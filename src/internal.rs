@@ -1,4 +1,4 @@
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 pub struct Repository {
     pub entries: HashMap<String, Entry>,
@@ -6,7 +6,9 @@ pub struct Repository {
 
 impl Repository {
     pub fn new() -> Self {
-        Self { entries: HashMap::new() }
+        Self {
+            entries: HashMap::new(),
+        }
     }
     pub fn add_entry(&mut self, entry: Entry) {
         self.entries.insert(entry.name.clone(), entry);
@@ -21,10 +23,27 @@ impl Repository {
 pub struct Entry {
     pub name: String,
     pub value: String,
+    pub member: Member,
 }
 
 impl Entry {
     pub fn new(name: String, value: String) -> Self {
-        Self { name, value }
+        Self {
+            name,
+            value,
+            member: Member::new(String::new()),
+        }
     }
 }
+
+#[derive(Clone)]
+pub struct Member {
+    pub value: String,
+}
+
+impl Member {
+    pub fn new(value: String) -> Self {
+        Self { value }
+    }
+}
+

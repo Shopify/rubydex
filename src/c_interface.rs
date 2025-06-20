@@ -3,7 +3,40 @@ use std::ffi::{c_char, CString};
 use crate::internal::{Entry, Repository};
 
 pub type CRepository = std::ffi::c_void;
-pub type CEntry = std::ffi::c_void;
+
+// C-compatible struct for direct field access
+#[repr(C)]
+pub struct CEntry {
+    pub name: *mut c_char,
+    pub value: *mut c_char,
+}
+
+impl CEntry {
+    fn from_entry(entry: &Entry) -> Option<Self> {
+        let name_cstring = CString::new(entry.name.clone()).ok()?;
+        let value_cstring = CString::new(entry.value.clone()).ok()?;
+        
+        Some(Self {
+            name: name_cstring.into_raw(),
+            value: value_cstring.into_raw(),
+        })
+    }
+    
+    fn free(&mut self) {
+        if !self.name.is_null() {
+            unsafe {
+                let _ = CString::from_raw(self.name);
+            }
+            self.name = std::ptr::null_mut();
+        }
+        if !self.value.is_null() {
+            unsafe {
+                let _ = CString::from_raw(self.value);
+            }
+            self.value = std::ptr::null_mut();
+        }
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn get_repository() -> *mut CRepository {
@@ -25,7 +58,12 @@ pub extern "C" fn repository_get_entry(repository: *const CRepository, name: *co
         };
         
         match repository_ref.get_entry(name_str) {
-            Some(entry) => Box::into_raw(Box::new(entry.clone())) as *mut CEntry,
+            Some(entry) => {
+                match CEntry::from_entry(entry) {
+                    Some(c_entry) => Box::into_raw(Box::new(c_entry)),
+                    None => std::ptr::null_mut(),
+                }
+            },
             None => std::ptr::null_mut(),
         }
     }
@@ -49,38 +87,11 @@ pub extern "C" fn repository_add_entry(repository: *mut CRepository, name: *cons
 }
 
 #[no_mangle]
-pub extern "C" fn entry_get_name(entry: *const CEntry) -> *const c_char {
-    if entry.is_null() {
-        return std::ptr::null();
-    }
-    unsafe {
-        let entry_ref = &*(entry as *const Entry);
-        match CString::new(entry_ref.name.clone()) {
-            Ok(c_string) => c_string.into_raw(),
-            Err(_) => std::ptr::null(),
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn entry_get_value(entry: *const CEntry) -> *const c_char {
-    if entry.is_null() {
-        return std::ptr::null();
-    }
-    unsafe {
-        let entry_ref = &*(entry as *const Entry);
-        match CString::new(entry_ref.value.clone()) {
-            Ok(c_string) => c_string.into_raw(),
-            Err(_) => std::ptr::null(),
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn delloc_entry(entry: *mut CEntry) {
+pub extern "C" fn dealloc_entry(entry: *mut CEntry) {
     if !entry.is_null() {
         unsafe {
-            let _ = Box::from_raw(entry as *mut Entry);
+            let mut entry_box = Box::from_raw(entry);
+            entry_box.free();
         }
     }
 }

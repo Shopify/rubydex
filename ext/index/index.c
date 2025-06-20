@@ -48,8 +48,9 @@ static VALUE rb_repository_get_entry(VALUE self, VALUE name) {
         return Qnil;
     }
     
-    const char *entry_name = entry_get_name(c_entry);
-    const char *entry_value = entry_get_value(c_entry);
+    // Access fields directly from the CEntry struct
+    const char *entry_name = c_entry->name;
+    const char *entry_value = c_entry->value;
     
     // Create a plain Ruby Entry object and set instance variables
     // instead of using TypedData_Wrap_Struct
@@ -57,7 +58,7 @@ static VALUE rb_repository_get_entry(VALUE self, VALUE name) {
     rb_ivar_set(ruby_entry, rb_intern("@name"), entry_name ? rb_str_new_cstr(entry_name) : Qnil);
     rb_ivar_set(ruby_entry, rb_intern("@value"), entry_value ? rb_str_new_cstr(entry_value) : Qnil);
     
-    delloc_entry(c_entry);
+    dealloc_entry(c_entry);
     
     return ruby_entry;
 }

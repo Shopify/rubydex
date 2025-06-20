@@ -11,19 +11,18 @@
 
 typedef void CRepository;
 
-typedef void CEntry;
+typedef struct CEntry {
+    char *name;
+    char *value;
+} CEntry;
 
 CRepository *get_repository(void);
 
-CEntry *repository_get_entry(const CRepository *repository, const char *name);
+struct CEntry *repository_get_entry(const CRepository *repository, const char *name);
 
 void repository_add_entry(CRepository *repository, const char *name, const char *value);
 
-const char *entry_get_name(const CEntry *entry);
-
-const char *entry_get_value(const CEntry *entry);
-
-void delloc_entry(CEntry *entry);
+void dealloc_entry(struct CEntry *entry);
 
 void dealloc_repository(CRepository *repository);
 
