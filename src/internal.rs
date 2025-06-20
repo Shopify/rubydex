@@ -46,4 +46,3 @@ impl Member {
         Self { value }
     }
 }
-

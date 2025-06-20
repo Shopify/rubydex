@@ -11,9 +11,14 @@
 
 typedef void CRepository;
 
+typedef struct CMember {
+    char *value;
+} CMember;
+
 typedef struct CEntry {
     char *name;
     char *value;
+    struct CMember *member;
 } CEntry;
 
 CRepository *get_repository(void);

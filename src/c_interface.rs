@@ -1,14 +1,41 @@
 use std::ffi::{c_char, CString};
+use std::rc::Rc;
 
-use crate::internal::{Entry, Repository};
+use crate::internal::{Entry, Repository, Member};
 
 pub type CRepository = std::ffi::c_void;
+
+// C-compatible struct for direct field access
+#[repr(C)]
+pub struct CMember {
+    pub value: *mut c_char,
+}
+
+impl CMember {
+    fn from_member(member: &Member) -> Option<Self> {
+        let value_cstring = CString::new(member.value.clone()).ok()?;
+        
+        Some(Self {
+            value: value_cstring.into_raw(),
+        })
+    }
+    
+    fn free(&mut self) {
+        if !self.value.is_null() {
+            unsafe {
+                let _ = CString::from_raw(self.value);
+            }
+            self.value = std::ptr::null_mut();
+        }
+    }
+}
 
 // C-compatible struct for direct field access
 #[repr(C)]
 pub struct CEntry {
     pub name: *mut c_char,
     pub value: *mut c_char,
+    pub member: *mut CMember,
 }
 
 impl CEntry {
@@ -16,9 +43,14 @@ impl CEntry {
         let name_cstring = CString::new(entry.name.clone()).ok()?;
         let value_cstring = CString::new(entry.value.clone()).ok()?;
         
+        // Create CMember struct for direct field access
+        let c_member = CMember::from_member(&entry.member)?;
+        let member_ptr = Box::into_raw(Box::new(c_member));
+        
         Some(Self {
             name: name_cstring.into_raw(),
             value: value_cstring.into_raw(),
+            member: member_ptr,
         })
     }
     
@@ -34,6 +66,13 @@ impl CEntry {
                 let _ = CString::from_raw(self.value);
             }
             self.value = std::ptr::null_mut();
+        }
+        if !self.member.is_null() {
+            unsafe {
+                let mut member_box = Box::from_raw(self.member);
+                member_box.free();
+            }
+            self.member = std::ptr::null_mut();
         }
     }
 }
