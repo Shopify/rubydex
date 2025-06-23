@@ -11,4 +11,19 @@ class IndexRustyTest < Minitest::Test
     entry = repository.get_entry("key")
     assert_equal(entry.value, "value")
   end
+
+  def test_get_member
+    repository = Index::Repository.new
+    repository.add_entry("key", "value")
+    entry = repository.get_entry("key")
+    binding.irb
+    assert_equal "member_value", entry.member.value
+  end
+
+  def test_get_nested_member
+    repository = Index::Repository.new
+    repository.add_entry("key", "value")
+    entry = repository.get_entry("key")
+    assert_equal "nested_value", entry.member.nested_member.value
+  end
 end

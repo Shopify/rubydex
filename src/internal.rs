@@ -31,7 +31,7 @@ impl Entry {
         Self {
             name,
             value,
-            member: Member::new(String::new()),
+            member: Member::new(String::from("member_value")),
         }
     }
 }
@@ -39,9 +39,24 @@ impl Entry {
 #[derive(Clone)]
 pub struct Member {
     pub value: String,
+    pub nested_member: NestedMember,
 }
 
 impl Member {
+    pub fn new(value: String) -> Self {
+        Self {
+            value,
+            nested_member: NestedMember::new("nested_value".to_string()),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct NestedMember {
+    pub value: String,
+}
+
+impl NestedMember {
     pub fn new(value: String) -> Self {
         Self { value }
     }

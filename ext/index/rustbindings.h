@@ -11,8 +11,13 @@
 
 typedef void CRepository;
 
+typedef struct CNestedMember {
+    char *value;
+} CNestedMember;
+
 typedef struct CMember {
     char *value;
+    struct CNestedMember *nested_member;
 } CMember;
 
 typedef struct CEntry {

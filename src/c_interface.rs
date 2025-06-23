@@ -1,19 +1,19 @@
 use std::ffi::{c_char, CString};
 use std::rc::Rc;
 
-use crate::internal::{Entry, Repository, Member};
+use crate::internal::{Entry, Repository, Member, NestedMember};
 
 pub type CRepository = std::ffi::c_void;
 
 // C-compatible struct for direct field access
 #[repr(C)]
-pub struct CMember {
+pub struct CNestedMember {
     pub value: *mut c_char,
 }
 
-impl CMember {
-    fn from_member(member: &Member) -> Option<Self> {
-        let value_cstring = CString::new(member.value.clone()).ok()?;
+impl CNestedMember {
+    fn from_nested_member(nested_member: &NestedMember) -> Option<Self> {
+        let value_cstring = CString::new(nested_member.value.clone()).ok()?;
         
         Some(Self {
             value: value_cstring.into_raw(),
@@ -26,6 +26,44 @@ impl CMember {
                 let _ = CString::from_raw(self.value);
             }
             self.value = std::ptr::null_mut();
+        }
+    }
+}
+
+// C-compatible struct for direct field access
+#[repr(C)]
+pub struct CMember {
+    pub value: *mut c_char,
+    pub nested_member: *mut CNestedMember,
+}
+
+impl CMember {
+    fn from_member(member: &Member) -> Option<Self> {
+        let value_cstring = CString::new(member.value.clone()).ok()?;
+        
+        // Create CNestedMember struct for direct field access
+        let c_nested_member = CNestedMember::from_nested_member(&member.nested_member)?;
+        let nested_member_ptr = Box::into_raw(Box::new(c_nested_member));
+        
+        Some(Self {
+            value: value_cstring.into_raw(),
+            nested_member: nested_member_ptr,
+        })
+    }
+    
+    fn free(&mut self) {
+        if !self.value.is_null() {
+            unsafe {
+                let _ = CString::from_raw(self.value);
+            }
+            self.value = std::ptr::null_mut();
+        }
+        if !self.nested_member.is_null() {
+            unsafe {
+                let mut nested_member_box = Box::from_raw(self.nested_member);
+                nested_member_box.free();
+            }
+            self.nested_member = std::ptr::null_mut();
         }
     }
 }

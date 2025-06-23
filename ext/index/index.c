@@ -7,6 +7,7 @@
 static VALUE cRepository;
 static VALUE cEntry;
 static VALUE cMember;
+static VALUE cNestedMember;
 
 // This method is for debugging ruby objects created within C.
 static void d(VALUE v) {
@@ -70,6 +71,8 @@ static VALUE rb_repository_get_entry(VALUE self, VALUE name) {
     // Store the raw member pointer for lazy resolution
     rb_ivar_set(ruby_entry, rb_intern("@member_ptr"), ULONG2NUM((unsigned long)c_entry->member));
     
+    // TODO do we want to free to c entry here?
+    // Shouldnt we keep it so that the we can later resolve it again
     dealloc_entry(c_entry);
     
     return ruby_entry;
@@ -81,7 +84,24 @@ static VALUE rb_entry_member(VALUE self) {
 
     VALUE ruby_member = rb_class_new_instance(0, NULL, cMember);
     rb_ivar_set(ruby_member, rb_intern("@value"),  rb_str_new_cstr("test"));
+    
+    // Store the raw member pointer for lazy nested_member resolution
+    rb_ivar_set(ruby_member, rb_intern("@nested_member_ptr"), member_ptr_val);
+    
     return ruby_member;
+}
+
+static VALUE rb_member_nested_member(VALUE self) {
+    // Get the stored pointer and extract member data
+    VALUE nested_member_ptr_val = rb_ivar_get(self, rb_intern("@nested_member_ptr"));
+
+    VALUE ruby_nested_member = rb_class_new_instance(0, NULL, cNestedMember);
+    rb_ivar_set(ruby_nested_member, rb_intern("@value"),  rb_str_new_cstr("test"));
+    
+    // Store the raw member pointer for lazy nested_member resolution
+    rb_ivar_set(ruby_nested_member, rb_intern("@nested_member_ptr"), nested_member_ptr_val);
+    
+    return ruby_nested_member;
 }
 
 
@@ -103,5 +123,9 @@ void Init_index(void) {
     rb_define_attr(cEntry, "value", 1, 1);
     
     cMember = rb_define_class_under(mIndex, "Member", rb_cObject);
+    rb_define_method(cMember, "nested_member", rb_member_nested_member, 0);
     rb_define_attr(cMember, "value", 1, 1);
+    
+    cNestedMember = rb_define_class_under(mIndex, "NestedMember", rb_cObject);
+    rb_define_attr(cNestedMember, "value", 1, 1);
 } 
