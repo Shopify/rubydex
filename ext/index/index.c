@@ -71,40 +71,65 @@ static VALUE rb_repository_get_entry(VALUE self, VALUE name) {
     // Store the raw member pointer for lazy resolution
     rb_ivar_set(ruby_entry, rb_intern("@member_ptr"), ULONG2NUM((unsigned long)c_entry->member));
     
-    // TODO do we want to free to c entry here?
-    // Shouldnt we keep it so that the we can later resolve it again
-    dealloc_entry(c_entry);
+    // Don't free the c_entry immediately - we need the member pointer to remain valid
+    // The member pointer points to memory that will be freed when we call dealloc_entry
+    // For now, we'll keep the entry alive and defer cleanup
+    // TODO: Implement proper lifecycle management - maybe store c_entry pointer too
+    // and free it when the Ruby object is garbage collected
+    // dealloc_entry(c_entry);
     
     return ruby_entry;
 }
 
 static VALUE rb_entry_member(VALUE self) {
-    // Get the stored pointer and extract member data
+    // Get the stored pointer and convert it back to CMember*
     VALUE member_ptr_val = rb_ivar_get(self, rb_intern("@member_ptr"));
-
-    VALUE ruby_member = rb_class_new_instance(0, NULL, cMember);
-    rb_ivar_set(ruby_member, rb_intern("@value"),  rb_str_new_cstr("test"));
     
-    // Store the raw member pointer for lazy nested_member resolution
-    rb_ivar_set(ruby_member, rb_intern("@nested_member_ptr"), member_ptr_val);
+    if (NIL_P(member_ptr_val)) {
+        return Qnil;
+    }
+    
+    // Convert the Ruby number back to a pointer
+    CMember* c_member = (CMember*)NUM2ULONG(member_ptr_val);
+    
+    if (!c_member) {
+        return Qnil;
+    }
+    
+    // Access the actual member data from C/Rust
+    VALUE ruby_member = rb_class_new_instance(0, NULL, cMember);
+    rb_ivar_set(ruby_member, rb_intern("@value"), 
+                c_member->value ? rb_str_new_cstr(c_member->value) : Qnil);
+    
+    // Store the raw nested_member pointer for lazy resolution
+    rb_ivar_set(ruby_member, rb_intern("@nested_member_ptr"), 
+                ULONG2NUM((unsigned long)c_member->nested_member));
     
     return ruby_member;
 }
 
 static VALUE rb_member_nested_member(VALUE self) {
-    // Get the stored pointer and extract member data
+    // Get the stored pointer and convert it back to CNestedMember*
     VALUE nested_member_ptr_val = rb_ivar_get(self, rb_intern("@nested_member_ptr"));
-
-    VALUE ruby_nested_member = rb_class_new_instance(0, NULL, cNestedMember);
-    rb_ivar_set(ruby_nested_member, rb_intern("@value"),  rb_str_new_cstr("test"));
     
-    // Store the raw member pointer for lazy nested_member resolution
-    rb_ivar_set(ruby_nested_member, rb_intern("@nested_member_ptr"), nested_member_ptr_val);
+    if (NIL_P(nested_member_ptr_val)) {
+        return Qnil;
+    }
+    
+    // Convert the Ruby number back to a pointer
+    CNestedMember* c_nested_member = (CNestedMember*)NUM2ULONG(nested_member_ptr_val);
+    
+    if (!c_nested_member) {
+        return Qnil;
+    }
+    
+    // Access the actual nested member data from C/Rust
+    VALUE ruby_nested_member = rb_class_new_instance(0, NULL, cNestedMember);
+    rb_ivar_set(ruby_nested_member, rb_intern("@value"), 
+                c_nested_member->value ? rb_str_new_cstr(c_nested_member->value) : Qnil);
     
     return ruby_nested_member;
 }
-
-
 
 // Initialization function for the Ruby extension
 void Init_index(void) {
