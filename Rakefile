@@ -25,7 +25,23 @@ end
 
 RuboCop::RakeTask.new
 
+task :lint_rust do
+  sh "cargo clippy --all-targets --all-features"
+  sh "rustfmt --check **/*.rs"
+end
+
+task :lint do
+  Rake::Task["rubocop"].invoke
+  Rake::Task["lint_rust"].invoke
+end
+
+task :format do
+  Rake::Task["rubocop:autocorrect"].invoke
+  sh "cargo clippy --all-targets --all-features --fix --allow-dirty"
+  sh "rustfmt **/*.rs"
+end
+
 # Enhance the clean task to also clean Rust artifacts
 Rake::Task[:clean].enhance([:clean_rust])
 
-task default: [:rubocop, :test]
+task default: [:lint, :test]

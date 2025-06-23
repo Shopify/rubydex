@@ -14,3 +14,4 @@
 /ext/index/Makefile
 mkmf.log
 target/
+ext/index/rustbindings.h
