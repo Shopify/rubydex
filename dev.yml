@@ -1,0 +1,20 @@
+name: index
+
+type: ruby
+
+up:
+  - ruby
+  - bundler
+
+commands:
+  console:
+    desc: 'start a console'
+    run: bin/console
+  run:
+    desc: 'start the application'
+    run: bin/run
+  test:
+    syntax:
+      argument: file
+      optional: args...
+    run: bin/testunit

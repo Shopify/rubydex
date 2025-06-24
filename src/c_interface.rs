@@ -1,29 +1,23 @@
-use std::ffi::{c_char, CString};
-
 use crate::internal::index_all;
+use libc::{c_char, size_t};
+use std::str::Utf8Error;
+use std::slice::from_raw_parts;
+use std::ffi::CStr;
+
+unsafe fn convert_double_pointer_to_vec(
+    data: &mut &mut c_char,
+    len: size_t,
+) -> Result<Vec<String>, Utf8Error> {
+    from_raw_parts(data, len)
+        .iter()
+        .map(|arg| CStr::from_ptr(*arg).to_str().map(ToString::to_string))
+        .collect()
+}
 
 #[no_mangle]
-pub extern "C" fn index_all_c(file_paths: *const *const c_char, count: usize) {
-    if file_paths.is_null() {
-        return;
-    }
-
-    let mut rust_file_paths = Vec::with_capacity(count);
-
-    unsafe {
-        for i in 0..count {
-            let file_path_ptr = *file_paths.add(i);
-            if file_path_ptr.is_null() {
-                continue;
-            }
-
-            let c_str = std::ffi::CStr::from_ptr(file_path_ptr);
-            match c_str.to_str() {
-                Ok(s) => rust_file_paths.push(s.to_string()),
-                Err(_) => continue, // Skip invalid UTF-8 strings
-            }
-        }
-    }
-
-    index_all(rust_file_paths);
+pub extern "C" fn index_all_c(file_paths: &mut &mut c_char, count: usize) {
+    let file_paths: Vec<String> = unsafe {
+        convert_double_pointer_to_vec(file_paths, count).unwrap()
+     };
+     index_all(file_paths);
 }

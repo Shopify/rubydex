@@ -9,6 +9,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-void index_all_c(const char *const *file_paths, size_t count);
+void index_all_c(char **file_paths, size_t count);
 
 #endif /* RUSTBINDINGS_H */

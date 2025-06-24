@@ -11,3 +11,4 @@ cbindgen = "0.26"
 
 [dependencies]
 ruby-prism = { version = "1.4.0" }
+libc = "0.2.174"

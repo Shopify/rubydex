@@ -10,10 +10,11 @@ static VALUE rb_index_all(VALUE self, VALUE file_paths_array) {
     Check_Type(file_paths_array, T_ARRAY);
     
     long count = RARRAY_LEN(file_paths_array);
-    const char **c_file_paths = malloc(count * sizeof(char*));
-    
+
+    char **c_file_paths = malloc(count * sizeof(char*));
     for (long i = 0; i < count; i++) {
         VALUE file_path = rb_ary_entry(file_paths_array, i);
+        // Returns pointer to CString from Ruby string
         c_file_paths[i] = StringValueCStr(file_path);
     }
     

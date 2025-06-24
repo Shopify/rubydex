@@ -3,19 +3,17 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 #[derive(Debug)]
-struct Visitor {
-    repository: Repository,
+struct Visitor<'a> {
+    repository: &'a mut Repository,
 }
 
-impl Visitor {
-    fn new(repository: Repository) -> Self {
-        Self {
-            repository: repository,
-        }
+impl<'a> Visitor<'a> {
+    fn new(repository: &'a mut Repository) -> Self {
+        Self { repository }
     }
 }
 
-impl Visit<'_> for Visitor {
+impl Visit<'_> for Visitor<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         // store info about class node in index
         // Get the class name as a string from the constant path
@@ -35,6 +33,12 @@ impl Visit<'_> for Visitor {
 #[derive(Debug)]
 pub struct Repository {
     pub entries: HashMap<String, Entry>,
+}
+
+impl Default for Repository {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Repository {
@@ -64,9 +68,10 @@ impl Entry {
     }
 }
 
-pub fn index_all(file_paths: Vec<String>) -> () {
-    let repository = Repository::new();
-    let mut visitor = Visitor::new(repository);
+#[no_mangle]
+pub fn index_all(file_paths: Vec<String>) {
+    let mut repository = Repository::new();
+    let mut visitor = Visitor::new(&mut repository);
     for file_path in file_paths {
         println!("{}", file_path);
         let source = match std::fs::read_to_string(&file_path) {
