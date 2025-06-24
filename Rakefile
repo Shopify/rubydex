@@ -2,7 +2,7 @@
 
 require "bundler/gem_tasks"
 require "rubocop/rake_task"
-require "rake/extensiontask"
+require "rb_sys/extensiontask"
 require "rake/testtask"
 
 GEMSPEC = Gem::Specification.load("index.gemspec")
@@ -12,7 +12,7 @@ task :clean_rust do
   sh "cargo clean"
 end
 
-Rake::ExtensionTask.new("index", GEMSPEC) do |ext|
+RbSys::ExtensionTask.new("index", GEMSPEC) do |ext|
   ext.lib_dir = "lib/index"
 end
 

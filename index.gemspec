@@ -23,5 +23,6 @@ Gem::Specification.new do |spec|
   spec.bindir = "exe"
   spec.executables = Dir.glob("exe/*").map { |f| File.basename(f) }
   spec.require_paths = ["lib"]
-  spec.extensions = ["ext/index/extconf.rb"]
+  spec.add_dependency "rb_sys", "~> 0.9"
+  spec.extensions = ["extconf.rb"]
 end
