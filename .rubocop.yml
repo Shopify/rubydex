@@ -2,13 +2,13 @@ inherit_gem:
   rubocop-shopify: rubocop.yml
 
 AllCops:
+  NewCops: disable
   SuggestExtensions: false
+  Exclude:
+    - "src/**/*"
+    - "target/**/*"
+    - "tmp/**/*"
 
-Style/StringLiterals:
-  EnforcedStyle: double_quotes
-
-Style/StringLiteralsInInterpolation:
-  EnforcedStyle: double_quotes
-
-Style/FrozenStringLiteralComment:
-  Enabled: false
+Style/GlobalVars:
+  Exclude:
+    - ext/index/extconf.rb
