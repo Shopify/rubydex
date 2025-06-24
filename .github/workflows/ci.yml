@@ -42,8 +42,28 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
 
+      - name: Restore Rust compile cache
+        id: rust-compile-cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust
+
       - name: Run Rust tests
         run: cargo test
 
       - name: Run Ruby tests
         run: bundle exec rake test
+
+      - name: Save Rust compile cache
+        id: rust-compile-cache-save
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.rust-compile-cache-restore.outputs.cache-primary-key }}
