@@ -3,10 +3,15 @@ name = "index"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "index"
+path = "src/main.rs"
+
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+glob = "0.3"
 ruby-prism = { version = "1.4.0" }
 
 [build-dependencies]
