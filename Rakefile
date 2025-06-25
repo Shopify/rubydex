@@ -12,6 +12,19 @@ task :clean_rust do
   sh "cargo clean"
 end
 
+task :compile_rust do
+  sh "cargo build"
+end
+
+task :compile_rust_relase do
+  sh "cargo build --release"
+end
+
+task :cargo_test do
+  puts "\n******** Running cargo tests ********\n"
+  sh "cargo test"
+end
+
 Rake::ExtensionTask.new("index", GEMSPEC) do |ext|
   ext.lib_dir = "lib/index"
 end
@@ -31,6 +44,7 @@ task :lint_rust do
 end
 
 task :lint do
+  puts "******** Linting ********\n"
   Rake::Task["rubocop"].invoke
   Rake::Task["lint_rust"].invoke
 end
@@ -43,5 +57,6 @@ end
 
 # Enhance the clean task to also clean Rust artifacts
 Rake::Task[:clean].enhance([:clean_rust])
+Rake::Task[:compile].enhance([:compile_rust])
 
-task default: [:lint, :test]
+task default: [:lint, :cargo_test, :test]

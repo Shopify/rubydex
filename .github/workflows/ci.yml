@@ -52,9 +52,6 @@ jobs:
             target
           key: ${{ runner.os }}-rust
 
-      - name: Run Rust tests
-        run: cargo test
-
       - name: Run Ruby tests
         run: bundle exec rake test
 
