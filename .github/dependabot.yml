@@ -4,8 +4,6 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    reviewers:
-      - "Shopify/ruby-dev-exp"
     labels:
       - "dependencies"
       - "ruby"
@@ -19,8 +17,6 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    reviewers:
-      - "Shopify/ruby-dev-exp"
     labels:
       - "dependencies"
       - "rust"
