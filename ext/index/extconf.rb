@@ -1,19 +1,51 @@
-require "mkmf"
+# frozen_string_literal: true
 
-# Get the absolute path to the target directory
-root_dir = File.expand_path("../..", __dir__)
+require "mkmf"
+require "pathname"
+
 release = ENV["RELEASE"]
-if release
-  build_dir = File.join(root_dir, "target", "release")
-else
-  build_dir = File.join(root_dir, "target", "debug")
+root_dir = Pathname.new("../..").expand_path(__dir__)
+target_dir = root_dir.join("target")
+target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
+target_dir = target_dir.join(release ? "release" : "debug")
+
+cargo_args = ["--manifest-path #{root_dir.join("Cargo.toml")}"]
+
+if Gem.win_platform?
+  cargo_args << "--target x86_64-pc-windows-gnu"
+  ENV["RUSTFLAGS"] = "-C target-feature=+crt-static"
 end
 
-# Build Rust library before compiling C extension
-puts "Building Rust library..."
-system("cd #{root_dir} && cargo build #{release ? '--release' : ''}") or abort("Rust build failed")
+if Gem.win_platform?
+  append_ldflags(target_dir.join("libindex.a").to_s)
 
-# Add the Rust target directory to the library search path
-$LOCAL_LIBS << " -L#{build_dir} -lindex"
+  # On Windows, statically link system libraries to avoid having to distribute and load DLLs
+  #
+  # These libraries are the ones informed by `cargo rustc -- --print native-static-libs`, which displays the
+  # libraries necessary for statically linking the Rust code on the current platform
+  ["kernel32", "ntdll", "userenv", "ws2_32", "dbghelp", "msvcrt"].each do |lib|
+    append_ldflags("-l#{lib}")
+  end
+else
+  append_ldflags("-Wl,-rpath,#{target_dir}")
+  # We cannot use append_ldflags here because the Rust code is only compiled later. If it's not compiled yet, this will
+  # fail and the flag will not be added
+  $LDFLAGS << " -L#{target_dir} -lindex"
+end
 
 create_makefile("index/index")
+cargo_command = "cargo build #{cargo_args.join(" ")}".strip
+
+makefile = File.read("Makefile")
+new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.chomp)
+  .PHONY: compile_rust
+
+  .rust_built:
+  \t#{cargo_command} || (echo "Compiling Rust failed" && exit 1)
+  \ttouch $@
+
+  compile_rust: .rust_built
+
+  $(OBJS): $(HDRS) $(ruby_headers) .rust_built
+MAKEFILE
+File.write("Makefile", new_makefile)

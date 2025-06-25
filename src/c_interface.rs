@@ -11,8 +11,13 @@ pub extern "C" fn get_repository() -> *mut CRepository {
     Box::into_raw(Box::new(repository)) as *mut CRepository
 }
 
+/// This will likely be removed
+///
+/// # Safety
+///
+/// This function is unsafe
 #[no_mangle]
-pub extern "C" fn repository_get_entry(repository: *const CRepository, name: *const c_char) -> *mut CEntry {
+pub unsafe extern "C" fn repository_get_entry(repository: *const CRepository, name: *const c_char) -> *mut CEntry {
     if repository.is_null() || name.is_null() {
         return std::ptr::null_mut();
     }
@@ -23,7 +28,7 @@ pub extern "C" fn repository_get_entry(repository: *const CRepository, name: *co
             Ok(s) => s,
             Err(_) => return std::ptr::null_mut(),
         };
-        
+
         match repository_ref.get_entry(name_str) {
             Some(entry) => Box::into_raw(Box::new(entry.clone())) as *mut CEntry,
             None => std::ptr::null_mut(),
@@ -31,8 +36,13 @@ pub extern "C" fn repository_get_entry(repository: *const CRepository, name: *co
     }
 }
 
+/// This will likely be removed
+///
+/// # Safety
+///
+/// This function is unsafe
 #[no_mangle]
-pub extern "C" fn repository_add_entry(repository: *mut CRepository, name: *const c_char, value: *const c_char) {
+pub unsafe extern "C" fn repository_add_entry(repository: *mut CRepository, name: *const c_char, value: *const c_char) {
     if repository.is_null() || name.is_null() || value.is_null() {
         return;
     }
@@ -40,7 +50,7 @@ pub extern "C" fn repository_add_entry(repository: *mut CRepository, name: *cons
         let repository_ref = &mut *(repository as *mut Repository);
         let name_cstr = std::ffi::CStr::from_ptr(name);
         let value_cstr = std::ffi::CStr::from_ptr(value);
-        
+
         if let (Ok(name_str), Ok(value_str)) = (name_cstr.to_str(), value_cstr.to_str()) {
             let entry = Entry::new(name_str.to_string(), value_str.to_string());
             repository_ref.add_entry(entry);

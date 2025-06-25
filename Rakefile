@@ -7,11 +7,6 @@ require "rake/testtask"
 
 GEMSPEC = Gem::Specification.load("index.gemspec")
 
-desc "Clean Rust build artifacts"
-task :clean_rust do
-  sh "cargo clean"
-end
-
 Rake::ExtensionTask.new("index", GEMSPEC) do |ext|
   ext.lib_dir = "lib/index"
 end
@@ -25,7 +20,19 @@ end
 
 RuboCop::RakeTask.new
 
+task :lint do
+  puts "******** Linting ********\n"
+  Rake::Task["rubocop"].invoke
+  Rake::Task["lint_rust"].invoke
+end
+
+task :format do
+  puts "******** Formatting ********\n"
+  Rake::Task["rubocop:autocorrect"].invoke
+  Rake::Task["format_rust"].invoke
+end
+
 # Enhance the clean task to also clean Rust artifacts
 Rake::Task[:clean].enhance([:clean_rust])
 
-task default: [:rubocop, :test]
+task default: [:lint, :cargo_test, :test]

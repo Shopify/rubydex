@@ -1,12 +1,20 @@
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 pub struct Repository {
     pub entries: HashMap<String, Entry>,
 }
 
+impl Default for Repository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Repository {
     pub fn new() -> Self {
-        Self { entries: HashMap::new() }
+        Self {
+            entries: HashMap::new(),
+        }
     }
     pub fn add_entry(&mut self, entry: Entry) {
         self.entries.insert(entry.name.clone(), entry);
