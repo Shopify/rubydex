@@ -17,7 +17,7 @@ if Gem.win_platform?
 end
 
 if Gem.win_platform?
-  append_ldflags(target_dir.join("libindex.a").to_s)
+  $LDFLAGS << " #{target_dir.join("libindex.a")}"
 
   # On Windows, statically link system libraries to avoid having to distribute and load DLLs
   #
