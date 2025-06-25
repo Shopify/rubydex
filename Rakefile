@@ -11,7 +11,7 @@ Rake::ExtensionTask.new("index", GEMSPEC) do |ext|
   ext.lib_dir = "lib/index"
 end
 
-Rake::TestTask.new(test: :compile_all) do |t|
+Rake::TestTask.new(test: :compile) do |t|
   t.libs << "test"
   t.libs << "lib"
   t.ruby_opts << ["--enable=frozen_string_literal"]
@@ -34,11 +34,5 @@ end
 
 # Enhance the clean task to also clean Rust artifacts
 Rake::Task[:clean].enhance([:clean_rust])
-
-desc "Compile both Rust and the C extension"
-task :compile_all do
-  Rake::Task[:compile_rust].invoke
-  Rake::Task[:compile].invoke
-end
 
 task default: [:lint, :cargo_test, :test]

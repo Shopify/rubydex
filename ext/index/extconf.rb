@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "mkmf"
+require "pathname"
 
 release = ENV["RELEASE"]
 root_dir = Pathname.new("../..").expand_path(__dir__)
@@ -8,12 +9,15 @@ target_dir = root_dir.join("target")
 target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
 target_dir = target_dir.join(release ? "release" : "debug")
 
-abort("Target directory \"#{target_dir}\" does not exist") unless target_dir.exist?
+cargo_args = ["--manifest-path #{root_dir.join("Cargo.toml")}"]
 
 if Gem.win_platform?
-  object_path = target_dir.join("libindex.a")
-  abort("Object file \"#{object_path}\" does not exist") unless object_path.exist?
-  append_ldflags(object_path.to_s)
+  cargo_args << "--target x86_64-pc-windows-gnu"
+  ENV["RUSTFLAGS"] = "-C target-feature=+crt-static"
+end
+
+if Gem.win_platform?
+  append_ldflags(target_dir.join("libindex.a").to_s)
 
   # On Windows, statically link system libraries to avoid having to distribute and load DLLs
   #
@@ -24,7 +28,24 @@ if Gem.win_platform?
   end
 else
   append_ldflags("-Wl,-rpath,#{target_dir}")
-  append_ldflags("-L#{target_dir} -lindex")
+  # We cannot use append_ldflags here because the Rust code is only compiled later. If it's not compiled yet, this will
+  # fail and the flag will not be added
+  $LDFLAGS << " -L#{target_dir} -lindex"
 end
 
 create_makefile("index/index")
+cargo_command = "cargo build #{cargo_args.join(" ")}".strip
+
+makefile = File.read("Makefile")
+new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.chomp)
+  .PHONY: compile_rust
+
+  .rust_built:
+  \t#{cargo_command} || (echo "Compiling Rust failed" && exit 1)
+  \ttouch $@
+
+  compile_rust: .rust_built
+
+  $(OBJS): $(HDRS) $(ruby_headers) .rust_built
+MAKEFILE
+File.write("Makefile", new_makefile)

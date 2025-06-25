@@ -7,16 +7,6 @@ if Gem.win_platform?
   ENV["RUSTFLAGS"] = "-C target-feature=+crt-static"
 end
 
-desc "Compile Rust in dev mode"
-task :compile_rust do
-  sh "cargo build #{cargo_args.join(" ")}".strip
-end
-
-desc "Compile Rust in release mode"
-task :compile_rust_release do
-  sh "cargo build --release #{cargo_args.join(" ")}".strip
-end
-
 desc "Run Rust tests"
 task :cargo_test do
   puts "\n******** Running cargo tests ********\n"
