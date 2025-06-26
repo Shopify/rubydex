@@ -48,4 +48,9 @@ new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.cho
 
   $(OBJS): $(HDRS) $(ruby_headers) .rust_built
 MAKEFILE
+
+new_makefile.gsub!("$(Q) $(POSTLINK)", <<~MAKEFILE.chomp)
+  $(Q) $(POSTLINK)
+  \t$(Q)$(RM) .rust_built
+MAKEFILE
 File.write("Makefile", new_makefile)
