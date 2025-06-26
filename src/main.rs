@@ -5,11 +5,30 @@ use std::collections::HashMap;
 use ast_data::symbol::{Symbol};
 use ast_data::visitor::{Visitor};
 use ruby_prism::Visit;
+use clap::{Parser, ValueEnum};
 
 mod ast_data;
 mod ast_enum;
 mod ast_base;
 mod location;
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum Mode {
+    Base,
+    Data,
+    Enum,
+}
+
+#[derive(Parser)]
+#[command(name = "index")]
+#[command(about = "A Ruby file indexer")]
+struct Args {
+    #[arg(required = true)]
+    paths: Vec<String>,
+
+    #[arg(long, value_enum, default_value_t = Mode::Data)]
+    mode: Mode,
+}
 
 fn glob_files(dir_path: &str) -> Vec<String> {
     let mut files = Vec::new();
@@ -56,19 +75,10 @@ fn collect_files(paths: &[String]) -> Vec<String> {
     files
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <path> [path] ...", args[0]);
-        process::exit(1);
-    }
+fn process_files_base(files: &[String]) {
+    let mut symbols_table: HashMap<String, ast_base::symbol::Symbol> = HashMap::new();
 
-    let files = collect_files(&args[1..]);
-    println!("  Found {} files.", files.len());
-
-    let mut symbols_table: HashMap<String, Symbol> = HashMap::new();
-
-    for file in &files {
+    for file in files {
         let source = match std::fs::read_to_string(file) {
             Ok(content) => content,
             Err(err) => {
@@ -78,14 +88,63 @@ fn main() {
         };
 
         let result = ruby_prism::parse(source.as_ref());
-        let mut visitor = Visitor::new(file, &mut symbols_table);
+        let mut visitor = ast_base::visitor::Visitor::new(file, &mut symbols_table);
         visitor.visit(&result.node());
     }
 
     println!("  Found {} symbols.", symbols_table.len());
+}
 
-    for (_, symbol) in symbols_table {
-        // println!("  {:?} {} {}", symbol.kind, symbol.name, symbol.location);
+fn process_files_data(files: &[String]) {
+    let mut symbols_table: HashMap<String, ast_data::symbol::Symbol> = HashMap::new();
+
+    for file in files {
+        let source = match std::fs::read_to_string(file) {
+            Ok(content) => content,
+            Err(err) => {
+                eprintln!("Error reading file {}: {}", file, err);
+                return;
+            }
+        };
+
+        let result = ruby_prism::parse(source.as_ref());
+        let mut visitor = ast_data::visitor::Visitor::new(file, &mut symbols_table);
+        visitor.visit(&result.node());
+    }
+
+    println!("  Found {} symbols.", symbols_table.len());
+}
+
+fn process_files_enum(files: &[String]) {
+    let mut symbols_table: HashMap<String, ast_enum::symbol::Symbol> = HashMap::new();
+
+    for file in files {
+        let source = match std::fs::read_to_string(file) {
+            Ok(content) => content,
+            Err(err) => {
+                eprintln!("Error reading file {}: {}", file, err);
+                return;
+            }
+        };
+
+        let result = ruby_prism::parse(source.as_ref());
+        let mut visitor = ast_enum::visitor::Visitor::new(file, &mut symbols_table);
+        visitor.visit(&result.node());
+    }
+
+    println!("  Found {} symbols.", symbols_table.len());
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let files = collect_files(&args.paths);
+    println!("  Found {} files.", files.len());
+
+    match args.mode {
+        Mode::Base => process_files_base(&files),
+        Mode::Data => process_files_data(&files),
+        Mode::Enum => process_files_enum(&files),
     }
 
     process::exit(0);

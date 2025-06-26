@@ -9,46 +9,80 @@ pub enum SymbolKind {
 }
 
 #[derive(Debug)]
-pub enum SymbolData {
-    Class(ClassData),
-    Module(ModuleData),
-    Constant(ConstantData),
-    Method(MethodData),
-}
-
-#[derive(Debug)]
 pub struct Symbol {
     pub kind: SymbolKind,
     pub name: String,
     pub location: Location,
-    pub data: Option<SymbolData>,
 }
 
 #[derive(Debug)]
-pub struct ClassData {
+pub struct Class {
+    pub base: Symbol,
     pub superclass: Option<String>,
     pub visibility: Option<String>,
 }
 
 #[derive(Debug)]
-pub struct ModuleData {
+pub struct Module {
+    pub base: Symbol,
     pub visibility: Option<String>,
 }
 
 #[derive(Debug)]
-pub struct ConstantData {
+pub struct Constant {
+    pub base: Symbol,
     pub visibility: Option<String>,
     pub value: Option<String>,
 }
 
 #[derive(Debug)]
-pub struct MethodData {
+pub struct Method {
+    pub base: Symbol,
     pub visibility: Option<String>,
     pub arguments: Vec<String>,
 }
 
 impl Symbol {
-    pub fn new(kind: SymbolKind, name: String, location: Location, data: Option<SymbolData>) -> Self {
-        Self { kind, name, location, data }
+    pub fn new(kind: SymbolKind, name: String, location: Location) -> Self {
+        Self { kind, name, location }
+    }
+}
+
+impl Class {
+    pub fn new(name: String, location: Location, superclass: Option<String>, visibility: Option<String>) -> Self {
+        Self {
+            base: Symbol::new(SymbolKind::Class, name, location),
+            superclass,
+            visibility,
+        }
+    }
+}
+
+impl Module {
+    pub fn new(name: String, location: Location, visibility: Option<String>) -> Self {
+        Self {
+            base: Symbol::new(SymbolKind::Module, name, location),
+            visibility,
+        }
+    }
+}
+
+impl Constant {
+    pub fn new(name: String, location: Location, visibility: Option<String>, value: Option<String>) -> Self {
+        Self {
+            base: Symbol::new(SymbolKind::Constant, name, location),
+            visibility,
+            value,
+        }
+    }
+}
+
+impl Method {
+    pub fn new(name: String, location: Location, visibility: Option<String>, arguments: Vec<String>) -> Self {
+        Self {
+            base: Symbol::new(SymbolKind::Method, name, location),
+            visibility,
+            arguments,
+        }
     }
 }
