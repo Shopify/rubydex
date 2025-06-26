@@ -82,7 +82,7 @@ fn main() {
     println!("  Found {} symbols.", symbols_table.len());
 
     for (_, symbol) in symbols_table {
-        println!("  {:?} {} {}", symbol.kind, symbol.name, symbol.location);
+        // println!("  {:?} {} {}", symbol.kind, symbol.name, symbol.location);
     }
 
     process::exit(0);
