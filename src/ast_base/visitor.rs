@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use ruby_prism::{Visit};
-use crate::ast::{symbol::{Symbol, SymbolKind}, Location};
+use crate::ast_base::{symbol::{Symbol, SymbolKind}};
+use crate::location::Location;
 
 #[derive(Debug)]
 pub struct Visitor<'a> {

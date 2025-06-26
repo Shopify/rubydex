@@ -1,4 +1,4 @@
-use super::location::Location;
+use crate::location::Location;
 
 #[derive(Debug)]
 pub enum SymbolKind {

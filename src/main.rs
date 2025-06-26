@@ -2,11 +2,14 @@ use std::process;
 use std::path::Path;
 use glob::glob;
 use std::collections::HashMap;
-use ast::symbol::{Symbol};
-use ast::visitor::{Visitor};
+use ast_data::symbol::{Symbol};
+use ast_data::visitor::{Visitor};
 use ruby_prism::Visit;
 
-mod ast;
+mod ast_data;
+mod ast_enum;
+mod ast_base;
+mod location;
 
 fn glob_files(dir_path: &str) -> Vec<String> {
     let mut files = Vec::new();
