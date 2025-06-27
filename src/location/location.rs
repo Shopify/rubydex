@@ -5,6 +5,7 @@ pub struct Location {
     pub end_offset: usize,
 }
 
+
 impl Location {
     pub fn new(file: String, start_offset: usize, end_offset: usize) -> Self {
         Self { file, start_offset, end_offset }
@@ -16,3 +17,4 @@ impl std::fmt::Display for Location {
         write!(f, "{}:{}-{}", self.file, self.start_offset, self.end_offset)
     }
 }
+

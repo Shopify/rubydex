@@ -2,13 +2,13 @@ use std::process;
 use std::path::Path;
 use glob::glob;
 use std::collections::HashMap;
-use ast_data::symbol::{Symbol};
-use ast_data::visitor::{Visitor};
+use ast_enum::symbol::{Symbol};
+use ast_enum::visitor::{Visitor};
 use ruby_prism::Visit;
 use clap::{Parser, ValueEnum};
 
-mod ast_data;
 mod ast_enum;
+mod ast_data;
 mod ast_base;
 mod location;
 
@@ -93,6 +93,10 @@ fn process_files_base(files: &[String]) {
     }
 
     println!("  Found {} symbols.", symbols_table.len());
+
+    // for (_, symbol) in symbols_table.iter() {
+    //     println!("{}", symbol);
+    // }
 }
 
 fn process_files_data(files: &[String]) {
@@ -113,6 +117,10 @@ fn process_files_data(files: &[String]) {
     }
 
     println!("  Found {} symbols.", symbols_table.len());
+
+    // for (_, symbol) in symbols_table.iter() {
+    //     println!("{}", symbol);
+    // }
 }
 
 fn process_files_enum(files: &[String]) {
@@ -133,6 +141,10 @@ fn process_files_enum(files: &[String]) {
     }
 
     println!("  Found {} symbols.", symbols_table.len());
+
+    // for (_, symbol) in symbols_table.iter() {
+    //     println!("{}", symbol);
+    // }
 }
 
 fn main() {

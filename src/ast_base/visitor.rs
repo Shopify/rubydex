@@ -19,7 +19,13 @@ impl<'a> Visit<'a> for Visitor<'a> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'a>) {
         let class_name = String::from_utf8_lossy(node.name().as_slice());
         let location = Location::new(self.file.to_string(), node.location().start_offset(), node.location().end_offset());
-        let symbol = Class::new(class_name.to_string(), location, None, None);
+
+        let mut superclass: Option<String> = None;
+        if let Some(superclass_name) = node.superclass() {
+            superclass = Some(String::from_utf8_lossy(superclass_name.location().as_slice()).to_string());
+        }
+
+        let symbol = Class::new(class_name.to_string(), location, superclass, None);
         self.symbols_table.insert(class_name.to_string(), symbol.base);
 
         ruby_prism::visit_class_node(self, node);
@@ -46,7 +52,30 @@ impl<'a> Visit<'a> for Visitor<'a> {
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode<'a>) {
         let method_name = String::from_utf8_lossy(node.name().as_slice());
         let location = Location::new(self.file.to_string(), node.location().start_offset(), node.location().end_offset());
-        let symbol = Method::new(method_name.to_string(), location, None, Vec::new());
+
+        let mut parameters: Vec<String> = Vec::new();
+        if let Some(parameters_list) = node.parameters() {
+            for parameter in parameters_list.requireds().iter() {
+                parameters.push(String::from_utf8_lossy(parameter.location().as_slice()).to_string());
+            }
+            for parameter in parameters_list.optionals().iter() {
+                parameters.push(String::from_utf8_lossy(parameter.location().as_slice()).to_string());
+            }
+            for parameter in parameters_list.rest().iter() {
+                parameters.push(String::from_utf8_lossy(parameter.location().as_slice()).to_string());
+            }
+            for parameter in parameters_list.keywords().iter() {
+                parameters.push(String::from_utf8_lossy(parameter.location().as_slice()).to_string());
+            }
+            if let Some(rest) = parameters_list.keyword_rest() {
+                parameters.push(String::from_utf8_lossy(rest.location().as_slice()).to_string());
+            }
+            if let Some(block) = parameters_list.block() {
+                parameters.push(String::from_utf8_lossy(block.location().as_slice()).to_string());
+            }
+        }
+
+        let symbol = Method::new(method_name.to_string(), location, None, parameters);
         self.symbols_table.insert(method_name.to_string(), symbol.base);
 
         ruby_prism::visit_def_node(self, node);

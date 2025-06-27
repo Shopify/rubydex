@@ -1,64 +1,106 @@
 use crate::location::Location;
 
-#[derive(Debug)]
-pub enum Symbol {
-    Class(Class),
-    Module(Module),
-    Constant(Constant),
-    Method(Method),
+#[derive(Debug, PartialEq)]
+pub enum SymbolKind {
+    Class,
+    Module,
+    Constant,
+    Method,
+}
+
+impl SymbolKind {
+    pub fn to_string(&self) -> &str {
+        match self {
+            SymbolKind::Class => "class",
+            SymbolKind::Module => "module",
+            SymbolKind::Constant => "constant",
+            SymbolKind::Method => "method",
+        }
+    }
 }
 
 #[derive(Debug)]
-pub struct Class {
+pub enum SymbolData {
+    Class(ClassData),
+    Module(ModuleData),
+    Constant(ConstantData),
+    Method(MethodData),
+}
+
+impl std::fmt::Display for SymbolData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SymbolData::Class(data) => write!(f, "{}", data),
+            SymbolData::Module(data) => write!(f, "{}", data),
+            SymbolData::Constant(data) => write!(f, "{}", data),
+            SymbolData::Method(data) => write!(f, "{}", data),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Symbol {
+    pub kind: SymbolKind,
     pub name: String,
     pub location: Location,
+    pub data: Option<SymbolData>,
+}
+
+impl Symbol {
+    pub fn new(kind: SymbolKind, name: String, location: Location, data: Option<SymbolData>) -> Self {
+        Self { kind, name, location, data }
+    }
+}
+
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} ({}) {}", self.kind.to_string(), self.name, self.location, self.data.as_ref().map(|data| data.to_string()).unwrap_or(String::new()))
+    }
+}
+
+#[derive(Debug)]
+pub struct ClassData {
     pub superclass: Option<String>,
     pub visibility: Option<String>,
 }
 
-impl Class {
-    pub fn new(name: String, location: Location, superclass: Option<String>, visibility: Option<String>) -> Self {
-        Self { name, location, superclass, visibility }
+impl std::fmt::Display for ClassData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "< {}", self.superclass.as_ref().unwrap_or(&String::new()))
     }
 }
 
 #[derive(Debug)]
-pub struct Module {
-    pub name: String,
-    pub location: Location,
+pub struct ModuleData {
     pub visibility: Option<String>,
 }
 
-impl Module {
-    pub fn new(name: String, location: Location, visibility: Option<String>) -> Self {
-        Self { name, location, visibility }
+impl std::fmt::Display for ModuleData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "")
     }
 }
 
 #[derive(Debug)]
-pub struct Constant {
-    pub name: String,
-    pub location: Location,
+pub struct ConstantData {
     pub visibility: Option<String>,
     pub value: Option<String>,
 }
 
-impl Constant {
-    pub fn new(name: String, location: Location, visibility: Option<String>, value: Option<String>) -> Self {
-        Self { name, location, visibility, value }
+impl std::fmt::Display for ConstantData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value.as_ref().unwrap_or(&String::new()))
     }
 }
 
 #[derive(Debug)]
-pub struct Method {
-    pub name: String,
-    pub location: Location,
+pub struct MethodData {
     pub visibility: Option<String>,
-    pub arguments: Vec<String>,
+    pub parameters: Vec<String>,
 }
 
-impl Method {
-    pub fn new(name: String, location: Location, visibility: Option<String>, arguments: Vec<String>) -> Self {
-        Self { name, location, visibility, arguments }
+impl std::fmt::Display for MethodData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.parameters.join(", "))
     }
 }
