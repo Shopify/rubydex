@@ -11,6 +11,7 @@ mod ast_enum;
 mod ast_data;
 mod ast_base;
 mod location;
+mod tables;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Mode {

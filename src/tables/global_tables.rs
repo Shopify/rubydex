@@ -1,4 +1,4 @@
-use crate::string_pool::{PoolId, StringPool};
+use crate::tables::string_pool::{PoolId, StringPool};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
