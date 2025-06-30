@@ -5,7 +5,7 @@ static VALUE cRepository;
 
 static void repository_free(void *ptr) {
     if (ptr) {
-        free(ptr);
+        free_repo(ptr);
     }
 }
 
@@ -53,9 +53,17 @@ static VALUE rb_repository_index_all(VALUE self, VALUE file_paths) {
     return Qnil;
 }
 
+static VALUE rb_repository_size(VALUE self) {
+    void* repository;
+    TypedData_Get_Struct(self, void*, &repository_type, repository);
+    size_t size = repo_size(repository);
+    return SIZET2NUM(size);
+}
+
 void initialize_repository(VALUE mIndex) {
     cRepository = rb_define_class_under(mIndex, "Repository", rb_cObject);
 
     rb_define_alloc_func(cRepository, rb_repository_alloc);
     rb_define_method(cRepository, "index_all", rb_repository_index_all, 1);
+    rb_define_method(cRepository, "size", rb_repository_size, 0);
 }

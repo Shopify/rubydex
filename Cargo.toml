@@ -11,6 +11,7 @@ cbindgen = "0.29"
 
 [dependencies]
 libc = "0.2.174"
+ruby-prism = "1.4.0"
 
 [profile.release]
 lto = true
