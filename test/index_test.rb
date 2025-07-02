@@ -7,10 +7,8 @@ class IndexRustyTest < Minitest::Test
     refute_nil(::Index::VERSION)
   end
 
-  def test_add_entry
+  def test_index_all
     repository = Index::Repository.new
-    repository.add_entry("key", "value")
-    entry = repository.get_entry("key")
-    assert_equal(entry.value, "value")
+    repository.index_all([__FILE__])
   end
 end
