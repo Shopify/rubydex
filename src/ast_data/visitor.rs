@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use ruby_prism::{Visit};
-use crate::ast_data::{symbol::{Symbol, SymbolKind, SymbolData, ClassData, MethodData}};
+use crate::{ast_data::symbol::{ClassData, MethodData, Symbol, SymbolData, SymbolKind}, tables::global_tables::{intern_name, NameId}};
 use crate::location::Location;
 
 #[derive(Debug)]
@@ -20,9 +20,9 @@ impl<'a> Visit<'a> for Visitor<'a> {
         let class_name = String::from_utf8_lossy(node.name().as_slice());
         let location = Location::new(self.file.to_string(), node.location().start_offset(), node.location().end_offset());
 
-        let mut superclass: Option<String> = None;
+        let mut superclass: Option<NameId> = None;
         if let Some(superclass_name) = node.superclass() {
-            superclass = Some(String::from_utf8_lossy(superclass_name.location().as_slice()).to_string());
+            superclass = Some(intern_name(&String::from_utf8_lossy(superclass_name.location().as_slice()).to_string()));
         }
 
         let data = ClassData {
