@@ -11,6 +11,7 @@ mod ast_enum;
 mod ast_data;
 mod ast_base;
 mod location;
+mod pool;
 mod tables;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -77,6 +78,7 @@ fn collect_files(paths: &[String]) -> Vec<String> {
 }
 
 fn process_files_base(files: &[String]) {
+    let mut tables = tables::GlobalTables::new();
     let mut symbols_table: HashMap<String, ast_base::symbol::Symbol> = HashMap::new();
 
     for file in files {
@@ -89,18 +91,19 @@ fn process_files_base(files: &[String]) {
         };
 
         let result = ruby_prism::parse(source.as_ref());
-        let mut visitor = ast_base::visitor::Visitor::new(file, &mut symbols_table);
+        let mut visitor = ast_base::visitor::Visitor::new(&mut tables, file, &mut symbols_table);
         visitor.visit(&result.node());
     }
 
     println!("  Found {} symbols.", symbols_table.len());
 
-    // for (_, symbol) in symbols_table.iter() {
-    //     println!("{}", symbol);
-    // }
+    for (_, symbol) in symbols_table.iter() {
+        println!("{}", symbol.to_string(&tables));
+    }
 }
 
 fn process_files_data(files: &[String]) {
+    let mut tables = tables::GlobalTables::new();
     let mut symbols_table: HashMap<String, ast_data::symbol::Symbol> = HashMap::new();
 
     for file in files {
@@ -113,7 +116,7 @@ fn process_files_data(files: &[String]) {
         };
 
         let result = ruby_prism::parse(source.as_ref());
-        let mut visitor = ast_data::visitor::Visitor::new(file, &mut symbols_table);
+        let mut visitor = ast_data::visitor::Visitor::new(&mut tables, file, &mut symbols_table);
         visitor.visit(&result.node());
     }
 
@@ -125,6 +128,7 @@ fn process_files_data(files: &[String]) {
 }
 
 fn process_files_enum(files: &[String]) {
+    let mut tables = tables::GlobalTables::new();
     let mut symbols_table: HashMap<String, ast_enum::symbol::Symbol> = HashMap::new();
 
     for file in files {
@@ -137,7 +141,7 @@ fn process_files_enum(files: &[String]) {
         };
 
         let result = ruby_prism::parse(source.as_ref());
-        let mut visitor = ast_enum::visitor::Visitor::new(file, &mut symbols_table);
+        let mut visitor = ast_enum::visitor::Visitor::new(&mut tables, file, &mut symbols_table);
         visitor.visit(&result.node());
     }
 

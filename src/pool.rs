@@ -20,6 +20,7 @@ use std::rc::Rc;
 /// # let name_id = name_pool.add("Foo::Bar#method".into());
 /// # uri_pool.get(&name_id) // Not possible. This will fail to compile because of the ID types
 /// ```
+#[derive(Debug)]
 pub struct Pool<I, T: Eq + std::hash::Hash> {
     id_to_entry: HashMap<usize, Rc<T>>,
     entry_to_id: HashMap<Rc<T>, usize>,

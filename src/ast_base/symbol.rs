@@ -1,5 +1,6 @@
 use crate::location::Location;
-use crate::tables::global_tables::{NameId, intern_name, with_name};
+use crate::tables::{NameId, GlobalTables};
+use crate::pool::PoolId;
 
 #[derive(Debug)]
 pub enum SymbolKind {
@@ -23,73 +24,63 @@ impl SymbolKind {
 #[derive(Debug)]
 pub struct Symbol {
     pub kind: SymbolKind,
-    pub name_id: NameId, // Memory-efficient name reference using global table
+    pub name_id: PoolId<NameId>,
     pub location: Location,
 }
 
 impl Symbol {
-    pub fn new(kind: SymbolKind, name: String, location: Location) -> Self {
-        let name_id = intern_name(&name);
+    pub fn new(kind: SymbolKind, name_id: PoolId<NameId>, location: Location) -> Self {
         Self { kind, name_id, location }
     }
 
-    pub fn new_with_id(kind: SymbolKind, name_id: NameId, location: Location) -> Self {
-        Self { kind, name_id, location }
+    pub fn as_class(&self) -> Option<&Class> {
+        match self.kind {
+            SymbolKind::Class => Some(mem::transmute(self)),
+            _ => None,
+        }
     }
 
-    /// Get the symbol name as a string
-    pub fn name(&self) -> Option<String> {
-        with_name(self.name_id, |s| s.to_string())
+    pub fn as_module(&self) -> Option<&Module> {
+        match self.kind {
+            SymbolKind::Module => Some(&self),
+            _ => None,
+        }
     }
 
-    /// Execute a function with the symbol name
-    pub fn with_name<R>(&self, f: impl FnOnce(&str) -> R) -> Option<R> {
-        with_name(self.name_id, f)
+    pub fn as_constant(&self) -> Option<&Constant> {
+        match self.kind {
+            SymbolKind::Constant => Some(&self),
+            _ => None,
+        }
     }
-}
 
-impl std::fmt::Display for Symbol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = self.name().unwrap_or_else(|| "<unknown>".to_string());
-        write!(f, "{} {} ({})", self.kind.to_string(), name, self.location)
+    pub fn as_method(&self) -> Option<&Method> {
+        match self.kind {
+            SymbolKind::Method => Some(&self),
+            _ => None,
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct Class {
     pub base: Symbol,
-    pub superclass: Option<NameId>, // Also intern superclass names
+    pub superclass: Option<PoolId<NameId>>,
     pub visibility: Option<String>,
 }
 
 impl Class {
-    pub fn new(name: String, location: Location, superclass: Option<String>, visibility: Option<String>) -> Self {
-        let superclass = superclass.map(|s| intern_name(&s));
+    pub fn new(name_id: PoolId<NameId>, location: Location, superclass: Option<PoolId<NameId>>, visibility: Option<String>) -> Self {
         Self {
-            base: Symbol::new(SymbolKind::Class, name, location),
+            base: Symbol::new(SymbolKind::Class, name_id, location),
             superclass,
             visibility,
         }
     }
 
-    pub fn new_with_ids(name_id: NameId, location: Location, superclass: Option<NameId>, visibility: Option<String>) -> Self {
-        Self {
-            base: Symbol::new_with_id(SymbolKind::Class, name_id, location),
-            superclass,
-            visibility,
-        }
-    }
-
-    /// Get the superclass name as a string
-    pub fn superclass_name(&self) -> Option<String> {
-        self.superclass.and_then(|id| with_name(id, |s| s.to_string()))
-    }
-}
-
-impl std::fmt::Display for Class {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let superclass = self.superclass_name().unwrap_or_else(|| String::new());
-        write!(f, "{} < {}", self.base, superclass)
+    pub fn to_string(&self, tables: &GlobalTables) -> String {
+        let superclass_name = self.superclass.as_ref().map(|id| tables.names.get(id).unwrap().to_string());
+        format!("{} < {}", self.base.to_string(tables), superclass_name.as_ref().unwrap_or(&String::new()))
     }
 }
 
@@ -100,17 +91,15 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn new(name: String, location: Location, visibility: Option<String>) -> Self {
+    pub fn new(name_id: PoolId<NameId>, location: Location, visibility: Option<String>) -> Self {
         Self {
-            base: Symbol::new(SymbolKind::Module, name, location),
+            base: Symbol::new(SymbolKind::Module, name_id, location),
             visibility,
         }
     }
-}
 
-impl std::fmt::Display for Module {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.base)
+    pub fn to_string(&self, tables: &GlobalTables) -> String {
+        format!("{} ({})", self.base.to_string(tables), self.visibility.as_ref().unwrap_or(&String::new()))
     }
 }
 
@@ -122,40 +111,38 @@ pub struct Constant {
 }
 
 impl Constant {
-    pub fn new(name: String, location: Location, visibility: Option<String>, value: Option<String>) -> Self {
+    pub fn new(name_id: PoolId<NameId>, location: Location, visibility: Option<String>, value: Option<String>) -> Self {
         Self {
-            base: Symbol::new(SymbolKind::Constant, name, location),
+            base: Symbol::new(SymbolKind::Constant, name_id, location),
             visibility,
             value,
         }
     }
-}
 
-impl std::fmt::Display for Constant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.base)
+    pub fn to_string(&self, tables: &GlobalTables) -> String {
+        format!("{} ({})", self.base.to_string(tables), self.value.as_ref().unwrap_or(&String::new()))
     }
 }
+
 
 #[derive(Debug)]
 pub struct Method {
     pub base: Symbol,
     pub visibility: Option<String>,
-    pub parameters: Vec<String>,
+    pub parameters: Vec<PoolId<NameId>>,
 }
 
 impl Method {
-    pub fn new(name: String, location: Location, visibility: Option<String>, parameters: Vec<String>) -> Self {
+    pub fn new(name_id: PoolId<NameId>, location: Location, visibility: Option<String>, parameters: Vec<PoolId<NameId>>) -> Self {
         Self {
-            base: Symbol::new(SymbolKind::Method, name, location),
+            base: Symbol::new(SymbolKind::Method, name_id, location),
             visibility,
             parameters,
         }
     }
-}
 
-impl std::fmt::Display for Method {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.base, self.parameters.join(", "))
+    pub fn to_string(&self, tables: &GlobalTables) -> String {
+        let parameters = self.parameters.iter().map(|id| tables.names.get(id).unwrap().to_string()).collect::<Vec<String>>().join(", ");
+        format!("{} ({})", self.base.to_string(tables), parameters)
     }
 }
