@@ -20,6 +20,14 @@ exit_code=$?
 
 echo "----------------------------------------"
 
+if [ "$exit_code" -ne 0 ]; then
+    echo "----------------------------------------"
+    echo "Command failed with exit code: $exit_code"
+    cat "$temp_file"
+    echo "----------------------------------------"
+    exit $exit_code
+fi
+
 # Extract memory statistics
 mrss=$(grep "maximum resident set size" "$temp_file" | awk '{print $1}')
 peak=$(grep "peak memory footprint" "$temp_file" | awk '{print $1}')

@@ -2,21 +2,17 @@ use std::process;
 use std::path::Path;
 use glob::glob;
 use std::collections::HashMap;
-use ast_enum::symbol::{Symbol};
-use ast_enum::visitor::{Visitor};
 use ruby_prism::Visit;
 use clap::{Parser, ValueEnum};
 
 mod ast_enum;
 mod ast_data;
-mod ast_base;
 mod location;
 mod pool;
 mod tables;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Mode {
-    Base,
     Data,
     Enum,
 }
@@ -30,6 +26,12 @@ struct Args {
 
     #[arg(long, value_enum, default_value_t = Mode::Data)]
     mode: Mode,
+
+    #[arg(long, default_value_t = false)]
+    print_symbols: bool,
+
+    #[arg(long, default_value_t = false)]
+    simulate_cache: bool,
 }
 
 fn glob_files(dir_path: &str) -> Vec<String> {
@@ -47,7 +49,7 @@ fn glob_files(dir_path: &str) -> Vec<String> {
                     match entry {
                         Ok(file_path) => {
                             let path_str = file_path.to_string_lossy().to_string();
-                            if !files.contains(&path_str) {
+                            if !files.contains(&path_str) && Path::new(&path_str).is_file() {
                                 files.push(path_str);
                             }
                         }
@@ -77,9 +79,9 @@ fn collect_files(paths: &[String]) -> Vec<String> {
     files
 }
 
-fn process_files_base(files: &[String]) {
+fn process_files_data(files: &[String], print_symbols: bool, simulate_cache: bool) {
     let mut tables = tables::GlobalTables::new();
-    let mut symbols_table: HashMap<String, ast_base::symbol::Symbol> = HashMap::new();
+    let mut symbols_table: HashMap<String, Vec<ast_data::symbol::Symbol>> = HashMap::new();
 
     for file in files {
         let source = match std::fs::read_to_string(file) {
@@ -91,45 +93,24 @@ fn process_files_base(files: &[String]) {
         };
 
         let result = ruby_prism::parse(source.as_ref());
-        let mut visitor = ast_base::visitor::Visitor::new(&mut tables, file, &mut symbols_table);
+        let mut visitor = ast_data::visitor::Visitor::new(&mut tables, file, &mut symbols_table, !simulate_cache);
         visitor.visit(&result.node());
     }
 
-    println!("  Found {} symbols.", symbols_table.len());
+    println!("  Found {} symbols.", symbols_table.values().flatten().count());
 
-    for (_, symbol) in symbols_table.iter() {
-        println!("{}", symbol.to_string(&tables));
-    }
-}
-
-fn process_files_data(files: &[String]) {
-    let mut tables = tables::GlobalTables::new();
-    let mut symbols_table: HashMap<String, ast_data::symbol::Symbol> = HashMap::new();
-
-    for file in files {
-        let source = match std::fs::read_to_string(file) {
-            Ok(content) => content,
-            Err(err) => {
-                eprintln!("Error reading file {}: {}", file, err);
-                return;
+    if print_symbols {
+        for (_, symbols) in symbols_table.iter() {
+            for symbol in symbols {
+                println!("{}", symbol.to_string(&tables));
             }
-        };
-
-        let result = ruby_prism::parse(source.as_ref());
-        let mut visitor = ast_data::visitor::Visitor::new(&mut tables, file, &mut symbols_table);
-        visitor.visit(&result.node());
+        }
     }
-
-    println!("  Found {} symbols.", symbols_table.len());
-
-    // for (_, symbol) in symbols_table.iter() {
-    //     println!("{}", symbol);
-    // }
 }
 
-fn process_files_enum(files: &[String]) {
+fn process_files_enum(files: &[String], print_symbols: bool) {
     let mut tables = tables::GlobalTables::new();
-    let mut symbols_table: HashMap<String, ast_enum::symbol::Symbol> = HashMap::new();
+    let mut symbols_table: HashMap<String, Vec<ast_enum::symbol::Symbol>> = HashMap::new();
 
     for file in files {
         let source = match std::fs::read_to_string(file) {
@@ -145,11 +126,15 @@ fn process_files_enum(files: &[String]) {
         visitor.visit(&result.node());
     }
 
-    println!("  Found {} symbols.", symbols_table.len());
+    println!("  Found {} symbols.", symbols_table.values().flatten().count());
 
-    // for (_, symbol) in symbols_table.iter() {
-    //     println!("{}", symbol);
-    // }
+    if print_symbols {
+        for (_, symbols) in symbols_table.iter() {
+            for symbol in symbols {
+                println!("{}", symbol.to_string(&tables));
+            }
+        }
+    }
 }
 
 fn main() {
@@ -159,9 +144,8 @@ fn main() {
     println!("  Found {} files.", files.len());
 
     match args.mode {
-        Mode::Base => process_files_base(&files),
-        Mode::Data => process_files_data(&files),
-        Mode::Enum => process_files_enum(&files),
+        Mode::Data => process_files_data(&files, args.print_symbols, args.simulate_cache),
+        Mode::Enum => process_files_enum(&files, args.print_symbols),
     }
 
     process::exit(0);

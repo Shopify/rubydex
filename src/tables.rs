@@ -24,14 +24,14 @@ impl GlobalTables {
         }
     }
 
-    /// Get statistics about memory usage
-    pub fn stats(&self) -> GlobalStats {
-        GlobalStats {
-            file_count: self.files.size(),
-            name_count: self.names.size(),
-            total_strings: self.files.size() + self.names.size(),
-        }
-    }
+    // /// Get statistics about memory usage
+    // pub fn stats(&self) -> GlobalStats {
+    //     GlobalStats {
+    //         file_count: self.files.size(),
+    //         name_count: self.names.size(),
+    //         total_strings: self.files.size() + self.names.size(),
+    //     }
+    // }
 }
 
 impl Default for GlobalTables {

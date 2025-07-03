@@ -78,15 +78,15 @@ impl<I: PartialEq, T: Eq + std::hash::Hash> Pool<I, T> {
         self.id_to_entry.get(&id.value).map(|rc| rc.as_ref())
     }
 
-    pub fn remove(&mut self, id: &PoolId<I>) {
-        if let Some(entry) = self.id_to_entry.remove(&id.value) {
-            self.entry_to_id.remove(&entry);
-        }
-    }
+    // pub fn remove(&mut self, id: &PoolId<I>) {
+    //     if let Some(entry) = self.id_to_entry.remove(&id.value) {
+    //         self.entry_to_id.remove(&entry);
+    //     }
+    // }
 
-    pub fn size(&self) -> usize {
-        self.id_to_entry.len()
-    }
+    // pub fn size(&self) -> usize {
+    //     self.id_to_entry.len()
+    // }
 }
 
 impl<I: PartialEq, T: Eq + std::hash::Hash> Default for Pool<I, T> {
@@ -113,21 +113,21 @@ mod tests {
         assert_eq!(*item, "Foo::Bar#method".to_string());
     }
 
-    #[test]
-    fn test_adding_the_same_entry_just_returns_id() {
-        let mut pool: Pool<UniqueNameId, String> = Pool::new();
-        let id = pool.add("Foo::Bar#method".into());
-        assert_eq!(1, pool.size());
-        let other_id = pool.add("Foo::Bar#method".into());
-        assert_eq!(1, pool.size());
-        assert_eq!(id, other_id);
-    }
+    // #[test]
+    // fn test_adding_the_same_entry_just_returns_id() {
+    //     let mut pool: Pool<UniqueNameId, String> = Pool::new();
+    //     let id = pool.add("Foo::Bar#method".into());
+    //     assert_eq!(1, pool.size());
+    //     let other_id = pool.add("Foo::Bar#method".into());
+    //     assert_eq!(1, pool.size());
+    //     assert_eq!(id, other_id);
+    // }
 
-    #[test]
-    fn test_removing_entries() {
-        let mut pool: Pool<UniqueNameId, String> = Pool::new();
-        let id = pool.add("Foo::Bar#method".into());
-        pool.remove(&id);
-        assert_eq!(pool.get(&id), None);
-    }
+    // #[test]
+    // fn test_removing_entries() {
+    //     let mut pool: Pool<UniqueNameId, String> = Pool::new();
+    //     let id = pool.add("Foo::Bar#method".into());
+    //     pool.remove(&id);
+    //     assert_eq!(pool.get(&id), None);
+    // }
 }

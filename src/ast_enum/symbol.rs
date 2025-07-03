@@ -36,7 +36,12 @@ impl Class {
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
         let superclass = self.superclass.as_ref().map(|id| tables.names.get(id).unwrap().to_string());
-        format!("{} < {}", tables.names.get(&self.name_id).unwrap().to_string(), superclass.as_ref().unwrap_or(&String::new()))
+        let name = tables.names.get(&self.name_id).unwrap().to_string();
+        if let Some(superclass) = superclass {
+            format!("{} class {} < {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), name, superclass, self.location.to_string(tables))
+        } else {
+            format!("{} class {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), name, self.location.to_string(tables))
+        }
     }
 }
 
@@ -53,7 +58,7 @@ impl Module {
     }
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
-        format!("{}", tables.names.get(&self.name_id).unwrap().to_string())
+        format!("{} module {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), self.location.to_string(tables))
     }
 }
 
@@ -71,7 +76,7 @@ impl Constant {
     }
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
-        format!("{}", tables.names.get(&self.name_id).unwrap().to_string())
+        format!("{} constant {} = {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), self.value.as_ref().unwrap_or(&String::new()), self.location.to_string(tables))
     }
 }
 
@@ -90,6 +95,6 @@ impl Method {
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
         let parameters = self.parameters.iter().map(|id| tables.names.get(id).unwrap().to_string()).collect::<Vec<String>>().join(", ");
-        format!("{} ({})", self.visibility.as_ref().unwrap_or(&String::new()), parameters)
+        format!("{} method {}({}) -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), parameters, self.location.to_string(tables))
     }
 }

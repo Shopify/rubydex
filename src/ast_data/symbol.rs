@@ -55,8 +55,8 @@ impl Symbol {
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
         let name = tables.names.get(&self.name_id).unwrap().to_string();
-        let data_str = self.data.as_ref().map(|data| data.to_string(tables)).unwrap_or(String::new());
-        format!("{} {} ({}) {}", self.kind.to_string(), name, self.location.to_string(tables), data_str)
+        let data_str = self.data.as_ref().map(|data| data.to_string(tables)).unwrap_or_default();
+        format!("{} {}{} -- {}", self.kind.to_string(), name, data_str, self.location.to_string(tables))
     }
 }
 
@@ -73,7 +73,7 @@ impl ClassData {
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
         let superclass = self.superclass.as_ref().map(|id| tables.names.get(id).unwrap().to_string());
-        format!("< {}", superclass.as_ref().unwrap_or(&String::new()))
+        format!(" < {} {}", superclass.as_ref().unwrap_or(&String::new()), self.visibility.as_ref().unwrap_or(&String::new()))
     }
 }
 
@@ -83,8 +83,12 @@ pub struct ModuleData {
 }
 
 impl ModuleData {
-    pub fn to_string(&self, tables: &GlobalTables) -> String {
-        format!("{}", self.visibility.as_ref().unwrap_or(&String::new()))
+    pub fn new(visibility: Option<String>) -> Self {
+        Self { visibility }
+    }
+
+    pub fn to_string(&self, _tables: &GlobalTables) -> String {
+        format!(" {}", self.visibility.as_ref().unwrap_or(&String::new()))
     }
 }
 
@@ -95,8 +99,12 @@ pub struct ConstantData {
 }
 
 impl ConstantData {
-    pub fn to_string(&self, tables: &GlobalTables) -> String {
-        format!("{}", self.value.as_ref().unwrap_or(&String::new()))
+    pub fn new(visibility: Option<String>, value: Option<String>) -> Self {
+        Self { visibility, value }
+    }
+
+    pub fn to_string(&self, _tables: &GlobalTables) -> String {
+        format!(" = {} {}", self.value.as_ref().unwrap_or(&String::new()), self.visibility.as_ref().unwrap_or(&String::new()))
     }
 }
 
@@ -113,7 +121,7 @@ impl MethodData {
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
         let parameters = self.parameters.iter().map(|id| tables.names.get(id).unwrap().to_string()).collect::<Vec<String>>().join(", ");
-        format!("{} ({})", self.visibility.as_ref().unwrap_or(&String::new()), parameters)
+        format!("({}) {}", parameters, self.visibility.as_ref().unwrap_or(&String::new()))
     }
 }
 
