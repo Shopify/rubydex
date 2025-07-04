@@ -1,6 +1,6 @@
-use crate::location::Location;
-use crate::tables::{NameId, GlobalTables};
+use crate::offset::Offset;
 use crate::pool::PoolId;
+use crate::tables::{NameId, GlobalTables};
 
 #[derive(Debug, PartialEq)]
 pub enum SymbolKind {
@@ -48,19 +48,19 @@ impl SymbolData {
 pub struct Symbol {
     pub kind: SymbolKind,
     pub name_id: PoolId<NameId>,
-    pub location: Location,
+    pub offset: Offset,
     pub data: Option<SymbolData>,
 }
 
 impl Symbol {
-    pub fn new(kind: SymbolKind, name_id: PoolId<NameId>, location: Location, data: Option<SymbolData>) -> Self {
-        Self { kind, name_id, location, data }
+    pub fn new(kind: SymbolKind, name_id: PoolId<NameId>, offset: Offset, data: Option<SymbolData>) -> Self {
+        Self { kind, name_id, offset, data }
     }
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
         let name = tables.names.get(&self.name_id).unwrap().to_string();
         let data_str = self.data.as_ref().map(|data| data.to_string(tables)).unwrap_or_default();
-        format!("{} {}{} -- {}", self.kind.to_string(), name, data_str, self.location.to_string(tables))
+        format!("{} {}{} -- {}", self.kind.to_string(), name, data_str, self.offset)
     }
 }
 
@@ -134,6 +134,7 @@ pub enum VarKind {
     Local,
     Instance,
     Class,
+    Global,
 }
 
 impl VarKind {
@@ -142,6 +143,7 @@ impl VarKind {
             VarKind::Local => "local",
             VarKind::Instance => "instance",
             VarKind::Class => "class",
+            VarKind::Global => "global",
         }
     }
 }

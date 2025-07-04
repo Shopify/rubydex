@@ -1,6 +1,6 @@
-use crate::location::Location;
-use crate::tables::{NameId, GlobalTables};
+use crate::offset::Offset;
 use crate::pool::PoolId;
+use crate::tables::{NameId, GlobalTables};
 
 #[derive(Debug)]
 pub enum Symbol {
@@ -26,23 +26,23 @@ impl Symbol {
 #[derive(Debug)]
 pub struct Class {
     pub name_id: PoolId<NameId>,
-    pub location: Location,
+    pub offset: Offset,
     pub superclass: Option<PoolId<NameId>>,
     pub visibility: Option<String>,
 }
 
 impl Class {
-    pub fn new(name_id: PoolId<NameId>, location: Location, superclass: Option<PoolId<NameId>>, visibility: Option<String>) -> Self {
-        Self { name_id, location, superclass, visibility }
+    pub fn new(name_id: PoolId<NameId>, offset: Offset, superclass: Option<PoolId<NameId>>, visibility: Option<String>) -> Self {
+        Self { name_id, offset, superclass, visibility }
     }
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
         let superclass = self.superclass.as_ref().map(|id| tables.names.get(id).unwrap().to_string());
         let name = tables.names.get(&self.name_id).unwrap().to_string();
         if let Some(superclass) = superclass {
-            format!("{} class {} < {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), name, superclass, self.location.to_string(tables))
+            format!("{} class {} < {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), name, superclass, self.offset)
         } else {
-            format!("{} class {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), name, self.location.to_string(tables))
+            format!("{} class {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), name, self.offset)
         }
     }
 }
@@ -50,54 +50,54 @@ impl Class {
 #[derive(Debug)]
 pub struct Module {
     pub name_id: PoolId<NameId>,
-    pub location: Location,
+    pub offset: Offset,
     pub visibility: Option<String>,
 }
 
 impl Module {
-    pub fn new(name_id: PoolId<NameId>, location: Location, visibility: Option<String>) -> Self {
-        Self { name_id, location, visibility }
+    pub fn new(name_id: PoolId<NameId>, offset: Offset, visibility: Option<String>) -> Self {
+        Self { name_id, offset, visibility }
     }
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
-        format!("{} module {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), self.location.to_string(tables))
+        format!("{} module {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), self.offset)
     }
 }
 
 #[derive(Debug)]
 pub struct Constant {
     pub name_id: PoolId<NameId>,
-    pub location: Location,
+    pub offset: Offset,
     pub visibility: Option<String>,
     pub value: Option<String>,
 }
 
 impl Constant {
-    pub fn new(name_id: PoolId<NameId>, location: Location, visibility: Option<String>, value: Option<String>) -> Self {
-        Self { name_id, location, visibility, value }
+    pub fn new(name_id: PoolId<NameId>, offset: Offset, visibility: Option<String>, value: Option<String>) -> Self {
+        Self { name_id, offset, visibility, value }
     }
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
-        format!("{} constant {} = {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), self.value.as_ref().unwrap_or(&String::new()), self.location.to_string(tables))
+        format!("{} constant {} = {} -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), self.value.as_ref().unwrap_or(&String::new()), self.offset)
     }
 }
 
 #[derive(Debug)]
 pub struct Method {
     pub name_id: PoolId<NameId>,
-    pub location: Location,
+    pub offset: Offset,
     pub visibility: Option<String>,
     pub parameters: Vec<PoolId<NameId>>,
 }
 
 impl Method {
-    pub fn new(name_id: PoolId<NameId>, location: Location, visibility: Option<String>, parameters: Vec<PoolId<NameId>>) -> Self {
-        Self { name_id, location, visibility, parameters }
+    pub fn new(name_id: PoolId<NameId>, offset: Offset, visibility: Option<String>, parameters: Vec<PoolId<NameId>>) -> Self {
+        Self { name_id, offset, visibility, parameters }
     }
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
         let parameters = self.parameters.iter().map(|id| tables.names.get(id).unwrap().to_string()).collect::<Vec<String>>().join(", ");
-        format!("{} method {}({}) -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), parameters, self.location.to_string(tables))
+        format!("{} method {}({}) -- {}", self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), parameters, self.offset)
     }
 }
 
@@ -106,6 +106,7 @@ pub enum VarKind {
     Local,
     Instance,
     Class,
+    Global,
 }
 
 impl VarKind {
@@ -114,6 +115,7 @@ impl VarKind {
             VarKind::Local => "local",
             VarKind::Instance => "instance",
             VarKind::Class => "class",
+            VarKind::Global => "global",
         }
     }
 }
@@ -121,17 +123,17 @@ impl VarKind {
 #[derive(Debug)]
 pub struct Var {
     pub name_id: PoolId<NameId>,
-    pub location: Location,
+    pub offset: Offset,
     pub visibility: Option<String>,
     pub kind: VarKind,
 }
 
 impl Var {
-    pub fn new(name_id: PoolId<NameId>, location: Location, visibility: Option<String>, kind: VarKind) -> Self {
-        Self { name_id, location, visibility, kind }
+    pub fn new(name_id: PoolId<NameId>, offset: Offset, visibility: Option<String>, kind: VarKind) -> Self {
+        Self { name_id, offset, visibility, kind }
     }
 
     pub fn to_string(&self, tables: &GlobalTables) -> String {
-        format!("{} var {} {} -- {}", self.kind.to_string(), self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), self.location.to_string(tables))
+        format!("{} var {} {} -- {}", self.kind.to_string(), self.visibility.as_ref().unwrap_or(&String::new()), tables.names.get(&self.name_id).unwrap(), self.offset)
     }
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use ruby_prism::{Visit};
 use crate::ast_enum::{symbol::{Symbol, Class, Module, Constant, Method, Var, VarKind}};
-use crate::location::Location;
+use crate::offset::Offset;
 use crate::tables::{GlobalTables, NameId};
 use crate::pool::PoolId;
 
@@ -16,6 +16,10 @@ impl<'a> Visitor<'a> {
     pub fn new(tables: &'a mut GlobalTables, file: &'a str, symbols_table: &'a mut HashMap<PoolId<NameId>, Vec<Symbol>>) -> Self {
         Self { tables, file, symbols_table }
     }
+
+    pub fn location_to_offset(&self, location: &ruby_prism::Location) -> Offset {
+        Offset::new(location.start_offset() as u32, location.end_offset() as u32)
+    }
 }
 
 impl<'a> Visit<'a> for Visitor<'a> {
@@ -23,14 +27,14 @@ impl<'a> Visit<'a> for Visitor<'a> {
         let name = String::from_utf8_lossy(node.name().as_slice());
         let name_id = self.tables.names.add(name.to_string());
 
-        let location = Location::new(self.tables.files.add(self.file.to_string()), node.location().start_offset(), node.location().end_offset());
+        let offset = self.location_to_offset(&node.location());
 
         let mut superclass: Option<PoolId<NameId>> = None;
         if let Some(superclass_name) = node.superclass() {
             superclass = Some(self.tables.names.add(String::from_utf8_lossy(superclass_name.location().as_slice()).to_string()));
         }
 
-        let symbol = Class::new(name_id, location, superclass, None);
+        let symbol = Class::new(name_id, offset, superclass, None);
 
         if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
             symbols.push(Symbol::Class(symbol));
@@ -45,8 +49,8 @@ impl<'a> Visit<'a> for Visitor<'a> {
         let name = String::from_utf8_lossy(node.name().as_slice());
         let name_id = self.tables.names.add(name.to_string());
 
-        let location = Location::new(self.tables.files.add(self.file.to_string()), node.location().start_offset(), node.location().end_offset());
-        let symbol = Module::new(name_id, location, None);
+        let offset = self.location_to_offset(&node.location());
+        let symbol = Module::new(name_id, offset, None);
 
         if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
             symbols.push(Symbol::Module(symbol));
@@ -61,9 +65,9 @@ impl<'a> Visit<'a> for Visitor<'a> {
         let name = String::from_utf8_lossy(node.name().as_slice());
         let name_id = self.tables.names.add(name.to_string());
 
-        let location = Location::new(self.tables.files.add(self.file.to_string()), node.location().start_offset(), node.location().end_offset());
+        let offset = self.location_to_offset(&node.location());
         let value = String::from_utf8_lossy(node.value().location().as_slice());
-        let symbol = Constant::new(name_id, location, None, Some(value.to_string()));
+        let symbol = Constant::new(name_id, offset, None, Some(value.to_string()));
 
         if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
             symbols.push(Symbol::Constant(symbol));
@@ -78,7 +82,7 @@ impl<'a> Visit<'a> for Visitor<'a> {
         let name = String::from_utf8_lossy(node.name().as_slice());
         let name_id = self.tables.names.add(name.to_string());
 
-        let location = Location::new(self.tables.files.add(self.file.to_string()), node.location().start_offset(), node.location().end_offset());
+        let offset = self.location_to_offset(&node.location());
 
         let mut parameters: Vec<PoolId<NameId>> = Vec::new();
         if let Some(parameters_list) = node.parameters() {
@@ -102,7 +106,7 @@ impl<'a> Visit<'a> for Visitor<'a> {
             }
         }
 
-        let symbol = Method::new(name_id, location, None, parameters);
+        let symbol = Method::new(name_id, offset, None, parameters);
         if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
             symbols.push(Symbol::Method(symbol));
         } else {
@@ -112,46 +116,59 @@ impl<'a> Visit<'a> for Visitor<'a> {
         ruby_prism::visit_def_node(self, node);
     }
 
-    // fn visit_instance_variable_write_node(&mut self,node: &ruby_prism::InstanceVariableWriteNode<'a>) {
-    //     let name = String::from_utf8_lossy(node.name().as_slice());
-    //     let name_id = self.tables.names.add(name.to_string());
+    fn visit_instance_variable_write_node(&mut self,node: &ruby_prism::InstanceVariableWriteNode<'a>) {
+        let name = String::from_utf8_lossy(node.name().as_slice());
+        let name_id = self.tables.names.add(name.to_string());
 
-    //     let location = Location::new(self.tables.files.add(self.file.to_string()), node.location().start_offset(), node.location().end_offset());
-    //     let symbol = Var::new(name_id, location, None, VarKind::Instance);
+        let offset = self.location_to_offset(&node.location());
+        let symbol = Var::new(name_id, offset, None, VarKind::Instance);
 
-    //     if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
-    //         symbols.push(Symbol::Var(symbol));
-    //     } else {
-    //         self.symbols_table.insert(name_id, vec![Symbol::Var(symbol)]);
-    //     }
-    // }
+        if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
+            symbols.push(Symbol::Var(symbol));
+        } else {
+            self.symbols_table.insert(name_id, vec![Symbol::Var(symbol)]);
+        }
+    }
 
-    // fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode<'a>) {
-    //     let name = String::from_utf8_lossy(node.name().as_slice());
-    //     let name_id = self.tables.names.add(name.to_string());
+    fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode<'a>) {
+        let name = String::from_utf8_lossy(node.name().as_slice());
+        let name_id = self.tables.names.add(name.to_string());
 
-    //     let location = Location::new(self.tables.files.add(self.file.to_string()), node.location().start_offset(), node.location().end_offset());
-    //     let symbol = Var::new(name_id, location, None, VarKind::Class);
+        let offset = self.location_to_offset(&node.location());
+        let symbol = Var::new(name_id, offset, None, VarKind::Class);
 
-    //     if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
-    //         symbols.push(Symbol::Var(symbol));
-    //     } else {
-    //         self.symbols_table.insert(name_id, vec![Symbol::Var(symbol)]);
-    //     }
-    // }
+        if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
+            symbols.push(Symbol::Var(symbol));
+        } else {
+            self.symbols_table.insert(name_id, vec![Symbol::Var(symbol)]);
+        }
+    }
 
-    // fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<'a>) {
-    //     let name = String::from_utf8_lossy(node.name().as_slice());
-    //     let name_id = self.tables.names.add(name.to_string());
+    fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<'a>) {
+        let name = String::from_utf8_lossy(node.name().as_slice());
+        let name_id = self.tables.names.add(name.to_string());
 
-    //     let location = Location::new(self.tables.files.add(self.file.to_string()), node.location().start_offset(), node.location().end_offset());
+        let offset = self.location_to_offset(&node.location());
+        let symbol = Var::new(name_id, offset, None, VarKind::Local);
 
-    //     let symbol = Var::new(name_id, location, None, VarKind::Local);
+        if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
+            symbols.push(Symbol::Var(symbol));
+        } else {
+            self.symbols_table.insert(name_id, vec![Symbol::Var(symbol)]);
+        }
+    }
 
-    //     if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
-    //         symbols.push(Symbol::Var(symbol));
-    //     } else {
-    //         self.symbols_table.insert(name_id, vec![Symbol::Var(symbol)]);
-    //     }
-    // }
+    fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode<'a>) {
+        let name = String::from_utf8_lossy(node.name().as_slice());
+        let name_id = self.tables.names.add(name.to_string());
+
+        let offset = self.location_to_offset(&node.location());
+        let symbol = Var::new(name_id, offset, None, VarKind::Global);
+
+        if let Some(symbols) = self.symbols_table.get_mut(&name_id) {
+            symbols.push(Symbol::Var(symbol));
+        } else {
+            self.symbols_table.insert(name_id, vec![Symbol::Var(symbol)]);
+        }
+    }
 }
