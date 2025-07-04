@@ -13,6 +13,7 @@ mod location;
 mod pool;
 mod tables;
 mod locations;
+mod offset;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Mode {
@@ -141,41 +142,39 @@ fn process_files_enum(files: &[String], print_symbols: bool) {
     }
 }
 
-fn locations(files: &[String], print_locations: bool) {
-    println!("  Struct size: {:?}", std::mem::size_of::<locations::Location>());
+fn locations(paths: &[String], print_locations: bool) {
+    println!("  File struct size: {:?}", std::mem::size_of::<locations::File>());
+    println!("  Offset struct size: {:?}", std::mem::size_of::<locations::Offset>());
 
     let mut file_pool = Pool::<locations::FileId, String>::new();
+    let mut files = Vec::new();
+    let mut offsets = Vec::new();
+    for path in paths {
+        let file_id = file_pool.add(path.clone());
+        files.push(locations::File { name_id: file_id });
 
-    let mut locations = Vec::new();
-    for file in files {
-        let file_id = file_pool.add(file.clone());
-
-        let location = locations::Location {
-            file_id,
-            start_offset: 0,
-            end_offset: 0,
-        };
-
-        locations.push(location);
-
-        let source = match std::fs::read_to_string(file) {
+        let source = match std::fs::read_to_string(path) {
             Ok(content) => content,
             Err(err) => {
-                eprintln!("Error reading file {}: {}", file, err);
+                eprintln!("Error reading file {}: {}", path, err);
                 return;
             }
         };
 
         let result = ruby_prism::parse(source.as_ref());
-        let mut visitor = locations::Visitor::new(&mut locations, file_id);
+        let mut visitor = locations::Visitor::new(&mut offsets, path);
         visitor.visit(&result.node());
     }
 
-    println!("  Found {} locations.", locations.len());
+    println!("  Found {} files.", files.len());
+    println!("  Found {} offsets.", offsets.len());
 
     if print_locations {
-        for location in locations {
-            location.show();
+        for file in files {
+            file.show();
+        }
+        for offset in offsets {
+            offset.show();
         }
     }
 }
