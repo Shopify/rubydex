@@ -28,8 +28,8 @@ pub struct Pool<I, T: Eq + std::hash::Hash> {
     _phantom: PhantomData<I>,
 }
 
-#[derive(PartialEq, Debug)]
-pub struct PoolId<I: PartialEq> {
+#[derive(PartialEq, Debug, Eq, Hash, Clone, Copy)]
+pub struct PoolId<I> {
     value: usize,
     _phantom: PhantomData<I>,
 }

@@ -4,6 +4,8 @@ use glob::glob;
 use std::collections::HashMap;
 use ruby_prism::Visit;
 use clap::{Parser, ValueEnum};
+use pool::PoolId;
+use tables::NameId;
 
 mod ast_enum;
 mod ast_data;
@@ -81,7 +83,7 @@ fn collect_files(paths: &[String]) -> Vec<String> {
 
 fn process_files_data(files: &[String], print_symbols: bool, simulate_cache: bool) {
     let mut tables = tables::GlobalTables::new();
-    let mut symbols_table: HashMap<String, Vec<ast_data::symbol::Symbol>> = HashMap::new();
+    let mut symbols_table: HashMap<PoolId<NameId>, Vec<ast_data::symbol::Symbol>> = HashMap::new();
 
     for file in files {
         let source = match std::fs::read_to_string(file) {
@@ -110,7 +112,7 @@ fn process_files_data(files: &[String], print_symbols: bool, simulate_cache: boo
 
 fn process_files_enum(files: &[String], print_symbols: bool) {
     let mut tables = tables::GlobalTables::new();
-    let mut symbols_table: HashMap<String, Vec<ast_enum::symbol::Symbol>> = HashMap::new();
+    let mut symbols_table: HashMap<PoolId<NameId>, Vec<ast_enum::symbol::Symbol>> = HashMap::new();
 
     for file in files {
         let source = match std::fs::read_to_string(file) {

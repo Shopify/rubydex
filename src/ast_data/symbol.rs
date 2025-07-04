@@ -8,6 +8,7 @@ pub enum SymbolKind {
     Module,
     Constant,
     Method,
+    Var,
 }
 
 impl SymbolKind {
@@ -17,6 +18,7 @@ impl SymbolKind {
             SymbolKind::Module => "module",
             SymbolKind::Constant => "constant",
             SymbolKind::Method => "method",
+            SymbolKind::Var => "var",
         }
     }
 }
@@ -27,6 +29,7 @@ pub enum SymbolData {
     Module(ModuleData),
     Constant(ConstantData),
     Method(MethodData),
+    Var(VarData),
 }
 
 impl SymbolData {
@@ -36,6 +39,7 @@ impl SymbolData {
             SymbolData::Module(data) => data.to_string(tables),
             SymbolData::Constant(data) => data.to_string(tables),
             SymbolData::Method(data) => data.to_string(tables),
+            SymbolData::Var(data) => data.to_string(tables),
         }
     }
 }
@@ -125,3 +129,35 @@ impl MethodData {
     }
 }
 
+#[derive(Debug)]
+pub enum VarKind {
+    Local,
+    Instance,
+    Class,
+}
+
+impl VarKind {
+    pub fn to_string(&self) -> &str {
+        match self {
+            VarKind::Local => "local",
+            VarKind::Instance => "instance",
+            VarKind::Class => "class",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VarData {
+    pub kind: VarKind,
+    pub visibility: Option<String>,
+}
+
+impl VarData {
+    pub fn new(kind: VarKind, visibility: Option<String>) -> Self {
+        Self { kind, visibility }
+    }
+
+    pub fn to_string(&self, _tables: &GlobalTables) -> String {
+        format!("{} {}", self.kind.to_string(), self.visibility.as_ref().unwrap_or(&String::new()))
+    }
+}
