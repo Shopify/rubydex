@@ -10,6 +10,7 @@ target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
 target_dir = target_dir.join(release ? "release" : "debug")
 
 cargo_args = ["--manifest-path #{root_dir.join("Cargo.toml")}"]
+cargo_args << "--release" if release
 
 if Gem.win_platform?
   cargo_args << "--target x86_64-pc-windows-gnu"
