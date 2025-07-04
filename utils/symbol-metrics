@@ -1,0 +1,117 @@
+#! /usr/bin/env ruby
+# frozen_string_literal: true
+
+# This script counts the number of symbols found in Ruby files.
+
+if ARGV.empty?
+  puts "Usage: #{$PROGRAM_NAME} <path> [<path>...]"
+  exit 1
+end
+
+require "bundler/inline"
+
+gemfile do
+  source "https://rubygems.org"
+
+  gem "prism"
+end
+
+class Metrics < Prism::Visitor
+  FIXED_ORDER = [:files, :classes, :modules, :singleton_classes, :methods, :constants, :instance_variables, :class_variables, :local_variables, :global_variables]
+
+  attr_reader :counters
+
+  def initialize
+    super
+
+    @counters = Hash.new(0)
+  end
+
+  # visit
+
+  def visit_class_node(node)
+    @counters[:classes] += 1
+    super
+  end
+
+  def visit_module_node(node)
+    @counters[:modules] += 1
+    super
+  end
+
+  def visit_singleton_class_node(node)
+    @counters[:singleton_classes] += 1
+    super
+  end
+
+  def visit_constant_write_node(node)
+    @counters[:constants] += 1
+    super
+  end
+
+  def visit_constant_path_write_node(node)
+    @counters[:constants] += 1
+    super
+  end
+
+  def visit_def_node(node)
+    @counters[:methods] += 1
+    super
+  end
+
+  def visit_instance_variable_write_node(node)
+    @counters[:instance_variables] += 1
+    super
+  end
+
+  def visit_class_variable_write_node(node)
+    @counters[:class_variables] += 1
+    super
+  end
+
+  def visit_local_variable_write_node(node)
+    @counters[:local_variables] += 1
+    super
+  end
+
+  def visit_global_variable_write_node(node)
+    @counters[:global_variables] += 1
+    super
+  end
+
+  # print
+
+  def print_counters
+    FIXED_ORDER.each do |key|
+      puts "#{@counters[key]}\t#{key}"
+    end
+    puts
+    puts "\n#{@counters.values.sum}\ttotal"
+  end
+end
+
+paths = ARGV.flat_map do |path|
+  if File.directory?(path)
+    Dir.glob(File.join(path, "**/*.{rb,rbi}")).select { |file| File.file?(file) }
+  else
+    [path]
+  end
+end
+
+visitor = Metrics.new
+
+paths.each do |path|
+  visitor.counters[:files] += 1
+
+  contents = File.read(path)
+  result = Prism.parse(contents)
+
+  unless result.success?
+    $stderr.puts "Skipping #{path}: failed to parse"
+    next
+  end
+
+  visitor.visit(result.value)
+end
+
+visitor.print_counters
