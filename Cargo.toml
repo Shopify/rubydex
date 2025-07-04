@@ -15,6 +15,9 @@ clap = { version = "4.0", features = ["derive"] }
 glob = "0.3"
 ruby-prism = { version = "1.4.0" }
 
+[dev-dependencies]
+tempfile = "3.8"
+
 [build-dependencies]
 cbindgen = "0.29"
 

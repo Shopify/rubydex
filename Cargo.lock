@@ -265,6 +265,7 @@ dependencies = [
  "clap",
  "glob",
  "ruby-prism",
+ "tempfile",
 ]
 
 [[package]]

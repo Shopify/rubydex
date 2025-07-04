@@ -9,17 +9,16 @@ use tables::NameId;
 
 mod ast_enum;
 mod ast_data;
-mod location;
 mod pool;
 mod tables;
-mod locations;
+mod location;
 mod offset;
+mod file;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Mode {
     Data,
     Enum,
-    Locations,
 }
 
 #[derive(Parser)]
@@ -142,43 +141,6 @@ fn process_files_enum(files: &[String], print_symbols: bool) {
     }
 }
 
-fn locations(paths: &[String], print_locations: bool) {
-    println!("  File struct size: {:?}", std::mem::size_of::<locations::File>());
-    println!("  Offset struct size: {:?}", std::mem::size_of::<locations::Offset>());
-
-    let mut file_pool = Pool::<locations::FileId, String>::new();
-    let mut files = Vec::new();
-    let mut offsets = Vec::new();
-    for path in paths {
-        let file_id = file_pool.add(path.clone());
-        files.push(locations::File { name_id: file_id });
-
-        let source = match std::fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(err) => {
-                eprintln!("Error reading file {}: {}", path, err);
-                return;
-            }
-        };
-
-        let result = ruby_prism::parse(source.as_ref());
-        let mut visitor = locations::Visitor::new(&mut offsets, path);
-        visitor.visit(&result.node());
-    }
-
-    println!("  Found {} files.", files.len());
-    println!("  Found {} offsets.", offsets.len());
-
-    if print_locations {
-        for file in files {
-            file.show();
-        }
-        for offset in offsets {
-            offset.show();
-        }
-    }
-}
-
 fn main() {
     let args = Args::parse();
 
@@ -188,7 +150,6 @@ fn main() {
     match args.mode {
         Mode::Data => process_files_data(&files, args.print, args.simulate_cache),
         Mode::Enum => process_files_enum(&files, args.print),
-        Mode::Locations => locations(&files, args.print),
     }
 
     process::exit(0);
