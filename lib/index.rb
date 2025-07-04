@@ -2,6 +2,7 @@
 
 require "index/version"
 require "index/index"
+require "index/declaration"
 
 module Index
 end

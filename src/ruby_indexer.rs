@@ -1,7 +1,7 @@
 use ruby_prism::Visit;
 use std::sync::{Arc, Mutex};
 
-use crate::Repository;
+use crate::{declaration::Location, Repository};
 
 pub struct RubyIndexer<'a> {
     nesting: Vec<String>,
@@ -30,7 +30,8 @@ impl Visit<'_> for RubyIndexer<'_> {
         match std::str::from_utf8(node.constant_path().location().as_slice()).map(str::to_string) {
             Ok(name) => {
                 let mut repo_guard = self.repository.lock().unwrap();
-                repo_guard.add_class(name, node.location());
+                let loc = Location::from_prism_location(node.location());
+                repo_guard.add_class(name, loc);
             }
             Err(_) => {
                 // Name is not a valid UTF-8 string
@@ -46,7 +47,8 @@ impl Visit<'_> for RubyIndexer<'_> {
         match std::str::from_utf8(node.constant_path().location().as_slice()).map(str::to_string) {
             Ok(name) => {
                 let mut repo_guard = self.repository.lock().unwrap();
-                repo_guard.add_module(name, node.location());
+                let loc = Location::from_prism_location(node.location());
+                repo_guard.add_module(name, loc);
             }
             Err(_) => {
                 // Name is not a valid UTF-8 string
