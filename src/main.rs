@@ -4,7 +4,7 @@ use glob::glob;
 use std::collections::HashMap;
 use ruby_prism::Visit;
 use clap::{Parser, ValueEnum};
-use pool::PoolId;
+use pool::{Pool, PoolId};
 use tables::NameId;
 
 mod ast_enum;
@@ -12,11 +12,13 @@ mod ast_data;
 mod location;
 mod pool;
 mod tables;
+mod locations;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Mode {
     Data,
     Enum,
+    Locations,
 }
 
 #[derive(Parser)]
@@ -30,7 +32,7 @@ struct Args {
     mode: Mode,
 
     #[arg(long, default_value_t = false)]
-    print_symbols: bool,
+    print: bool,
 
     #[arg(long, default_value_t = false)]
     simulate_cache: bool,
@@ -139,6 +141,45 @@ fn process_files_enum(files: &[String], print_symbols: bool) {
     }
 }
 
+fn locations(files: &[String], print_locations: bool) {
+    println!("  Struct size: {:?}", std::mem::size_of::<locations::Location>());
+
+    let mut file_pool = Pool::<locations::FileId, String>::new();
+
+    let mut locations = Vec::new();
+    for file in files {
+        let file_id = file_pool.add(file.clone());
+
+        let location = locations::Location {
+            file_id,
+            start_offset: 0,
+            end_offset: 0,
+        };
+
+        locations.push(location);
+
+        let source = match std::fs::read_to_string(file) {
+            Ok(content) => content,
+            Err(err) => {
+                eprintln!("Error reading file {}: {}", file, err);
+                return;
+            }
+        };
+
+        let result = ruby_prism::parse(source.as_ref());
+        let mut visitor = locations::Visitor::new(&mut locations, file_id);
+        visitor.visit(&result.node());
+    }
+
+    println!("  Found {} locations.", locations.len());
+
+    if print_locations {
+        for location in locations {
+            location.show();
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -146,8 +187,9 @@ fn main() {
     println!("  Found {} files.", files.len());
 
     match args.mode {
-        Mode::Data => process_files_data(&files, args.print_symbols, args.simulate_cache),
-        Mode::Enum => process_files_enum(&files, args.print_symbols),
+        Mode::Data => process_files_data(&files, args.print, args.simulate_cache),
+        Mode::Enum => process_files_enum(&files, args.print),
+        Mode::Locations => locations(&files, args.print),
     }
 
     process::exit(0);
