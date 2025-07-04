@@ -2,10 +2,11 @@
 #include "rustbindings.h"
 
 static VALUE cRepository;
+static VALUE cDeclaration;
 
 static void repository_free(void *ptr) {
     if (ptr) {
-        free_repo(ptr);
+        idx_repository_free(ptr);
     }
 }
 
@@ -16,7 +17,7 @@ static const rb_data_type_t repository_type = {
 };
 
 static VALUE rb_repository_alloc(VALUE klass) {
-    void* repository = new_repo();
+    void* repository = idx_repository_new();
     return TypedData_Wrap_Struct(klass, &repository_type, repository);
 }
 
@@ -43,7 +44,7 @@ static VALUE rb_repository_index_all(VALUE self, VALUE file_paths) {
 
     void* repository;
     TypedData_Get_Struct(self, void*, &repository_type, repository);
-    index_all_c(repository, converted_file_paths, length);
+    idx_index_all_c(repository, converted_file_paths, length);
 
     for (long i = 0; i < length; i++) {
         free(converted_file_paths[i]);
@@ -56,14 +57,66 @@ static VALUE rb_repository_index_all(VALUE self, VALUE file_paths) {
 static VALUE rb_repository_size(VALUE self) {
     void* repository;
     TypedData_Get_Struct(self, void*, &repository_type, repository);
-    size_t size = repo_size(repository);
+    size_t size = idx_repository_size(repository);
     return SIZET2NUM(size);
 }
 
+static VALUE rb_repository_add_class(VALUE self, VALUE name, VALUE start_offset, VALUE end_offset) {
+    void* repository;
+    TypedData_Get_Struct(self, void*, &repository_type, repository);
+
+    char* c_name = StringValueCStr(name);
+    uint32_t c_start_offset = NUM2UINT(start_offset);
+    uint32_t c_end_offset = NUM2UINT(end_offset);
+    idx_repository_add_class_declaration(repository, c_name, c_start_offset, c_end_offset);
+    return Qnil;
+}
+
+static VALUE instantiate_declaration(const Declaration* declaration) {
+    uint32_t start_offset, end_offset;
+    uint8_t tag = declaration->tag;
+
+    switch (tag) {
+    case CLASS:
+        start_offset = declaration->class_.location.start_offset;
+        end_offset = declaration->class_.location.end_offset;
+        break;
+    case MODULE:
+        start_offset = declaration->module.location.start_offset;
+        end_offset = declaration->module.location.end_offset;
+        break;
+    default:
+        rb_raise(rb_eArgError, "Unknown declaration type");
+        return Qnil;
+    }
+
+    VALUE args[] = { UINT2NUM(start_offset), UINT2NUM(end_offset) };
+    return rb_class_new_instance(2, args, cDeclaration);
+}
+
+static VALUE rb_repository_get(VALUE self, VALUE name) {
+    void* repository;
+    TypedData_Get_Struct(self, void*, &repository_type, repository);
+
+    char* c_name = StringValueCStr(name);
+    const Declaration* declaration = idx_repository_get(repository, c_name);
+
+    if (declaration == NULL) {
+        return Qnil;
+    }
+
+    VALUE ruby_declaration = instantiate_declaration(declaration);
+    idx_declaration_free(declaration);
+    return ruby_declaration;
+}
+
 void initialize_repository(VALUE mIndex) {
-    cRepository = rb_define_class_under(mIndex, "Repository", rb_cObject);
+    cRepository  = rb_define_class_under(mIndex, "Repository",  rb_cObject);
+    cDeclaration = rb_define_class_under(mIndex, "Declaration", rb_cObject);
 
     rb_define_alloc_func(cRepository, rb_repository_alloc);
     rb_define_method(cRepository, "index_all", rb_repository_index_all, 1);
     rb_define_method(cRepository, "size", rb_repository_size, 0);
+    rb_define_method(cRepository, "add_class", rb_repository_add_class, 3);
+    rb_define_method(cRepository, "get", rb_repository_get, 1);
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::declaration::{ClassDeclaration, Declaration, ModuleDeclaration};
+use crate::declaration::{ClassDeclaration, Declaration, Location, ModuleDeclaration};
 
 #[derive(Debug)]
 pub struct Repository {
@@ -14,12 +14,16 @@ impl Repository {
         }
     }
 
-    pub fn add_class(&mut self, name: String, location: ruby_prism::Location) {
+    pub fn get(&self, name: &str) -> Option<&Declaration> {
+        self.entries.get(name)
+    }
+
+    pub fn add_class(&mut self, name: String, location: Location) {
         let declaration = Declaration::Class(ClassDeclaration::new(location));
         self.entries.insert(name, declaration);
     }
 
-    pub fn add_module(&mut self, name: String, location: ruby_prism::Location) {
+    pub fn add_module(&mut self, name: String, location: Location) {
         let declaration = Declaration::Module(ModuleDeclaration::new(location));
         self.entries.insert(name, declaration);
     }

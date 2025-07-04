@@ -11,4 +11,10 @@ class IndexRustyTest < Minitest::Test
     repository = Index::Repository.new
     repository.index_all([__FILE__])
   end
+
+  def test_add_and_get
+    repository = Index::Repository.new
+    repository.add_class("MyClass", 0, 30)
+    puts repository.get("MyClass").inspect
+  end
 end
