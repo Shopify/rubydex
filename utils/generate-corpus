@@ -1,0 +1,265 @@
+#! /usr/bin/env ruby
+# frozen_string_literal: true
+
+# Generate a corpus of random Ruby files with a given scale.
+#
+# Usage:
+#   utils/generate-corpus tmp/corpus/tiny -s 0.1
+#   utils/generate-corpus tmp/corpus/small -s 1
+#   utils/generate-corpus tmp/corpus/medium -s 10
+#   utils/generate-corpus tmp/corpus/large -s 100
+#   utils/generate-corpus tmp/corpus/huge -s 1000
+
+require "bundler/inline"
+
+gemfile do
+  source "https://rubygems.org"
+
+  gem "thor"
+end
+
+require "fileutils"
+require "stringio"
+
+module Symbols
+  class Tree
+    attr_reader :children
+
+    def initialize
+      @children = []
+    end
+
+    def write_children(buffer, indent:)
+      children.each_with_index do |child, i|
+        buffer.puts if i > 0
+        child.write(buffer, indent: indent + 2)
+      end
+    end
+  end
+
+  class NamedTree < Tree
+    attr_reader :name
+
+    def initialize(name)
+      super()
+      @name = name
+    end
+  end
+
+  class File < NamedTree
+    def write(output_dir)
+      return if children.empty?
+
+      buffer = StringIO.new
+      write_children(buffer, indent: 0)
+      ::File.write(::File.join(output_dir, @name), buffer.string)
+    end
+  end
+
+  class Class < NamedTree
+    attr_accessor :superclass
+
+    def write(buffer, indent:)
+      if @superclass
+        buffer.puts "#{" " * indent}class #{@name} < #{@superclass.name}"
+      else
+        buffer.puts "#{" " * indent}class #{@name}"
+      end
+      write_children(buffer, indent: indent)
+      buffer.puts "#{" " * indent}end"
+    end
+  end
+
+  class Module < NamedTree
+    def write(buffer, indent:)
+      buffer.puts "#{" " * indent}module #{@name}"
+      write_children(buffer, indent: indent)
+      buffer.puts "#{" " * indent}end"
+    end
+  end
+
+  class SingletonClass < Tree
+    def write(buffer, indent:)
+      buffer.puts "#{" " * indent}class << self"
+      write_children(buffer, indent: indent)
+      buffer.puts "#{" " * indent}end"
+    end
+  end
+
+  class Constant
+    def initialize(name)
+      @name = name
+    end
+
+    def write(buffer, indent:)
+      buffer.puts "#{" " * indent}#{@name} = 42"
+    end
+  end
+
+  class Method < NamedTree
+    def write(buffer, indent:)
+      params = rand(0..10).times.map { |i| "param#{i}" }
+      if params.empty?
+        buffer.puts "#{" " * indent}def #{@name}"
+      else
+        buffer.puts "#{" " * indent}def #{@name}(#{params.join(", ")})"
+      end
+      write_children(buffer, indent: indent)
+
+      if children.any?
+        buffer.puts "#{" " * (indent + 2)}puts #{children.grep(Variable).map(&:name).join(", ")}"
+      end
+
+      buffer.puts "#{" " * indent}end"
+    end
+  end
+
+  class Variable
+    attr_reader :name
+
+    def initialize(name)
+      @name = name
+    end
+
+    def write(buffer, indent:)
+      buffer.puts "#{" " * indent}#{@name} = 42"
+    end
+  end
+end
+
+class Generator
+  COUNTS = {
+    files: 100,
+    classes: 1_000,
+    constants: 1_000,
+    methods: 10_000,
+    variables: 10_000,
+  }
+
+  def initialize(output_dir, scale: 1.0)
+    @output_dir = output_dir
+    @scale = scale
+  end
+
+  def generate
+    FileUtils.rm_rf(@output_dir)
+    FileUtils.mkdir_p(@output_dir)
+
+    counts = COUNTS.map { |symbol, count| [symbol, (count * @scale).to_i] }.to_h
+    files = distribute(counts)
+    files.each_with_index do |file, i|
+      puts "\rWriting file #{i}/#{files.size}"
+
+      file.write(@output_dir)
+    end
+
+    puts "\nWrote #{files.size} files in #{@output_dir}"
+  end
+
+  private
+
+  def distribute(counts)
+    files = counts[:files].times.map { |i| Symbols::File.new("file_#{i}.rb") }
+    puts "Instanciated #{counts[:files]} files"
+
+    scopes = []
+    classes = []
+
+    counts[:classes].times do |i|
+      scope_roll = rand
+
+      scope = if scope_roll < 0.1
+        # 10% chance of a singleton class
+        Symbols::SingletonClass.new
+      elsif scope_roll < 0.4
+        # 40% chance of a module
+        Symbols::Module.new("Module#{i}")
+      else
+        klass = Symbols::Class.new("Class#{i}")
+        if rand < 0.4
+          klass.superclass = classes.sample
+        end
+        classes << klass
+        klass
+      end
+
+      if scopes.empty? || (rand < 0.3 && !scope.is_a?(Symbols::SingletonClass))
+        # scopes have 30% chances to be at the top level of a file
+        files.sample.children << scope
+      else
+        scopes.sample.children << scope
+      end
+
+      scopes << scope
+    end
+
+    puts "Instanciated #{counts[:classes]} classes"
+
+    counts[:constants].times do |i|
+      const = Symbols::Constant.new("Constant#{i}")
+
+      if rand < 0.1
+        # 10% chance of a constant at the top level of a file
+        files.sample.children << const
+      else
+        scopes.sample.children << const
+      end
+    end
+
+    puts "Instanciated #{counts[:constants]} constants"
+
+    methods = []
+
+    counts[:methods].times do |i|
+      method = Symbols::Method.new("method#{i}")
+
+      if rand < 0.1
+        # 10% chance of a method at the top level of a file
+        files.sample.children << method
+      else
+        scopes.sample.children << method
+      end
+
+      methods << method
+    end
+
+    puts "Instanciated #{counts[:methods]} methods"
+
+    counts[:variables].times do |i|
+      variable = if rand < 0.0001
+        Symbols::Variable.new("$variable#{i}")
+      elsif rand < 0.0006
+        Symbols::Variable.new("@@variable#{i}")
+      elsif rand < 0.2
+        Symbols::Variable.new("@variable#{i}")
+      else
+        Symbols::Variable.new("variable#{i}")
+      end
+
+      methods.sample.children << variable
+    end
+
+    puts "Instanciated #{counts[:variables]} variables"
+
+    files
+  end
+end
+
+class GenerateCorpus < Thor
+  desc "generate", "Generate a corpus of Ruby files"
+  option :scale, aliases: ["-s"], type: :numeric, default: 1.0
+  def generate(output_dir)
+    puts "Generating corpus..."
+
+    generator = Generator.new(output_dir, scale: options[:scale])
+    generator.generate
+  end
+
+  class << self
+    def exit_on_failure?
+      true
+    end
+  end
+end
+
+GenerateCorpus.start(["generate", *ARGV])
