@@ -17,4 +17,17 @@ class IndexRustyTest < Minitest::Test
     repository.add_class("MyClass", 0, 30)
     puts repository.get("MyClass").inspect
   end
+
+  def test_ractor_compatibility
+    ractor = Ractor.new do
+      repository = Index::Repository.new
+      repository.index_all(Dir.glob("**/*.rb"))
+      repository.add_class("MyClass", 0, 30)
+      puts "Printing from Ractor: #{repository.get("MyClass").inspect}"
+      repository
+    end
+
+    repository = ractor.take
+    refute_equal(0, repository.size)
+  end
 end
