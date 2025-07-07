@@ -17,6 +17,8 @@ if Gem.win_platform?
   ENV["RUSTFLAGS"] = "-C target-feature=+crt-static"
 end
 
+append_cflags("-Werror=implicit-function-declaration")
+
 if Gem.win_platform?
   $LDFLAGS << " #{target_dir.join("libindex.a")}"
 
