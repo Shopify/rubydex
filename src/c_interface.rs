@@ -1,4 +1,4 @@
-use std::ffi::{CString, c_char};
+use std::ffi::{c_char, CString};
 
 use crate::internal::{Entry, Repository};
 
