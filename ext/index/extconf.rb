@@ -60,3 +60,7 @@ new_makefile.gsub!("$(Q) $(POSTLINK)", <<~MAKEFILE.chomp)
   \t$(Q)$(RM) .rust_built
 MAKEFILE
 File.write("Makefile", new_makefile)
+
+require "extconf_compile_commands_json"
+ExtconfCompileCommandsJson.generate!
+ExtconfCompileCommandsJson.symlink!
