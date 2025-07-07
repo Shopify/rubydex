@@ -110,6 +110,15 @@ static VALUE rb_repository_get(VALUE self, VALUE name) {
     return ruby_declaration;
 }
 
+static VALUE rb_repository_memsize(VALUE self) {
+    void* repository;
+    TypedData_Get_Struct(self, void*, &repository_type, repository);
+
+    size_t rust_memsize = idx_repository_memsize(repository);
+    size_t ruby_memsize = rb_obj_memsize_of(self);
+    return SIZET2NUM(rust_memsize + ruby_memsize);
+}
+
 void initialize_repository(VALUE mIndex) {
     cRepository  = rb_define_class_under(mIndex, "Repository",  rb_cObject);
     cDeclaration = rb_define_class_under(mIndex, "Declaration", rb_cObject);
@@ -119,4 +128,6 @@ void initialize_repository(VALUE mIndex) {
     rb_define_method(cRepository, "size", rb_repository_size, 0);
     rb_define_method(cRepository, "add_class", rb_repository_add_class, 3);
     rb_define_method(cRepository, "get", rb_repository_get, 1);
+
+    rb_define_method(cRepository, "memsize", rb_repository_memsize, 0);
 }

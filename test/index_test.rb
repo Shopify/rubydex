@@ -10,6 +10,7 @@ class IndexRustyTest < Minitest::Test
   def test_index_all
     repository = Index::Repository.new
     repository.index_all([__FILE__])
+    puts repository.memsize
   end
 
   def test_add_and_get

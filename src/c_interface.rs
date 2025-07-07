@@ -59,6 +59,12 @@ pub extern "C" fn idx_repository_size(pointer: RepositoryPointer) -> usize {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn idx_repository_memsize(pointer: *mut c_void) -> usize {
+    let repository = retain_repository(pointer);
+    std::mem::size_of_val(&repository.lock().unwrap())
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn idx_repository_add_class_declaration(
     pointer: RepositoryPointer,
     name: &mut c_char,
