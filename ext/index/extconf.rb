@@ -37,11 +37,14 @@ end
 create_makefile("index/index")
 cargo_command = "cargo build #{cargo_args.join(" ")}".strip
 
+rust_srcs = Dir.glob("#{root_dir}/src/**/*.rs")
+
 makefile = File.read("Makefile")
 new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.chomp)
   .PHONY: compile_rust
+  RUST_SRCS = #{File.expand_path("Cargo.toml", root_dir)} #{File.expand_path("Cargo.lock", root_dir)} #{rust_srcs.join(" ")}
 
-  .rust_built:
+  .rust_built: $(RUST_SRCS)
   \t#{cargo_command} || (echo "Compiling Rust failed" && exit 1)
   \ttouch $@
 
