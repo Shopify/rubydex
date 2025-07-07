@@ -1,11 +1,11 @@
-use std::ffi::{c_char, CString};
+use std::ffi::{CString, c_char};
 
 use crate::internal::{Entry, Repository};
 
 pub type CRepository = std::ffi::c_void;
 pub type CEntry = std::ffi::c_void;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn get_repository() -> *mut CRepository {
     let repository = Repository::new();
     Box::into_raw(Box::new(repository)) as *mut CRepository
@@ -16,7 +16,7 @@ pub extern "C" fn get_repository() -> *mut CRepository {
 /// # Safety
 ///
 /// This function is unsafe
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn repository_get_entry(repository: *const CRepository, name: *const c_char) -> *mut CEntry {
     if repository.is_null() || name.is_null() {
         return std::ptr::null_mut();
@@ -41,7 +41,7 @@ pub unsafe extern "C" fn repository_get_entry(repository: *const CRepository, na
 /// # Safety
 ///
 /// This function is unsafe
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn repository_add_entry(repository: *mut CRepository, name: *const c_char, value: *const c_char) {
     if repository.is_null() || name.is_null() || value.is_null() {
         return;
@@ -58,7 +58,7 @@ pub unsafe extern "C" fn repository_add_entry(repository: *mut CRepository, name
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn entry_get_name(entry: *const CEntry) -> *const c_char {
     if entry.is_null() {
         return std::ptr::null();
@@ -72,7 +72,7 @@ pub extern "C" fn entry_get_name(entry: *const CEntry) -> *const c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn entry_get_value(entry: *const CEntry) -> *const c_char {
     if entry.is_null() {
         return std::ptr::null();
@@ -86,7 +86,7 @@ pub extern "C" fn entry_get_value(entry: *const CEntry) -> *const c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn delloc_entry(entry: *mut CEntry) {
     if !entry.is_null() {
         unsafe {
@@ -95,7 +95,7 @@ pub extern "C" fn delloc_entry(entry: *mut CEntry) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn dealloc_repository(repository: *mut CRepository) {
     if !repository.is_null() {
         unsafe {
