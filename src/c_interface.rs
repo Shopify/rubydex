@@ -124,27 +124,7 @@ pub extern "C" fn create_point(x: u32, y: u32) -> *mut CPoint {
     Box::into_raw(Box::new(point)) as *mut CPoint
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn point_get_x(point: *const CPoint) -> u32 {
-    if point.is_null() {
-        return 0;
-    }
-    unsafe {
-        let point_ref = &*(point as *const Point);
-        point_ref.x
-    }
-}
 
-#[unsafe(no_mangle)]
-pub extern "C" fn point_get_y(point: *const CPoint) -> u32 {
-    if point.is_null() {
-        return 0;
-    }
-    unsafe {
-        let point_ref = &*(point as *const Point);
-        point_ref.y
-    }
-}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dealloc_point(point: *mut CPoint) {
@@ -173,19 +153,7 @@ pub unsafe extern "C" fn create_message(content: *const c_char) -> *mut CMessage
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn message_get_content(message: *const CMessage) -> *const c_char {
-    if message.is_null() {
-        return std::ptr::null();
-    }
-    unsafe {
-        let message_ref = &*(message as *const Message);
-        match CString::new(message_ref.content.clone()) {
-            Ok(c_string) => c_string.into_raw(),
-            Err(_) => std::ptr::null(),
-        }
-    }
-}
+
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dealloc_message(message: *mut CMessage) {
@@ -196,12 +164,4 @@ pub extern "C" fn dealloc_message(message: *mut CMessage) {
     }
 }
 
-// Helper function to free strings returned from native functions
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_rust_string(s: *mut c_char) {
-    if !s.is_null() {
-        unsafe {
-            let _ = CString::from_raw(s);
-        }
-    }
-}
+

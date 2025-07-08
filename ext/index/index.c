@@ -97,25 +97,29 @@ static const rb_data_type_t point_type = {
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
+// Wrap a native CPoint* in a Ruby object
+static VALUE wrap_point(CPoint* point) {
+    return TypedData_Wrap_Struct(cPoint, &point_type, point);
+}
+
+// Initialize Ruby instance variables @x and @y for fast Ruby access
+static void initialize_point_ivars(VALUE ruby_point, uint32_t x, uint32_t y) {
+    rb_ivar_set(ruby_point, rb_intern("@x"), UINT2NUM(x));
+    rb_ivar_set(ruby_point, rb_intern("@y"), UINT2NUM(y));
+}
+
 static VALUE rb_create_point(VALUE klass, VALUE x, VALUE y) {
     uint32_t c_x = NUM2UINT(x);
     uint32_t c_y = NUM2UINT(y);
     CPoint* point = create_point(c_x, c_y);
-    return TypedData_Wrap_Struct(klass, &point_type, point);
-}
-
-static VALUE rb_point_get_x(VALUE self) {
-    CPoint* point;
-    TypedData_Get_Struct(self, CPoint, &point_type, point);
-    uint32_t result = point_get_x(point);
-    return UINT2NUM(result);
-}
-
-static VALUE rb_point_get_y(VALUE self) {
-    CPoint* point;
-    TypedData_Get_Struct(self, CPoint, &point_type, point);
-    uint32_t result = point_get_y(point);
-    return UINT2NUM(result);
+    
+    // Wrap the native struct in a Ruby object
+    VALUE ruby_point = wrap_point(point);
+    
+    // Initialize instance variables for fast Ruby-side access
+    initialize_point_ivars(ruby_point, c_x, c_y);
+    
+    return ruby_point;
 }
 
 // Message functions for string object creation benchmarking
@@ -131,23 +135,27 @@ static const rb_data_type_t message_type = {
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
+// Wrap a native CMessage* in a Ruby object
+static VALUE wrap_message(CMessage* message) {
+    return TypedData_Wrap_Struct(cMessage, &message_type, message);
+}
+
+// Initialize Ruby instance variable @content for fast Ruby access
+static void initialize_message_ivars(VALUE ruby_message, VALUE content) {
+    rb_ivar_set(ruby_message, rb_intern("@content"), content);
+}
+
 static VALUE rb_create_message(VALUE klass, VALUE content) {
     const char *c_content = StringValueCStr(content);
     CMessage* message = create_message(c_content);
     if (message) {
-        return TypedData_Wrap_Struct(klass, &message_type, message);
-    }
-    return Qnil;
-}
-
-static VALUE rb_message_get_content(VALUE self) {
-    CMessage* message;
-    TypedData_Get_Struct(self, CMessage, &message_type, message);
-    char* result = (char*)message_get_content(message);
-    if (result) {
-        VALUE ruby_str = rb_str_new_cstr(result);
-        free_rust_string(result);
-        return ruby_str;
+        // Wrap the native struct in a Ruby object
+        VALUE ruby_message = wrap_message(message);
+        
+        // Initialize instance variable for fast Ruby-side access
+        initialize_message_ivars(ruby_message, content);
+        
+        return ruby_message;
     }
     return Qnil;
 }
@@ -175,11 +183,11 @@ void Init_index(void) {
     // Point class for object creation benchmarking
     cPoint = rb_define_class_under(mIndex, "Point", rb_cObject);
     rb_define_singleton_method(cPoint, "new", rb_create_point, 2);
-    rb_define_method(cPoint, "x", rb_point_get_x, 0);
-    rb_define_method(cPoint, "y", rb_point_get_y, 0);
+    rb_define_attr(cPoint, "x", 1, 0);  // readable, not writable
+    rb_define_attr(cPoint, "y", 1, 0);  // readable, not writable
 
     // Message class for string object creation benchmarking
     cMessage = rb_define_class_under(mIndex, "Message", rb_cObject);
     rb_define_singleton_method(cMessage, "new", rb_create_message, 1);
-    rb_define_method(cMessage, "content", rb_message_get_content, 0);
+    rb_define_attr(cMessage, "content", 1, 0);  // readable, not writable
 }
