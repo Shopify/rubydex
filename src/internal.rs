@@ -49,3 +49,15 @@ impl Point {
         Self { x, y }
     }
 }
+
+// Message struct for benchmarking string object creation and access
+#[derive(Clone)]
+pub struct Message {
+    pub content: String,
+}
+
+impl Message {
+    pub fn new(content: String) -> Self {
+        Self { content }
+    }
+}

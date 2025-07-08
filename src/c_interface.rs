@@ -1,10 +1,11 @@
 use std::ffi::{c_char, CString};
 
-use crate::internal::{Entry, Repository, Point};
+use crate::internal::{Entry, Repository, Point, Message};
 
 pub type CRepository = std::ffi::c_void;
 pub type CEntry = std::ffi::c_void;
 pub type CPoint = std::ffi::c_void;
+pub type CMessage = std::ffi::c_void;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn get_repository() -> *mut CRepository {
@@ -150,6 +151,57 @@ pub extern "C" fn dealloc_point(point: *mut CPoint) {
     if !point.is_null() {
         unsafe {
             let _ = Box::from_raw(point as *mut Point);
+        }
+    }
+}
+
+// Message functions for string object creation benchmarking
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn create_message(content: *const c_char) -> *mut CMessage {
+    if content.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let c_str = std::ffi::CStr::from_ptr(content);
+        match c_str.to_str() {
+            Ok(s) => {
+                let message = Message::new(s.to_string());
+                Box::into_raw(Box::new(message)) as *mut CMessage
+            }
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn message_get_content(message: *const CMessage) -> *const c_char {
+    if message.is_null() {
+        return std::ptr::null();
+    }
+    unsafe {
+        let message_ref = &*(message as *const Message);
+        match CString::new(message_ref.content.clone()) {
+            Ok(c_string) => c_string.into_raw(),
+            Err(_) => std::ptr::null(),
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn dealloc_message(message: *mut CMessage) {
+    if !message.is_null() {
+        unsafe {
+            let _ = Box::from_raw(message as *mut Message);
+        }
+    }
+}
+
+// Helper function to free strings returned from native functions
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_rust_string(s: *mut c_char) {
+    if !s.is_null() {
+        unsafe {
+            let _ = CString::from_raw(s);
         }
     }
 }

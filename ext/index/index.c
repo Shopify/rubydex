@@ -7,6 +7,7 @@
 static VALUE cRepository;
 static VALUE cEntry;
 static VALUE cPoint;
+static VALUE cMessage;
 
 static void index_free(void *ptr) {
     if (ptr) {
@@ -117,6 +118,40 @@ static VALUE rb_point_get_y(VALUE self) {
     return UINT2NUM(result);
 }
 
+// Message functions for string object creation benchmarking
+static void message_free(void *ptr) {
+    if (ptr) {
+        dealloc_message((CMessage*)ptr);
+    }
+}
+
+static const rb_data_type_t message_type = {
+    "Message",
+    {0, message_free, 0,},
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+};
+
+static VALUE rb_create_message(VALUE klass, VALUE content) {
+    const char *c_content = StringValueCStr(content);
+    CMessage* message = create_message(c_content);
+    if (message) {
+        return TypedData_Wrap_Struct(klass, &message_type, message);
+    }
+    return Qnil;
+}
+
+static VALUE rb_message_get_content(VALUE self) {
+    CMessage* message;
+    TypedData_Get_Struct(self, CMessage, &message_type, message);
+    char* result = (char*)message_get_content(message);
+    if (result) {
+        VALUE ruby_str = rb_str_new_cstr(result);
+        free_rust_string(result);
+        return ruby_str;
+    }
+    return Qnil;
+}
+
 // Initialization function for the Ruby extension
 void Init_index(void) {
     VALUE mIndex = rb_define_module("Index");
@@ -142,4 +177,9 @@ void Init_index(void) {
     rb_define_singleton_method(cPoint, "new", rb_create_point, 2);
     rb_define_method(cPoint, "x", rb_point_get_x, 0);
     rb_define_method(cPoint, "y", rb_point_get_y, 0);
+
+    // Message class for string object creation benchmarking
+    cMessage = rb_define_class_under(mIndex, "Message", rb_cObject);
+    rb_define_singleton_method(cMessage, "new", rb_create_message, 1);
+    rb_define_method(cMessage, "content", rb_message_get_content, 0);
 }

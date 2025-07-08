@@ -35,4 +35,24 @@ class IndexRustyTest < Minitest::Test
     assert_equal(0, point.x)
     assert_equal(0, point.y)
   end
+
+  def test_create_message
+    message = Index::Message.new("Hello from native!")
+    assert_equal("Hello from native!", message.content)
+  end
+
+  def test_message_with_empty_string
+    message = Index::Message.new("")
+    assert_equal("", message.content)
+  end
+
+  def test_message_with_unicode
+    message = Index::Message.new("Hello 世界! 🌍")
+    assert_equal("Hello 世界! 🌍", message.content)
+  end
+
+  def test_message_with_special_characters
+    message = Index::Message.new("Special chars: @#$%^&*()_+{}|:<>?")
+    assert_equal("Special chars: @#$%^&*()_+{}|:<>?", message.content)
+  end
 end
