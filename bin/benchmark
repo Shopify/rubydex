@@ -1,0 +1,8 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+puts "Building native extension..."
+system("bundle exec rake compile") || (puts "Build failed!" && exit(1))
+
+puts "\nRunning boundary overhead benchmark..."
+load File.expand_path("../benchmark/boundary_overhead.rb", __dir__) 

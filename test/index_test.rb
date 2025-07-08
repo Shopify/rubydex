@@ -13,4 +13,14 @@ class IndexRustyTest < Minitest::Test
     entry = repository.get_entry("key")
     assert_equal(entry.value, "value")
   end
+
+  def test_get_constant_number
+    result = Index.get_constant_number
+    assert_equal(42, result)
+  end
+
+  def test_increment_number
+    result = Index.increment_number(10)
+    assert_equal(11, result)
+  end
 end

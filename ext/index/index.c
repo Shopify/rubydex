@@ -70,6 +70,18 @@ static VALUE rb_entry_value(VALUE self) {
     return rb_ivar_get(self, rb_intern("@value"));
 }
 
+// Integer functions for boundary performance testing
+static VALUE rb_get_constant_number(VALUE self) {
+    uint32_t result = get_constant_number();
+    return UINT2NUM(result);
+}
+
+static VALUE rb_increment_number(VALUE self, VALUE input) {
+    uint32_t c_input = NUM2UINT(input);
+    uint32_t result = increment_number(c_input);
+    return UINT2NUM(result);
+}
+
 // Initialization function for the Ruby extension
 void Init_index(void) {
     VALUE mIndex = rb_define_module("Index");
@@ -85,4 +97,8 @@ void Init_index(void) {
 
     rb_define_attr(cEntry, "name", 1, 1);
     rb_define_attr(cEntry, "value", 1, 1);
+
+    // Integer functions for boundary performance testing
+    rb_define_singleton_method(mIndex, "get_constant_number", rb_get_constant_number, 0);
+    rb_define_singleton_method(mIndex, "increment_number", rb_increment_number, 1);
 }

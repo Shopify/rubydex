@@ -103,3 +103,14 @@ pub extern "C" fn dealloc_repository(repository: *mut CRepository) {
         }
     }
 }
+
+// Simple integer functions for boundary performance testing
+#[unsafe(no_mangle)]
+pub extern "C" fn get_constant_number() -> u32 {
+    42
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn increment_number(input: u32) -> u32 {
+    input + 1
+}
