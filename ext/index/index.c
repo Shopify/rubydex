@@ -6,6 +6,7 @@
 // Store the class references
 static VALUE cRepository;
 static VALUE cEntry;
+static VALUE cPoint;
 
 static void index_free(void *ptr) {
     if (ptr) {
@@ -82,6 +83,40 @@ static VALUE rb_increment_number(VALUE self, VALUE input) {
     return UINT2NUM(result);
 }
 
+// Point functions for object creation benchmarking
+static void point_free(void *ptr) {
+    if (ptr) {
+        dealloc_point((CPoint*)ptr);
+    }
+}
+
+static const rb_data_type_t point_type = {
+    "Point",
+    {0, point_free, 0,},
+    0, 0, RUBY_TYPED_FREE_IMMEDIATELY
+};
+
+static VALUE rb_create_point(VALUE klass, VALUE x, VALUE y) {
+    uint32_t c_x = NUM2UINT(x);
+    uint32_t c_y = NUM2UINT(y);
+    CPoint* point = create_point(c_x, c_y);
+    return TypedData_Wrap_Struct(klass, &point_type, point);
+}
+
+static VALUE rb_point_get_x(VALUE self) {
+    CPoint* point;
+    TypedData_Get_Struct(self, CPoint, &point_type, point);
+    uint32_t result = point_get_x(point);
+    return UINT2NUM(result);
+}
+
+static VALUE rb_point_get_y(VALUE self) {
+    CPoint* point;
+    TypedData_Get_Struct(self, CPoint, &point_type, point);
+    uint32_t result = point_get_y(point);
+    return UINT2NUM(result);
+}
+
 // Initialization function for the Ruby extension
 void Init_index(void) {
     VALUE mIndex = rb_define_module("Index");
@@ -101,4 +136,10 @@ void Init_index(void) {
     // Integer functions for boundary performance testing
     rb_define_singleton_method(mIndex, "get_constant_number", rb_get_constant_number, 0);
     rb_define_singleton_method(mIndex, "increment_number", rb_increment_number, 1);
+
+    // Point class for object creation benchmarking
+    cPoint = rb_define_class_under(mIndex, "Point", rb_cObject);
+    rb_define_singleton_method(cPoint, "new", rb_create_point, 2);
+    rb_define_method(cPoint, "x", rb_point_get_x, 0);
+    rb_define_method(cPoint, "y", rb_point_get_y, 0);
 }

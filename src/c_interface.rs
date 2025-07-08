@@ -1,9 +1,10 @@
 use std::ffi::{c_char, CString};
 
-use crate::internal::{Entry, Repository};
+use crate::internal::{Entry, Repository, Point};
 
 pub type CRepository = std::ffi::c_void;
 pub type CEntry = std::ffi::c_void;
+pub type CPoint = std::ffi::c_void;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn get_repository() -> *mut CRepository {
@@ -113,4 +114,42 @@ pub extern "C" fn get_constant_number() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn increment_number(input: u32) -> u32 {
     input + 1
+}
+
+// Point functions for object creation benchmarking
+#[unsafe(no_mangle)]
+pub extern "C" fn create_point(x: u32, y: u32) -> *mut CPoint {
+    let point = Point::new(x, y);
+    Box::into_raw(Box::new(point)) as *mut CPoint
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn point_get_x(point: *const CPoint) -> u32 {
+    if point.is_null() {
+        return 0;
+    }
+    unsafe {
+        let point_ref = &*(point as *const Point);
+        point_ref.x
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn point_get_y(point: *const CPoint) -> u32 {
+    if point.is_null() {
+        return 0;
+    }
+    unsafe {
+        let point_ref = &*(point as *const Point);
+        point_ref.y
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn dealloc_point(point: *mut CPoint) {
+    if !point.is_null() {
+        unsafe {
+            let _ = Box::from_raw(point as *mut Point);
+        }
+    }
 }

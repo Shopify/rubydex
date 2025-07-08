@@ -23,4 +23,16 @@ class IndexRustyTest < Minitest::Test
     result = Index.increment_number(10)
     assert_equal(11, result)
   end
+
+  def test_create_point
+    point = Index::Point.new(10, 20)
+    assert_equal(10, point.x)
+    assert_equal(20, point.y)
+  end
+
+  def test_point_with_zero_values
+    point = Index::Point.new(0, 0)
+    assert_equal(0, point.x)
+    assert_equal(0, point.y)
+  end
 end
