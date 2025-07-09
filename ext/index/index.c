@@ -23,8 +23,6 @@ static const rb_data_type_t index_type = {
 
 static VALUE rb_index_new(VALUE klass) {
     CRepository* index = get_repository();
-    // TODO: Need to determine a potential way to allow interaction with the index without
-    // wrapping the object
     return TypedData_Wrap_Struct(klass, &index_type, index);
 }
 
@@ -102,7 +100,6 @@ static VALUE wrap_point(CPoint* point) {
     return TypedData_Wrap_Struct(cPoint, &point_type, point);
 }
 
-// Initialize Ruby instance variables @x and @y for fast Ruby access
 static void initialize_point_ivars(VALUE ruby_point, uint32_t x, uint32_t y) {
     rb_ivar_set(ruby_point, rb_intern("@x"), UINT2NUM(x));
     rb_ivar_set(ruby_point, rb_intern("@y"), UINT2NUM(y));
@@ -113,16 +110,13 @@ static VALUE rb_create_point(VALUE klass, VALUE x, VALUE y) {
     uint32_t c_y = NUM2UINT(y);
     CPoint* point = create_point(c_x, c_y);
     
-    // Wrap the native struct in a Ruby object
     VALUE ruby_point = wrap_point(point);
     
-    // Initialize instance variables for fast Ruby-side access
     initialize_point_ivars(ruby_point, c_x, c_y);
     
     return ruby_point;
 }
 
-// Message functions for string object creation benchmarking
 static void message_free(void *ptr) {
     if (ptr) {
         dealloc_message((CMessage*)ptr);
@@ -135,12 +129,10 @@ static const rb_data_type_t message_type = {
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
-// Wrap a native CMessage* in a Ruby object
 static VALUE wrap_message(CMessage* message) {
     return TypedData_Wrap_Struct(cMessage, &message_type, message);
 }
 
-// Initialize Ruby instance variable @content for fast Ruby access
 static void initialize_message_ivars(VALUE ruby_message, VALUE content) {
     rb_ivar_set(ruby_message, rb_intern("@content"), content);
 }
@@ -148,19 +140,11 @@ static void initialize_message_ivars(VALUE ruby_message, VALUE content) {
 static VALUE rb_create_message(VALUE klass, VALUE content) {
     const char *c_content = StringValueCStr(content);
     CMessage* message = create_message(c_content);
-    if (message) {
-        // Wrap the native struct in a Ruby object
-        VALUE ruby_message = wrap_message(message);
-        
-        // Initialize instance variable for fast Ruby-side access
-        initialize_message_ivars(ruby_message, content);
-        
-        return ruby_message;
-    }
-    return Qnil;
+    VALUE ruby_message = wrap_message(message);
+    initialize_message_ivars(ruby_message, content);
+    return ruby_message;
 }
 
-// Initialization function for the Ruby extension
 void Init_index(void) {
     VALUE mIndex = rb_define_module("Index");
 
@@ -176,18 +160,18 @@ void Init_index(void) {
     rb_define_attr(cEntry, "name", 1, 1);
     rb_define_attr(cEntry, "value", 1, 1);
 
-    // Integer functions for boundary performance testing
     rb_define_singleton_method(mIndex, "get_constant_number", rb_get_constant_number, 0);
     rb_define_singleton_method(mIndex, "increment_number", rb_increment_number, 1);
 
-    // Point class for object creation benchmarking
     cPoint = rb_define_class_under(mIndex, "Point", rb_cObject);
     rb_define_singleton_method(cPoint, "new", rb_create_point, 2);
-    rb_define_attr(cPoint, "x", 1, 0);  // readable, not writable
-    rb_define_attr(cPoint, "y", 1, 0);  // readable, not writable
+    rb_define_attr(cPoint, "x", 1, 0);  
+    rb_define_attr(cPoint, "y", 1, 0);  
 
-    // Message class for string object creation benchmarking
     cMessage = rb_define_class_under(mIndex, "Message", rb_cObject);
+    // NOTE: Choosing to use definition via singleton method instead of 
+    // defining an alloc function becasue rb_define_alloc_func doesn't 
+    // take any arguments after the klass.
     rb_define_singleton_method(cMessage, "new", rb_create_message, 1);
     rb_define_attr(cMessage, "content", 1, 0);  // readable, not writable
 }
