@@ -6,6 +6,10 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
+[dependencies]
+ahash = "0.8"
+hashbrown = "0.14"
+
 [build-dependencies]
 cbindgen = "0.29"
 
