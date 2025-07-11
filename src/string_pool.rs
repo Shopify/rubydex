@@ -60,12 +60,24 @@ use hashbrown::hash_map::RawEntryMut;
 ///         self.0
 ///     }
 /// }
-pub trait PoolId {
+pub trait PoolId: From<u32> + Into<u32> {
     /// Creates a new pool identifier from a u32 value.
     fn from_u32(id: u32) -> Self;
 
     /// Converts this pool identifier to a u32 value.
     fn to_u32(&self) -> u32;
+}
+
+impl<T> PoolId for T
+where
+    T: Copy + From<u32> + Into<u32>,
+{
+    fn from_u32(id: u32) -> Self {
+        Self::from(id)
+    }
+    fn to_u32(&self) -> u32 {
+        (*self).into()
+    }
 }
 
 /// A string pool implementation with efficient string interning.
@@ -162,7 +174,7 @@ impl<I: PoolId> StringPool<I> {
         };
 
         // Step 4: Convert the internal u32 ID to the user's ID type
-        I::from_u32(id)
+        id.into()
     }
 
     /// Retrieves a string from the pool by its ID.
@@ -215,20 +227,11 @@ impl<I: PoolId> StringPool<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use derive_more::{From, Into};
 
     // Test ID type for testing the Pool
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, From, Into)]
     struct TestId(u32);
-
-    impl PoolId for TestId {
-        fn from_u32(id: u32) -> Self {
-            Self(id)
-        }
-
-        fn to_u32(&self) -> u32 {
-            self.0
-        }
-    }
 
     #[test]
     fn pool_new_creates_empty_pool() {

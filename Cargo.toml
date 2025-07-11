@@ -8,6 +8,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 ahash = "0.8"
+derive_more = { version = "2.0.1", features = ["from", "into"] }
 hashbrown = "0.14"
 
 [build-dependencies]
