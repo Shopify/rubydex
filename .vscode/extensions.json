@@ -1,6 +1,7 @@
 {
     "recommendations": [
         "rust-lang.rust-analyzer",
-        "shopify.ruby-extensions-pack"
+        "shopify.ruby-extensions-pack",
+        "llvm-vs-code-extensions.vscode-clangd"
     ]
 }
