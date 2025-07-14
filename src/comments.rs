@@ -1,3 +1,6 @@
+use std::usize;
+
+use rand::{Rng, distributions::Alphanumeric};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -7,15 +10,18 @@ pub struct CommentData {
 }
 
 impl CommentData {
-    pub fn new(entry_name: String) -> Self {
+    pub fn new(entry_name: String, comment_size: usize) -> Self {
         Self {
-            text: generate_comment(),
+            text: generate_comment(comment_size),
             entry_name,
         }
     }
 }
 
-fn generate_comment() -> String {
-    let comment = "This is a sample comment";
-    String::from(comment)
+fn generate_comment(length: usize) -> String {
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
 }
