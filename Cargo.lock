@@ -167,6 +167,8 @@ name = "index"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
