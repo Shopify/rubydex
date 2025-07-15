@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package comments;
+
+message ProtoCommentData {
+  string text = 1;
+  string entry_name = 2;
+}
+
+message ProtoCommentCollection {
+  map<string, ProtoCommentData> comments = 1;
+} 

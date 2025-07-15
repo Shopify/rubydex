@@ -16,6 +16,7 @@ path = "bin/serialize_compare.rs"
 
 [build-dependencies]
 cbindgen = "0.29"
+prost-build = "0.12"
 
 [profile.release]
 lto = true
@@ -31,3 +32,5 @@ rmp-serde = "1.1"
 bincode = "1.3"
 postcard = { version = "1.0", features = ["use-std"] }
 ciborium = "0.2"
+prost = "0.12"
+prost-types = "0.12"
