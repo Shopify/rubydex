@@ -4,12 +4,26 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [build-dependencies]
 cbindgen = "0.29"
+
 
 [profile.release]
 lto = true
 opt-level = 3
 codegen-units = 1
+
+
+[[bin]]
+name = "sqlite"
+path = "bin/sqlite.rs"
+
+[[bin]]
+name = "store_comments"
+path = "bin/store_comments.rs"
+
+[dependencies]
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+rand = "0.8"
