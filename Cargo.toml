@@ -13,3 +13,18 @@ cbindgen = "0.29"
 lto = true
 opt-level = 3
 codegen-units = 1
+
+[workspace.lints.clippy]
+# See: https://doc.rust-lang.org/clippy/lints.html
+correctness = "forbid"
+suspicious = "forbid"
+perf = "forbid"
+complexity = "forbid"
+style = "forbid"
+pedantic = "warn"
+
+ptr-as-ptr = { level = "forbid", priority = 1 }
+manual-let-else = { level = "allow", priority = 1 }
+
+[lints]
+workspace = true

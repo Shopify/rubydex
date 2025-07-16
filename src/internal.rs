@@ -11,6 +11,7 @@ impl Default for Repository {
 }
 
 impl Repository {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
@@ -20,6 +21,7 @@ impl Repository {
         self.entries.insert(entry.name.clone(), entry);
     }
 
+    #[must_use]
     pub fn get_entry(&self, key: &str) -> Option<&Entry> {
         self.entries.get(key)
     }
@@ -32,6 +34,7 @@ pub struct Entry {
 }
 
 impl Entry {
+    #[must_use]
     pub fn new(name: String, value: String) -> Self {
         Self { name, value }
     }
