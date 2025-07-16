@@ -1,7 +1,6 @@
 use rusqlite::{Connection, Result};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Hello, world!");
     let conn = Connection::open("tmp/comments.db")?;
     // Now let's try to create a table to store comments
 

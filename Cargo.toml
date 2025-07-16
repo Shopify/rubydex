@@ -24,6 +24,10 @@ path = "bin/sqlite.rs"
 name = "store_comments"
 path = "bin/store_comments.rs"
 
+[[bin]]
+name = "store_comments_per_file"
+path = "bin/store_comments_per_file.rs"
+
 [dependencies]
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 rand = "0.8"
