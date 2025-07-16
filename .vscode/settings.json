@@ -1,13 +1,6 @@
 {
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.check.allTargets": true,
-    "rust-analyzer.check.extraArgs": [
-        "--",
-        "-W",
-        "clippy::all",
-        "-W",
-        "clippy::nursery"
-    ],
     "rust-analyzer.diagnostics.enable": true,
     "rust-analyzer.rustfmt.extraArgs": [
         "--edition",
