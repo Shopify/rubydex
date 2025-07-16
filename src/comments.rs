@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CommentData {
-    text: String,
-    entry_name: String,
+    pub text: String,
+    pub entry_name: String,
 }
 
 impl CommentData {

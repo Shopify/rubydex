@@ -14,6 +14,10 @@ path = "bin/serde_json.rs"
 name = "serialize_compare"
 path = "bin/serialize_compare.rs"
 
+[[bin]]
+name = "serialize_benchmark"
+path = "bin/serialize_benchmark.rs"
+
 [build-dependencies]
 cbindgen = "0.29"
 prost-build = "0.12"
@@ -36,7 +40,6 @@ ciborium = "0.2"
 prost = "0.12"
 prost-types = "0.12"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
-rand = "0.8"
 
 [[bin]]
 name = "sqlite"
