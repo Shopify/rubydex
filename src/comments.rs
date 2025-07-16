@@ -3,7 +3,7 @@ use std::usize;
 use rand::{Rng, distributions::Alphanumeric};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct CommentData {
     text: String,
     entry_name: String,

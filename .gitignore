@@ -17,3 +17,4 @@ target/
 ext/index/rustbindings.h
 ext/index/compile_commands.json
 ext/index/.cache
+.DS_Store

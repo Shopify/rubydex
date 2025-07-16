@@ -18,6 +18,7 @@ path = "bin/serialize_compare.rs"
 cbindgen = "0.29"
 prost-build = "0.12"
 
+
 [profile.release]
 lto = true
 opt-level = 3
@@ -34,3 +35,33 @@ postcard = { version = "1.0", features = ["use-std"] }
 ciborium = "0.2"
 prost = "0.12"
 prost-types = "0.12"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+rand = "0.8"
+
+[[bin]]
+name = "sqlite"
+path = "bin/sqlite.rs"
+
+[[bin]]
+name = "store_comments"
+path = "bin/store_comments.rs"
+
+[[bin]]
+name = "store_comments_per_file"
+path = "bin/store_comments_per_file.rs"
+
+[[bin]]
+name = "sqlite_benchmark"
+path = "bin/sqlite_insertion_benchmark.rs"
+
+[[bin]]
+name = "sqlite_benchmark_concise"
+path = "bin/sqlite_benchmark_concise.rs"
+
+[[bin]]
+name = "sqlite_reading_benchmark"
+path = "bin/sqlite_reading_benchmark.rs"
+
+[[bin]]
+name = "sqlite_simple_reading_benchmark"
+path = "bin/sqlite_simple_reading_benchmark.rs"
