@@ -28,6 +28,22 @@ path = "bin/store_comments.rs"
 name = "store_comments_per_file"
 path = "bin/store_comments_per_file.rs"
 
+[[bin]]
+name = "sqlite_benchmark"
+path = "bin/sqlite_insertion_benchmark.rs"
+
+[[bin]]
+name = "sqlite_benchmark_concise"
+path = "bin/sqlite_benchmark_concise.rs"
+
+[[bin]]
+name = "sqlite_reading_benchmark"
+path = "bin/sqlite_reading_benchmark.rs"
+
+[[bin]]
+name = "sqlite_simple_reading_benchmark"
+path = "bin/sqlite_simple_reading_benchmark.rs"
+
 [dependencies]
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 rand = "0.8"
