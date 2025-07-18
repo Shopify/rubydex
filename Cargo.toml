@@ -54,17 +54,9 @@ name = "store_comments_per_file"
 path = "bin/store_comments_per_file.rs"
 
 [[bin]]
-name = "sqlite_benchmark"
+name = "sqlite_insertion_benchmark"
 path = "bin/sqlite_insertion_benchmark.rs"
 
 [[bin]]
-name = "sqlite_benchmark_concise"
-path = "bin/sqlite_benchmark_concise.rs"
-
-[[bin]]
-name = "sqlite_reading_benchmark"
-path = "bin/sqlite_reading_benchmark.rs"
-
-[[bin]]
-name = "sqlite_simple_reading_benchmark"
-path = "bin/sqlite_simple_reading_benchmark.rs"
+name = "reading_benchmark"
+path = "bin/reading_benchmark.rs"

@@ -2,29 +2,44 @@ use rusqlite::{Connection, Result};
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("SQLite Write Performance Benchmark");
-    println!("===================================");
+    println!("SQLite Write Performance Benchmark: 1M Records with Batch Size 100");
+    println!("===================================================================");
+    println!("Comparing WITH vs WITHOUT entry_name index");
 
-    // Test different scales
-    let test_scales = vec![1_000, 10_000, 100_000, 1_000_000];
+    let scale = 1_000_000;
 
-    for &scale in &test_scales {
-        println!("\nTesting {} records:", scale);
-        println!("----------------------------------------");
+    // Test WITHOUT entry_name index first (faster inserts)
+    println!("\n🚫 WITHOUT entry_name INDEX:");
+    println!("-----------------------------");
+    test_insertion_scenario(&scale, false)?;
 
-        // Clean setup for each scale
-        let db_path = format!("tmp/benchmark_{}.db", scale);
-        std::fs::remove_file(&db_path).ok();
-        let conn = Connection::open(&db_path)?;
-        setup_table(&conn)?;
+    // Test WITH entry_name index (slower inserts due to index maintenance)
+    println!("\n✅ WITH entry_name INDEX:");
+    println!("--------------------------");
+    test_insertion_scenario(&scale, true)?;
 
-        // Test different approaches
-        if scale <= 100_000 {
-            test_individual_transactions(&conn, scale)?;
-        }
-        test_transaction_batches(&conn, scale)?;
-        test_with_pragmas(&conn, scale)?;
-        test_batch_inserts(&conn, scale)?;
+    Ok(())
+}
+
+fn test_insertion_scenario(scale: &usize, with_indexes: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let scenario_name = if with_indexes { "indexed" } else { "no_indexes" };
+    let db_path = format!("tmp/write_benchmark_{}_{}.db", scenario_name, scale);
+
+    // Clean setup for each test
+    std::fs::remove_file(&db_path).ok();
+    let conn = Connection::open(&db_path)?;
+    setup_table(&conn)?;
+
+    if with_indexes {
+        create_indexes(&conn)?;
+    }
+
+    // Test transaction batches with size 100
+    test_transaction_batch_100(&conn, *scale, scenario_name)?;
+
+    if with_indexes {
+        println!("  📊 Index overhead comparison:");
+        measure_index_overhead(&conn, *scale)?;
     }
 
     Ok(())
@@ -35,24 +50,41 @@ fn setup_table(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         "CREATE TABLE IF NOT EXISTS comments (
             id INTEGER PRIMARY KEY,
             comment TEXT,
-            entry_name TEXT
+            entry_name TEXT,
+            created_at INTEGER,
+            score INTEGER
         )",
         [],
     )?;
     Ok(())
 }
 
-fn test_individual_transactions(conn: &Connection, scale: usize) -> Result<(), Box<dyn std::error::Error>> {
+fn create_indexes(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    println!("  🔨 Creating entry_name index before insertion...");
+
+    // Only create index on entry_name for lookups
+    conn.execute("CREATE INDEX idx_entry_name ON comments(entry_name)", [])?;
+
+    Ok(())
+}
+
+fn test_individual_transactions(
+    conn: &Connection,
+    scale: usize,
+    scenario: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     conn.execute("DELETE FROM comments", [])?;
     let start = Instant::now();
 
     for i in 0..scale {
         let comment = format!("comment_{:06}", i);
         let entry = format!("entry_{}", i / 100);
+        let created_at = 1600000000 + (i * 60) as i64;
+        let score = (i % 100 + 1) as i64;
 
         conn.execute(
-            "INSERT INTO comments (comment, entry_name) VALUES (?1, ?2)",
-            [&comment, &entry],
+            "INSERT INTO comments (comment, entry_name, created_at, score) VALUES (?1, ?2, ?3, ?4)",
+            [&comment, &entry, &created_at.to_string(), &score.to_string()],
         )?;
     }
 
@@ -60,7 +92,8 @@ fn test_individual_transactions(conn: &Connection, scale: usize) -> Result<(), B
     let rate = scale as f64 / duration.as_secs_f64();
 
     println!(
-        "Individual transactions: {:.0}ms  |  {:.0} records/sec",
+        "Individual transactions ({:10}): {:6.0}ms | {:6.0} records/sec",
+        scenario,
         duration.as_millis(),
         rate
     );
@@ -68,7 +101,7 @@ fn test_individual_transactions(conn: &Connection, scale: usize) -> Result<(), B
     Ok(())
 }
 
-fn test_transaction_batches(conn: &Connection, scale: usize) -> Result<(), Box<dyn std::error::Error>> {
+fn test_transaction_batches(conn: &Connection, scale: usize, scenario: &str) -> Result<(), Box<dyn std::error::Error>> {
     let batch_sizes = vec![10, 100, 1000];
 
     for &batch_size in &batch_sizes {
@@ -82,13 +115,16 @@ fn test_transaction_batches(conn: &Connection, scale: usize) -> Result<(), Box<d
         let mut records_inserted = 0;
         while records_inserted < scale {
             let tx = conn.unchecked_transaction()?;
-            let mut stmt = tx.prepare("INSERT INTO comments (comment, entry_name) VALUES (?1, ?2)")?;
+            let mut stmt =
+                tx.prepare("INSERT INTO comments (comment, entry_name, created_at, score) VALUES (?1, ?2, ?3, ?4)")?;
 
             let batch_end = std::cmp::min(records_inserted + batch_size, scale);
             for i in records_inserted..batch_end {
                 let comment = format!("comment_{:06}", i);
                 let entry = format!("entry_{}", i / 100);
-                stmt.execute([&comment, &entry])?;
+                let created_at = 1600000000 + (i * 60) as i64;
+                let score = (i % 100 + 1) as i64;
+                stmt.execute([&comment, &entry, &created_at.to_string(), &score.to_string()])?;
             }
 
             drop(stmt);
@@ -100,8 +136,9 @@ fn test_transaction_batches(conn: &Connection, scale: usize) -> Result<(), Box<d
         let rate = scale as f64 / duration.as_secs_f64();
 
         println!(
-            "Transaction batch {:4}: {:.0}ms  |  {:.0} records/sec",
+            "Transaction batch {:4} ({:10}): {:6.0}ms | {:6.0} records/sec",
             batch_size,
+            scenario,
             duration.as_millis(),
             rate
         );
@@ -110,7 +147,50 @@ fn test_transaction_batches(conn: &Connection, scale: usize) -> Result<(), Box<d
     Ok(())
 }
 
-fn test_with_pragmas(conn: &Connection, scale: usize) -> Result<(), Box<dyn std::error::Error>> {
+fn test_transaction_batch_100(
+    conn: &Connection,
+    scale: usize,
+    scenario: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    conn.execute("DELETE FROM comments", [])?;
+    let start = Instant::now();
+
+    let batch_size = 100;
+    let mut records_inserted = 0;
+
+    while records_inserted < scale {
+        let tx = conn.unchecked_transaction()?;
+        let mut stmt =
+            tx.prepare("INSERT INTO comments (comment, entry_name, created_at, score) VALUES (?1, ?2, ?3, ?4)")?;
+
+        let batch_end = std::cmp::min(records_inserted + batch_size, scale);
+        for i in records_inserted..batch_end {
+            let comment = format!("comment_{:06}", i);
+            let entry = format!("entry_{}", i / 100);
+            let created_at = 1600000000 + (i * 60) as i64;
+            let score = (i % 100 + 1) as i64;
+            stmt.execute([&comment, &entry, &created_at.to_string(), &score.to_string()])?;
+        }
+
+        drop(stmt);
+        tx.commit()?;
+        records_inserted = batch_end;
+    }
+
+    let duration = start.elapsed();
+    let rate = scale as f64 / duration.as_secs_f64();
+
+    println!(
+        "Transaction batch 100 ({:10}): {:6.0}ms | {:6.0} records/sec",
+        scenario,
+        duration.as_millis(),
+        rate
+    );
+
+    Ok(())
+}
+
+fn test_with_pragmas(conn: &Connection, scale: usize, scenario: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Set performance pragmas
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -126,13 +206,16 @@ fn test_with_pragmas(conn: &Connection, scale: usize) -> Result<(), Box<dyn std:
 
     while records_inserted < scale {
         let tx = conn.unchecked_transaction()?;
-        let mut stmt = tx.prepare("INSERT INTO comments (comment, entry_name) VALUES (?1, ?2)")?;
+        let mut stmt =
+            tx.prepare("INSERT INTO comments (comment, entry_name, created_at, score) VALUES (?1, ?2, ?3, ?4)")?;
 
         let batch_end = std::cmp::min(records_inserted + batch_size, scale);
         for i in records_inserted..batch_end {
             let comment = format!("comment_{:06}", i);
             let entry = format!("entry_{}", i / 100);
-            stmt.execute([&comment, &entry])?;
+            let created_at = 1600000000 + (i * 60) as i64;
+            let score = (i % 100 + 1) as i64;
+            stmt.execute([&comment, &entry, &created_at.to_string(), &score.to_string()])?;
         }
 
         drop(stmt);
@@ -144,7 +227,8 @@ fn test_with_pragmas(conn: &Connection, scale: usize) -> Result<(), Box<dyn std:
     let rate = scale as f64 / duration.as_secs_f64();
 
     println!(
-        "With pragmas + batch  : {:.0}ms  |  {:.0} records/sec",
+        "With pragmas + batch ({:10}): {:6.0}ms | {:6.0} records/sec",
+        scenario,
         duration.as_millis(),
         rate
     );
@@ -156,7 +240,7 @@ fn test_with_pragmas(conn: &Connection, scale: usize) -> Result<(), Box<dyn std:
     Ok(())
 }
 
-fn test_batch_inserts(conn: &Connection, scale: usize) -> Result<(), Box<dyn std::error::Error>> {
+fn test_batch_inserts(conn: &Connection, scale: usize, scenario: &str) -> Result<(), Box<dyn std::error::Error>> {
     conn.execute("DELETE FROM comments", [])?;
     let start = Instant::now();
 
@@ -170,12 +254,17 @@ fn test_batch_inserts(conn: &Connection, scale: usize) -> Result<(), Box<dyn std
 
         let batch_end = std::cmp::min(records_inserted + batch_size, scale);
         for i in records_inserted..batch_end {
-            values.push("(?, ?)");
+            values.push("(?, ?, ?, ?)");
             params.push(format!("comment_{:06}", i));
             params.push(format!("entry_{}", i / 100));
+            params.push((1600000000 + i * 60).to_string());
+            params.push(((i % 100) + 1).to_string());
         }
 
-        let sql = format!("INSERT INTO comments (comment, entry_name) VALUES {}", values.join(","));
+        let sql = format!(
+            "INSERT INTO comments (comment, entry_name, created_at, score) VALUES {}",
+            values.join(",")
+        );
         tx.execute(&sql, rusqlite::params_from_iter(&params))?;
 
         records_inserted = batch_end;
@@ -187,10 +276,43 @@ fn test_batch_inserts(conn: &Connection, scale: usize) -> Result<(), Box<dyn std
     let rate = scale as f64 / duration.as_secs_f64();
 
     println!(
-        "Batch SQL inserts     : {:.0}ms  |  {:.0} records/sec",
+        "Batch SQL inserts    ({:10}): {:6.0}ms | {:6.0} records/sec",
+        scenario,
         duration.as_millis(),
         rate
     );
+
+    Ok(())
+}
+
+fn measure_index_overhead(conn: &Connection, scale: usize) -> Result<(), Box<dyn std::error::Error>> {
+    // Measure time to rebuild entry_name index on existing data
+    println!("    Measuring entry_name index maintenance overhead...");
+
+    // Drop entry_name index
+    conn.execute("DROP INDEX IF EXISTS idx_entry_name", [])?;
+
+    // Measure time to create entry_name index on populated table
+    let start = Instant::now();
+
+    conn.execute("CREATE INDEX idx_entry_name ON comments(entry_name)", [])?;
+
+    let duration = start.elapsed();
+
+    println!(
+        "    Index creation time        : {:6.0}ms | {} records indexed",
+        duration.as_millis(),
+        scale
+    );
+
+    // Show storage overhead
+    let table_size: i64 = conn.query_row(
+        "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()",
+        [],
+        |row| row.get(0),
+    )?;
+
+    println!("    Database size with indexes : {:6.0} KB", table_size as f64 / 1024.0);
 
     Ok(())
 }
