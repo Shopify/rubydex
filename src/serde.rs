@@ -43,48 +43,70 @@ impl Encoding {
 
 pub fn serialize_and_write(encoding: Encoding, data: &HashMap<String, CommentData>) {
     let path = format!("tmp/{}.{}", encoding.to_string(), encoding.suffix());
-    let f = File::create(&path).expect("Unable to create file at '{path}'");
+    serialize_and_write_to_path(encoding, data, &path, false);
+}
+
+pub fn serialize_and_write_to_path(encoding: Encoding, data: &HashMap<String, CommentData>, path: &str, silent: bool) {
+    let f = File::create(path).expect(&format!("Unable to create file at '{}'", path));
     match encoding {
         Encoding::JSON => {
             let bw = BufWriter::new(f);
             if serde_json::ser::to_writer(bw, &data).is_ok() {
-                println!("Successfully written model to '{path}'");
+                if !silent {
+                    println!("Successfully written model to '{}'", path);
+                }
             } else {
-                eprintln!("Error writting model to '{path}'");
+                eprintln!("Error writing model to '{}'", path);
             }
         }
         Encoding::POSTCARD => {
             let serialized = postcard::to_allocvec(data).unwrap();
-            let result = fs::write(path.clone(), &serialized);
+            let result = std::fs::write(path, &serialized);
             match result {
-                Ok(()) => println!("Successfully written model to '{path}'"),
-                Err(error) => eprintln!("Error writting model to '{path}'"),
+                Ok(()) => {
+                    if !silent {
+                        println!("Successfully written model to '{}'", path);
+                    }
+                }
+                Err(_) => eprintln!("Error writing model to '{}'", path),
             }
         }
         Encoding::MESSAGEPACK => {
             let serialized = rmp_serde::to_vec(data).unwrap();
-            let result = fs::write(path.clone(), &serialized);
+            let result = std::fs::write(path, &serialized);
             match result {
-                Ok(()) => println!("Successfully written model to '{path}'"),
-                Err(error) => eprintln!("Error writting model to '{path}'"),
+                Ok(()) => {
+                    if !silent {
+                        println!("Successfully written model to '{}'", path);
+                    }
+                }
+                Err(_) => eprintln!("Error writing model to '{}'", path),
             }
         }
         Encoding::BINCODE => {
             let serialized = bincode::serialize(data).unwrap();
-            let result = fs::write(path.clone(), &serialized);
+            let result = std::fs::write(path, &serialized);
             match result {
-                Ok(()) => println!("Successfully written model to '{path}'"),
-                Err(error) => eprintln!("Error writting model to '{path}'"),
+                Ok(()) => {
+                    if !silent {
+                        println!("Successfully written model to '{}'", path);
+                    }
+                }
+                Err(_) => eprintln!("Error writing model to '{}'", path),
             }
         }
         Encoding::CBOR => {
             let mut serialized = Vec::new();
             ciborium::into_writer(data, &mut serialized).unwrap();
 
-            let result = fs::write(path.clone(), &serialized);
+            let result = std::fs::write(path, &serialized);
             match result {
-                Ok(()) => println!("Successfully written model to '{path}'"),
-                Err(error) => eprintln!("Error writting model to '{path}'"),
+                Ok(()) => {
+                    if !silent {
+                        println!("Successfully written model to '{}'", path);
+                    }
+                }
+                Err(_) => eprintln!("Error writing model to '{}'", path),
             }
         }
     }

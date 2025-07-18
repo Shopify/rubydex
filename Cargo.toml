@@ -54,8 +54,8 @@ name = "store_comments_per_file"
 path = "bin/store_comments_per_file.rs"
 
 [[bin]]
-name = "sqlite_insertion_benchmark"
-path = "bin/sqlite_insertion_benchmark.rs"
+name = "insertion_benchmark"
+path = "bin/insertion_benchmark.rs"
 
 [[bin]]
 name = "reading_benchmark"
