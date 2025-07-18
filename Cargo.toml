@@ -6,22 +6,9 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
-[[bin]]
-name = "serde_json"
-path = "bin/serde_json.rs"
-
-[[bin]]
-name = "serialize_compare"
-path = "bin/serialize_compare.rs"
-
-[[bin]]
-name = "serialize_benchmark"
-path = "bin/serialize_benchmark.rs"
-
 [build-dependencies]
 cbindgen = "0.29"
 prost-build = "0.12"
-
 
 [profile.release]
 lto = true
@@ -40,18 +27,6 @@ ciborium = "0.2"
 prost = "0.12"
 prost-types = "0.12"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
-
-[[bin]]
-name = "sqlite"
-path = "bin/sqlite.rs"
-
-[[bin]]
-name = "store_comments"
-path = "bin/store_comments.rs"
-
-[[bin]]
-name = "store_comments_per_file"
-path = "bin/store_comments_per_file.rs"
 
 [[bin]]
 name = "insertion_benchmark"
