@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# A simple script to measure memory usage of a command.
+#
+# Usage:
+#   utils/mem-use <command> [args...]
+
 if [ $# -eq 0 ]; then
     echo "Usage: $0 <command> [args...]"
     echo "Example: $0 cargo run"
