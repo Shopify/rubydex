@@ -35,3 +35,7 @@ path = "bin/insertion_benchmark.rs"
 [[bin]]
 name = "reading_benchmark"
 path = "bin/reading_benchmark.rs"
+
+[[bin]]
+name = "storage_benchmark"
+path = "bin/storage_benchmark.rs"
