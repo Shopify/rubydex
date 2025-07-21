@@ -8,13 +8,13 @@ use std::{collections::HashMap, time::Instant};
 // Inserting 1M records
 static SCALE: usize = 1_000_000;
 static NUM_LOOKUPS: usize = 1000;
-static ENCODINGS_LIST: [Encoding; 5] = [
+static ENCODINGS_LIST: [Encoding; 6] = [
     Encoding::JSON,
     Encoding::POSTCARD,
     Encoding::MESSAGEPACK,
     Encoding::BINCODE,
     Encoding::CBOR,
-    //Encoding::PROST,
+    Encoding::PROST,
 ];
 // The purpose of this Benchmark is to test how quickly each storage
 // method can look up 1 record from a database of 1M records.

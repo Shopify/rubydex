@@ -5,12 +5,13 @@ use std::{collections::HashMap, time::Instant};
 
 // Inserting 1M records consistently with reading benchmark
 static SCALE: usize = 1_000_000;
-static ENCODINGS_LIST: [Encoding; 5] = [
+static ENCODINGS_LIST: [Encoding; 6] = [
     Encoding::JSON,
     Encoding::POSTCARD,
     Encoding::MESSAGEPACK,
     Encoding::BINCODE,
     Encoding::CBOR,
+    Encoding::PROST,
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -118,6 +119,7 @@ fn test_serde_serialization_batched(indexed_comments: &HashMap<String, CommentDa
             Encoding::MESSAGEPACK => "msgpack",
             Encoding::BINCODE => "bincode",
             Encoding::CBOR => "cbor",
+            Encoding::PROST => "prost",
         };
 
         // Serialize this batch to a separate file

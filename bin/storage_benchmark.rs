@@ -5,12 +5,13 @@ use std::{collections::HashMap, fs};
 
 // Testing with 1000 records for storage strategy comparison
 static SCALE: usize = 1_000_000;
-static ENCODINGS_LIST: [Encoding; 5] = [
+static ENCODINGS_LIST: [Encoding; 6] = [
     Encoding::JSON,
     Encoding::POSTCARD,
     Encoding::MESSAGEPACK,
     Encoding::BINCODE,
     Encoding::CBOR,
+    Encoding::PROST,
 ];
 
 // Storage Strategy File Size Comparison Benchmark
@@ -161,6 +162,7 @@ fn get_serde_file_path(encoding: Encoding) -> String {
         Encoding::MESSAGEPACK => "msgpack",
         Encoding::BINCODE => "bincode",
         Encoding::CBOR => "cbor",
+        Encoding::PROST => "prost",
     };
     format!("tmp/storage_benchmark/{}.{}", encoding.to_string(), suffix)
 }
