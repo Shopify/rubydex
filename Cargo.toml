@@ -16,6 +16,7 @@ opt-level = 3
 codegen-units = 1
 
 [dependencies]
+string-interner = "0.19.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rand = "0.8"
@@ -39,3 +40,18 @@ path = "bin/reading_benchmark.rs"
 [[bin]]
 name = "storage_benchmark"
 path = "bin/storage_benchmark.rs"
+
+[workspace.lints.clippy]
+# See: https://doc.rust-lang.org/clippy/lints.html
+correctness = "forbid"
+suspicious = "forbid"
+perf = "forbid"
+complexity = "forbid"
+style = "forbid"
+pedantic = "warn"
+
+ptr-as-ptr = { level = "forbid", priority = 1 }
+manual-let-else = { level = "allow", priority = 1 }
+
+[lints]
+workspace = true

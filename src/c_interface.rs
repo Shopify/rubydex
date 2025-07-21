@@ -8,7 +8,7 @@ pub type CEntry = std::ffi::c_void;
 #[unsafe(no_mangle)]
 pub extern "C" fn get_repository() -> *mut CRepository {
     let repository = Repository::new();
-    Box::into_raw(Box::new(repository)) as *mut CRepository
+    Box::into_raw(Box::new(repository)).cast::<CRepository>()
 }
 
 /// This will likely be removed
@@ -22,7 +22,7 @@ pub unsafe extern "C" fn repository_get_entry(repository: *const CRepository, na
         return std::ptr::null_mut();
     }
     unsafe {
-        let repository_ref = &*(repository as *const Repository);
+        let repository_ref = &*repository.cast::<Repository>();
         let c_str = std::ffi::CStr::from_ptr(name);
         let name_str = match c_str.to_str() {
             Ok(s) => s,
@@ -30,7 +30,7 @@ pub unsafe extern "C" fn repository_get_entry(repository: *const CRepository, na
         };
 
         match repository_ref.get_entry(name_str) {
-            Some(entry) => Box::into_raw(Box::new(entry.clone())) as *mut CEntry,
+            Some(entry) => Box::into_raw(Box::new(entry.clone())).cast::<CEntry>(),
             None => std::ptr::null_mut(),
         }
     }
@@ -47,7 +47,7 @@ pub unsafe extern "C" fn repository_add_entry(repository: *mut CRepository, name
         return;
     }
     unsafe {
-        let repository_ref = &mut *(repository as *mut Repository);
+        let repository_ref = &mut *repository.cast::<Repository>();
         let name_cstr = std::ffi::CStr::from_ptr(name);
         let value_cstr = std::ffi::CStr::from_ptr(value);
 
@@ -64,7 +64,7 @@ pub extern "C" fn entry_get_name(entry: *const CEntry) -> *const c_char {
         return std::ptr::null();
     }
     unsafe {
-        let entry_ref = &*(entry as *const Entry);
+        let entry_ref = &*entry.cast::<Entry>();
         match CString::new(entry_ref.name.clone()) {
             Ok(c_string) => c_string.into_raw(),
             Err(_) => std::ptr::null(),
@@ -78,7 +78,7 @@ pub extern "C" fn entry_get_value(entry: *const CEntry) -> *const c_char {
         return std::ptr::null();
     }
     unsafe {
-        let entry_ref = &*(entry as *const Entry);
+        let entry_ref = &*entry.cast::<Entry>();
         match CString::new(entry_ref.value.clone()) {
             Ok(c_string) => c_string.into_raw(),
             Err(_) => std::ptr::null(),
@@ -90,7 +90,7 @@ pub extern "C" fn entry_get_value(entry: *const CEntry) -> *const c_char {
 pub extern "C" fn delloc_entry(entry: *mut CEntry) {
     if !entry.is_null() {
         unsafe {
-            let _ = Box::from_raw(entry as *mut Entry);
+            let _ = Box::from_raw(entry.cast::<Entry>());
         }
     }
 }
@@ -99,7 +99,7 @@ pub extern "C" fn delloc_entry(entry: *mut CEntry) {
 pub extern "C" fn dealloc_repository(repository: *mut CRepository) {
     if !repository.is_null() {
         unsafe {
-            let _ = Box::from_raw(repository as *mut Repository);
+            let _ = Box::from_raw(repository.cast::<Repository>());
         }
     }
 }
