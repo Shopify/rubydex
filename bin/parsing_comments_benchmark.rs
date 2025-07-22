@@ -1,7 +1,7 @@
 use ruby_prism::Comment;
 
 fn main() {
-    let res = comments(124, "test.rb");
+    let res = comments(123, "test.rb");
     println!("{}", res);
 }
 
@@ -26,10 +26,9 @@ fn comments(entry_start_offset: usize, file_path: &str) -> String {
                 j = j - 1;
                 current_comment = prev_comment;
                 prev_comment = &comments[j - 1];
-                comment_group.insert_str(0, "\n");
 
                 let current_comment_str = String::from_utf8(current_comment.text().to_vec()).unwrap();
-                comment_group.insert_str(0, &current_comment_str);
+                comment_group.insert_str(0, format!("{}\n", current_comment_str).as_str());
             }
             // go backwards and collect comments until we find a comment that whose end offset
             // doesn't align with the current comment's start offset
