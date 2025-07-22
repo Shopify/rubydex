@@ -1,5 +1,3 @@
-use std::usize;
-
 use rand::{Rng, distributions::Alphanumeric};
 use serde::{Deserialize, Serialize};
 
