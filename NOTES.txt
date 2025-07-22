@@ -1,0 +1,4 @@
+1. Create a large Ruby file that contains a bunch of potential entries + comments associated
+2. Create a Rust object manually that contains Entry info + Location info (start line number) for an example entry whose comments we want to extract
+3. Create a cached version of the comments for the file related to each given entry
+4. Create a test to compare time taken for parsing from cache VS from Ruby file
