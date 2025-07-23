@@ -30,6 +30,7 @@ pub enum SymbolDefinition {
     Module(Box<ModuleDefinition>),
     SingletonClass(Box<SingletonClassDefinition>),
     Constant(Box<ConstantDefinition>),
+    Method(Box<MethodDefinition>),
 }
 
 impl SymbolDefinition {
@@ -50,6 +51,7 @@ impl SymbolDefinition {
             Self::Module(module) => module.to_string(uri_pool, name_pool),
             Self::SingletonClass(singleton) => singleton.to_string(uri_pool, name_pool),
             Self::Constant(constant) => constant.to_string(uri_pool, name_pool),
+            Self::Method(method) => method.to_string(uri_pool, name_pool),
         }
     }
 }
@@ -190,6 +192,10 @@ impl ConstantDefinition {
     /// # Returns
     ///
     /// A string representation of the constant definition.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the name is not found in the name pool.
     #[must_use]
     pub fn to_string(&self, uri_pool: &UriPool, name_pool: &NamePool) -> String {
         format!(
@@ -197,5 +203,88 @@ impl ConstantDefinition {
             name_pool.get(self.name_id).unwrap(),
             self.offset.to_string(uri_pool)
         )
+    }
+}
+
+#[derive(Debug)]
+pub struct MethodDefinition {
+    pub name_id: NameId,
+    pub offset: Offset,
+    pub parameters: Vec<Parameter>,
+}
+
+impl MethodDefinition {
+    #[must_use]
+    pub const fn new(name_id: NameId, offset: Offset, parameters: Vec<Parameter>) -> Self {
+        Self {
+            name_id,
+            offset,
+            parameters,
+        }
+    }
+
+    #[must_use]
+    pub fn to_string(&self, uri_pool: &UriPool, name_pool: &NamePool) -> String {
+        format!(
+            "def {}({}) ({})",
+            name_pool.get(self.name_id).unwrap(),
+            self.parameters
+                .iter()
+                .map(|p| name_pool.get(p.name_id).unwrap())
+                .collect::<Vec<String>>()
+                .join(", "),
+            self.offset.to_string(uri_pool)
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct Parameter {
+    pub name_id: NameId,
+    pub offset: Offset,
+    pub kind: ParameterKind,
+}
+
+impl Parameter {
+    #[must_use]
+    pub const fn new(name_id: NameId, offset: Offset, kind: ParameterKind) -> Self {
+        Self { name_id, offset, kind }
+    }
+
+    #[must_use]
+    pub fn to_string(&self, uri_pool: &UriPool, name_pool: &NamePool) -> String {
+        format!(
+            "{} {} ({})",
+            self.kind,
+            name_pool.get(self.name_id).unwrap(),
+            self.offset.to_string(uri_pool)
+        )
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParameterKind {
+    RequiredPositional,
+    OptionalPositional,
+    RestPositional,
+    Post,
+    RequiredKeyword,
+    OptionalKeyword,
+    RestKeyword,
+    Block,
+}
+
+impl std::fmt::Display for ParameterKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RequiredPositional => write!(f, "required positional"),
+            Self::OptionalPositional => write!(f, "optional positional"),
+            Self::RestPositional => write!(f, "rest positional"),
+            Self::Post => write!(f, "post positional"),
+            Self::RequiredKeyword => write!(f, "required keyword"),
+            Self::OptionalKeyword => write!(f, "optional keyword"),
+            Self::RestKeyword => write!(f, "rest keyword"),
+            Self::Block => write!(f, "block"),
+        }
     }
 }

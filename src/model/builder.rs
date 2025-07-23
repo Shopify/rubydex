@@ -1,7 +1,8 @@
 //! Parse the source code and build the symbol definitions.
 
 use crate::model::symbol_definitions::{
-    ClassDefinition, ConstantDefinition, ModuleDefinition, SingletonClassDefinition, SymbolDefinition,
+    ClassDefinition, ConstantDefinition, MethodDefinition, ModuleDefinition, Parameter, ParameterKind,
+    SingletonClassDefinition, SymbolDefinition,
 };
 use crate::offset::Offset;
 use crate::pools::name_pool::{NameId, NamePool};
@@ -67,6 +68,12 @@ impl<'a> Builder<'a> {
     fn intern_slice(&mut self, location: &ruby_prism::Location) -> NameId {
         self.name_pool
             .add(String::from_utf8_lossy(location.as_slice()).to_string())
+    }
+
+    fn intern_slice_without_last_char(&mut self, location: &ruby_prism::Location) -> NameId {
+        let mut s = String::from_utf8_lossy(location.as_slice()).to_string();
+        s.pop(); // Remove the last character
+        self.name_pool.add(s)
     }
 
     /// Converts a Prism location to an offset.
@@ -155,6 +162,88 @@ impl<'a> Visit<'a> for Builder<'a> {
                 _ => {}
             }
         }
+    }
+
+    fn visit_def_node(&mut self, node: &ruby_prism::DefNode<'a>) {
+        let mut parameters: Vec<Parameter> = Vec::new();
+        if let Some(parameters_list) = node.parameters() {
+            for parameter in parameters_list.requireds().iter() {
+                parameters.push(Parameter::new(
+                    self.intern_slice(&parameter.location()),
+                    self.prism_location_to_offset(&parameter.location()),
+                    ParameterKind::RequiredPositional,
+                ));
+            }
+            for parameter in parameters_list.optionals().iter() {
+                if let ruby_prism::Node::OptionalParameterNode { .. } = parameter {
+                    let opt_param = parameter.as_optional_parameter_node().unwrap();
+                    parameters.push(Parameter::new(
+                        self.intern_slice(&opt_param.name_loc()),
+                        self.prism_location_to_offset(&parameter.location()),
+                        ParameterKind::OptionalPositional,
+                    ));
+                }
+            }
+            if let Some(rest) = parameters_list.rest() {
+                let rest_param = rest.as_rest_parameter_node().unwrap();
+                parameters.push(Parameter::new(
+                    self.intern_slice(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
+                    self.prism_location_to_offset(&rest.location()),
+                    ParameterKind::RestPositional,
+                ));
+            }
+            for post in parameters_list.posts().iter() {
+                parameters.push(Parameter::new(
+                    self.intern_slice(&post.location()),
+                    self.prism_location_to_offset(&post.location()),
+                    ParameterKind::Post,
+                ));
+            }
+            for keyword in parameters_list.keywords().iter() {
+                match keyword {
+                    ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
+                        let required = keyword.as_required_keyword_parameter_node().unwrap();
+                        parameters.push(Parameter::new(
+                            self.intern_slice_without_last_char(&required.name_loc()),
+                            self.prism_location_to_offset(&keyword.location()),
+                            ParameterKind::RequiredKeyword,
+                        ));
+                    }
+                    ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
+                        let optional = keyword.as_optional_keyword_parameter_node().unwrap();
+                        parameters.push(Parameter::new(
+                            self.intern_slice_without_last_char(&optional.name_loc()),
+                            self.prism_location_to_offset(&keyword.location()),
+                            ParameterKind::OptionalKeyword,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(rest) = parameters_list.keyword_rest() {
+                let rest_param = rest.as_keyword_rest_parameter_node().unwrap();
+                parameters.push(Parameter::new(
+                    self.intern_slice(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
+                    self.prism_location_to_offset(&rest.location()),
+                    ParameterKind::RestKeyword,
+                ));
+            }
+            if let Some(block) = parameters_list.block() {
+                parameters.push(Parameter::new(
+                    self.intern_slice(&block.name_loc().unwrap_or_else(|| block.location())),
+                    self.prism_location_to_offset(&block.location()),
+                    ParameterKind::Block,
+                ));
+            }
+        }
+
+        let method = MethodDefinition::new(
+            self.intern_slice(&node.name_loc()),
+            self.prism_location_to_offset(&node.location()),
+            parameters,
+        );
+
+        self.symbol_definitions.push(SymbolDefinition::Method(Box::new(method)));
     }
 }
 
@@ -351,4 +440,75 @@ mod tests {
             _ => panic!("Expected a constant definition"),
         }
     }
+
+    #[test]
+    fn test_builder_method() {
+        let context = parse_string("def foo; end");
+
+        assert_eq!(context.symbol_definitions.len(), 1);
+
+        match &context.symbol_definitions[0] {
+            SymbolDefinition::Method(definition) => {
+                assert_eq!(definition.name_id.to_string(&context.name_pool), "foo");
+                assert_eq!(definition.parameters.len(), 0);
+            }
+            _ => panic!("Expected a method definition"),
+        }
+    }
+
+    #[test]
+    fn test_builder_method_with_all_named_parameters() {
+        let context = parse_string("def foo(p1, p2 = 42, *p3, p4, p5:, p6: 42, **p7, &block); end");
+
+        assert_eq!(context.symbol_definitions.len(), 1);
+
+        match &context.symbol_definitions[0] {
+            SymbolDefinition::Method(definition) => {
+                assert_eq!(definition.name_id.to_string(&context.name_pool), "foo");
+                assert_eq!(definition.parameters.len(), 8);
+
+                assert_eq!(definition.parameters[0].name_id.to_string(&context.name_pool), "p1");
+                assert_eq!(definition.parameters[0].kind, ParameterKind::RequiredPositional);
+                assert_eq!(definition.parameters[1].name_id.to_string(&context.name_pool), "p2");
+                assert_eq!(definition.parameters[1].kind, ParameterKind::OptionalPositional);
+                assert_eq!(definition.parameters[2].name_id.to_string(&context.name_pool), "p3");
+                assert_eq!(definition.parameters[2].kind, ParameterKind::RestPositional);
+                assert_eq!(definition.parameters[3].name_id.to_string(&context.name_pool), "p4");
+                assert_eq!(definition.parameters[3].kind, ParameterKind::Post);
+                assert_eq!(definition.parameters[4].name_id.to_string(&context.name_pool), "p5");
+                assert_eq!(definition.parameters[4].kind, ParameterKind::RequiredKeyword);
+                assert_eq!(definition.parameters[5].name_id.to_string(&context.name_pool), "p6");
+                assert_eq!(definition.parameters[5].kind, ParameterKind::OptionalKeyword);
+                assert_eq!(definition.parameters[6].name_id.to_string(&context.name_pool), "p7");
+                assert_eq!(definition.parameters[6].kind, ParameterKind::RestKeyword);
+                assert_eq!(definition.parameters[7].name_id.to_string(&context.name_pool), "block");
+                assert_eq!(definition.parameters[7].kind, ParameterKind::Block);
+            }
+            _ => panic!("Expected a method definition"),
+        }
+    }
+
+    #[test]
+    fn test_builder_method_with_anonymous_parameters() {
+        let context = parse_string("def foo(*, **, &); end");
+
+        assert_eq!(context.symbol_definitions.len(), 1);
+
+        match &context.symbol_definitions[0] {
+            SymbolDefinition::Method(definition) => {
+                assert_eq!(definition.name_id.to_string(&context.name_pool), "foo");
+                assert_eq!(definition.parameters.len(), 3);
+
+                assert_eq!(definition.parameters[0].name_id.to_string(&context.name_pool), "*");
+                assert_eq!(definition.parameters[0].kind, ParameterKind::RestPositional);
+                assert_eq!(definition.parameters[1].name_id.to_string(&context.name_pool), "**");
+                assert_eq!(definition.parameters[1].kind, ParameterKind::RestKeyword);
+                assert_eq!(definition.parameters[2].name_id.to_string(&context.name_pool), "&");
+                assert_eq!(definition.parameters[2].kind, ParameterKind::Block);
+            }
+            _ => panic!("Expected a method definition"),
+        }
+    }
+
+    // TODO: def self.foo; end
 }
