@@ -1,0 +1,4 @@
+up:
+  - ruby
+  - bundler
+  - rust
