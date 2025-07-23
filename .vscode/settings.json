@@ -2,15 +2,6 @@
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.check.allTargets": true,
     "rust-analyzer.diagnostics.enable": true,
-    "rust-analyzer.rustfmt.extraArgs": [
-        "--edition",
-        "2024"
-    ],
-    "rust-analyzer.rustfmt.overrideCommand": [
-        "rustfmt",
-        "--edition",
-        "2024"
-    ],
     "[rust]": {
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "rust-lang.rust-analyzer"
