@@ -1,6 +1,8 @@
 //! Parse the source code and build the symbol definitions.
 
-use crate::model::symbol_definitions::{ClassDefinition, ModuleDefinition, SingletonClassDefinition, SymbolDefinition};
+use crate::model::symbol_definitions::{
+    ClassDefinition, ConstantDefinition, ModuleDefinition, SingletonClassDefinition, SymbolDefinition,
+};
 use crate::offset::Offset;
 use crate::pools::name_pool::{NameId, NamePool};
 use crate::pools::uri_pool::UriId;
@@ -116,6 +118,43 @@ impl<'a> Visit<'a> for Builder<'a> {
             .push(SymbolDefinition::SingletonClass(Box::new(singleton)));
 
         ruby_prism::visit_singleton_class_node(self, node);
+    }
+
+    fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode<'a>) {
+        let constant = ConstantDefinition::new(
+            self.intern_slice(&node.name_loc()),
+            self.prism_location_to_offset(&node.location()),
+        );
+
+        self.symbol_definitions
+            .push(SymbolDefinition::Constant(Box::new(constant)));
+    }
+
+    fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode<'a>) {
+        let constant = ConstantDefinition::new(
+            self.intern_slice(&node.target().location()),
+            self.prism_location_to_offset(&node.location()),
+        );
+
+        self.symbol_definitions
+            .push(SymbolDefinition::Constant(Box::new(constant)));
+    }
+
+    fn visit_multi_write_node(&mut self, node: &ruby_prism::MultiWriteNode<'a>) {
+        for left in node.lefts().iter() {
+            match left {
+                ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
+                    let constant = ConstantDefinition::new(
+                        self.intern_slice(&left.location()),
+                        self.prism_location_to_offset(&left.location()),
+                    );
+
+                    self.symbol_definitions
+                        .push(SymbolDefinition::Constant(Box::new(constant)));
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -269,6 +308,47 @@ mod tests {
         match &context.symbol_definitions[2] {
             SymbolDefinition::SingletonClass(_) => {}
             _ => panic!("Expected a singleton class definition"),
+        }
+    }
+
+    #[test]
+    fn test_builder_constant() {
+        let context = parse_string(
+            "
+                FOO = 1
+                ::BAR::BAZ = 2
+                CONST1, ::CONST2 = 3
+            ",
+        );
+
+        assert_eq!(context.symbol_definitions.len(), 4);
+
+        match &context.symbol_definitions[0] {
+            SymbolDefinition::Constant(definition) => {
+                assert_eq!(definition.name_id.to_string(&context.name_pool), "FOO");
+            }
+            _ => panic!("Expected a constant definition"),
+        }
+
+        match &context.symbol_definitions[1] {
+            SymbolDefinition::Constant(definition) => {
+                assert_eq!(definition.name_id.to_string(&context.name_pool), "::BAR::BAZ");
+            }
+            _ => panic!("Expected a constant definition"),
+        }
+
+        match &context.symbol_definitions[2] {
+            SymbolDefinition::Constant(definition) => {
+                assert_eq!(definition.name_id.to_string(&context.name_pool), "CONST1");
+            }
+            _ => panic!("Expected a constant definition"),
+        }
+
+        match &context.symbol_definitions[3] {
+            SymbolDefinition::Constant(definition) => {
+                assert_eq!(definition.name_id.to_string(&context.name_pool), "::CONST2");
+            }
+            _ => panic!("Expected a constant definition"),
         }
     }
 }

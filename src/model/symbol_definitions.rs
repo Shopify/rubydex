@@ -29,6 +29,7 @@ pub enum SymbolDefinition {
     Class(Box<ClassDefinition>),
     Module(Box<ModuleDefinition>),
     SingletonClass(Box<SingletonClassDefinition>),
+    Constant(Box<ConstantDefinition>),
 }
 
 impl SymbolDefinition {
@@ -48,6 +49,7 @@ impl SymbolDefinition {
             Self::Class(class) => class.to_string(uri_pool, name_pool),
             Self::Module(module) => module.to_string(uri_pool, name_pool),
             Self::SingletonClass(singleton) => singleton.to_string(uri_pool, name_pool),
+            Self::Constant(constant) => constant.to_string(uri_pool, name_pool),
         }
     }
 }
@@ -160,5 +162,40 @@ impl SingletonClassDefinition {
     #[must_use]
     pub fn to_string(&self, uri_pool: &UriPool, _name_pool: &NamePool) -> String {
         format!("singleton class ({})", self.offset.to_string(uri_pool))
+    }
+}
+
+/// The definition of a constant in the source code.
+///
+/// This represent where a constant is being assigned.
+#[derive(Debug)]
+pub struct ConstantDefinition {
+    pub name_id: NameId,
+    pub offset: Offset,
+}
+
+impl ConstantDefinition {
+    #[must_use]
+    pub const fn new(name_id: NameId, offset: Offset) -> Self {
+        Self { name_id, offset }
+    }
+
+    /// Converts the constant definition to a string.
+    ///
+    /// # Arguments
+    ///
+    /// * `uri_pool` - The uri pool to resolve the uri from the uri ID
+    /// * `name_pool` - The name pool to resolve the name from the name ID
+    ///
+    /// # Returns
+    ///
+    /// A string representation of the constant definition.
+    #[must_use]
+    pub fn to_string(&self, uri_pool: &UriPool, name_pool: &NamePool) -> String {
+        format!(
+            "constant {} ({})",
+            name_pool.get(self.name_id).unwrap(),
+            self.offset.to_string(uri_pool)
+        )
     }
 }
