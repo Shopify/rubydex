@@ -61,6 +61,7 @@ fn test_sql_insertion_scenario(
     // Clean setup for each test
     std::fs::remove_file(&db_path).ok();
     let conn = Connection::open(&db_path)?;
+
     setup_table(&conn)?;
 
     if with_indexes {
@@ -158,6 +159,11 @@ fn setup_table(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         )",
         [],
     )?;
+
+    // Configure SQLite for maximum write performance
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+
     Ok(())
 }
 

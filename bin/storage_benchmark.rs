@@ -97,6 +97,9 @@ fn test_sql_file_size(
         [],
     )?;
 
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+
     if with_index {
         conn.execute("CREATE INDEX idx_entry_name ON comments(entry_name)", [])?;
     }

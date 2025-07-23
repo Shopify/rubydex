@@ -77,6 +77,8 @@ fn setup_and_populate_table(
         )",
         [],
     )?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
 
     println!("  📝 Populating database with 1M records...");
     let comments = indexed_comments.values();
