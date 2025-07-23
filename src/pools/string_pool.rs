@@ -80,6 +80,12 @@ pub trait PoolId: Copy + Clone + PartialEq + Eq + std::hash::Hash + std::fmt::De
 
     /// Converts this pool identifier to a `SymbolId`.
     fn to_symbol(&self) -> SymbolId;
+
+    /// Converts this pool identifier to a `String`.
+    fn to_string(&self, pool: &StringPool<Self>) -> String {
+        let symbol = self.to_symbol();
+        pool.backend.resolve(symbol).unwrap().to_string()
+    }
 }
 
 /// A string pool implementation with efficient string interning.
