@@ -14,7 +14,7 @@ cargo_args << "--release" if release
 
 if Gem.win_platform?
   cargo_args << "--target x86_64-pc-windows-gnu"
-  ENV["RUSTFLAGS"] = "-C target-feature=+crt-static"
+  ENV["RUSTFLAGS"] = "-C target-feature=+crt-static -C link-arg=-Wl,--stack,16777216"
 end
 
 append_cflags("-Werror=implicit-function-declaration")
