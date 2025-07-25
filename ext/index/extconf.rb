@@ -15,6 +15,8 @@ cargo_args << "--release" if release
 if Gem.win_platform?
   cargo_args << "--target x86_64-pc-windows-gnu"
   ENV["RUSTFLAGS"] = "-C target-feature=+crt-static -C link-arg=-Wl,--stack,16777216"
+  # Work around bindgen 0.66.1 panic on _Complex _Float16 types
+  ENV["BINDGEN_EXTRA_CLANG_ARGS"] = "-fno-builtin-complex -D_Complex= -D_Float16=double --target=x86_64-w64-mingw32"
 end
 
 append_cflags("-Werror=implicit-function-declaration")
