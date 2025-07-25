@@ -5,9 +5,11 @@ use rand::seq::SliceRandom;
 use rusqlite::{Connection, Result};
 use std::{collections::HashMap, time::Instant};
 
-// Inserting 1M records
-static SCALE: usize = 1_000_000;
+// NOTE: Change these values determine size of DB
+// and number of lookups to perform
+static SCALE: usize = 100_000;
 static NUM_LOOKUPS: usize = 1000;
+
 static ENCODINGS_LIST: [Encoding; 6] = [
     Encoding::JSON,
     Encoding::POSTCARD,
@@ -16,8 +18,9 @@ static ENCODINGS_LIST: [Encoding; 6] = [
     Encoding::CBOR,
     Encoding::PROST,
 ];
+
 // The purpose of this Benchmark is to test how quickly each storage
-// method can look up 1 record from a database of 1M records.
+// method can look up a given number of records from a database.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut indexed_comments = HashMap::new();
     for i in 0..SCALE {
@@ -27,19 +30,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("Created {} comments in memory", SCALE);
 
-    // Setup database with data
+    // Setup SQLite database with data
     let db_path = format!("tmp/read_benchmark_{}.db", SCALE);
     let mut conn = Connection::open(&db_path)?;
     setup_and_populate_table(&mut conn, &indexed_comments)?;
     println!("  📝 Populated SQLite database with {} records...", SCALE);
 
+    // Setup serialized files with data
     for encoding in ENCODINGS_LIST.clone() {
         let encoding_name = encoding.to_string();
         index::serde::serialize_and_write(encoding, &indexed_comments);
         println!("  📝 Wrote to file buffer as {}", encoding_name);
     }
 
-    // Get sample of entry_names for testing
+    // Get random sample of entry_names for testing
     let test_entry_names = get_random_entry_names(&conn)?;
     println!("📋 Prepared {} random entry_names for testing", test_entry_names.len());
 
@@ -48,6 +52,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("-----------------------------");
     ensure_no_index(&conn)?;
     test_entry_name_lookups_sql(&conn, &test_entry_names, "NO INDEX")?;
+
+    // Load all SQLite records into memory for in-memory lookup testing
+    println!("\n💾 IN-MEMORY SQLite query result lookups:");
+    println!("-----------------------------");
+    ensure_no_index(&conn)?;
+    test_entry_name_lookups_sqlite_memory(&conn, &test_entry_names)?;
 
     // Test WITH entry_name index
     println!("\n✅ WITH entry_name INDEX:");
@@ -162,6 +172,53 @@ fn test_entry_name_lookups_sql(
         "{} SQL lookups       ({:10}): {:6.0}ms total | {:6.1}μs avg/lookup | {:6.0} lookups/sec | {} rows found",
         NUM_LOOKUPS,
         scenario,
+        duration.as_millis(),
+        avg_per_lookup,
+        lookups_per_sec,
+        total_rows
+    );
+
+    Ok(())
+}
+
+fn load_all_records_to_memory(conn: &Connection) -> Result<HashMap<String, CommentData>, Box<dyn std::error::Error>> {
+    let mut records_map = HashMap::new();
+    let mut stmt = conn.prepare("SELECT entry_name, comment FROM comments")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+
+    for row_result in rows {
+        let (entry_name, comment_text) = row_result?;
+        let comment_data = CommentData {
+            entry_name: entry_name.clone(),
+            text: comment_text,
+        };
+        records_map.insert(entry_name, comment_data);
+    }
+
+    Ok(records_map)
+}
+
+fn test_entry_name_lookups_sqlite_memory(
+    conn: &Connection,
+    test_entry_names: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    let records_map = load_all_records_to_memory(conn)?;
+    let mut total_rows = 0;
+
+    for entry_name in test_entry_names {
+        if let Some(_comment_data) = records_map.get(entry_name) {
+            total_rows += 1;
+        }
+    }
+
+    let duration = start.elapsed();
+    let avg_per_lookup = duration.as_micros() as f64 / test_entry_names.len() as f64;
+    let lookups_per_sec = test_entry_names.len() as f64 / duration.as_secs_f64();
+
+    println!(
+        "{} SQLite memory lookups {:6.0}ms total | {:6.1}μs avg/lookup | {:6.0} lookups/sec | {} rows found",
+        NUM_LOOKUPS,
         duration.as_millis(),
         avg_per_lookup,
         lookups_per_sec,
