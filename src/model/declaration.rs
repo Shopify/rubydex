@@ -14,16 +14,21 @@
 //!
 //! and only one declaration: for the name `Foo`
 
+use crate::model::definitions::Definition;
 use crate::pools::name_pool::{NameId, NamePool};
 
 #[derive(Debug)]
 pub struct Declaration {
     pub name_id: NameId,
+    pub definitions: Vec<Definition>,
 }
 
 impl Declaration {
     pub fn new(name_id: NameId) -> Self {
-        Self { name_id }
+        Self {
+            name_id,
+            definitions: Vec::new(),
+        }
     }
 
     #[must_use]
