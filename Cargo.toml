@@ -7,6 +7,7 @@ edition = "2024"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+ruby-prism = "1.4.0"
 string-interner = "0.19.0"
 
 [dev-dependencies]
