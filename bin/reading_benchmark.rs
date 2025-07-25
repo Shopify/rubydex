@@ -7,7 +7,7 @@ use std::{collections::HashMap, time::Instant};
 
 // NOTE: Change these values determine size of DB
 // and number of lookups to perform
-static SCALE: usize = 100_000;
+static SCALE: usize = 1_000_000;
 static NUM_LOOKUPS: usize = 1000;
 
 static ENCODINGS_LIST: [Encoding; 6] = [
@@ -58,6 +58,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("-----------------------------");
     ensure_no_index(&conn)?;
     test_entry_name_lookups_sqlite_memory(&conn, &test_entry_names)?;
+
+    // Load all SQLite records into memory for linear search testing
+    println!("\n🔍 IN-MEMORY SQLite linear search lookups:");
+    println!("-----------------------------");
+    test_entry_name_lookups_sqlite_linear_search(&conn, &test_entry_names)?;
 
     // Test WITH entry_name index
     println!("\n✅ WITH entry_name INDEX:");
@@ -202,8 +207,11 @@ fn test_entry_name_lookups_sqlite_memory(
     conn: &Connection,
     test_entry_names: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let start = Instant::now();
+    let load_start = Instant::now();
     let records_map = load_all_records_to_memory(conn)?;
+    let load_duration = load_start.elapsed();
+    
+    let lookup_start = Instant::now();
     let mut total_rows = 0;
 
     for entry_name in test_entry_names {
@@ -212,14 +220,63 @@ fn test_entry_name_lookups_sqlite_memory(
         }
     }
 
-    let duration = start.elapsed();
-    let avg_per_lookup = duration.as_micros() as f64 / test_entry_names.len() as f64;
-    let lookups_per_sec = test_entry_names.len() as f64 / duration.as_secs_f64();
+    let lookup_duration = lookup_start.elapsed();
+    let total_duration = load_duration + lookup_duration;
+    let avg_per_lookup = lookup_duration.as_micros() as f64 / test_entry_names.len() as f64;
+    let lookups_per_sec = test_entry_names.len() as f64 / lookup_duration.as_secs_f64();
 
     println!(
-        "{} SQLite memory lookups {:6.0}ms total | {:6.1}μs avg/lookup | {:6.0} lookups/sec | {} rows found",
+        "{} SQLite memory lookups {:6.0}ms total | Load: {:6.0}ms | Lookup: {:6.0}ms | {:6.1}μs avg/lookup | {:6.0} lookups/sec | {} rows found",
         NUM_LOOKUPS,
-        duration.as_millis(),
+        total_duration.as_millis(),
+        load_duration.as_millis(),
+        lookup_duration.as_millis(),
+        avg_per_lookup,
+        lookups_per_sec,
+        total_rows
+    );
+
+    Ok(())
+}
+
+fn test_entry_name_lookups_sqlite_linear_search(
+    conn: &Connection,
+    test_entry_names: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let load_start = Instant::now();
+
+    // Query once and collect all rows into a Vec
+    let mut stmt = conn.prepare("SELECT entry_name, comment FROM comments")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+
+    let all_rows: Result<Vec<_>, _> = rows.collect();
+    let all_rows = all_rows?;
+    
+    let load_duration = load_start.elapsed();
+
+    // Now perform lookups using linear search through the Vec
+    let lookup_start = Instant::now();
+    let mut total_rows = 0;
+    for entry_name in test_entry_names {
+        for (record_entry_name, _comment_text) in &all_rows {
+            if record_entry_name == entry_name {
+                total_rows += 1;
+                break;
+            }
+        }
+    }
+
+    let lookup_duration = lookup_start.elapsed();
+    let total_duration = load_duration + lookup_duration;
+    let avg_per_lookup = lookup_duration.as_micros() as f64 / test_entry_names.len() as f64;
+    let lookups_per_sec = test_entry_names.len() as f64 / lookup_duration.as_secs_f64();
+
+    println!(
+        "{} SQLite linear search  {:6.0}ms total | Load: {:6.0}ms | Lookup: {:6.0}ms | {:6.1}μs avg/lookup | {:6.0} lookups/sec | {} rows found",
+        NUM_LOOKUPS,
+        total_duration.as_millis(),
+        load_duration.as_millis(),
+        lookup_duration.as_millis(),
         avg_per_lookup,
         lookups_per_sec,
         total_rows
@@ -230,8 +287,11 @@ fn test_entry_name_lookups_sqlite_memory(
 
 fn test_entry_name_lookups_serde(encoding: Encoding, test_entry_names: &[String]) {
     let _encoding_name = encoding.to_string();
-    let start = Instant::now();
+    let load_start = Instant::now();
     let deserialized_comments_hash = index::serde::deserialize_from_file(encoding.clone()).unwrap();
+    let load_duration = load_start.elapsed();
+    
+    let lookup_start = Instant::now();
     let mut total_rows = 0;
 
     for entry_name in test_entry_names {
@@ -239,14 +299,17 @@ fn test_entry_name_lookups_serde(encoding: Encoding, test_entry_names: &[String]
         total_rows += 1;
     }
 
-    let duration = start.elapsed();
-    let avg_per_lookup = duration.as_micros() as f64 / test_entry_names.len() as f64;
-    let lookups_per_sec = test_entry_names.len() as f64 / duration.as_secs_f64();
+    let lookup_duration = lookup_start.elapsed();
+    let total_duration = load_duration + lookup_duration;
+    let avg_per_lookup = lookup_duration.as_micros() as f64 / test_entry_names.len() as f64;
+    let lookups_per_sec = test_entry_names.len() as f64 / lookup_duration.as_secs_f64();
     println!(
-        "{} {} lookups       {:6.0}ms total | {:6.1}μs avg/lookup | {:6.0} lookups/sec | {} rows found",
+        "{} {} lookups       {:6.0}ms total | Load: {:6.0}ms | Lookup: {:6.0}ms | {:6.1}μs avg/lookup | {:6.0} lookups/sec | {} rows found",
         NUM_LOOKUPS,
         encoding.to_string(),
-        duration.as_millis(),
+        total_duration.as_millis(),
+        load_duration.as_millis(),
+        lookup_duration.as_millis(),
         avg_per_lookup,
         lookups_per_sec,
         total_rows
