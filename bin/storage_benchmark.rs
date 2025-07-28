@@ -67,6 +67,9 @@ fn test_sql_storage_file_sizes(
     // Test SQLite with index
     test_sql_file_size(indexed_comments, true, "SQLite (with index)")?;
 
+    // Test sharded SQLite
+    test_sharded_sql_file_size(indexed_comments, "SQLite (sharded)")?;
+
     Ok(())
 }
 
@@ -128,6 +131,114 @@ fn test_sql_file_size(
     let file_size = fs::metadata(&db_path)?.len();
 
     println!("{:25}: {:10} bytes", scenario_name, file_size);
+
+    Ok(())
+}
+
+fn test_sharded_sql_file_size(
+    indexed_comments: &HashMap<String, CommentData>,
+    scenario_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = format!("tmp/storage_benchmark/sharded_{}.db", SCALE);
+
+    // Clean setup - remove existing database file
+    fs::remove_file(&db_path).ok();
+    let mut conn = Connection::open(&db_path)?;
+
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+
+    // Calculate batch size - aim for ~1000 records per table
+    let batch_size = 100;
+    let total_batches = (SCALE + batch_size - 1) / batch_size; // Round up division
+
+    // Clean up any existing shard tables (in case of previous runs)
+    for batch_id in 0..total_batches {
+        let table_name = format!("comments_batch_{}", batch_id);
+        conn.execute(&format!("DROP TABLE IF EXISTS {}", table_name), [])?;
+    }
+
+    let mut batch_id = 0;
+    let mut current_batch_count = 0;
+
+    // Start transaction for all tables
+    let tx = conn.transaction()?;
+
+    // Group comments by batches and create tables
+    let mut current_table_name = format!("comments_batch_{}", batch_id);
+
+    // Create first table
+    tx.execute(
+        &format!(
+            "CREATE TABLE {} (
+                id INTEGER PRIMARY KEY,
+                comment TEXT,
+                entry_name TEXT,
+                created_at INTEGER,
+                score INTEGER
+            )",
+            current_table_name
+        ),
+        [],
+    )?;
+
+    let mut stmt = tx.prepare(&format!(
+        "INSERT INTO {} (comment, entry_name, created_at, score) VALUES (?1, ?2, ?3, ?4)",
+        current_table_name
+    ))?;
+
+    for (i, comment_data) in indexed_comments.values().enumerate() {
+        // Check if we need to create a new table for this batch
+        if current_batch_count >= batch_size {
+            // Finalize current statement
+            drop(stmt);
+
+            // Create new table for next batch
+            batch_id += 1;
+            current_table_name = format!("comments_batch_{}", batch_id);
+            current_batch_count = 0;
+
+            tx.execute(
+                &format!(
+                    "CREATE TABLE {} (
+                        id INTEGER PRIMARY KEY,
+                        comment TEXT,
+                        entry_name TEXT,
+                        created_at INTEGER,
+                        score INTEGER
+                    )",
+                    current_table_name
+                ),
+                [],
+            )?;
+
+            // Create new prepared statement for new table
+            stmt = tx.prepare(&format!(
+                "INSERT INTO {} (comment, entry_name, created_at, score) VALUES (?1, ?2, ?3, ?4)",
+                current_table_name
+            ))?;
+        }
+
+        let created_at = 1600000000 + (i * 60) as i64;
+        let score = (i % 100 + 1) as i64;
+
+        stmt.execute([
+            &comment_data.text,
+            &comment_data.entry_name,
+            &created_at.to_string(),
+            &score.to_string(),
+        ])?;
+
+        current_batch_count += 1;
+    }
+
+    drop(stmt);
+    tx.commit()?;
+
+    // Get file size
+    let file_size = fs::metadata(&db_path)?.len();
+
+    println!("{:25}: {:10} bytes ({} tables)", scenario_name, file_size, batch_id + 1);
 
     Ok(())
 }
