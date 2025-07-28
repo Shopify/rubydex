@@ -210,7 +210,7 @@ fn test_entry_name_lookups_sqlite_memory(
     let load_start = Instant::now();
     let records_map = load_all_records_to_memory(conn)?;
     let load_duration = load_start.elapsed();
-    
+
     let lookup_start = Instant::now();
     let mut total_rows = 0;
 
@@ -251,7 +251,7 @@ fn test_entry_name_lookups_sqlite_linear_search(
 
     let all_rows: Result<Vec<_>, _> = rows.collect();
     let all_rows = all_rows?;
-    
+
     let load_duration = load_start.elapsed();
 
     // Now perform lookups using linear search through the Vec
@@ -290,7 +290,7 @@ fn test_entry_name_lookups_serde(encoding: Encoding, test_entry_names: &[String]
     let load_start = Instant::now();
     let deserialized_comments_hash = index::serde::deserialize_from_file(encoding.clone()).unwrap();
     let load_duration = load_start.elapsed();
-    
+
     let lookup_start = Instant::now();
     let mut total_rows = 0;
 

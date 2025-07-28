@@ -40,6 +40,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--------------------------");
     test_sql_insertion_scenario(&indexed_comments, true)?;
 
+    println!("\n🗂️ SHARDED TABLES:");
+    println!("------------------");
+    test_sharded_sql_insertion(&indexed_comments)?;
+
     // Test serde serializations
     println!("\n💾 SERDE SERIALIZATION TESTS:");
     println!("=============================");
@@ -217,6 +221,112 @@ fn test_sql_insertion_batch_100(
         scenario,
         duration.as_millis(),
         rate
+    );
+
+    Ok(())
+}
+
+fn test_sharded_sql_insertion(
+    indexed_comments: &HashMap<String, CommentData>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = format!("tmp/sharded_write_benchmark_{}.db", SCALE);
+
+    // Clean setup
+    std::fs::remove_file(&db_path).ok();
+    let mut conn = Connection::open(&db_path)?;
+
+    // Configure SQLite for maximum write performance
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+
+    let start = std::time::Instant::now();
+
+    // Calculate batch size - aim for ~100 records per table (same as storage benchmark)
+    let batch_size = 100;
+
+    let tx = conn.transaction()?;
+
+    let mut batch_id = 0;
+    let mut current_batch_count = 0;
+    let mut current_table_name = format!("comments_batch_{}", batch_id);
+
+    // Create first table
+    tx.execute(
+        &format!(
+            "CREATE TABLE {} (
+                id INTEGER PRIMARY KEY,
+                comment TEXT,
+                entry_name TEXT,
+                created_at INTEGER,
+                score INTEGER
+            )",
+            current_table_name
+        ),
+        [],
+    )?;
+
+    let mut stmt = tx.prepare(&format!(
+        "INSERT INTO {} (comment, entry_name, created_at, score) VALUES (?1, ?2, ?3, ?4)",
+        current_table_name
+    ))?;
+
+    for (i, comment_data) in indexed_comments.values().enumerate() {
+        // Check if we need to create a new table for this batch
+        if current_batch_count >= batch_size {
+            // Finalize current statement
+            drop(stmt);
+
+            // Create new table for next batch
+            batch_id += 1;
+            current_table_name = format!("comments_batch_{}", batch_id);
+            current_batch_count = 0;
+
+            tx.execute(
+                &format!(
+                    "CREATE TABLE {} (
+                        id INTEGER PRIMARY KEY,
+                        comment TEXT,
+                        entry_name TEXT,
+                        created_at INTEGER,
+                        score INTEGER
+                    )",
+                    current_table_name
+                ),
+                [],
+            )?;
+
+            // Create new prepared statement for new table
+            stmt = tx.prepare(&format!(
+                "INSERT INTO {} (comment, entry_name, created_at, score) VALUES (?1, ?2, ?3, ?4)",
+                current_table_name
+            ))?;
+        }
+
+        let created_at = 1600000000 + (i * 60) as i64;
+        let score = (i % 100 + 1) as i64;
+
+        stmt.execute([
+            &comment_data.text,
+            &comment_data.entry_name,
+            &created_at.to_string(),
+            &score.to_string(),
+        ])?;
+
+        current_batch_count += 1;
+    }
+
+    drop(stmt);
+    tx.commit()?;
+
+    let duration = start.elapsed();
+    let rate = SCALE as f64 / duration.as_secs_f64();
+
+    println!(
+        "Sharded tables       ({:10}): {:6.0}ms | {:6.0} records/sec | {} tables",
+        "sharded",
+        duration.as_millis(),
+        rate,
+        batch_id + 1
     );
 
     Ok(())
