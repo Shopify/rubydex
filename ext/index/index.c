@@ -69,6 +69,12 @@ static VALUE rb_entry_name(VALUE self) {
 static VALUE rb_entry_value(VALUE self) {
     return rb_ivar_get(self, rb_intern("@value"));
 }
+static VALUE rb_dump_to_cache(VALUE self) {
+  CRepository *index;
+  TypedData_Get_Struct(self, CRepository, &index_type, index);
+  dump_to_cache(index);
+  return Qnil;
+}
 
 // Initialization function for the Ruby extension
 void Init_index(void) {
@@ -85,4 +91,5 @@ void Init_index(void) {
 
     rb_define_attr(cEntry, "name", 1, 1);
     rb_define_attr(cEntry, "value", 1, 1);
+    rb_define_method(cRepository, "dump_to_cache", rb_dump_to_cache, 0);
 }
