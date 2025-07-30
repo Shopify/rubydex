@@ -19,7 +19,6 @@ string-interner = "0.19.0"
 ruby-prism = "1.4.0"
 glob = "0.3.1"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
-rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3.0"
