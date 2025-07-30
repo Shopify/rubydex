@@ -1,7 +1,8 @@
-[package]
-name = "index"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+  "index",
+  "index-sys",
+]
 
 [[bin]]
 name = "index"
@@ -25,6 +26,7 @@ tempfile = "3.0"
 
 [build-dependencies]
 cbindgen = "0.29"
+resolver = "3"
 
 [profile.release]
 lto = true
@@ -42,6 +44,3 @@ pedantic = "warn"
 
 ptr-as-ptr = { level = "forbid", priority = 1 }
 manual-let-else = { level = "allow", priority = 1 }
-
-[lints]
-workspace = true

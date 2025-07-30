@@ -1,6 +1,6 @@
 use std::ffi::{CString, c_char};
 
-use crate::internal::{Entry, Repository};
+use index::internal::{Entry, Repository};
 
 pub type CRepository = std::ffi::c_void;
 pub type CEntry = std::ffi::c_void;

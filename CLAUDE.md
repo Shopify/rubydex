@@ -30,12 +30,15 @@ When necessary, commands can be executed for the Ruby code.
 - `bundle exec rake test`: runs all automated Ruby tests
 - `bundle exec ruby -Itest test/specific_test.rb`: runs a specific test file
 
-## Rust crate
+## Rust workspace
 
-The entire indexing and static analysis logic implementation. This crate aims to be optimized to achieve maximum
-performance in large codebases while maintaining memory usage to a minimum.
+The Rust workspace under the `rust` directory contains two crates:
 
-The crate's goal is to provide all indexing and static analysis capabilities to power tools such as language servers,
+- `index`: this crate implements the entire indexing and static analysis logic. The implementation aims to be optimized
+to achieve maximum performance in super large codebases while maintaining memory usage to a minimum
+- `index-sys`: this crate provides bindings for C, so that the logic from `index` can be called through FFI
+
+The workspace's goal is to provide all indexing and static analysis capabilities to power tools such as language servers,
 type checkers, linting and other code analysis features.
 
 ### Commands
