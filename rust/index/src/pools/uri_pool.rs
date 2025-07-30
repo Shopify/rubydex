@@ -21,8 +21,8 @@
 //! assert_eq!(uri1, uri3);
 //!
 //! // Retrieve uris by ID
-//! assert_eq!(pool.get(&uri1), Some("file:///path/to/file1.txt".to_string()));
-//! assert_eq!(pool.get(&uri2), Some("file:///path/to/file2.txt".to_string()));
+//! assert_eq!(pool.get(uri1), Some("file:///path/to/file1.txt".to_string()));
+//! assert_eq!(pool.get(uri2), Some("file:///path/to/file2.txt".to_string()));
 //! ```
 
 use crate::pools::string_pool::{PoolId, StringPool, SymbolId};

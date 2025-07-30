@@ -11,33 +11,14 @@ use crate::pools::uri_pool::{UriId, UriPool};
 /// An `Offset` tracks a contiguous span of bytes from `start_offset` to `end_offset`
 /// within a file identified by `uri_id`. This is useful for representing the location
 /// of tokens, AST nodes, or other text spans in source code.
-///
-/// # Examples
-///
-/// ```rust
-/// use index::offset::Offset;
-/// use index::pools::uri_pool::{UriId, UriPool};
-///
-/// let mut uri_pool = UriPool::new();
-/// let uri_id = uri_pool.add("file://path/to/file.txt".to_string());
-///
-/// let offset = Offset::new(uri_id, 10, 20);
-///
-/// // Print the source covered by the offset
-/// println!("{}", offset.source(&uri_pool));
-///
-/// // Create a location from the offset
-/// let location = offset.to_location(&uri_pool);
-/// println!("{}", location);
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Offset {
     /// The ID of the uri this offset refers to (see `UriPool`)
-    pub uri_id: UriId,
+    uri_id: UriId,
     /// The starting byte offset (inclusive)
-    pub start_offset: u32,
+    start: u32,
     /// The ending byte offset (exclusive)
-    pub end_offset: u32,
+    end: u32,
 }
 
 impl Offset {
@@ -52,8 +33,8 @@ impl Offset {
     pub const fn new(uri_id: UriId, start_offset: u32, end_offset: u32) -> Self {
         Self {
             uri_id,
-            start_offset,
-            end_offset,
+            start: start_offset,
+            end: end_offset,
         }
     }
 
@@ -74,6 +55,6 @@ impl Offset {
     pub fn to_string(&self, uri_pool: &UriPool) -> String {
         let uri = uri_pool.get(self.uri_id).unwrap();
 
-        format!("{}:{}-{}", uri, self.start_offset, self.end_offset)
+        format!("{}:{}-{}", uri, self.start, self.end)
     }
 }

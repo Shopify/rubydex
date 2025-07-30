@@ -4,10 +4,12 @@ require "mkmf"
 require "pathname"
 
 release = ENV["RELEASE"]
-root_dir = Pathname.new("../..").expand_path(__dir__)
+root_dir = Pathname.new("../..").expand_path(__dir__).join("rust")
 target_dir = root_dir.join("target")
 target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
 target_dir = target_dir.join(release ? "release" : "debug")
+
+bindings_path = root_dir.join("index-sys").join("rustbindings.h")
 
 cargo_args = ["--manifest-path #{root_dir.join("Cargo.toml")}"]
 cargo_args << "--release" if release
@@ -20,7 +22,7 @@ end
 append_cflags("-Werror=implicit-function-declaration")
 
 if Gem.win_platform?
-  $LDFLAGS << " #{target_dir.join("libindex.a")}"
+  $LDFLAGS << " #{target_dir.join("libindex_sys.a")}"
 
   # On Windows, statically link system libraries to avoid having to distribute and load DLLs
   #
@@ -33,13 +35,13 @@ else
   append_ldflags("-Wl,-rpath,#{target_dir}")
   # We cannot use append_ldflags here because the Rust code is only compiled later. If it's not compiled yet, this will
   # fail and the flag will not be added
-  $LDFLAGS << " -L#{target_dir} -lindex"
+  $LDFLAGS << " -L#{target_dir} -lindex_sys"
 end
 
 create_makefile("index/index")
 cargo_command = "cargo build #{cargo_args.join(" ")}".strip
 
-rust_srcs = Dir.glob("#{root_dir}/src/**/*.rs")
+rust_srcs = Dir.glob("#{root_dir}/**/*.rs")
 
 makefile = File.read("Makefile")
 new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.chomp)
@@ -48,6 +50,7 @@ new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.cho
 
   .rust_built: $(RUST_SRCS)
   \t#{cargo_command} || (echo "Compiling Rust failed" && exit 1)
+  \t$(COPY) #{bindings_path} #{__dir__}
   \ttouch $@
 
   compile_rust: .rust_built
