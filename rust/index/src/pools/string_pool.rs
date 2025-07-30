@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```rust
-//! use index::string_pool::{StringPool, PoolId, SymbolId};
+//! use index::pools::string_pool::{StringPool, PoolId, SymbolId};
 //!
 //! // Define custom ID types directly
 //! #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -59,7 +59,7 @@ pub type SymbolId = SymbolU32;
 /// # Example
 ///
 /// ```rust
-/// use index::string_pool::PoolId;
+/// use index::pools::string_pool::{PoolId, SymbolId};
 ///
 /// #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 /// struct NameId(SymbolId);
@@ -93,6 +93,9 @@ pub trait PoolId: Copy + Clone + PartialEq + Eq + std::hash::Hash + std::fmt::De
 /// # Example
 ///
 /// ```rust
+/// use index::pools::string_pool::StringPool;
+/// use index::pools::name_pool::NameId;
+///
 /// let mut name_pool: StringPool<NameId> = StringPool::new();
 ///
 /// // Add strings to pools

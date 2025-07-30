@@ -10,22 +10,22 @@ end
 desc "Run Rust tests"
 task :cargo_test do
   puts "\n******** Running cargo tests ********\n"
-  sh "cargo test #{cargo_args.join(" ")}".strip
+  sh "cargo test #{cargo_args.join(" ")}".strip, chdir: "rust"
 end
 
 desc "Clean Rust build artifacts"
 task :clean_rust do
-  sh "cargo clean"
+  sh "cargo clean", chdir: "rust"
 end
 
 desc "Lint Rust code"
 task :lint_rust do
-  sh "cargo clippy --all-targets --all-features"
-  sh "rustfmt --check **/*.rs"
+  sh "cargo clippy --all-targets --all-features", chdir: "rust"
+  sh "rustfmt --check **/*.rs", chdir: "rust"
 end
 
 desc "Format and auto fix violations for Rust code"
 task :format_rust do
-  sh "cargo clippy --all-targets --all-features --fix --allow-dirty"
-  sh "rustfmt **/*.rs"
+  sh "cargo clippy --all-targets --all-features --fix --allow-dirty", chdir: "rust"
+  sh "rustfmt **/*.rs", chdir: "rust"
 end

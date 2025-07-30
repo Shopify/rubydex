@@ -20,11 +20,20 @@ use ruby_prism::Visit;
 /// Example:
 ///
 /// ```
-/// let mut name_pool = NamePool::new();
-/// let mut definitions = Vec::new();
-/// let indexer = RubyIndexer::new(uri_id, &mut name_pool, &mut definitions);
+/// use index::indexing::ruby_indexer::RubyIndexer;
+/// use ruby_prism::Visit;
+/// use std::collections::HashMap;
+/// use index::pools::uri_pool::UriPool;
+/// use index::pools::name_pool::NamePool;
 ///
-/// let result = ruby_prism::parse("class Foo; end");
+/// let mut name_pool = NamePool::new();
+/// let mut uri_pool = UriPool::new();
+/// let uri_id = uri_pool.add(String::from("file:///path/to/file1.rb"));
+/// let mut definitions = HashMap::new();
+/// let mut indexer = RubyIndexer::new(uri_id, &mut name_pool, &mut definitions);
+///
+/// let source = String::from("class Foo; end");
+/// let result = ruby_prism::parse(source.as_ref());
 /// indexer.visit(&result.node());
 ///
 /// assert_eq!(definitions.len(), 1);
