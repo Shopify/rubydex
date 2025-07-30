@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use rusqlite::{Connection, params};
+use std::{collections::HashMap, process::exit};
 
 pub struct Repository {
     pub entries: HashMap<String, Entry>,
@@ -24,6 +25,26 @@ impl Repository {
     #[must_use]
     pub fn get_entry(&self, key: &str) -> Option<&Entry> {
         self.entries.get(key)
+    }
+
+    #[allow(clippy::missing_panics_doc)]
+    pub fn dump_to_cache(&self) {
+        let mut conn = Connection::open("tmp/entries.db").unwrap();
+
+        // Use transaction for batch insert
+        let tx = conn.transaction().unwrap();
+        {
+            let mut stmt = tx
+                .prepare("INSERT OR REPLACE INTO entries (name, value) VALUES (?1, ?2)")
+                .unwrap();
+
+            for entry in self.entries.values() {
+                stmt.execute(params![entry.name, entry.value]).unwrap();
+            }
+        }
+        tx.commit().unwrap();
+
+        exit(0)
     }
 }
 

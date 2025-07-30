@@ -103,3 +103,11 @@ pub extern "C" fn dealloc_repository(repository: *mut CRepository) {
         }
     }
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn dump_to_cache(repository: *mut CRepository) {
+    unsafe {
+        let repository_ref = &mut *repository.cast::<Repository>();
+        repository_ref.dump_to_cache();
+    }
+}

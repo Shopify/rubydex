@@ -9,6 +9,7 @@ class IndexRustyTest < Minitest::Test
 
   def test_add_entry
     repository = Index::Repository.new
+    binding.irb
     repository.add_entry("key", "value")
     entry = repository.get_entry("key")
     assert_equal(entry.value, "value")

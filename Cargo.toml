@@ -7,6 +7,10 @@ edition = "2024"
 name = "index"
 path = "src/main.rs"
 
+[[bin]]
+name = "sqlite"
+path = "bin/sqlite.rs"
+
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
