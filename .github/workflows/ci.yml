@@ -27,9 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # TODO: Put back windows once we have figured how to compile Prism on it.
-        # os: [shopify-ubuntu-latest, macos-latest, shopify-windows-latest]
-        os: [shopify-ubuntu-latest, macos-latest]
+        os: [shopify-ubuntu-latest, macos-latest, shopify-windows-latest]
         ruby: ["3.4"]
     runs-on: ${{ matrix.os }}
     name: Ruby ${{ matrix.ruby }} on ${{ matrix.os }}

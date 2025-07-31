@@ -12,7 +12,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 string-interner = "0.19.0"
-ruby-prism = "1.4.0"
+ruby-prism = { git = "https://github.com/ruby/prism", branch = "main", path = "rust/ruby-prism" }
 glob = "0.3.1"
 
 [dev-dependencies]
