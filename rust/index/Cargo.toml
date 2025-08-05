@@ -4,16 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "index"
+name = "index_cli"
 path = "src/main.rs"
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
-string-interner = "0.19.0"
 ruby-prism = "1.4.0"
-glob = "0.3.1"
+url = "2.5.4"
 
 [dev-dependencies]
 tempfile = "3.0"

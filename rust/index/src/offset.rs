@@ -4,7 +4,7 @@
 //! within a file. It can be used to track positions in source code and convert
 //! between byte offsets and line/column positions.
 
-use crate::pools::uri_pool::{UriId, UriPool};
+use crate::model::ids::UriId;
 
 /// Represents a byte offset range within a specific file.
 ///
@@ -16,9 +16,9 @@ pub struct Offset {
     /// The ID of the uri this offset refers to (see `UriPool`)
     uri_id: UriId,
     /// The starting byte offset (inclusive)
-    start: u32,
+    start_offset: u32,
     /// The ending byte offset (exclusive)
-    end: u32,
+    end_offset: u32,
 }
 
 impl Offset {
@@ -33,28 +33,13 @@ impl Offset {
     pub const fn new(uri_id: UriId, start_offset: u32, end_offset: u32) -> Self {
         Self {
             uri_id,
-            start: start_offset,
-            end: end_offset,
+            start_offset,
+            end_offset,
         }
     }
 
-    /// Returns a string representation of this offset in the format "URI:start-end".
-    ///
-    /// # Arguments
-    ///
-    /// * `uri_pool` - The uri pool to resolve the uri from the uri ID
-    ///
-    /// # Returns
-    ///
-    /// A string in the format "URI:start_offset-end_offset"
-    ///
-    /// # Panics
-    ///
-    /// Panics if the uri ID is not found in the uri pool.
     #[must_use]
-    pub fn to_string(&self, uri_pool: &UriPool) -> String {
-        let uri = uri_pool.get(self.uri_id).unwrap();
-
-        format!("{}:{}-{}", uri, self.start, self.end)
+    pub fn uri_id(&self) -> UriId {
+        self.uri_id
     }
 }

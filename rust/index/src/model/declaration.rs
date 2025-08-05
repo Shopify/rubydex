@@ -15,24 +15,19 @@
 //! and only one declaration: for the name `Foo`
 
 use crate::model::definitions::Definition;
-use crate::pools::name_pool::{NameId, NamePool};
 
 #[derive(Debug)]
 pub struct Declaration {
-    pub name_id: NameId,
-    pub definitions: Vec<Definition>,
+    name: String,
+    definitions: Vec<Definition>,
 }
 
 impl Declaration {
-    pub fn new(name_id: NameId) -> Self {
-        Self {
-            name_id,
-            definitions: Vec::new(),
-        }
-    }
-
     #[must_use]
-    pub fn to_string(&self, name_pool: &NamePool) -> String {
-        format!("declaration {}", name_pool.get(self.name_id).unwrap())
+    pub fn new(name: String, definitions: Option<Vec<Definition>>) -> Self {
+        Self {
+            name,
+            definitions: definitions.unwrap_or_default(),
+        }
     }
 }

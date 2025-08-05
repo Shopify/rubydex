@@ -1,93 +1,51 @@
-use glob::glob;
-use ruby_prism::Visit;
-use std::collections::HashMap;
-use std::env;
-use std::path::Path;
-use std::process;
+use std::{
+    env, fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
-use indexing::ruby_indexer::RubyIndexer;
-use model::declaration::Declaration;
-use pools::name_pool::{NameId, NamePool};
-use pools::uri_pool::UriPool;
-
-mod indexing;
-mod model;
-mod offset;
-mod pools;
-
-fn glob_files(dir_path: &str) -> Vec<String> {
-    let mut files = Vec::new();
-
-    let patterns = vec![format!("{}/**/*.rb", dir_path)];
-
-    for pattern in patterns {
-        match glob(&pattern) {
-            Ok(paths) => {
-                for entry in paths {
-                    match entry {
-                        Ok(file_path) => {
-                            let path_str = file_path.to_string_lossy().to_string();
-                            if !files.contains(&path_str) && Path::new(&path_str).is_file() {
-                                files.push(path_str);
-                            }
-                        }
-                        Err(e) => eprintln!("Error reading glob entry: {e}"),
-                    }
-                }
-            }
-            Err(e) => eprintln!("Failed to read glob pattern {pattern}: {e}"),
-        }
-    }
-
-    files
-}
-
-fn collect_files(paths: &[String]) -> Vec<String> {
-    let mut files = Vec::new();
-    for path in paths {
-        if Path::new(path).is_dir() {
-            let mut dir_files = glob_files(path);
-            files.append(&mut dir_files);
-        } else {
-            files.push(path.to_string());
-        }
-    }
-    files.sort();
-    files.dedup();
-    files
-}
-
-fn process_files(paths: &[String], uri_pool: &mut UriPool, name_pool: &mut NamePool) -> HashMap<NameId, Declaration> {
-    let mut declarations: HashMap<NameId, Declaration> = HashMap::new();
-
-    for path in paths {
-        let uri_id = uri_pool.add(format!("file://{path}"));
-
-        let source = match std::fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(err) => {
-                eprintln!("Error reading file {path}: {err}");
-                continue;
-            }
-        };
-
-        let result = ruby_prism::parse(source.as_ref());
-        RubyIndexer::new(uri_id, name_pool, &mut declarations).visit(&result.node());
-    }
-
-    declarations
-}
+use index::{
+    indexing::{Document, index_in_parallel},
+    model::index::Index,
+};
 
 fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
-    let files = collect_files(&args);
-    println!("  Found {} files.", files.len());
+    let dir = env::args()
+        .nth(1)
+        .expect("Please provide a directory path as an argument");
 
-    let mut uri_pool = UriPool::new();
-    let mut name_pool = NamePool::new();
+    let documents = {
+        let mut uris: Vec<String> = Vec::new();
+        collect_files_recursive(&PathBuf::from(dir), &mut uris);
+        uris.into_iter()
+            .map(|path| Document::new(path, None))
+            .collect::<Vec<_>>()
+    };
 
-    let definitions = process_files(&files, &mut uri_pool, &mut name_pool);
-    println!("  Found {} definitions.", definitions.len());
+    let file_queue = Arc::new(Mutex::new(documents));
 
-    process::exit(0);
+    let index = Arc::new(Mutex::new(Index::new()));
+    index_in_parallel(&index, &file_queue);
+}
+
+fn collect_files_recursive(directory: &PathBuf, uris: &mut Vec<String>) {
+    match fs::read_dir(directory) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let excluded_dirs = ["tmp", "test", "vendor", ".vscode", "vscode", "fixtures"];
+
+                if path.is_dir()
+                    && path
+                        .file_name()
+                        .is_some_and(|name| !excluded_dirs.contains(&name.to_str().unwrap()))
+                {
+                    collect_files_recursive(&path, uris);
+                } else if path.is_file() && path.extension().filter(|ext| *ext == "rb").is_some() {
+                    uris.push(format!("file://{}", path.to_string_lossy()));
+                }
+            }
+        }
+        Err(e) => eprintln!("Error reading directory '{}': {}", directory.display(), e),
+    }
 }
