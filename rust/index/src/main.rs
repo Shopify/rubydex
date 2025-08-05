@@ -42,7 +42,9 @@ fn collect_files_recursive(directory: &PathBuf, uris: &mut Vec<String>) {
                 {
                     collect_files_recursive(&path, uris);
                 } else if path.is_file() && path.extension().filter(|ext| *ext == "rb").is_some() {
-                    uris.push(format!("file://{}", path.to_string_lossy()));
+                    if let Ok(absolute_path) = path.canonicalize() {
+                        uris.push(format!("file://{}", absolute_path.to_string_lossy()));
+                    }
                 }
             }
         }
