@@ -56,6 +56,8 @@ pub fn index_in_parallel(index_arc: &Arc<Mutex<Index>>, documents: &Arc<Mutex<Ve
                             ruby_indexer.index(uri_id, &source);
                         } else if let Ok(source) = std::fs::read_to_string(uri.path()) {
                             ruby_indexer.index(uri_id, &source);
+                        } else {
+                            panic!("Cannot index document at {}", uri.path());
                         }
                     }
                 } else {
