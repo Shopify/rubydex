@@ -3,6 +3,7 @@ use std::collections::hash_map::Entry;
 
 use crate::indexing::indexed_data::IndexingThreadData;
 use crate::model::declaration::Declaration;
+use crate::model::definitions::Definition;
 use crate::model::ids::{DeclarationId, UriId};
 
 // The `Index` is the global graph representation of the entire Ruby codebase. It contains all declarations and their
@@ -21,20 +22,23 @@ impl Index {
         }
     }
 
+    fn add_declaration(&mut self, id: DeclarationId, name: String, definitions: Vec<Definition>) {
+        match self.declarations.entry(id) {
+            Entry::Occupied(mut _occ) => {
+                // todo synchronize modifications to the existing declarations
+            }
+            Entry::Vacant(vac) => {
+                vac.insert(Declaration::new(name, Some(definitions)));
+            }
+        }
+    }
+
     pub fn merge_definitions(&mut self, indexed_data: IndexingThreadData) {
         let (declarations, uris) = indexed_data.into_parts();
 
         for (name, declarations) in declarations {
             let (id, definitions) = declarations.into();
-
-            match self.declarations.entry(id) {
-                Entry::Occupied(mut _occ) => {
-                    // todo synchronize modifications to the existing declarations
-                }
-                Entry::Vacant(vac) => {
-                    vac.insert(Declaration::new(name, Some(definitions)));
-                }
-            }
+            self.add_declaration(id, name, definitions);
         }
 
         self.uri_pool.extend(uris);
