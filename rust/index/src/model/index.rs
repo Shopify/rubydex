@@ -24,7 +24,17 @@ impl Index {
 
     fn add_declaration(&mut self, id: DeclarationId, name: String, definitions: Vec<Definition>) {
         match self.declarations.entry(id) {
-            Entry::Occupied(mut _occ) => {
+            Entry::Occupied(existing_entry) => {
+                let existing_declaration = existing_entry.get();
+
+                // Check for hash collision: same hash but different name
+                assert_eq!(
+                    existing_declaration.name, name,
+                    "Hash collision detected! DeclarationId {:?} maps to both '{}' and '{}'",
+                    id, existing_declaration.name, name
+                );
+
+                // Same name, so this is a legitimate duplicate declaration
                 // todo synchronize modifications to the existing declarations
             }
             Entry::Vacant(vac) => {
@@ -48,5 +58,34 @@ impl Index {
 impl Default for Index {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "Hash collision detected!")]
+    fn test_hash_collision_detection() {
+        let mut index = Index::new();
+
+        // Create the same DeclarationId for two different names to simulate a hash collision scenario
+        let collision_id = DeclarationId::new("SameName");
+
+        index.add_declaration(collision_id, "SameName".to_string(), vec![]);
+        index.add_declaration(collision_id, "DifferentName".to_string(), vec![]);
+    }
+
+    #[test]
+    fn test_same_name_duplicate_declaration() {
+        let mut index = Index::new();
+
+        let id = DeclarationId::new("TestName");
+
+        index.add_declaration(id, "TestName".to_string(), vec![]);
+        index.add_declaration(id, "TestName".to_string(), vec![]);
+
+        assert!(index.declarations.contains_key(&id));
     }
 }
