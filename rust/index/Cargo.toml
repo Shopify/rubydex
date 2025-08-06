@@ -13,6 +13,7 @@ crate-type = ["rlib"]
 [dependencies]
 ruby-prism = "1.4.0"
 url = "2.5.4"
+rayon = "1.10.0"
 
 [dev-dependencies]
 tempfile = "3.0"
