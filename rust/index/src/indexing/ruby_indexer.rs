@@ -12,6 +12,7 @@ use ruby_prism::Visit;
 ///
 /// It implements the `Visit` trait from `ruby_prism` to visit the AST and create a hash of definitions that must be
 /// merged into the global state later.
+#[derive(Default)]
 pub struct RubyIndexer {
     uri_id: Option<UriId>,
     indexed_data: IndexingThreadData,
@@ -51,22 +52,8 @@ impl RubyIndexer {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
-    fn location_to_offset(&self, location: &ruby_prism::Location) -> Offset {
-        Offset::new(
-            self.uri_id.expect("URI must be set during indexing"),
-            location
-                .start_offset()
-                .try_into()
-                .expect("Expected usize `start_offset` to fit in `u32`"),
-            location
-                .end_offset()
-                .try_into()
-                .expect("Expected usize `end_offset` to fit in `u32`"),
-        )
-    }
-
     fn index_definition(&mut self, name: String, definition: Definition) {
-        self.indexed_data.add_definition(name, definition);
+        self.indexed_data.add_definition(self.uri_id.unwrap(), name, definition);
     }
 
     fn with_updated_nesting<F>(&mut self, name: &str, perform_visit: F)
@@ -105,20 +92,14 @@ impl RubyIndexer {
     }
 }
 
-impl Default for RubyIndexer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Visit<'_> for RubyIndexer {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         let name = Self::location_to_string(&node.constant_path().location());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Class(Box::new(ClassDefinition::new(
-                indexer.location_to_offset(&node.location()),
-            )));
+            let definition = Definition::Class(Box::new(ClassDefinition::new(Offset::from_prism_location(
+                &node.location(),
+            ))));
             indexer.index_definition(fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
@@ -131,9 +112,9 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.constant_path().location());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Module(Box::new(ModuleDefinition::new(
-                indexer.location_to_offset(&node.location()),
-            )));
+            let definition = Definition::Module(Box::new(ModuleDefinition::new(Offset::from_prism_location(
+                &node.location(),
+            ))));
             indexer.index_definition(fully_qualified_name, definition);
 
             if let Some(body) = node.body() {

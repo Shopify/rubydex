@@ -37,8 +37,9 @@ impl PartialDeclaration {
 //
 // This is similar to a temporary global index instance, but we prioritize performance since we will throw away this
 // state once it gets merged globally
+#[derive(Default)]
 pub struct IndexingThreadData {
-    declarations: HashMap<String, PartialDeclaration>,
+    declarations: HashMap<UriId, HashMap<String, PartialDeclaration>>,
     uris: HashMap<UriId, String>,
 }
 
@@ -54,11 +55,20 @@ impl IndexingThreadData {
     pub fn add_uri(&mut self, uri: String) -> UriId {
         let uri_id = UriId::new(&uri);
         self.uris.insert(uri_id, uri);
+        self.declarations.insert(uri_id, HashMap::new());
         uri_id
     }
 
-    pub fn add_definition(&mut self, name: String, definition: Definition) {
-        self.declarations
+    /// # Panics
+    ///
+    /// This method will panic if a new hashmap of declarations was not created for the URI ahead of time
+    pub fn add_definition(&mut self, uri_id: UriId, name: String, definition: Definition) {
+        let declarations = self
+            .declarations
+            .get_mut(&uri_id)
+            .expect("URI should have been registered before indexing definitions");
+
+        declarations
             .entry(name)
             .or_insert_with_key(|name| {
                 let id = DeclarationId::new(name);
@@ -69,13 +79,12 @@ impl IndexingThreadData {
 
     // Returns all the owned data, so that we can merge it into the global index
     #[must_use]
-    pub fn into_parts(self) -> (HashMap<String, PartialDeclaration>, HashMap<UriId, String>) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        HashMap<UriId, HashMap<String, PartialDeclaration>>,
+        HashMap<UriId, String>,
+    ) {
         (self.declarations, self.uris)
-    }
-}
-
-impl Default for IndexingThreadData {
-    fn default() -> Self {
-        Self::new()
     }
 }

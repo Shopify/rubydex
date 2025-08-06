@@ -2,6 +2,13 @@
 
 use std::{hash::DefaultHasher, hash::Hash, hash::Hasher};
 
+// An enum for all IDs that may declare dependencies among themselves
+#[derive(Eq, Hash, PartialEq, Debug, Copy, Clone)]
+pub enum DependencyId {
+    Uri(UriId),
+    Declaration(DeclarationId),
+}
+
 // A UriId is the hashed version of a unique URI describing a resource. There cannot be two different resources
 // described by the same exact URI
 //
@@ -31,7 +38,7 @@ impl UriId {
 // - Foo
 // - Foo::Bar
 // - Foo::Bar#instance_method
-#[derive(Hash, Eq, PartialEq)]
+#[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
 pub struct DeclarationId(u32);
 
 impl DeclarationId {
@@ -42,5 +49,11 @@ impl DeclarationId {
         id.hash(&mut hasher);
         let hash = hasher.finish() as u32;
         Self(hash)
+    }
+}
+
+impl std::fmt::Display for DeclarationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DeclarationId({})", self.0)
     }
 }

@@ -4,8 +4,6 @@
 //! within a file. It can be used to track positions in source code and convert
 //! between byte offsets and line/column positions.
 
-use crate::model::ids::UriId;
-
 /// Represents a byte offset range within a specific file.
 ///
 /// An `Offset` tracks a contiguous span of bytes from `start_offset` to `end_offset`
@@ -13,8 +11,6 @@ use crate::model::ids::UriId;
 /// of tokens, AST nodes, or other text spans in source code.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Offset {
-    /// The ID of the uri this offset refers to (see `UriPool`)
-    uri_id: UriId,
     /// The starting byte offset (inclusive)
     start_offset: u32,
     /// The ending byte offset (exclusive)
@@ -30,16 +26,29 @@ impl Offset {
     /// * `start_offset` - The starting byte position (inclusive)
     /// * `end_offset` - The ending byte position (exclusive)
     #[must_use]
-    pub const fn new(uri_id: UriId, start_offset: u32, end_offset: u32) -> Self {
+    pub const fn new(start_offset: u32, end_offset: u32) -> Self {
         Self {
-            uri_id,
             start_offset,
             end_offset,
         }
     }
 
+    /// Creates an offset from a Prism location
+    ///
+    /// # Panics
+    ///
+    /// Will panic if the location cannot be contained in a u32
     #[must_use]
-    pub fn uri_id(&self) -> UriId {
-        self.uri_id
+    pub fn from_prism_location(location: &ruby_prism::Location) -> Self {
+        Self::new(
+            location
+                .start_offset()
+                .try_into()
+                .expect("Expected usize `start_offset` to fit in `u32`"),
+            location
+                .end_offset()
+                .try_into()
+                .expect("Expected usize `end_offset` to fit in `u32`"),
+        )
     }
 }

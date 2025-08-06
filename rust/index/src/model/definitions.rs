@@ -23,7 +23,7 @@
 //! 1. The declaration for the name `Foo`
 //! 2. The declaration for the name `Foo::Bar`
 
-use crate::{model::ids::UriId, offset::Offset};
+use crate::offset::Offset;
 
 #[derive(Debug)]
 pub enum Definition {
@@ -33,10 +33,10 @@ pub enum Definition {
 
 impl Definition {
     #[must_use]
-    pub fn uri_id(&self) -> UriId {
+    pub fn offset(&self) -> &Offset {
         match self {
-            Definition::Class(class) => class.offset.uri_id(),
-            Definition::Module(module) => module.offset.uri_id(),
+            Definition::Class(def) => &def.offset,
+            Definition::Module(def) => &def.offset,
         }
     }
 }
