@@ -1,5 +1,7 @@
 use std::{
-    env, fs,
+    env,
+    error::Error,
+    fs,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -9,7 +11,7 @@ use index::{
     model::index::Index,
 };
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let dir = env::args()
         .nth(1)
         .expect("Please provide a directory path as an argument");
@@ -18,14 +20,19 @@ fn main() {
         let mut uris: Vec<String> = Vec::new();
         collect_files_recursive(&PathBuf::from(dir), &mut uris);
         uris.into_iter()
-            .map(|path| Document::new(path, None))
+            .filter_map(|uri| match Document::new(&uri, None) {
+                Ok(document) => Some(document),
+                Err(e) => {
+                    eprintln!("Invalid URI for document '{uri}': {e}");
+                    None
+                }
+            })
             .collect::<Vec<_>>()
     };
 
-    let file_queue = Arc::new(Mutex::new(documents));
-
     let index = Arc::new(Mutex::new(Index::new()));
-    index_in_parallel(&index, &file_queue);
+    index_in_parallel(&index, &documents)?;
+    Ok(())
 }
 
 fn collect_files_recursive(directory: &PathBuf, uris: &mut Vec<String>) {

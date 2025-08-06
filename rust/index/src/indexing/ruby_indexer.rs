@@ -1,59 +1,22 @@
 //! Visit the Ruby AST and create the definitions.
 
-use std::collections::HashMap;
-
+use crate::indexing::errors::IndexingError;
+use crate::indexing::indexed_data::IndexingThreadData;
 use crate::model::definitions::{ClassDefinition, Definition, ModuleDefinition};
-use crate::model::ids::{DeclarationId, UriId};
+use crate::model::ids::UriId;
 use crate::offset::Offset;
 
 use ruby_prism::Visit;
-
-// A collection of definitions specific for this indexer. This is not the global representation of declarations, just a
-// list of all definitions discovered that will be merged into the global index. It helps us avoid having to hash fully
-// qualified names into DeclarationIds multiple times
-pub struct DefinitionCollection {
-    pub node_id: DeclarationId,
-    pub definitions: Vec<Definition>,
-}
-
-impl DefinitionCollection {
-    #[must_use]
-    pub fn new(node_id: DeclarationId) -> Self {
-        Self {
-            node_id,
-            definitions: Vec::new(),
-        }
-    }
-
-    pub fn add_definition(&mut self, definition: Definition) {
-        self.definitions.push(definition);
-    }
-}
 
 /// The indexer for the definitions found in the Ruby source code.
 ///
 /// It implements the `Visit` trait from `ruby_prism` to visit the AST and create a hash of definitions that must be
 /// merged into the global state later.
-///
-/// Example:
-///
-/// ```
-/// use index::indexing::ruby_indexer::RubyIndexer;
-/// use index::model::index::Index;
-///
-/// let mut index = Index::new();
-/// let uri_id = index.intern_uri("file:///path/to/file.rb".to_string());
-/// let mut indexer = RubyIndexer::new();
-///
-/// let source = "class Foo; end";
-/// indexer.index(uri_id, &source);
-///
-/// assert_eq!(indexer.definitions.len(), 1);
-/// ```
 pub struct RubyIndexer {
     uri_id: Option<UriId>,
-    pub definitions: HashMap<String, DefinitionCollection>,
+    indexed_data: IndexingThreadData,
     nesting_stacks: Vec<Vec<String>>,
+    errors: Vec<IndexingError>,
 }
 
 impl RubyIndexer {
@@ -61,13 +24,24 @@ impl RubyIndexer {
     pub fn new() -> Self {
         Self {
             uri_id: None,
-            definitions: HashMap::new(),
             nesting_stacks: vec![Vec::new()],
+            indexed_data: IndexingThreadData::new(),
+            errors: Vec::new(),
         }
     }
 
-    pub fn index(&mut self, uri_id: UriId, source: &str) {
-        self.uri_id = Some(uri_id);
+    // Returns the information collected by this indexer as owned data, so that it can be moved into the global index
+    #[must_use]
+    pub fn into(self) -> (IndexingThreadData, Vec<IndexingError>) {
+        (self.indexed_data, self.errors)
+    }
+
+    pub fn add_error(&mut self, error: IndexingError) {
+        self.errors.push(error);
+    }
+
+    pub fn index(&mut self, uri: String, source: &str) {
+        self.uri_id = Some(self.indexed_data.add_uri(uri));
         let result = ruby_prism::parse(source.as_ref());
         self.visit(&result.node());
         self.uri_id = None;
@@ -92,21 +66,7 @@ impl RubyIndexer {
     }
 
     fn index_definition(&mut self, name: String, definition: Definition) {
-        // If the entry already exists in the hashmap
-        if self.definitions.contains_key(&name) {
-            self.definitions
-                .get_mut(&name)
-                .expect("Definition should exist")
-                .add_definition(definition);
-
-            return;
-        }
-
-        // If the entry does not exist, take the slow path and create a new one
-        let node_id = DeclarationId::new(&name);
-        let mut file_definitions = DefinitionCollection::new(node_id);
-        file_definitions.add_definition(definition);
-        self.definitions.insert(name, file_definitions);
+        self.indexed_data.add_definition(name, definition);
     }
 
     fn with_updated_nesting<F>(&mut self, name: &str, perform_visit: F)
