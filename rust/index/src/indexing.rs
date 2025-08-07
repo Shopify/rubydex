@@ -13,7 +13,6 @@ use crate::{
 use rayon::prelude::*;
 use url::Url;
 mod errors;
-pub mod indexed_data;
 pub mod ruby_indexer;
 
 // Represents a document to be indexed. If `source` is `Some(String)`, we're indexing a file state that's not committed
@@ -54,41 +53,43 @@ pub fn index_in_parallel(index_arc: &Arc<Mutex<Index>>, documents: &[Document]) 
 
     let indexers: Vec<RubyIndexer> = documents
         .par_chunks(chunk_size)
-        .map(|chunk| {
-            let mut ruby_indexer = RubyIndexer::new();
-
-            for document in chunk {
-                // If the document includes the source, use it directly to index (especially since the content may not
-                // be committed to disk yet). Otherwise, read it from disk
-                if let Some(source) = &document.source {
-                    ruby_indexer.index(document.uri.to_string(), source);
-                } else {
-                    match fs::read_to_string(document.path()) {
-                        Ok(source) => {
-                            ruby_indexer.index(document.uri.to_string(), &source);
-                        }
-                        Err(e) => {
-                            ruby_indexer.add_error(IndexingError::FileReadError(format!(
-                                "Failed to read {}: {}",
-                                document.path(),
-                                e
-                            )));
+        .flat_map(|chunk| {
+            chunk
+                .iter()
+                .map(|document| {
+                    let mut ruby_indexer = RubyIndexer::new(document.uri.to_string());
+                    // If the document includes the source, use it directly to index (especially since the content may not
+                    // be committed to disk yet). Otherwise, read it from disk
+                    if let Some(source) = &document.source {
+                        ruby_indexer.index(source);
+                    } else {
+                        match fs::read_to_string(document.path()) {
+                            Ok(source) => {
+                                ruby_indexer.index(&source);
+                            }
+                            Err(e) => {
+                                ruby_indexer.add_error(IndexingError::FileReadError(format!(
+                                    "Failed to read {}: {}",
+                                    document.path(),
+                                    e
+                                )));
+                            }
                         }
                     }
-                }
-            }
 
-            ruby_indexer
+                    ruby_indexer
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
 
     // Insert all discovered definitions into the global index
     let mut all_errors = Vec::new();
-    let mut index = index_arc.lock().unwrap();
+    let mut index_guard = index_arc.lock().unwrap();
 
     for indexer in indexers {
-        let (indexed_data, errors) = indexer.into();
-        index.merge_definitions(indexed_data);
+        let (local_index, errors) = indexer.into_parts();
+        index_guard.update(local_index);
         all_errors.extend(errors);
     }
 
