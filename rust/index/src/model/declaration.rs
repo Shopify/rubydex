@@ -18,7 +18,7 @@ use crate::model::definitions::Definition;
 
 #[derive(Debug)]
 pub struct Declaration {
-    name: String,
+    pub name: String,
     definitions: Vec<Definition>,
 }
 
