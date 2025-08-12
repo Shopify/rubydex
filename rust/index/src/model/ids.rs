@@ -1,11 +1,10 @@
 //! This module contains stable ID representations that composed the `Index` graph
 
-use blake3;
+use blake3::Hash;
 
 /// Creates a Blake3 hash from a string input and returns it as a 32-byte array.
-fn create_hash(input: &str) -> [u8; 32] {
-    let hash = blake3::hash(input.as_bytes());
-    *hash.as_bytes()
+fn create_hash(input: &str) -> Hash {
+    blake3::hash(input.as_bytes())
 }
 
 // A UriId is the hashed version of a unique URI describing a resource. There cannot be two different resources
@@ -16,7 +15,7 @@ fn create_hash(input: &str) -> [u8; 32] {
 //  - untitled:Untitled-1
 //  - file:///C:/projects/something/file.rb
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
-pub struct UriId([u8; 32]);
+pub struct UriId(Hash);
 
 impl UriId {
     #[must_use]
@@ -34,7 +33,7 @@ impl UriId {
 // - Foo::Bar
 // - Foo::Bar#instance_method
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
-pub struct DeclarationId([u8; 32]);
+pub struct DeclarationId(Hash);
 
 impl DeclarationId {
     #[must_use]
