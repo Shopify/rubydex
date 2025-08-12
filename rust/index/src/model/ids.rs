@@ -24,21 +24,51 @@ impl UriId {
     }
 }
 
-// A DeclarationId is the hashed version of the unique name representing a declaration. There cannot be two entities
-// that shared the exact same name and so we can guarantee that IDs are both unique and stable, making it easy to load
-// things from cache.
+impl std::fmt::Display for UriId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+// A NameId is the hashed version of the unique name representing a declaration. There cannot be two entities that
+// shared the exact same name and so we can guarantee that IDs are both unique and stable, making it easy to load things
+// from cache.
 //
 // Some example of unique names:
 // - Foo
 // - Foo::Bar
 // - Foo::Bar#instance_method
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
-pub struct DeclarationId(Hash);
+pub struct NameId(Hash);
 
-impl DeclarationId {
+impl NameId {
     #[must_use]
     pub fn new(id: &str) -> Self {
         Self(create_hash(id))
+    }
+}
+
+impl std::fmt::Display for NameId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Hash, Eq, PartialEq, Debug, Copy, Clone)]
+pub struct DefinitionId(Hash);
+
+impl DefinitionId {
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn new(uri_id: UriId, start_offset: u32) -> Self {
+        let id = format!("{uri_id}:{start_offset}");
+        Self(create_hash(&id))
+    }
+}
+
+impl std::fmt::Display for DefinitionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
