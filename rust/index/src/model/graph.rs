@@ -132,6 +132,58 @@ impl Graph {
             }
         }
     }
+
+    /// # Panics
+    ///
+    /// This method iterates through the entire graph and panics if there are any inconsistencies. For example, if a
+    /// relationship is created for URI to definition, but that definition is not registered. Or if a name is
+    /// registered, but has no relationship with any definitions
+    pub fn verify_integrity(&self) {
+        for (uri_id, definition_ids) in &self.uris_to_definitions {
+            // Each URI must be registered as a node in the graph
+            let uri = self.uri_pool.get(uri_id).unwrap_or_else(|| {
+                panic!("URI id {uri_id} is registered in URI to definition map, but not present in the URI pool")
+            });
+
+            for definition_id in definition_ids {
+                // Each definition has to be registered as a node in the graph
+                self.definitions.get(definition_id).unwrap_or_else(|| {
+                    panic!(
+                        "Definition id {definition_id} is registered for {uri}, but not present in the definitions map"
+                    )
+                });
+
+                // Each definition has to be associated with a fully qualified name
+                let name_id = self.definition_to_name.get(definition_id).unwrap_or_else(|| {
+                    panic!("Definition id {definition_id} is registered for {uri}, but not present in the definition to name map")
+                });
+
+                // Each name has to be registered as a node in the graph
+                let name = self.names.get(name_id).unwrap_or_else(|| {
+                    panic!("Name id {name_id} is registered for {uri}, but not present in the names map")
+                });
+
+                // Each name has to be associated with at least one definition
+                self.name_to_definitions.get(name_id).unwrap_or_else(|| {
+                    panic!(
+                        "Name id {name_id} is registered for {uri} with name {name}, but not present in the name to definitions map"
+                    )
+                });
+            }
+        }
+
+        // Each definition has to be associated to a URI
+        for definition_id in self.definitions.keys() {
+            self.uris_to_definitions
+                .values()
+                .find(|defs| defs.contains(definition_id))
+                .unwrap_or_else(|| {
+                    let name_id = self.definition_to_name.get(definition_id).unwrap();
+                    let name = self.names.get(name_id).unwrap();
+                    panic!("Definition {name} is present in the definitions map (id: {definition_id}), but not associated with any URI")
+                });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -143,7 +195,10 @@ mod tests {
     fn index_source(uri: &str, source: &str) -> Graph {
         let mut indexer = RubyIndexer::new(uri.to_string());
         indexer.index(source);
-        indexer.into_parts().0
+        let (index, errors) = indexer.into_parts();
+
+        assert!(errors.is_empty(), "Indexing errors: {errors:?}");
+        index
     }
 
     #[test]
@@ -157,6 +212,7 @@ mod tests {
         assert!(global.name_to_definitions.is_empty());
         assert!(global.uris_to_definitions.is_empty());
         assert!(global.uri_pool.is_empty());
+        global.verify_integrity();
     }
 
     #[test]
@@ -172,6 +228,7 @@ mod tests {
         assert!(global.uris_to_definitions.is_empty());
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(global.uri_pool.len(), 1);
+        global.verify_integrity();
     }
 
     #[test]
@@ -195,6 +252,7 @@ mod tests {
                 .len(),
             1
         );
+        global.verify_integrity();
     }
 
     #[test]
@@ -213,6 +271,7 @@ mod tests {
         let definitions = global.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].start_offset(), 6);
+        global.verify_integrity();
     }
 
     #[test]
@@ -226,6 +285,7 @@ mod tests {
         offsets.sort_unstable();
         assert_eq!(definitions.len(), 2);
         assert_eq!(vec![0, 5], offsets);
+        global.verify_integrity();
     }
 
     #[test]
@@ -239,5 +299,6 @@ mod tests {
         offsets.sort_unstable();
         assert_eq!(definitions.len(), 2);
         assert_eq!(vec![0, 18], offsets);
+        global.verify_integrity();
     }
 }
