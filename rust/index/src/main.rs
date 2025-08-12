@@ -1,24 +1,30 @@
 use std::{
-    env,
     error::Error,
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
+use clap::Parser;
+
 use index::{
     indexing::{Document, index_in_parallel},
     model::index::Index,
 };
 
+#[derive(Parser, Debug)]
+#[command(name = "index_cli", about = "A Ruby code indexer", version)]
+struct Args {
+    #[arg(value_name = "DIR", default_value = ".")]
+    dir: String,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let dir = env::args()
-        .nth(1)
-        .expect("Please provide a directory path as an argument");
+    let args = Args::parse();
 
     let documents = {
         let mut uris: Vec<String> = Vec::new();
-        collect_files_recursive(&PathBuf::from(dir), &mut uris);
+        collect_files_recursive(&PathBuf::from(args.dir), &mut uris);
         uris.into_iter()
             .filter_map(|uri| match Document::new(&uri, None) {
                 Ok(document) => Some(document),
