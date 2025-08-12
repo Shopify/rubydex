@@ -48,10 +48,11 @@ fn collect_files_recursive(directory: &PathBuf, uris: &mut Vec<String>) {
                         .is_some_and(|name| !excluded_dirs.contains(&name.to_str().unwrap()))
                 {
                     collect_files_recursive(&path, uris);
-                } else if path.is_file() && path.extension().filter(|ext| *ext == "rb").is_some() {
-                    if let Ok(absolute_path) = path.canonicalize() {
-                        uris.push(format!("file://{}", absolute_path.to_string_lossy()));
-                    }
+                } else if path.is_file()
+                    && path.extension().filter(|ext| *ext == "rb").is_some()
+                    && let Ok(absolute_path) = path.canonicalize()
+                {
+                    uris.push(format!("file://{}", absolute_path.to_string_lossy()));
                 }
             }
         }
