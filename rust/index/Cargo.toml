@@ -16,9 +16,12 @@ ruby-prism = "1.4.0"
 url = "2.5.4"
 rayon = "1.10.0"
 blake3 = "1.8.2"
+clap = { version = "4.5.16", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.0"
+assert_cmd = "2.0"
+predicates = "3.1"
 
 [lints]
 workspace = true

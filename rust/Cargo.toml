@@ -13,11 +13,11 @@ codegen-units = 1
 
 [workspace.lints.clippy]
 # See: https://doc.rust-lang.org/clippy/lints.html
-correctness = "forbid"
-suspicious = "forbid"
-perf = "forbid"
-complexity = "forbid"
-style = "forbid"
+correctness = "deny"
+suspicious = "deny"
+perf = "deny"
+complexity = "deny"
+style = "deny"
 pedantic = "warn"
 
-ptr-as-ptr = { level = "forbid", priority = 1 }
+ptr-as-ptr = { level = "deny", priority = 1 }
