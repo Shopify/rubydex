@@ -40,6 +40,42 @@ impl Graph {
         }
     }
 
+    // Returns an immutable reference to the names map
+    #[must_use]
+    pub fn names(&self) -> &HashMap<NameId, String> {
+        &self.names
+    }
+
+    // Returns an immutable reference to the definitions map
+    #[must_use]
+    pub fn definitions(&self) -> &HashMap<DefinitionId, Definition> {
+        &self.definitions
+    }
+
+    // Returns an immutable reference to the URI pool map
+    #[must_use]
+    pub fn uri_pool(&self) -> &HashMap<UriId, String> {
+        &self.uri_pool
+    }
+
+    // Returns an immutable reference to the name to definitions map
+    #[must_use]
+    pub fn name_to_definitions(&self) -> &HashMap<NameId, HashSet<DefinitionId>> {
+        &self.name_to_definitions
+    }
+
+    // Returns an immutable reference to the definition to name map
+    #[must_use]
+    pub fn definition_to_name(&self) -> &HashMap<DefinitionId, NameId> {
+        &self.definition_to_name
+    }
+
+    // Returns an immutable reference to the URI to definitions map
+    #[must_use]
+    pub fn uris_to_definitions(&self) -> &HashMap<UriId, HashSet<DefinitionId>> {
+        &self.uris_to_definitions
+    }
+
     pub fn set_configuration(&mut self, db_path: String) {
         self.db.set_db_path(db_path);
     }
