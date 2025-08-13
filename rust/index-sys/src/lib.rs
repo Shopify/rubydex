@@ -24,9 +24,8 @@ pub unsafe extern "C" fn repository_get_entry(repository: *const CRepository, na
     unsafe {
         let repository_ref = &*repository.cast::<Repository>();
         let c_str = std::ffi::CStr::from_ptr(name);
-        let name_str = match c_str.to_str() {
-            Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
+        let Ok(name_str) = c_str.to_str() else {
+            return std::ptr::null_mut();
         };
 
         match repository_ref.get_entry(name_str) {
