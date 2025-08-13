@@ -46,47 +46,4 @@ impl LocalIndex {
             .or_default()
             .insert(definition_id);
     }
-
-    #[must_use]
-    pub fn uri_id(&self) -> UriId {
-        self.uri_id
-    }
-
-    #[must_use]
-    pub fn definitions(&self) -> &HashMap<DefinitionId, Definition> {
-        &self.definitions
-    }
-
-    #[must_use]
-    pub fn names(&self) -> &HashMap<NameId, String> {
-        &self.names
-    }
-
-    #[must_use]
-    pub fn name_to_definitions(&self) -> &HashMap<NameId, HashSet<DefinitionId>> {
-        &self.name_to_definitions
-    }
-
-    #[must_use]
-    pub fn definition_to_name(&self) -> &HashMap<DefinitionId, NameId> {
-        &self.definition_to_name
-    }
-
-    #[must_use]
-    pub fn uris_to_definitions(&self) -> &HashMap<UriId, HashSet<DefinitionId>> {
-        &self.uris_to_definitions
-    }
-
-    #[must_use]
-    pub fn into_definitions(self) -> (UriId, Vec<(String, Definition)>) {
-        let mut definitions = Vec::new();
-        for (definition_id, definition) in self.definitions {
-            if let Some(name_id) = self.definition_to_name.get(&definition_id)
-                && let Some(name) = self.names.get(name_id) {
-                    definitions.push((name.clone(), definition));
-                }
-        }
-        (self.uri_id, definitions)
-    }
 }
-
