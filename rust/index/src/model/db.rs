@@ -3,24 +3,28 @@ use std::error::Error;
 
 const SCHEMA_VERSION: i32 = 1;
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 enum ConnectionType {
     Path(String),
-    #[allow(dead_code)]
+    #[default]
     Memory,
 }
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct Db {
     connection_type: ConnectionType,
 }
 
 impl Db {
     #[must_use]
-    pub fn new(path: &str) -> Self {
+    pub fn new() -> Self {
         Self {
-            connection_type: ConnectionType::Path(path.to_string()),
+            connection_type: ConnectionType::Memory,
         }
+    }
+
+    pub fn set_db_path(&mut self, path: String) {
+        self.connection_type = ConnectionType::Path(path);
     }
 
     /// Initializes a fresh database with schema and configuration

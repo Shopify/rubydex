@@ -15,12 +15,14 @@ impl Error for MultipleErrors {}
 #[derive(Debug)]
 pub enum IndexingError {
     FileReadError(String),
+    InvalidUri(String),
 }
 
 impl std::fmt::Display for IndexingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IndexingError::FileReadError(msg) => write!(f, "File read error: {msg}"),
+            IndexingError::InvalidUri(msg) => write!(f, "Invalid URI: {msg}"),
         }
     }
 }

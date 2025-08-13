@@ -26,10 +26,21 @@ impl Document {
     /// # Errors
     ///
     /// Creating a new document fails on invalid URIs
-    pub fn new(uri: &str, source: Option<String>) -> Result<Self, url::ParseError> {
+    pub fn new(uri: &str, source: Option<String>) -> Result<Self, IndexingError> {
         Ok(Self {
-            uri: Url::parse(uri)?,
+            uri: Url::parse(uri).map_err(|e| IndexingError::InvalidUri(format!("Failed to parse URI '{uri}': {e}")))?,
             source,
+        })
+    }
+
+    /// # Errors
+    ///
+    /// Errors if the file path cannot be turned into a URI
+    pub fn from_file_path(path: &str) -> Result<Self, IndexingError> {
+        Ok(Self {
+            uri: Url::from_file_path(path)
+                .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't build URI from path '{path}'")))?,
+            source: None,
         })
     }
 
