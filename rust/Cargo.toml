@@ -21,4 +21,3 @@ style = "forbid"
 pedantic = "warn"
 
 ptr-as-ptr = { level = "forbid", priority = 1 }
-manual-let-else = { level = "allow", priority = 1 }
