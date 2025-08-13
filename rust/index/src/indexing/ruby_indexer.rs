@@ -3,7 +3,7 @@
 use crate::indexing::errors::IndexingError;
 use crate::model::definitions::{ClassDefinition, Definition, ModuleDefinition};
 use crate::model::ids::UriId;
-use crate::model::index::Index;
+use crate::model::local_index::LocalIndex;
 use crate::offset::Offset;
 
 use ruby_prism::Visit;
@@ -14,7 +14,7 @@ use ruby_prism::Visit;
 /// merged into the global state later.
 pub struct RubyIndexer {
     uri_id: UriId,
-    local_index: Index,
+    local_index: LocalIndex,
     nesting_stacks: Vec<Vec<String>>,
     errors: Vec<IndexingError>,
 }
@@ -22,8 +22,8 @@ pub struct RubyIndexer {
 impl RubyIndexer {
     #[must_use]
     pub fn new(uri: String) -> Self {
-        let mut local_index = Index::new();
-        let uri_id = local_index.add_uri(uri);
+        let uri_id = UriId::new(&uri);
+        let local_index = LocalIndex::new(uri_id);
 
         Self {
             uri_id,
@@ -34,7 +34,7 @@ impl RubyIndexer {
     }
 
     #[must_use]
-    pub fn into_parts(self) -> (Index, Vec<IndexingError>) {
+    pub fn into_parts(self) -> (LocalIndex, Vec<IndexingError>) {
         (self.local_index, self.errors)
     }
 
@@ -98,7 +98,7 @@ impl Visit<'_> for RubyIndexer {
 
             indexer
                 .local_index
-                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+                .add_definition(fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
                 indexer.visit(&body);
@@ -115,7 +115,7 @@ impl Visit<'_> for RubyIndexer {
             ))));
             indexer
                 .local_index
-                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+                .add_definition(fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
                 indexer.visit(&body);

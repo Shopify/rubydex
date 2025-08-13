@@ -89,7 +89,7 @@ pub fn index_in_parallel(index_arc: &Arc<Mutex<Index>>, documents: &[Document]) 
 
     for indexer in indexers {
         let (local_index, errors) = indexer.into_parts();
-        index_guard.update(local_index);
+        index_guard.update_from_local(local_index);
         all_errors.extend(errors);
     }
 

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::model::definitions::Definition;
 use crate::model::ids::{DefinitionId, NameId, UriId};
+use crate::model::local_index::LocalIndex;
 
 // The `Index` is the global graph representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
@@ -84,16 +85,16 @@ impl Index {
             .insert(definition_id);
     }
 
-    /// Merges everything in `other` into this Index. This method is meant to merge all index representations from
-    /// different threads, but not meant to handle updates to the existing global representation
-    pub fn extend(&mut self, incomplete_index: Index) {
-        self.names.extend(incomplete_index.names);
-        self.definitions.extend(incomplete_index.definitions);
-        self.uri_pool.extend(incomplete_index.uri_pool);
-        self.definition_to_name.extend(incomplete_index.definition_to_name);
-        self.uris_to_definitions.extend(incomplete_index.uris_to_definitions);
+    /// Merges a `LocalIndex` into this global Index. This is the primary way to add definitions
+    /// collected during single-file indexing into the global state.
+    pub fn extend_from_local(&mut self, local_index: LocalIndex) {
+        self.names.extend(local_index.names);
+        self.definitions.extend(local_index.definitions);
+        self.definition_to_name.extend(local_index.definition_to_name);
+        self.uris_to_definitions.extend(local_index.uris_to_definitions);
 
-        for (name_id, definition_ids) in incomplete_index.name_to_definitions {
+        // Merge name_to_definitions, handling potential collisions
+        for (name_id, definition_ids) in local_index.name_to_definitions {
             self.name_to_definitions
                 .entry(name_id)
                 .or_default()
@@ -101,17 +102,15 @@ impl Index {
         }
     }
 
-    /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
-    /// updates to existing entries
-    pub fn update(&mut self, other: Index) {
-        // For each URI that was indexed through `other`, check what was discovered and update our current global
-        // representation
-        for uri_id in other.uri_pool.keys() {
-            self.remove_definitions_for_uri(*uri_id);
-        }
 
-        self.extend(other);
+    /// Updates the global representation with a LocalIndex, handling deletions, insertions and
+    /// updates to existing entries for the URI contained in the LocalIndex
+    pub fn update_from_local(&mut self, local_index: LocalIndex) {
+        let uri_id = local_index.uri_id();
+        self.remove_definitions_for_uri(uri_id);
+        self.extend_from_local(local_index);
     }
+
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
     // document (identified by `uri_id`) changes
@@ -143,7 +142,12 @@ mod tests {
     fn index_source(uri: &str, source: &str) -> Index {
         let mut indexer = RubyIndexer::new(uri.to_string());
         indexer.index(source);
-        indexer.into_parts().0
+        let (local_index, _errors) = indexer.into_parts();
+
+        let mut index = Index::new();
+        index.add_uri(uri.to_string());
+        index.extend_from_local(local_index);
+        index
     }
 
     #[test]
@@ -162,8 +166,11 @@ mod tests {
     #[test]
     fn updating_index_with_deleted_definitions() {
         let mut global = index_source("file:///foo.rb", "module Foo; end");
-        let other = index_source("file:///foo.rb", "");
-        global.update(other);
+        
+        let mut indexer = RubyIndexer::new("file:///foo.rb".to_string());
+        indexer.index("");
+        let (local_index, _errors) = indexer.into_parts();
+        global.update_from_local(local_index);
 
         assert!(global.definitions.is_empty());
         assert!(global.names.is_empty());
@@ -177,8 +184,12 @@ mod tests {
     #[test]
     fn updating_index_with_new_definitions() {
         let mut global = Index::new();
-        let other = index_source("file:///foo.rb", "module Foo; end");
-        global.update(other);
+        global.add_uri("file:///foo.rb".to_string());
+        
+        let mut indexer = RubyIndexer::new("file:///foo.rb".to_string());
+        indexer.index("module Foo; end");
+        let (local_index, _errors) = indexer.into_parts();
+        global.update_from_local(local_index);
 
         assert_eq!(global.definitions.len(), 1);
         assert_eq!(global.names.get(&NameId::new("Foo")).unwrap(), "Foo");
@@ -200,8 +211,11 @@ mod tests {
     #[test]
     fn updating_existing_definitions() {
         let mut global = index_source("file:///foo.rb", "module Foo; end");
-        let other = index_source("file:///foo.rb", "\n\n\n\n\n\nmodule Foo; end");
-        global.update(other);
+        
+        let mut indexer = RubyIndexer::new("file:///foo.rb".to_string());
+        indexer.index("\n\n\n\n\n\nmodule Foo; end");
+        let (local_index, _errors) = indexer.into_parts();
+        global.update_from_local(local_index);
 
         assert_eq!(global.definitions.len(), 1);
         assert_eq!(global.names.get(&NameId::new("Foo")).unwrap(), "Foo");
@@ -218,8 +232,12 @@ mod tests {
     #[test]
     fn adding_another_definition_from_a_different_uri() {
         let mut global = index_source("file:///foo.rb", "module Foo; end");
-        let other = index_source("file:///foo2.rb", "\n\n\n\n\nmodule Foo; end");
-        global.update(other);
+        global.add_uri("file:///foo2.rb".to_string());
+        
+        let mut indexer = RubyIndexer::new("file:///foo2.rb".to_string());
+        indexer.index("\n\n\n\n\nmodule Foo; end");
+        let (local_index, _errors) = indexer.into_parts();
+        global.update_from_local(local_index);
 
         let definitions = global.get("Foo").unwrap();
         let mut offsets = definitions.iter().map(|d| d.start_offset()).collect::<Vec<_>>();
@@ -231,8 +249,11 @@ mod tests {
     #[test]
     fn adding_a_second_definition_from_the_same_uri() {
         let mut global = index_source("file:///foo.rb", "module Foo; end");
-        let other = index_source("file:///foo.rb", "module Foo; end\n\n\nmodule Foo; end");
-        global.update(other);
+        
+        let mut indexer = RubyIndexer::new("file:///foo.rb".to_string());
+        indexer.index("module Foo; end\n\n\nmodule Foo; end");
+        let (local_index, _errors) = indexer.into_parts();
+        global.update_from_local(local_index);
 
         let definitions = global.get("Foo").unwrap();
         let mut offsets = definitions.iter().map(|d| d.start_offset()).collect::<Vec<_>>();
