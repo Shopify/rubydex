@@ -48,8 +48,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<_>>()
     };
 
-    let index = Arc::new(Mutex::new(Graph::new()));
+    let index = Arc::new(Mutex::new(
+        Graph::new().expect("Failed to initialize main index database"),
+    ));
     index_in_parallel(&index, &documents)?;
+    let _ = index
+        .lock()
+        .expect("Failed to acquire index lock for dumping to DB.")
+        .dump_to_db();
     Ok(())
 }
 

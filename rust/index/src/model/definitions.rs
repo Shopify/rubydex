@@ -25,7 +25,7 @@
 
 use crate::offset::Offset;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
     Module(Box<ModuleDefinition>),
@@ -39,6 +39,14 @@ impl Definition {
             Definition::Module(it) => it.offset.start_offset(),
         }
     }
+
+    #[must_use]
+    pub const fn definition_type_value(&self) -> i32 {
+        match self {
+            Definition::Class(_) => 1,
+            Definition::Module(_) => 2,
+        }
+    }
 }
 
 /// A class definition
@@ -48,9 +56,9 @@ impl Definition {
 /// class Foo
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClassDefinition {
-    offset: Offset,
+    pub offset: Offset,
 }
 
 impl ClassDefinition {
@@ -67,9 +75,9 @@ impl ClassDefinition {
 /// module Foo
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleDefinition {
-    offset: Offset,
+    pub offset: Offset,
 }
 
 impl ModuleDefinition {

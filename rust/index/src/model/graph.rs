@@ -1,40 +1,67 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::model::db::Db;
 use crate::model::definitions::Definition;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 
+const DB_PATH: &str = "..";
+
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Graph {
     // *** Graph nodes: the following represent possible nodes in our graph ***
     // Map of fully qualified names. These represent global declarations, like `Foo`, `Foo#bar` or `Foo.baz`
-    names: HashMap<NameId, String>,
+    pub names: HashMap<NameId, String>,
     // Map of URIs currently loaded in memory
-    uri_pool: HashMap<UriId, String>,
+    pub uri_pool: HashMap<UriId, String>,
     // Map of definitions
-    definitions: HashMap<DefinitionId, Definition>,
+    pub definitions: HashMap<DefinitionId, Definition>,
 
     // *** Graph edges: the following represent relationships between nodes ***
     // Map of a fully qualified name to all definitions we discovered for it
     name_to_definitions: HashMap<NameId, HashSet<DefinitionId>>,
     // Reverse map of a definition to its unique fully qualified name
-    definition_to_name: HashMap<DefinitionId, NameId>,
+    pub definition_to_name: HashMap<DefinitionId, NameId>,
     // Map of URI to all definitions discovered in that document
     uris_to_definitions: HashMap<UriId, HashSet<DefinitionId>>,
+    // Reverse map of a definition to the URI of its document
+    pub definition_to_uri: HashMap<DefinitionId, UriId>,
+    db: Db,
 }
 
 impl Graph {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
+    /// # Errors
+    /// Will return an error if db connection fails
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let db = Db::new(DB_PATH)?;
+        Ok(Self {
             names: HashMap::new(),
             definitions: HashMap::new(),
             uri_pool: HashMap::new(),
             name_to_definitions: HashMap::new(),
             definition_to_name: HashMap::new(),
             uris_to_definitions: HashMap::new(),
-        }
+            definition_to_uri: HashMap::new(),
+            db,
+        })
+    }
+
+    // Instantiate an index graph with a memory DB for local indexing and testing
+    /// # Errors
+    /// Will return an error if memory db init fails
+    pub fn new_with_memory_db() -> Result<Self, Box<dyn std::error::Error>> {
+        let db = Db::new_memory_db()?;
+        Ok(Self {
+            names: HashMap::new(),
+            definitions: HashMap::new(),
+            uri_pool: HashMap::new(),
+            name_to_definitions: HashMap::new(),
+            definition_to_name: HashMap::new(),
+            uris_to_definitions: HashMap::new(),
+            definition_to_uri: HashMap::new(),
+            db,
+        })
     }
 
     #[must_use]
@@ -82,6 +109,8 @@ impl Graph {
             .entry(uri_id)
             .or_default()
             .insert(definition_id);
+
+        self.definition_to_uri.insert(definition_id, uri_id);
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
@@ -91,6 +120,7 @@ impl Graph {
         self.definitions.extend(incomplete_index.definitions);
         self.uri_pool.extend(incomplete_index.uri_pool);
         self.definition_to_name.extend(incomplete_index.definition_to_name);
+        self.definition_to_uri.extend(incomplete_index.definition_to_uri);
         self.uris_to_definitions.extend(incomplete_index.uris_to_definitions);
 
         for (name_id, definition_ids) in incomplete_index.name_to_definitions {
@@ -129,8 +159,25 @@ impl Graph {
                 }
 
                 self.definitions.remove(&def_id);
+                self.definition_to_uri.remove(&def_id);
             }
         }
+    }
+
+    /// # Errors
+    /// Will return an error if db connection fails
+    pub fn dump_to_db(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let result = self.db.dump_graph(self);
+        if result.is_ok() {
+            self.names.clear();
+            self.definitions.clear();
+            self.uri_pool.clear();
+            self.name_to_definitions.clear();
+            self.definition_to_name.clear();
+            self.uris_to_definitions.clear();
+            self.definition_to_uri.clear();
+        }
+        result
     }
 }
 
@@ -156,6 +203,7 @@ mod tests {
         assert!(global.definition_to_name.is_empty());
         assert!(global.name_to_definitions.is_empty());
         assert!(global.uris_to_definitions.is_empty());
+        assert!(global.definition_to_uri.is_empty());
         assert!(global.uri_pool.is_empty());
     }
 
@@ -170,13 +218,14 @@ mod tests {
         assert!(global.definition_to_name.is_empty());
         assert!(global.name_to_definitions.is_empty());
         assert!(global.uris_to_definitions.is_empty());
+        assert!(global.definition_to_uri.is_empty());
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(global.uri_pool.len(), 1);
     }
 
     #[test]
     fn updating_index_with_new_definitions() {
-        let mut global = Graph::new();
+        let mut global = Graph::new_with_memory_db().unwrap();
         let other = index_source("file:///foo.rb", "module Foo; end");
         global.update(other);
 
@@ -239,5 +288,47 @@ mod tests {
         offsets.sort_unstable();
         assert_eq!(definitions.len(), 2);
         assert_eq!(vec![0, 18], offsets);
+    }
+
+    #[test]
+    fn dump_to_db_success_and_memory_clear() {
+        let mut graph = Graph::new_with_memory_db().unwrap();
+        
+        // Add some test data to the graph
+        let _uri_id = graph.add_uri("file:///test.rb".to_string());
+        let other = index_source("file:///test.rb", "module TestModule; end\nclass TestClass; end");
+        graph.update(other);
+        
+        // Verify data exists before dumping
+        assert!(!graph.names.is_empty());
+        assert!(!graph.definitions.is_empty());
+        assert!(!graph.uri_pool.is_empty());
+        assert!(!graph.name_to_definitions.is_empty());
+        assert!(!graph.definition_to_name.is_empty());
+        assert!(!graph.uris_to_definitions.is_empty());
+        assert!(!graph.definition_to_uri.is_empty());
+        
+        // Verify we can find the definitions
+        assert!(graph.get("TestModule").is_some());
+        assert!(graph.get("TestClass").is_some());
+        
+        // Dump to database
+        let result = graph.dump_to_db();
+        
+        // Verify dump was successful
+        assert!(result.is_ok(), "Dump failed with error: {:?}", result.unwrap_err());
+        
+        // Verify memory has been cleared after successful dump
+        assert!(graph.names.is_empty());
+        assert!(graph.definitions.is_empty());
+        assert!(graph.uri_pool.is_empty());
+        assert!(graph.name_to_definitions.is_empty());
+        assert!(graph.definition_to_name.is_empty());
+        assert!(graph.uris_to_definitions.is_empty());
+        assert!(graph.definition_to_uri.is_empty());
+        
+        // Verify data is no longer accessible via get method
+        assert!(graph.get("TestModule").is_none());
+        assert!(graph.get("TestClass").is_none());
     }
 }

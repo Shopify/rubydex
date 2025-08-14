@@ -1,6 +1,6 @@
 //! This module contains stable ID representations that composed the `Graph` global representation
-
 use blake3::Hash;
+use std::fmt;
 
 /// Creates a Blake3 hash from a string input and returns it as a 32-byte array.
 fn create_hash(input: &str) -> Hash {
@@ -24,8 +24,8 @@ impl UriId {
     }
 }
 
-impl std::fmt::Display for UriId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for UriId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -48,8 +48,8 @@ impl NameId {
     }
 }
 
-impl std::fmt::Display for NameId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for NameId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -66,8 +66,8 @@ impl DefinitionId {
     }
 }
 
-impl std::fmt::Display for DefinitionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for DefinitionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }

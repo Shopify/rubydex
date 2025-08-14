@@ -22,7 +22,8 @@ pub struct RubyIndexer {
 impl RubyIndexer {
     #[must_use]
     pub fn new(uri: String) -> Self {
-        let mut local_index = Graph::new();
+        let mut local_index = Graph::new_with_memory_db()
+            .expect("Failed to initialize local index with memory database");
         let uri_id = local_index.add_uri(uri);
 
         Self {
