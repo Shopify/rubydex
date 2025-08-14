@@ -2,8 +2,8 @@
 
 use crate::indexing::errors::IndexingError;
 use crate::model::definitions::{ClassDefinition, Definition, ModuleDefinition};
+use crate::model::graph::Graph;
 use crate::model::ids::UriId;
-use crate::model::index::Index;
 use crate::offset::Offset;
 
 use ruby_prism::Visit;
@@ -14,7 +14,7 @@ use ruby_prism::Visit;
 /// merged into the global state later.
 pub struct RubyIndexer {
     uri_id: UriId,
-    local_index: Index,
+    local_index: Graph,
     nesting_stacks: Vec<Vec<String>>,
     errors: Vec<IndexingError>,
 }
@@ -22,7 +22,7 @@ pub struct RubyIndexer {
 impl RubyIndexer {
     #[must_use]
     pub fn new(uri: String) -> Self {
-        let mut local_index = Index::new();
+        let mut local_index = Graph::new();
         let uri_id = local_index.add_uri(uri);
 
         Self {
@@ -34,7 +34,7 @@ impl RubyIndexer {
     }
 
     #[must_use]
-    pub fn into_parts(self) -> (Index, Vec<IndexingError>) {
+    pub fn into_parts(self) -> (Graph, Vec<IndexingError>) {
         (self.local_index, self.errors)
     }
 

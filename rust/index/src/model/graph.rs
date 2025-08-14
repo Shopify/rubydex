@@ -3,10 +3,10 @@ use std::collections::{HashMap, HashSet};
 use crate::model::definitions::Definition;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 
-// The `Index` is the global graph representation of the entire Ruby codebase. It contains all declarations and their
+// The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
 #[derive(Default, Debug)]
-pub struct Index {
+pub struct Graph {
     // *** Graph nodes: the following represent possible nodes in our graph ***
     // Map of fully qualified names. These represent global declarations, like `Foo`, `Foo#bar` or `Foo.baz`
     names: HashMap<NameId, String>,
@@ -24,7 +24,7 @@ pub struct Index {
     uris_to_definitions: HashMap<UriId, HashSet<DefinitionId>>,
 }
 
-impl Index {
+impl Graph {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -66,7 +66,7 @@ impl Index {
         self.uri_pool.remove(&uri_id);
     }
 
-    // Registers a definition into the `Index`, automatically creating all relationships in the graph
+    // Registers a definition into the `Graph`, automatically creating all relationships
     pub fn add_definition(&mut self, uri_id: UriId, name: String, definition: Definition) {
         let name_id = NameId::new(&name);
         let definition_id = DefinitionId::new(uri_id, definition.start_offset());
@@ -84,9 +84,9 @@ impl Index {
             .insert(definition_id);
     }
 
-    /// Merges everything in `other` into this Index. This method is meant to merge all index representations from
+    /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
-    pub fn extend(&mut self, incomplete_index: Index) {
+    pub fn extend(&mut self, incomplete_index: Graph) {
         self.names.extend(incomplete_index.names);
         self.definitions.extend(incomplete_index.definitions);
         self.uri_pool.extend(incomplete_index.uri_pool);
@@ -103,7 +103,7 @@ impl Index {
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
     /// updates to existing entries
-    pub fn update(&mut self, other: Index) {
+    pub fn update(&mut self, other: Graph) {
         // For each URI that was indexed through `other`, check what was discovered and update our current global
         // representation
         for uri_id in other.uri_pool.keys() {
@@ -139,8 +139,8 @@ mod tests {
     use super::*;
     use crate::indexing::ruby_indexer::RubyIndexer;
 
-    // Index the given source and URI and return the resulting `Index`
-    fn index_source(uri: &str, source: &str) -> Index {
+    // Index the given source and URI and return the resulting `Graph`
+    fn index_source(uri: &str, source: &str) -> Graph {
         let mut indexer = RubyIndexer::new(uri.to_string());
         indexer.index(source);
         indexer.into_parts().0
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn updating_index_with_new_definitions() {
-        let mut global = Index::new();
+        let mut global = Graph::new();
         let other = index_source("file:///foo.rb", "module Foo; end");
         global.update(other);
 
