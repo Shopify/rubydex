@@ -10,7 +10,7 @@ use clap::Parser;
 
 use index::{
     indexing::{Document, index_in_parallel},
-    model::index::Index,
+    model::graph::Graph,
 };
 
 #[derive(Parser, Debug)]
@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<_>>()
     };
 
-    let index = Arc::new(Mutex::new(Index::new()));
+    let index = Arc::new(Mutex::new(Graph::new()));
     index_in_parallel(&index, &documents)?;
     Ok(())
 }

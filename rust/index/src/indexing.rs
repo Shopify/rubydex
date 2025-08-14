@@ -8,7 +8,7 @@ use crate::{
         errors::{IndexingError, MultipleErrors},
         ruby_indexer::RubyIndexer,
     },
-    model::index::Index,
+    model::graph::Graph,
 };
 use rayon::prelude::*;
 use url::Url;
@@ -39,7 +39,7 @@ impl Document {
     }
 }
 
-/// Indexes the given items, reading the content from disk and populating the given `Index` instance.
+/// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
 ///
 /// # Errors
 ///
@@ -48,7 +48,7 @@ impl Document {
 /// # Panics
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
-pub fn index_in_parallel(index_arc: &Arc<Mutex<Index>>, documents: &[Document]) -> Result<(), MultipleErrors> {
+pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) -> Result<(), MultipleErrors> {
     let chunk_size = cmp::max(10, documents.len() / rayon::current_num_threads());
 
     let indexers: Vec<RubyIndexer> = documents
@@ -83,13 +83,13 @@ pub fn index_in_parallel(index_arc: &Arc<Mutex<Index>>, documents: &[Document]) 
         })
         .collect();
 
-    // Insert all discovered definitions into the global index
+    // Insert all discovered definitions into the global graph
     let mut all_errors = Vec::new();
-    let mut index_guard = index_arc.lock().unwrap();
+    let mut graph_guard = graph_arc.lock().unwrap();
 
     for indexer in indexers {
-        let (local_index, errors) = indexer.into_parts();
-        index_guard.update(local_index);
+        let (local_graph, errors) = indexer.into_parts();
+        graph_guard.update(local_graph);
         all_errors.extend(errors);
     }
 

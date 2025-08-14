@@ -1,4 +1,4 @@
-//! This module contains stable ID representations that composed the `Index` graph
+//! This module contains stable ID representations that composed the `Graph` global representation
 
 use blake3::Hash;
 
