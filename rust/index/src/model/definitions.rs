@@ -25,7 +25,7 @@
 
 use crate::offset::Offset;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
     Module(Box<ModuleDefinition>),
@@ -56,7 +56,7 @@ impl Definition {
 /// class Foo
 /// end
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ClassDefinition {
     pub offset: Offset,
 }
@@ -75,7 +75,7 @@ impl ClassDefinition {
 /// module Foo
 /// end
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModuleDefinition {
     pub offset: Offset,
 }

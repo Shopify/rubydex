@@ -107,8 +107,8 @@ impl Db {
             let definition_type = definition.definition_type_value();
 
             let (start_offset, end_offset) = match definition {
-                Definition::Class(class) => (class.offset.start_offset, class.offset.end_offset),
-                Definition::Module(module) => (module.offset.start_offset, module.offset.end_offset),
+                Definition::Class(class) => (class.offset.start_offset(), class.offset.end_offset()),
+                Definition::Module(module) => (module.offset.start_offset(), module.offset.end_offset()),
             };
             let uri_id = definition_to_uri[definition_id];
             let name_id = definition_to_name[definition_id];
@@ -134,7 +134,12 @@ impl Db {
 
         self.batch_insert_uris(&tx, &graph.uri_pool)?;
         self.batch_insert_names(&tx, &graph.names)?;
-        self.batch_insert_definitions(&tx, &graph.definitions, &graph.definition_to_uri, &graph.definition_to_name)?;
+        self.batch_insert_definitions(
+            &tx,
+            &graph.definitions,
+            &graph.definition_to_uri,
+            &graph.definition_to_name,
+        )?;
 
         Ok(tx.commit()?)
     }

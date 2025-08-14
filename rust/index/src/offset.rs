@@ -11,9 +11,9 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Offset {
     /// The starting byte offset (inclusive)
-    pub start_offset: u32,
+    start_offset: u32,
     /// The ending byte offset (exclusive)
-    pub end_offset: u32,
+    end_offset: u32,
 }
 
 impl Offset {
@@ -51,5 +51,10 @@ impl Offset {
     #[must_use]
     pub fn start_offset(&self) -> u32 {
         self.start_offset
+    }
+
+    #[must_use]
+    pub fn end_offset(&self) -> u32 {
+        self.end_offset
     }
 }
