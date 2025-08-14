@@ -1,9 +1,12 @@
 version: 2
+enable-beta-ecosystems: true
 updates:
   - package-ecosystem: "bundler"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 90
     labels:
       - "dependencies"
       - "ruby"
@@ -17,6 +20,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 90
     labels:
       - "dependencies"
       - "rust"
