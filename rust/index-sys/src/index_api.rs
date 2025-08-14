@@ -1,7 +1,7 @@
 //! This file provides the C API for the Graph object
 
 use crate::conversions;
-use index::indexing::Document;
+use index::indexing;
 use index::model::graph::Graph;
 use libc::{c_char, c_void};
 use std::ffi::CString;
@@ -51,31 +51,24 @@ pub unsafe extern "C" fn idx_index_all_c(
     count: usize,
 ) -> *const c_char {
     let file_paths: Vec<String> = unsafe { conversions::convert_double_pointer_to_vec(file_paths, count).unwrap() };
-    let documents = file_paths
-        .iter()
-        .filter_map(|path| match Document::from_file_path(path) {
-            Ok(document) => Some(document),
-            Err(e) => {
-                eprintln!("Invalid URI for document '{path}': {e}");
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-
     let graph = retain_graph(pointer);
+    let mut all_errors = Vec::new();
+    let (documents, document_errors) = indexing::collect_documents_in_parallel(file_paths);
+    all_errors.extend(document_errors);
 
-    if let Err(errors) = index::indexing::index_in_parallel(&graph, &documents) {
-        let concatenated_errors = errors
-            .0
-            .into_iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        return CString::new(concatenated_errors).unwrap().into_raw().cast_const();
+    if let Err(errors) = indexing::index_in_parallel(&graph, &documents) {
+        all_errors.extend(errors.0);
     }
 
-    ptr::null()
+    if all_errors.is_empty() {
+        return ptr::null();
+    }
+
+    let concatenated_errors = all_errors.into_iter().map(|e| e.to_string()).collect::<Vec<_>>();
+    CString::new(concatenated_errors.join("\n"))
+        .unwrap()
+        .into_raw()
+        .cast_const()
 }
 
 /// # Safety
