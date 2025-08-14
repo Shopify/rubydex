@@ -20,18 +20,18 @@ pub struct RubyIndexer {
 }
 
 impl RubyIndexer {
-    #[must_use]
-    pub fn new(uri: String) -> Self {
-        let mut local_index = Graph::new_with_memory_db()
-            .expect("Failed to initialize local index with memory database");
+    /// # Errors
+    /// Will return an error if memory database initialization fails
+    pub fn new(uri: String) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut local_index = Graph::new_with_memory_db()?;
         let uri_id = local_index.add_uri(uri);
 
-        Self {
+        Ok(Self {
             uri_id,
             nesting_stacks: vec![Vec::new()],
             local_index,
             errors: Vec::new(),
-        }
+        })
     }
 
     #[must_use]

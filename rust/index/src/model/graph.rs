@@ -188,7 +188,7 @@ mod tests {
 
     // Index the given source and URI and return the resulting `Graph`
     fn index_source(uri: &str, source: &str) -> Graph {
-        let mut indexer = RubyIndexer::new(uri.to_string());
+        let mut indexer = RubyIndexer::new(uri.to_string()).expect("Failed to create indexer for test");
         indexer.index(source);
         indexer.into_parts().0
     }

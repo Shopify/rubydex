@@ -56,8 +56,14 @@ pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) 
         .flat_map(|chunk| {
             chunk
                 .iter()
-                .map(|document| {
-                    let mut ruby_indexer = RubyIndexer::new(document.uri.to_string());
+                .filter_map(|document| {
+                    let mut ruby_indexer = match RubyIndexer::new(document.uri.to_string()) {
+                        Ok(indexer) => indexer,
+                        Err(e) => {
+                            eprintln!("Failed to create indexer for {}: {}", document.uri, e);
+                            return None;
+                        }
+                    };
                     // If the document includes the source, use it directly to index (especially since the content may not
                     // be committed to disk yet). Otherwise, read it from disk
                     if let Some(source) = &document.source {
@@ -77,7 +83,7 @@ pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) 
                         }
                     }
 
-                    ruby_indexer
+                    Some(ruby_indexer)
                 })
                 .collect::<Vec<_>>()
         })
