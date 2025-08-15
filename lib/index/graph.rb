@@ -5,11 +5,13 @@ module Index
   #
   # Note: this class is partially defined in C to integrate with the Rust backend
   class Graph
+    #: (?workspace_path: String) -> void
     def initialize(workspace_path: Dir.pwd)
       @workspace_path = workspace_path
     end
 
     # Index all files and dependencies of the workspace that exists in `@workspace_path`
+    #: -> String?
     def index_workspace
       paths = workspace_dependency_paths
       paths.unshift(@workspace_path)
@@ -31,6 +33,7 @@ module Index
       end
 
       paths.flatten!
+      paths.uniq!
       paths
     end
   end
