@@ -1,0 +1,43 @@
+name: Index top 100 gems
+
+on: [push, pull_request]
+
+jobs:
+  indexing_top_gems:
+    runs-on: shopify-ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust tools
+        run: |
+          rustup update --no-self-update stable
+          rustup default stable
+          rustup component add --toolchain stable clippy rustfmt
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@a4effe49ee8ee5b8b5091268c473a4628afb5651 # v1.245.0
+        with:
+          bundler-cache: true
+
+      - name: Restore Rust compile cache
+        id: rust-compile-cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-rust
+
+      - name: Run Ruby tests
+        run: bundle exec rake index_top_gems
+
+      - name: Save Rust compile cache
+        id: rust-compile-cache-save
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.rust-compile-cache-restore.outputs.cache-primary-key }}
