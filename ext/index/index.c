@@ -57,7 +57,7 @@ static VALUE rb_repository_get_entry(VALUE self, VALUE name) {
     rb_ivar_set(ruby_entry, rb_intern("@name"), entry_name ? rb_str_new_cstr(entry_name) : Qnil);
     rb_ivar_set(ruby_entry, rb_intern("@value"), entry_value ? rb_str_new_cstr(entry_value) : Qnil);
 
-    delloc_entry(c_entry);
+    dealloc_entry(c_entry);
 
     return ruby_entry;
 }
