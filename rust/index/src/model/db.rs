@@ -9,6 +9,8 @@ use crate::model::{
     ids::{DefinitionId, NameId, UriId},
 };
 
+const EXPECTED_TABLE_COUNT: i64 = 3;
+
 #[derive(Debug)]
 pub struct Db {
     path: String,
@@ -50,12 +52,21 @@ impl Db {
             Connection::open(&self.path)?
         };
 
-        let schema = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src/db")
-                .join("schema.sql"),
-        )?;
-        conn.execute_batch(&schema)?;
+        // Only load schema if tables don't exist
+        let table_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('documents', 'names', 'definitions')",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        if table_count < EXPECTED_TABLE_COUNT {
+            let schema = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src/db")
+                    .join("schema.sql"),
+            )?;
+            conn.execute_batch(&schema)?;
+        }
 
         match self.conn.set(conn) {
             Ok(()) => self
