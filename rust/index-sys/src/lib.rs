@@ -86,7 +86,7 @@ pub extern "C" fn entry_get_value(entry: *const CEntry) -> *const c_char {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn delloc_entry(entry: *mut CEntry) {
+pub extern "C" fn dealloc_entry(entry: *mut CEntry) {
     if !entry.is_null() {
         unsafe {
             let _ = Box::from_raw(entry.cast::<Entry>());
