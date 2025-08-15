@@ -137,58 +137,64 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexing::ruby_indexer::RubyIndexer;
-
-    // Index the given source and URI and return the resulting `Graph`
-    fn index_source(uri: &str, source: &str) -> Graph {
-        let mut indexer = RubyIndexer::new(uri.to_string());
-        indexer.index(source);
-        indexer.into_parts().0
-    }
+    use crate::test_utils::GraphTest;
 
     #[test]
     fn deleting_a_uri() {
-        let mut global = index_source("file:///foo.rb", "module Foo; end");
-        global.delete_uri("file:///foo.rb");
+        let mut context = GraphTest::new();
 
-        assert!(global.definitions.is_empty());
-        assert!(global.names.is_empty());
-        assert!(global.definition_to_name.is_empty());
-        assert!(global.name_to_definitions.is_empty());
-        assert!(global.uris_to_definitions.is_empty());
-        assert!(global.uri_pool.is_empty());
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.delete_uri("file:///foo.rb");
+
+        assert!(context.graph.definitions.is_empty());
+        assert!(context.graph.names.is_empty());
+        assert!(context.graph.definition_to_name.is_empty());
+        assert!(context.graph.name_to_definitions.is_empty());
+        assert!(context.graph.uris_to_definitions.is_empty());
+        assert!(context.graph.uri_pool.is_empty());
     }
 
     #[test]
     fn updating_index_with_deleted_definitions() {
-        let mut global = index_source("file:///foo.rb", "module Foo; end");
-        let other = index_source("file:///foo.rb", "");
-        global.update(other);
+        let mut context = GraphTest::new();
 
-        assert!(global.definitions.is_empty());
-        assert!(global.names.is_empty());
-        assert!(global.definition_to_name.is_empty());
-        assert!(global.name_to_definitions.is_empty());
-        assert!(global.uris_to_definitions.is_empty());
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        // Update with empty content to remove definitions but keep the URI
+        context.index_uri("file:///foo.rb", "");
+
+        assert!(context.graph.definitions.is_empty());
+        assert!(context.graph.names.is_empty());
+        assert!(context.graph.definition_to_name.is_empty());
+        assert!(context.graph.name_to_definitions.is_empty());
+        assert!(context.graph.uris_to_definitions.is_empty());
         // URI remains if the file was not deleted, but definitions got erased
-        assert_eq!(global.uri_pool.len(), 1);
+        assert_eq!(context.graph.uri_pool.len(), 1);
     }
 
     #[test]
     fn updating_index_with_new_definitions() {
-        let mut global = Graph::new();
-        let other = index_source("file:///foo.rb", "module Foo; end");
-        global.update(other);
+        let mut context = GraphTest::new();
 
-        assert_eq!(global.definitions.len(), 1);
-        assert_eq!(global.names.get(&NameId::new("Foo")).unwrap(), "Foo");
+        context.index_uri("file:///foo.rb", "module Foo; end");
+
+        assert_eq!(context.graph.definitions.len(), 1);
+        assert_eq!(context.graph.names.get(&NameId::new("Foo")).unwrap(), "Foo");
         assert_eq!(
-            global.uri_pool.get(&UriId::new("file:///foo.rb")).unwrap(),
+            context.graph.uri_pool.get(&UriId::new("file:///foo.rb")).unwrap(),
             "file:///foo.rb"
         );
-        assert_eq!(global.name_to_definitions.get(&NameId::new("Foo")).unwrap().len(), 1);
         assert_eq!(
-            global
+            context
+                .graph
+                .name_to_definitions
+                .get(&NameId::new("Foo"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            context
+                .graph
                 .uris_to_definitions
                 .get(&UriId::new("file:///foo.rb"))
                 .unwrap()
@@ -199,29 +205,32 @@ mod tests {
 
     #[test]
     fn updating_existing_definitions() {
-        let mut global = index_source("file:///foo.rb", "module Foo; end");
-        let other = index_source("file:///foo.rb", "\n\n\n\n\n\nmodule Foo; end");
-        global.update(other);
+        let mut context = GraphTest::new();
 
-        assert_eq!(global.definitions.len(), 1);
-        assert_eq!(global.names.get(&NameId::new("Foo")).unwrap(), "Foo");
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        // Update with the same definition but at a different position (with content before it)
+        context.index_uri("file:///foo.rb", "\n\n\n\n\n\nmodule Foo; end");
+
+        assert_eq!(context.graph.definitions.len(), 1);
+        assert_eq!(context.graph.names.get(&NameId::new("Foo")).unwrap(), "Foo");
         assert_eq!(
-            global.uri_pool.get(&UriId::new("file:///foo.rb")).unwrap(),
+            context.graph.uri_pool.get(&UriId::new("file:///foo.rb")).unwrap(),
             "file:///foo.rb"
         );
 
-        let definitions = global.get("Foo").unwrap();
+        let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].start_offset(), 6);
     }
 
     #[test]
     fn adding_another_definition_from_a_different_uri() {
-        let mut global = index_source("file:///foo.rb", "module Foo; end");
-        let other = index_source("file:///foo2.rb", "\n\n\n\n\nmodule Foo; end");
-        global.update(other);
+        let mut context = GraphTest::new();
 
-        let definitions = global.get("Foo").unwrap();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.index_uri("file:///foo2.rb", "\n\n\n\n\nmodule Foo; end");
+
+        let definitions = context.graph.get("Foo").unwrap();
         let mut offsets = definitions.iter().map(|d| d.start_offset()).collect::<Vec<_>>();
         offsets.sort_unstable();
         assert_eq!(definitions.len(), 2);
@@ -230,14 +239,29 @@ mod tests {
 
     #[test]
     fn adding_a_second_definition_from_the_same_uri() {
-        let mut global = index_source("file:///foo.rb", "module Foo; end");
-        let other = index_source("file:///foo.rb", "module Foo; end\n\n\nmodule Foo; end");
-        global.update(other);
+        let mut context = GraphTest::new();
 
-        let definitions = global.get("Foo").unwrap();
-        let mut offsets = definitions.iter().map(|d| d.start_offset()).collect::<Vec<_>>();
-        offsets.sort_unstable();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+
+        // Update with multiple definitions of the same module in one file
+        context.index_uri("file:///foo.rb", {
+            "
+            module Foo; end
+
+
+            module Foo; end
+            "
+        });
+
+        let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 2);
-        assert_eq!(vec![0, 18], offsets);
+
+        let mut offsets = definitions
+            .iter()
+            .map(|d| [d.start_offset(), d.end_offset()])
+            .collect::<Vec<_>>();
+        offsets.sort_unstable();
+        assert_eq!([0, 15], offsets[0]);
+        assert_eq!([18, 33], offsets[1]);
     }
 }

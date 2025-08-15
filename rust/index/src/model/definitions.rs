@@ -39,6 +39,14 @@ impl Definition {
             Definition::Module(it) => it.offset.start_offset(),
         }
     }
+
+    #[must_use]
+    pub fn end_offset(&self) -> u32 {
+        match self {
+            Definition::Class(it) => it.offset.end_offset(),
+            Definition::Module(it) => it.offset.end_offset(),
+        }
+    }
 }
 
 /// A class definition

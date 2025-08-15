@@ -52,4 +52,9 @@ impl Offset {
     pub fn start_offset(&self) -> u32 {
         self.start_offset
     }
+
+    #[must_use]
+    pub fn end_offset(&self) -> u32 {
+        self.end_offset
+    }
 }
