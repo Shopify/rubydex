@@ -48,7 +48,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<_>>()
     };
 
-    let index = Arc::new(Mutex::new(Graph::new()));
+    let db_path = std::env::temp_dir().join("index.db").to_string_lossy().to_string();
+    let index = Arc::new(Mutex::new(Graph::new(db_path)));
     index_in_parallel(&index, &documents)?;
     Ok(())
 }

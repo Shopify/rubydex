@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::model::db::Db;
 use crate::model::definitions::Definition;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 
@@ -22,11 +23,13 @@ pub struct Graph {
     definition_to_name: HashMap<DefinitionId, NameId>,
     // Map of URI to all definitions discovered in that document
     uris_to_definitions: HashMap<UriId, HashSet<DefinitionId>>,
+    db: Db,
 }
 
 impl Graph {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(db_path: String) -> Self {
+        let db = Db::new(&db_path);
         Self {
             names: HashMap::new(),
             definitions: HashMap::new(),
@@ -34,6 +37,21 @@ impl Graph {
             name_to_definitions: HashMap::new(),
             definition_to_name: HashMap::new(),
             uris_to_definitions: HashMap::new(),
+            db,
+        }
+    }
+
+    // Instantiate an index graph with a memory DB for local indexing or testing.
+    #[must_use] pub fn new_with_memory_db() -> Self {
+        let db = Db::new_memory_db();
+        Self {
+            names: HashMap::new(),
+            definitions: HashMap::new(),
+            uri_pool: HashMap::new(),
+            name_to_definitions: HashMap::new(),
+            definition_to_name: HashMap::new(),
+            uris_to_definitions: HashMap::new(),
+            db,
         }
     }
 

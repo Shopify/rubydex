@@ -9,7 +9,7 @@ pub struct GraphTest {
 impl GraphTest {
     #[must_use]
     pub fn new() -> Self {
-        Self { graph: Graph::new() }
+        Self { graph: Graph::new_with_memory_db() }
     }
 
     #[must_use]
