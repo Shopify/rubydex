@@ -1,10 +1,5 @@
 use std::collections::HashSet;
-use std::{
-    error::Error,
-    fs,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{error::Error, fs, path::PathBuf, sync::Arc};
 
 use clap::Parser;
 
@@ -48,8 +43,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<_>>()
     };
 
-    let index = Arc::new(Mutex::new(Graph::new()));
-    index_in_parallel(&index, &documents)?;
+    let graph = Arc::new(Graph::new());
+    index_in_parallel(&graph, &documents)?;
     Ok(())
 }
 

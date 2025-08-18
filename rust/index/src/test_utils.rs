@@ -1,22 +1,27 @@
+use std::sync::Arc;
+
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
 
 #[derive(Default)]
 pub struct GraphTest {
-    pub graph: Graph,
+    pub graph: Arc<Graph>,
 }
 
 impl GraphTest {
     #[must_use]
     pub fn new() -> Self {
-        Self { graph: Graph::new() }
+        Self {
+            graph: Arc::new(Graph::new()),
+        }
     }
 
-    #[must_use]
-    fn index_source(uri: &str, source: &str) -> Graph {
-        let mut indexer = RubyIndexer::new(uri.to_string());
+    fn index_source(&self, uri: &str, source: &str) {
+        let mut indexer = RubyIndexer::new(Arc::clone(&self.graph), uri.to_string());
         indexer.index(source);
-        indexer.into_parts().0
+
+        let errors = indexer.into_errors();
+        assert!(errors.is_empty(), "Indexing errors occurred: {errors:?}");
     }
 
     #[must_use]
@@ -66,8 +71,7 @@ impl GraphTest {
 
     pub fn index_uri(&mut self, uri: &str, source: &str) {
         let source = Self::normalize_indentation(source);
-        let local_index = Self::index_source(uri, &source);
-        self.graph.update(local_index);
+        self.index_source(uri, &source);
     }
 
     pub fn delete_uri(&mut self, uri: &str) {

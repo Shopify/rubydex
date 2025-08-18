@@ -1,7 +1,4 @@
-use std::{
-    cmp, fs,
-    sync::{Arc, Mutex},
-};
+use std::{cmp, fs, sync::Arc};
 
 use crate::{
     indexing::{
@@ -44,20 +41,17 @@ impl Document {
 /// # Errors
 ///
 /// Returns Ok if indexing succeeded for all given documents or a vector of errors for all failures
-///
-/// # Panics
-/// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
-/// should not be any code that tries to lock the same mutex multiple times in the same thread
-pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) -> Result<(), MultipleErrors> {
+pub fn index_in_parallel(graph_arc: &Arc<Graph>, documents: &[Document]) -> Result<(), MultipleErrors> {
     let chunk_size = cmp::max(10, documents.len() / rayon::current_num_threads());
 
-    let indexers: Vec<RubyIndexer> = documents
+    let errors: Vec<IndexingError> = documents
         .par_chunks(chunk_size)
         .flat_map(|chunk| {
             chunk
                 .iter()
-                .map(|document| {
-                    let mut ruby_indexer = RubyIndexer::new(document.uri.to_string());
+                .flat_map(|document| {
+                    let mut ruby_indexer = RubyIndexer::new(Arc::clone(graph_arc), document.uri.to_string());
+
                     // If the document includes the source, use it directly to index (especially since the content may not
                     // be committed to disk yet). Otherwise, read it from disk
                     if let Some(source) = &document.source {
@@ -77,25 +71,15 @@ pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) 
                         }
                     }
 
-                    ruby_indexer
+                    ruby_indexer.into_errors()
                 })
                 .collect::<Vec<_>>()
         })
         .collect();
 
-    // Insert all discovered definitions into the global graph
-    let mut all_errors = Vec::new();
-    let mut graph_guard = graph_arc.lock().unwrap();
-
-    for indexer in indexers {
-        let (local_graph, errors) = indexer.into_parts();
-        graph_guard.update(local_graph);
-        all_errors.extend(errors);
-    }
-
-    if all_errors.is_empty() {
+    if errors.is_empty() {
         Ok(())
     } else {
-        Err(MultipleErrors(all_errors))
+        Err(MultipleErrors(errors))
     }
 }

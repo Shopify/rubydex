@@ -1,5 +1,7 @@
 //! Visit the Ruby AST and create the definitions.
 
+use std::sync::Arc;
+
 use crate::indexing::errors::IndexingError;
 use crate::model::definitions::{ClassDefinition, Definition, ModuleDefinition};
 use crate::model::graph::Graph;
@@ -14,28 +16,28 @@ use ruby_prism::Visit;
 /// merged into the global state later.
 pub struct RubyIndexer {
     uri_id: UriId,
-    local_index: Graph,
     nesting_stacks: Vec<Vec<String>>,
     errors: Vec<IndexingError>,
+    graph: Arc<Graph>,
 }
 
 impl RubyIndexer {
     #[must_use]
-    pub fn new(uri: String) -> Self {
-        let mut local_index = Graph::new();
-        let uri_id = local_index.add_uri(uri);
+    pub fn new(graph: Arc<Graph>, uri: String) -> Self {
+        let uri_id = graph.add_uri(uri);
+        graph.remove_definitions_for_uri(uri_id);
 
         Self {
             uri_id,
             nesting_stacks: vec![Vec::new()],
-            local_index,
+            graph,
             errors: Vec::new(),
         }
     }
 
     #[must_use]
-    pub fn into_parts(self) -> (Graph, Vec<IndexingError>) {
-        (self.local_index, self.errors)
+    pub fn into_errors(self) -> Vec<IndexingError> {
+        self.errors
     }
 
     pub fn add_error(&mut self, error: IndexingError) {
@@ -97,7 +99,7 @@ impl Visit<'_> for RubyIndexer {
             ))));
 
             indexer
-                .local_index
+                .graph
                 .add_definition(indexer.uri_id, fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
@@ -114,7 +116,7 @@ impl Visit<'_> for RubyIndexer {
                 &node.location(),
             ))));
             indexer
-                .local_index
+                .graph
                 .add_definition(indexer.uri_id, fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
