@@ -3,15 +3,24 @@ use std::error::Error;
 
 const SCHEMA_VERSION: i32 = 1;
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
+enum ConnectionType {
+    Path(String),
+    #[allow(dead_code)]
+    Memory,
+}
+
+#[derive(Debug)]
 pub struct Db {
-    path: String,
+    connection_type: ConnectionType,
 }
 
 impl Db {
     #[must_use]
     pub fn new(path: &str) -> Self {
-        Self { path: path.to_string() }
+        Self {
+            connection_type: ConnectionType::Path(path.to_string()),
+        }
     }
 
     /// Initializes a fresh database with schema and configuration
@@ -38,36 +47,41 @@ impl Db {
 
     /// Creates a fresh file database by removing existing file and recreating
     fn recreate_database(&self) -> Result<Connection, Box<dyn Error>> {
-        if std::path::Path::new(&self.path).exists() {
-            std::fs::remove_file(&self.path)?;
+        match &self.connection_type {
+            ConnectionType::Path(path) => {
+                if std::path::Path::new(path).exists() {
+                    std::fs::remove_file(path)?;
+                }
+                let mut conn = Connection::open(path)?;
+                Self::initialize_database(&mut conn)?;
+                Ok(conn)
+            }
+            ConnectionType::Memory => Err("Cannot recreate in-memory database".into()),
         }
-        let mut conn = Connection::open(&self.path)?;
-        Self::initialize_database(&mut conn)?;
-        Ok(conn)
     }
 
     /// # Errors
     /// Will return an Error if we fail to establish or set a connection
     pub fn get_connection(&self) -> Result<Connection, Box<dyn Error>> {
-        let mut conn = if self.path == ":memory:" {
-            Connection::open_in_memory()?
-        } else {
-            Connection::open(&self.path)?
+        let conn = match &self.connection_type {
+            ConnectionType::Path(path) => {
+                let conn = Connection::open(path)?;
+                // Check if schema needs to be loaded using user_version pragma.
+                // The default value for user_version is 0.
+                let current_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+                if current_version < SCHEMA_VERSION {
+                    drop(conn);
+                    return self.recreate_database();
+                }
+                conn
+            }
+            ConnectionType::Memory => {
+                let mut conn = Connection::open_in_memory()?;
+                Self::initialize_database(&mut conn)?;
+                conn
+            }
         };
 
-        // Check if schema needs to be loaded using user_version pragma.
-        // The default value for user_version is 0.
-        let current_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-
-        if current_version < SCHEMA_VERSION {
-            if self.path == ":memory:" {
-                Self::initialize_database(&mut conn)?;
-            } else {
-                // For file-based databases, delete and recreate for clean schema
-                drop(conn);
-                return self.recreate_database();
-            }
-        }
         Ok(conn)
     }
 }

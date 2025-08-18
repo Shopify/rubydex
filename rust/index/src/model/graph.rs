@@ -6,7 +6,7 @@ use crate::model::ids::{DefinitionId, NameId, UriId};
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Graph {
     // *** Graph nodes: the following represent possible nodes in our graph ***
     // Map of fully qualified names. These represent global declarations, like `Foo`, `Foo#bar` or `Foo.baz`
@@ -24,6 +24,12 @@ pub struct Graph {
     // Map of URI to all definitions discovered in that document
     uris_to_definitions: HashMap<UriId, HashSet<DefinitionId>>,
     db: Db,
+}
+
+impl Default for Graph {
+    fn default() -> Self {
+        Self::new(String::new())
+    }
 }
 
 impl Graph {
