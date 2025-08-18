@@ -9,7 +9,9 @@ pub struct GraphTest {
 impl GraphTest {
     #[must_use]
     pub fn new() -> Self {
-        Self { graph: Graph::new() }
+        Self {
+            graph: Graph::new(String::new()),
+        }
     }
 
     #[must_use]

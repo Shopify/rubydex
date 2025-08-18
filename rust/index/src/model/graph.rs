@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::model::db::Db;
 use crate::model::definitions::Definition;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Graph {
     // *** Graph nodes: the following represent possible nodes in our graph ***
     // Map of fully qualified names. These represent global declarations, like `Foo`, `Foo#bar` or `Foo.baz`
@@ -22,11 +23,19 @@ pub struct Graph {
     definition_to_name: HashMap<DefinitionId, NameId>,
     // Map of URI to all definitions discovered in that document
     uris_to_definitions: HashMap<UriId, HashSet<DefinitionId>>,
+    db: Db,
+}
+
+impl Default for Graph {
+    fn default() -> Self {
+        Self::new(String::new())
+    }
 }
 
 impl Graph {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(db_path: String) -> Self {
+        let db = Db::new(&db_path);
         Self {
             names: HashMap::new(),
             definitions: HashMap::new(),
@@ -34,6 +43,7 @@ impl Graph {
             name_to_definitions: HashMap::new(),
             definition_to_name: HashMap::new(),
             uris_to_definitions: HashMap::new(),
+            db,
         }
     }
 
