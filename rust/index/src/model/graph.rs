@@ -41,20 +41,6 @@ impl Graph {
         }
     }
 
-    // Instantiate an index graph with a memory DB for local indexing or testing.
-    #[must_use] pub fn new_with_memory_db() -> Self {
-        let db = Db::new_memory_db();
-        Self {
-            names: HashMap::new(),
-            definitions: HashMap::new(),
-            uri_pool: HashMap::new(),
-            name_to_definitions: HashMap::new(),
-            definition_to_name: HashMap::new(),
-            uris_to_definitions: HashMap::new(),
-            db,
-        }
-    }
-
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
         let name_id = NameId::new(name);

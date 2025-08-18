@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use std::error::Error;
 
 const SCHEMA_VERSION: i32 = 1;
 
@@ -13,16 +14,8 @@ impl Db {
         Self { path: path.to_string() }
     }
 
-    /// This method should return a new memory DB that can be used for local indexing or tests.
-    #[must_use]
-    pub fn new_memory_db() -> Self {
-        Self {
-            path: ":memory:".to_string(),
-        }
-    }
-
     /// Initializes a fresh database with schema and configuration
-    fn initialize_database(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn initialize_database(conn: &mut Connection) -> Result<(), Box<dyn Error>> {
         let tx = conn.transaction()?;
         tx.execute_batch(
             "
@@ -44,7 +37,7 @@ impl Db {
     }
 
     /// Creates a fresh file database by removing existing file and recreating
-    fn create_fresh_file_database(&self) -> Result<Connection, Box<dyn std::error::Error>> {
+    fn recreate_database(&self) -> Result<Connection, Box<dyn Error>> {
         if std::path::Path::new(&self.path).exists() {
             std::fs::remove_file(&self.path)?;
         }
@@ -55,7 +48,7 @@ impl Db {
 
     /// # Errors
     /// Will return an Error if we fail to establish or set a connection
-    pub fn get_connection(&self) -> Result<Connection, Box<dyn std::error::Error>> {
+    pub fn get_connection(&self) -> Result<Connection, Box<dyn Error>> {
         let mut conn = if self.path == ":memory:" {
             Connection::open_in_memory()?
         } else {
@@ -72,7 +65,7 @@ impl Db {
             } else {
                 // For file-based databases, delete and recreate for clean schema
                 drop(conn);
-                return self.create_fresh_file_database();
+                return self.recreate_database();
             }
         }
         Ok(conn)
