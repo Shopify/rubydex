@@ -11,7 +11,13 @@ GEM
     json (2.13.2)
     language_server-protocol (3.17.0.5)
     lint_roller (1.1.0)
+    mini_portile2 (2.8.9)
     minitest (5.25.5)
+    nokogiri (1.18.9)
+      mini_portile2 (~> 2.8.2)
+      racc (~> 1.4)
+    nokogiri (1.18.9-arm64-darwin)
+      racc (~> 1.4)
     parallel (1.27.0)
     parser (3.3.9.0)
       ast (~> 2.4.1)
@@ -40,6 +46,8 @@ GEM
     rubocop-shopify (2.17.1)
       rubocop (~> 1.62)
     ruby-progressbar (1.13.0)
+    ruby_memcheck (3.0.1)
+      nokogiri
     unicode-display_width (3.1.4)
       unicode-emoji (~> 4.0, >= 4.0.4)
     unicode-emoji (4.0.4)
@@ -56,6 +64,7 @@ DEPENDENCIES
   rake-compiler
   rubocop
   rubocop-shopify
+  ruby_memcheck
 
 BUNDLED WITH
    2.6.2
