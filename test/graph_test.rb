@@ -12,7 +12,7 @@ class GraphTest < Minitest::Test
     graph = Index::Graph.new
     message = graph.index_all(["/non_existing_file.rb"])
 
-    assert_equal("File read error: Failed to read /non_existing_file.rb: No such file or directory (os error 2)", message)
+    assert_equal("File read error: Error reading path '/non_existing_file.rb': No such file or directory (os error 2)", message)
   end
 
   def test_passing_invalid_arguments_to_index_all
