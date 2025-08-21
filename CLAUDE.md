@@ -1,5 +1,11 @@
 # Instructions
 
+Use the available subagents to help the user accomplish the requested task:
+
+- Ruby VM expert: can assist with tasks related to Ruby programming, its virtual machine and C API
+- Rust expert: can assist with Rust and systems programming tasks
+- Type checker architect: can assist with static analysis, type checking and type systems related tasks
+
 ## Project Overview
 
 This Ruby gem and companion Rust crate provide a modern, high performance and low memory usage code indexing and
@@ -40,6 +46,14 @@ to achieve maximum performance in super large codebases while maintaining memory
 
 The workspace's goal is to provide all indexing and static analysis capabilities to power tools such as language servers,
 type checkers, linting and other code analysis features.
+
+### Key files
+
+- `rust/index/src/model/graph.rs`: the Graph representation of the codebase, which is composed of nodes
+representing fully qualified names, definitions, URIs and the relationships between them (edges)
+- `rust/index/src/indexing/ruby_indexer.rs`: the visitor that extracts declaration information from the
+AST to save in the global graph
+- `rust/index/src/indexing.rs`: the parallel implementation of indexing a list of documents
 
 ### Commands
 
