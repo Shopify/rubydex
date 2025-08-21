@@ -16,6 +16,8 @@ pub struct Db {
 }
 
 impl Db {
+    const SCHEMA: &str = include_str!("../db/schema.sql");
+
     #[must_use]
     pub fn new(path: &str) -> Self {
         Self {
@@ -34,12 +36,7 @@ impl Db {
         ",
         )?;
 
-        let schema = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src/db")
-                .join("schema.sql"),
-        )?;
-        tx.execute_batch(&schema)?;
+        tx.execute_batch(Self::SCHEMA)?;
         tx.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
         tx.commit()?;
         Ok(())
