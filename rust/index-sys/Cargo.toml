@@ -8,6 +8,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 index = { path = "../index" }
+libc = "0.2.174"
 
 [build-dependencies]
 cbindgen = "0.29"

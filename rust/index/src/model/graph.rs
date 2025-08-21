@@ -6,7 +6,7 @@ use crate::model::ids::{DefinitionId, NameId, UriId};
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct Graph {
     // *** Graph nodes: the following represent possible nodes in our graph ***
     // Map of fully qualified names. These represent global declarations, like `Foo`, `Foo#bar` or `Foo.baz`
@@ -26,16 +26,9 @@ pub struct Graph {
     db: Db,
 }
 
-impl Default for Graph {
-    fn default() -> Self {
-        Self::new(String::new())
-    }
-}
-
 impl Graph {
     #[must_use]
-    pub fn new(db_path: String) -> Self {
-        let db = Db::new(&db_path);
+    pub fn new() -> Self {
         Self {
             names: HashMap::new(),
             definitions: HashMap::new(),
@@ -43,8 +36,12 @@ impl Graph {
             name_to_definitions: HashMap::new(),
             definition_to_name: HashMap::new(),
             uris_to_definitions: HashMap::new(),
-            db,
+            db: Db::new(),
         }
+    }
+
+    pub fn set_configuration(&mut self, db_path: String) {
+        self.db.set_db_path(db_path);
     }
 
     #[must_use]

@@ -33,6 +33,8 @@ struct Args {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let excluded_dirs_set: HashSet<&str> = args.exclude.iter().map(String::as_str).collect();
+    let mut graph = Graph::new();
+    graph.set_configuration(format!("{}/graph.db", &args.dir));
 
     let documents = {
         let mut uris: Vec<String> = Vec::new();
@@ -48,9 +50,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<_>>()
     };
 
-    let db_path = std::env::temp_dir().join("index.db").to_string_lossy().to_string();
-    let index = Arc::new(Mutex::new(Graph::new(db_path)));
-    index_in_parallel(&index, &documents)?;
+    let graph_arc = Arc::new(Mutex::new(graph));
+    index_in_parallel(&graph_arc, &documents)?;
     Ok(())
 }
 
