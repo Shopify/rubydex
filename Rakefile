@@ -35,4 +35,9 @@ end
 # Enhance the clean task to also clean Rust artifacts
 Rake::Task[:clean].enhance([:clean_rust])
 
+task compile_release: :clean do
+  ENV["RELEASE"] = "true"
+  Rake::Task[:compile].invoke
+end
+
 task default: [:lint, :cargo_test, :test]
