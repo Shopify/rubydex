@@ -1,7 +1,9 @@
 //! Visit the Ruby AST and create the definitions.
 
 use crate::indexing::errors::IndexingError;
-use crate::model::definitions::{ClassDefinition, ConstantDefinition, Definition, ModuleDefinition};
+use crate::model::definitions::{
+    ClassDefinition, ConstantDefinition, Definition, GlobalVariableDefinition, ModuleDefinition,
+};
 use crate::model::graph::Graph;
 use crate::model::ids::UriId;
 use crate::offset::Offset;
@@ -171,9 +173,30 @@ impl Visit<'_> for RubyIndexer {
                             .add_definition(indexer.uri_id, fully_qualified_name, definition);
                     });
                 }
+                ruby_prism::Node::GlobalVariableTargetNode { .. } => {
+                    let name = Self::location_to_string(&left.location());
+
+                    let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                        Offset::from_prism_location(&left.location()),
+                    )));
+
+                    self.local_index.add_definition(self.uri_id, name, definition);
+                }
                 _ => {}
             }
         }
+
+        self.visit(&node.value());
+    }
+
+    fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
+        let name = Self::location_to_string(&node.name_loc());
+
+        let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+            Offset::from_prism_location(&node.name_loc()),
+        )));
+
+        self.local_index.add_definition(self.uri_id, name, definition);
 
         self.visit(&node.value());
     }
@@ -381,5 +404,41 @@ mod tests {
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].start(), 49);
         assert_eq!(definitions[0].end(), 54);
+    }
+
+    #[test]
+    fn index_global_variable_definition() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            $foo = 1
+            $bar, $baz = 2, 3
+
+            class Foo
+              $qux = 2
+            end
+            "
+        });
+
+        let definitions = context.graph.get("$foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 0);
+        assert_eq!(definitions[0].end(), 4);
+
+        let definitions = context.graph.get("$bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 9);
+        assert_eq!(definitions[0].end(), 13);
+
+        let definitions = context.graph.get("$baz").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 15);
+        assert_eq!(definitions[0].end(), 19);
+
+        let definitions = context.graph.get("$qux").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 40);
+        assert_eq!(definitions[0].end(), 44);
     }
 }
