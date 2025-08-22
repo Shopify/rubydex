@@ -2,8 +2,8 @@
 
 use crate::indexing::errors::IndexingError;
 use crate::model::definitions::{
-    AttrAccessorDefinition, AttrReaderDefinition, ClassDefinition, ClassVariableDefinition, ConstantDefinition,
-    Definition, GlobalVariableDefinition, InstanceVariableDefinition, ModuleDefinition,
+    AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
+    ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, ModuleDefinition,
 };
 use crate::model::graph::Graph;
 use crate::model::ids::UriId;
@@ -267,6 +267,15 @@ impl Visit<'_> for RubyIndexer {
                                 indexer.uri_id,
                                 fully_qualified_name,
                                 Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                                    Offset::from_prism_location(&symbol.location()),
+                                ))),
+                            );
+                        }
+                        "attr_writer" => {
+                            indexer.local_index.add_definition(
+                                indexer.uri_id,
+                                format!("{fully_qualified_name}="),
+                                Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
                                     Offset::from_prism_location(&symbol.location()),
                                 ))),
                             );
@@ -606,6 +615,42 @@ mod tests {
         assert_eq!(definitions[0].end(), 52);
 
         assert!(context.graph.get("Foo::baz=").is_none());
+    }
+
+    #[test]
+    fn index_attr_writer_definition() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            attr_writer :foo
+
+            class Foo
+              attr_writer :bar, :baz
+            end
+            "
+        });
+
+        let definitions = context.graph.get("foo=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 12);
+        assert_eq!(definitions[0].end(), 16);
+
+        assert!(context.graph.get("foo").is_none());
+
+        let definitions = context.graph.get("Foo::bar=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 42);
+        assert_eq!(definitions[0].end(), 46);
+
+        assert!(context.graph.get("Foo::bar").is_none());
+
+        let definitions = context.graph.get("Foo::baz=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 48);
+        assert_eq!(definitions[0].end(), 52);
+
+        assert!(context.graph.get("Foo::baz").is_none());
     }
 
     #[test]

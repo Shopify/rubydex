@@ -32,6 +32,7 @@ pub enum Definition {
     Constant(Box<ConstantDefinition>),
     AttrAccessor(Box<AttrAccessorDefinition>),
     AttrReader(Box<AttrReaderDefinition>),
+    AttrWriter(Box<AttrWriterDefinition>),
     GlobalVariable(Box<GlobalVariableDefinition>),
     InstanceVariable(Box<InstanceVariableDefinition>),
     ClassVariable(Box<ClassVariableDefinition>),
@@ -49,6 +50,7 @@ impl Definition {
             Definition::ClassVariable(it) => it.offset.start(),
             Definition::AttrAccessor(it) => it.offset.start(),
             Definition::AttrReader(it) => it.offset.start(),
+            Definition::AttrWriter(it) => it.offset.start(),
         }
     }
 
@@ -63,6 +65,7 @@ impl Definition {
             Definition::ClassVariable(it) => it.offset.end(),
             Definition::AttrAccessor(it) => it.offset.end(),
             Definition::AttrReader(it) => it.offset.end(),
+            Definition::AttrWriter(it) => it.offset.end(),
         }
     }
 
@@ -79,6 +82,7 @@ impl Definition {
             Definition::ClassVariable(_) => 5,
             Definition::AttrAccessor(_) => 6,
             Definition::AttrReader(_) => 7,
+            Definition::AttrWriter(_) => 8,
         }
     }
 }
@@ -169,6 +173,24 @@ pub struct AttrReaderDefinition {
 }
 
 impl AttrReaderDefinition {
+    #[must_use]
+    pub const fn new(offset: Offset) -> Self {
+        Self { offset }
+    }
+}
+
+/// An attr writer definition
+///
+/// # Example
+/// ```ruby
+/// attr_writer :foo
+/// ```
+#[derive(Debug)]
+pub struct AttrWriterDefinition {
+    offset: Offset,
+}
+
+impl AttrWriterDefinition {
     #[must_use]
     pub const fn new(offset: Offset) -> Self {
         Self { offset }
