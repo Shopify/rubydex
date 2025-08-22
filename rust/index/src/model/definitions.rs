@@ -31,6 +31,7 @@ pub enum Definition {
     Module(Box<ModuleDefinition>),
     Constant(Box<ConstantDefinition>),
     AttrAccessor(Box<AttrAccessorDefinition>),
+    AttrReader(Box<AttrReaderDefinition>),
     GlobalVariable(Box<GlobalVariableDefinition>),
     InstanceVariable(Box<InstanceVariableDefinition>),
     ClassVariable(Box<ClassVariableDefinition>),
@@ -47,6 +48,7 @@ impl Definition {
             Definition::InstanceVariable(it) => it.offset.start(),
             Definition::ClassVariable(it) => it.offset.start(),
             Definition::AttrAccessor(it) => it.offset.start(),
+            Definition::AttrReader(it) => it.offset.start(),
         }
     }
 
@@ -60,6 +62,7 @@ impl Definition {
             Definition::InstanceVariable(it) => it.offset.end(),
             Definition::ClassVariable(it) => it.offset.end(),
             Definition::AttrAccessor(it) => it.offset.end(),
+            Definition::AttrReader(it) => it.offset.end(),
         }
     }
 
@@ -75,6 +78,7 @@ impl Definition {
             Definition::InstanceVariable(_) => 4,
             Definition::ClassVariable(_) => 5,
             Definition::AttrAccessor(_) => 6,
+            Definition::AttrReader(_) => 7,
         }
     }
 }
@@ -147,6 +151,24 @@ pub struct AttrAccessorDefinition {
 }
 
 impl AttrAccessorDefinition {
+    #[must_use]
+    pub const fn new(offset: Offset) -> Self {
+        Self { offset }
+    }
+}
+
+/// An attr reader definition
+///
+/// # Example
+/// ```ruby
+/// attr_reader :foo
+/// ```
+#[derive(Debug)]
+pub struct AttrReaderDefinition {
+    offset: Offset,
+}
+
+impl AttrReaderDefinition {
     #[must_use]
     pub const fn new(offset: Offset) -> Self {
         Self { offset }
