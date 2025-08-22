@@ -25,6 +25,9 @@
 
 use crate::offset::Offset;
 
+const CLASS_ID: i32 = 1;
+const MODULE_ID: i32 = 2;
+
 #[derive(Debug)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
@@ -45,6 +48,15 @@ impl Definition {
         match self {
             Definition::Class(it) => it.offset.end_offset(),
             Definition::Module(it) => it.offset.end_offset(),
+        }
+    }
+
+    // Mapping of a definition's type to the definition_type enum value in the DB.
+    #[must_use]
+    pub fn type_id(&self) -> i32 {
+        match self {
+            Definition::Class(_) => CLASS_ID,
+            Definition::Module(_) => MODULE_ID,
         }
     }
 }
