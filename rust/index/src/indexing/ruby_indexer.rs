@@ -123,3 +123,112 @@ impl Visit<'_> for RubyIndexer {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_utils::GraphTest;
+
+    #[test]
+    fn index_class_node() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              class Bar
+                class Baz; end
+              end
+            end
+            "
+        });
+
+        let definitions = context.graph.get("Foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 0);
+        assert_eq!(definitions[0].end_offset(), 50);
+
+        let definitions = context.graph.get("Foo::Bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 12);
+        assert_eq!(definitions[0].end_offset(), 46);
+
+        let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 26);
+        assert_eq!(definitions[0].end_offset(), 40);
+
+        let not_found = context.graph.get("Foo::Bar::Baz::Qux");
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn index_class_node_with_qualified_name() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo::Bar
+              class Baz::Qux; end
+              class ::Quuux; end
+            end
+            "
+        });
+
+        assert_eq!(context.graph.get("Foo::Bar").unwrap().len(), 1);
+        assert_eq!(context.graph.get("Foo::Bar::Baz::Qux").unwrap().len(), 1);
+        assert!(context.graph.get("Foo::Bar::Baz::Qux::Quuux").is_none());
+        assert_eq!(context.graph.get("Quuux").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn index_module_node() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            module Foo
+              module Bar
+                module Baz; end
+              end
+            end
+            "
+        });
+
+        let definitions = context.graph.get("Foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 0);
+        assert_eq!(definitions[0].end_offset(), 53);
+
+        let definitions = context.graph.get("Foo::Bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 13);
+        assert_eq!(definitions[0].end_offset(), 49);
+
+        let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 28);
+        assert_eq!(definitions[0].end_offset(), 43);
+
+        let not_found = context.graph.get("Foo::Bar::Baz::Qux");
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn index_module_node_with_qualified_name() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            module Foo::Bar
+              module Baz::Qux; end
+              module ::Quuux; end
+            end
+            "
+        });
+
+        assert_eq!(context.graph.get("Foo::Bar").unwrap().len(), 1);
+        assert_eq!(context.graph.get("Foo::Bar::Baz::Qux").unwrap().len(), 1);
+        assert!(context.graph.get("Foo::Bar::Baz::Qux::Quuux").is_none());
+        assert_eq!(context.graph.get("Quuux").unwrap().len(), 1);
+    }
+}
