@@ -4,6 +4,7 @@ require "bundler/gem_tasks"
 require "rubocop/rake_task"
 require "rake/extensiontask"
 require "rake/testtask"
+require "ruby_memcheck"
 
 GEMSPEC = Gem::Specification.load("index.gemspec")
 
@@ -11,12 +12,14 @@ Rake::ExtensionTask.new("index", GEMSPEC) do |ext|
   ext.lib_dir = "lib/index"
 end
 
-Rake::TestTask.new(test: :compile) do |t|
+test_config = lambda do |t|
   t.libs << "test"
   t.libs << "lib"
   t.ruby_opts << ["--enable=frozen_string_literal"]
   t.test_files = FileList["test/**/*_test.rb"]
 end
+Rake::TestTask.new(test: :compile, &test_config)
+namespace(:test) { RubyMemcheck::TestTask.new(valgrind: :compile, &test_config) }
 
 RuboCop::RakeTask.new
 

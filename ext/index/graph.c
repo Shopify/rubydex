@@ -30,8 +30,6 @@ static char** str_array_to_char(VALUE array, size_t length) {
 
     for (size_t i = 0; i < length; i++) {
         VALUE item = rb_ary_entry(array, i);
-        // Verify that the array's items are indeed strings
-        Check_Type(item, T_STRING);
         const char* string = StringValueCStr(item);
 
         converted_array[i] = malloc(strlen(string) + 1);
@@ -41,11 +39,20 @@ static char** str_array_to_char(VALUE array, size_t length) {
     return converted_array;
 }
 
+// Verify that the Ruby object is an array of strings or raise `TypeError`
+static void check_array_of_strings(VALUE array) {
+    Check_Type(array, T_ARRAY);
+
+    for (long i = 0; i < RARRAY_LEN(array); i++) {
+        VALUE item = rb_ary_entry(array, i);
+        Check_Type(item, T_STRING);
+    }
+}
+
 // Graph#index_all: (Array[String] file_paths) -> String?
 // Returns the error messages concatenated as a single string if anything failed during indexing or `nil`
 static VALUE rb_graph_index_all(VALUE self, VALUE file_paths) {
-    // Verify that the value passed is indeed an array
-    Check_Type(file_paths, T_ARRAY);
+    check_array_of_strings(file_paths);
 
     // Convert the given file paths into a char** array, so that we can pass to Rust
     size_t length = RARRAY_LEN(file_paths);

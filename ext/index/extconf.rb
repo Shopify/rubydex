@@ -39,7 +39,13 @@ else
 end
 
 create_makefile("index/index")
-cargo_command = "cargo build #{cargo_args.join(" ")}".strip
+
+cargo_command = if ENV["SANITIZER"]
+  ENV["RUSTFLAGS"] = "-Zsanitizer=#{ENV["SANITIZER"]}"
+  "cargo +nightly build -Zbuild-std #{cargo_args.join(" ")}".strip
+else
+  "cargo build #{cargo_args.join(" ")}".strip
+end
 
 rust_srcs = Dir.glob("#{root_dir}/**/*.rs")
 
