@@ -1,7 +1,7 @@
 //! Visit the Ruby AST and create the definitions.
 
 use crate::indexing::errors::IndexingError;
-use crate::model::definitions::{ClassDefinition, Definition, ModuleDefinition};
+use crate::model::definitions::{ClassDefinition, ConstantDefinition, Definition, ModuleDefinition};
 use crate::model::graph::Graph;
 use crate::model::ids::UriId;
 use crate::offset::Offset;
@@ -122,6 +122,61 @@ impl Visit<'_> for RubyIndexer {
             }
         });
     }
+
+    fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
+        let name = Self::location_to_string(&node.name_loc());
+
+        self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+            let definition = Definition::Constant(Box::new(ConstantDefinition::new(Offset::from_prism_location(
+                &node.name_loc(),
+            ))));
+
+            indexer
+                .local_index
+                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+        });
+
+        self.visit(&node.value());
+    }
+
+    fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
+        let name = Self::location_to_string(&node.target().location());
+
+        self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+            let definition = Definition::Constant(Box::new(ConstantDefinition::new(Offset::from_prism_location(
+                &node.target().location(),
+            ))));
+
+            indexer
+                .local_index
+                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+        });
+
+        self.visit(&node.value());
+    }
+
+    fn visit_multi_write_node(&mut self, node: &ruby_prism::MultiWriteNode) {
+        for left in node.lefts().iter() {
+            match left {
+                ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
+                    let name = Self::location_to_string(&left.location());
+
+                    self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+                            Offset::from_prism_location(&left.location()),
+                        )));
+
+                        indexer
+                            .local_index
+                            .add_definition(indexer.uri_id, fully_qualified_name, definition);
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        self.visit(&node.value());
+    }
 }
 
 #[cfg(test)]
@@ -230,5 +285,101 @@ mod tests {
         assert_eq!(context.graph.get("Foo::Bar::Baz::Qux").unwrap().len(), 1);
         assert!(context.graph.get("Foo::Bar::Baz::Qux::Quuux").is_none());
         assert_eq!(context.graph.get("Quuux").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn index_constant_write_node() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            FOO = 1
+
+            class Foo
+              FOO = 2
+            end
+            "
+        });
+
+        let definitions = context.graph.get("FOO").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 0);
+        assert_eq!(definitions[0].end_offset(), 3);
+
+        let definitions = context.graph.get("Foo::FOO").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 21);
+        assert_eq!(definitions[0].end_offset(), 24);
+    }
+
+    #[test]
+    fn index_constant_path_write_node() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            FOO::BAR = 1
+
+            class Foo
+              FOO::BAR = 2
+              ::BAZ = 3
+            end
+            "
+        });
+
+        let definitions = context.graph.get("FOO::BAR").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 0);
+        assert_eq!(definitions[0].end_offset(), 8);
+
+        let definitions = context.graph.get("Foo::FOO::BAR").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 26);
+        assert_eq!(definitions[0].end_offset(), 34);
+
+        let definitions = context.graph.get("BAZ").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 41);
+        assert_eq!(definitions[0].end_offset(), 46);
+    }
+
+    #[test]
+    fn index_constant_multi_write_node() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            FOO, BAR::BAZ = 1, 2
+
+            class Foo
+              FOO, BAR::BAZ, ::BAZ = 3, 4, 5
+            end
+            "
+        });
+
+        let definitions = context.graph.get("FOO").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 0);
+        assert_eq!(definitions[0].end_offset(), 3);
+
+        let definitions = context.graph.get("BAR::BAZ").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 5);
+        assert_eq!(definitions[0].end_offset(), 13);
+
+        let definitions = context.graph.get("Foo::FOO").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 34);
+        assert_eq!(definitions[0].end_offset(), 37);
+
+        let definitions = context.graph.get("Foo::BAR::BAZ").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 39);
+        assert_eq!(definitions[0].end_offset(), 47);
+
+        let definitions = context.graph.get("BAZ").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start_offset(), 49);
+        assert_eq!(definitions[0].end_offset(), 54);
     }
 }
