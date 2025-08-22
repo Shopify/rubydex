@@ -2,7 +2,8 @@
 
 use crate::indexing::errors::IndexingError;
 use crate::model::definitions::{
-    ClassDefinition, ConstantDefinition, Definition, GlobalVariableDefinition, ModuleDefinition,
+    ClassDefinition, ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition,
+    ModuleDefinition,
 };
 use crate::model::graph::Graph;
 use crate::model::ids::UriId;
@@ -182,6 +183,19 @@ impl Visit<'_> for RubyIndexer {
 
                     self.local_index.add_definition(self.uri_id, name, definition);
                 }
+                ruby_prism::Node::InstanceVariableTargetNode { .. } => {
+                    let name = Self::location_to_string(&left.location());
+
+                    self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                            Offset::from_prism_location(&left.location()),
+                        )));
+
+                        indexer
+                            .local_index
+                            .add_definition(indexer.uri_id, fully_qualified_name, definition);
+                    });
+                }
                 _ => {}
             }
         }
@@ -197,6 +211,22 @@ impl Visit<'_> for RubyIndexer {
         )));
 
         self.local_index.add_definition(self.uri_id, name, definition);
+
+        self.visit(&node.value());
+    }
+
+    fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
+        let name = Self::location_to_string(&node.name_loc());
+
+        self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+            let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                Offset::from_prism_location(&node.name_loc()),
+            )));
+
+            indexer
+                .local_index
+                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+        });
 
         self.visit(&node.value());
     }
@@ -437,6 +467,43 @@ mod tests {
         assert_eq!(definitions[0].end(), 19);
 
         let definitions = context.graph.get("$qux").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 40);
+        assert_eq!(definitions[0].end(), 44);
+    }
+
+    #[test]
+    fn index_instance_variable_definition() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            @foo = 1
+
+            class Foo
+              @bar = 2
+
+              @baz, @qux = 3, 4
+            end
+            "
+        });
+
+        let definitions = context.graph.get("@foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 0);
+        assert_eq!(definitions[0].end(), 4);
+
+        let definitions = context.graph.get("Foo::@bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 22);
+        assert_eq!(definitions[0].end(), 26);
+
+        let definitions = context.graph.get("Foo::@baz").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 34);
+        assert_eq!(definitions[0].end(), 38);
+
+        let definitions = context.graph.get("Foo::@qux").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].start(), 40);
         assert_eq!(definitions[0].end(), 44);
