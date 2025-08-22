@@ -32,6 +32,7 @@ pub enum Definition {
     Constant(Box<ConstantDefinition>),
     GlobalVariable(Box<GlobalVariableDefinition>),
     InstanceVariable(Box<InstanceVariableDefinition>),
+    ClassVariable(Box<ClassVariableDefinition>),
 }
 
 impl Definition {
@@ -43,6 +44,7 @@ impl Definition {
             Definition::Constant(it) => it.offset.start(),
             Definition::GlobalVariable(it) => it.offset.start(),
             Definition::InstanceVariable(it) => it.offset.start(),
+            Definition::ClassVariable(it) => it.offset.start(),
         }
     }
 
@@ -54,6 +56,7 @@ impl Definition {
             Definition::Constant(it) => it.offset.end(),
             Definition::GlobalVariable(it) => it.offset.end(),
             Definition::InstanceVariable(it) => it.offset.end(),
+            Definition::ClassVariable(it) => it.offset.end(),
         }
     }
 
@@ -67,6 +70,7 @@ impl Definition {
             Definition::Constant(_) => 2,
             Definition::GlobalVariable(_) => 3,
             Definition::InstanceVariable(_) => 4,
+            Definition::ClassVariable(_) => 5,
         }
     }
 }
@@ -157,6 +161,24 @@ pub struct InstanceVariableDefinition {
 }
 
 impl InstanceVariableDefinition {
+    #[must_use]
+    pub const fn new(offset: Offset) -> Self {
+        Self { offset }
+    }
+}
+
+/// A class variable definition
+///
+/// # Example
+/// ```ruby
+/// @@foo = 1
+/// ```
+#[derive(Debug)]
+pub struct ClassVariableDefinition {
+    offset: Offset,
+}
+
+impl ClassVariableDefinition {
     #[must_use]
     pub const fn new(offset: Offset) -> Self {
         Self { offset }
