@@ -3,12 +3,14 @@ use std::collections::{HashMap, HashSet};
 use crate::model::db::Db;
 use crate::model::definitions::Definition;
 use crate::model::ids::{DefinitionId, NameId, UriId};
+use crate::model::integrity::IntegrityChecker;
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
 #[derive(Default, Debug)]
 pub struct Graph {
     // *** Graph nodes: the following represent possible nodes in our graph ***
+
     // Map of fully qualified names. These represent global declarations, like `Foo`, `Foo#bar` or `Foo.baz`
     names: HashMap<NameId, String>,
     // Map of URIs currently loaded in memory
@@ -17,6 +19,7 @@ pub struct Graph {
     definitions: HashMap<DefinitionId, Definition>,
 
     // *** Graph edges: the following represent relationships between nodes ***
+
     // Map of a fully qualified name to all definitions we discovered for it
     name_to_definitions: HashMap<NameId, HashSet<DefinitionId>>,
     // Reverse map of a definition to its unique fully qualified name
@@ -175,6 +178,177 @@ impl Graph {
             }
         }
     }
+
+    /// Asserts that the index is in a valid state.
+    #[cfg(test)]
+    pub fn assert_integrity(&self) {
+        Self::integrity_checker().assert_integrity(self);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[must_use]
+    pub fn integrity_checker() -> IntegrityChecker {
+        let mut checker = IntegrityChecker::new();
+
+        checker.add_rule(
+            "Each `names` name has at least one definition in `name_to_definitions`",
+            |index, errors| {
+                for name_id in index.names().keys() {
+                    if let Some(definitions) = index.name_to_definitions().get(name_id) {
+                        if definitions.is_empty() {
+                            let name = index.names().get(name_id).map_or("<unknown>", String::as_str);
+                            errors.push(format!("Name '{name}' has no definitions in `name_to_definitions`"));
+                        }
+                    } else {
+                        let name = index.names().get(name_id).map_or("<unknown>", String::as_str);
+                        errors.push(format!("Name '{name}' has no entries in `name_to_definitions`"));
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `definition_to_name` name is registered in `names`",
+            |index, errors| {
+                for definition_name in index.definition_to_name().values() {
+                    if !index.names().contains_key(definition_name) {
+                        errors.push(format!(
+                            "Definition name '{definition_name}' exists in `definition_to_name` but not in `names`"
+                        ));
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `definition_to_name` definition is registered in `definitions`",
+            |index, errors| {
+                for definition_id in index.definition_to_name().keys() {
+                    if !index.definitions().contains_key(definition_id) {
+                        errors.push(format!(
+                            "Definition '{definition_id}' exists in `definition_to_name` but not in `definitions`"
+                        ));
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `definition_to_name` name is registered in `name_to_definitions`",
+            |index, errors| {
+                for name_id in index.definition_to_name().values() {
+                    if !index.name_to_definitions().contains_key(name_id) {
+                        errors.push(format!(
+                            "Name '{name_id}' exists in `definition_to_name` but not in `name_to_definitions`"
+                        ));
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `name_to_definitions` name is registered in `names`",
+            |index, errors| {
+                for name_id in index.name_to_definitions().keys() {
+                    if !index.names().contains_key(name_id) {
+                        errors.push(format!(
+                            "Name '{name_id}' exists in `name_to_definitions` but not in `names`"
+                        ));
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `name_to_definitions` definition is registered in `definitions`",
+            |index, errors| {
+                for definition_ids in index.name_to_definitions().values() {
+                    for definition_id in definition_ids {
+                        if !index.definitions().contains_key(definition_id) {
+                            errors.push(format!(
+                                "Definition '{definition_id}' exists in `name_to_definitions` but not in `definitions`"
+                            ));
+                        }
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `name_to_definitions` definition is registered in `definition_to_name`",
+            |index, errors| {
+                for (name_id, definition_ids) in index.name_to_definitions() {
+                    for definition_id in definition_ids {
+                        if index.definition_to_name().get(definition_id) != Some(name_id) {
+                            errors.push(format!(
+                                "Definition '{definition_id}' exists in `name_to_definitions` but not in `definition_to_name`"
+                            ));
+                        }
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `definitions` definition has a name in `definition_to_name`",
+            |index, errors| {
+                for definition_id in index.definitions().keys() {
+                    if !index.definition_to_name().contains_key(definition_id) {
+                        errors.push(format!(
+                            "Definition '{definition_id}' exists in `definitions` but not in `definition_to_name`"
+                        ));
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `uris_to_definitions` URI is registered in `uri_pool`",
+            |index, errors| {
+                for uri_id in index.uris_to_definitions().keys() {
+                    if !index.uri_pool().contains_key(uri_id) {
+                        errors.push(format!(
+                            "URI id '{uri_id}' is registered in `uris_to_definitions` but not in `uri_pool`"
+                        ));
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `uris_to_definitions` definition is registered in `definitions`",
+            |index, errors| {
+                for definition_ids in index.uris_to_definitions().values() {
+                    for definition_id in definition_ids {
+                        if !index.definitions().contains_key(definition_id) {
+                            errors.push(format!(
+                                "Definition '{definition_id}' is registered in `uris_to_definitions` but not in `definitions`"
+                            ));
+                        }
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `definitions` definition has at least one entry in `uris_to_definitions`",
+            |index, errors| {
+                for definition_id in index.definitions().keys() {
+                    if !index
+                        .uris_to_definitions()
+                        .values()
+                        .any(|ids| ids.contains(definition_id))
+                    {
+                        errors.push(format!(
+                            "Definition '{definition_id}' exists in `definitions` but not in `uris_to_definitions`"
+                        ));
+                    }
+                }
+            },
+        );
+
+        checker
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +369,8 @@ mod tests {
         assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
         assert!(context.graph.uri_pool.is_empty());
+
+        context.graph.assert_integrity();
     }
 
     #[test]
@@ -212,6 +388,8 @@ mod tests {
         assert!(context.graph.uris_to_definitions.is_empty());
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(context.graph.uri_pool.len(), 1);
+
+        context.graph.assert_integrity();
     }
 
     #[test]
@@ -244,6 +422,8 @@ mod tests {
                 .len(),
             1
         );
+
+        context.graph.assert_integrity();
     }
 
     #[test]
@@ -264,6 +444,8 @@ mod tests {
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].start_offset(), 6);
+
+        context.graph.assert_integrity();
     }
 
     #[test]
@@ -278,6 +460,8 @@ mod tests {
         offsets.sort_unstable();
         assert_eq!(definitions.len(), 2);
         assert_eq!(vec![0, 5], offsets);
+
+        context.graph.assert_integrity();
     }
 
     #[test]
@@ -306,5 +490,7 @@ mod tests {
         offsets.sort_unstable();
         assert_eq!([0, 15], offsets[0]);
         assert_eq!([18, 33], offsets[1]);
+
+        context.graph.assert_integrity();
     }
 }
