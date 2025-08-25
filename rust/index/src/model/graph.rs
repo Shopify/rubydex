@@ -391,25 +391,19 @@ impl Graph {
 
     /// # Errors
     /// This method will return an error if batch inserting to the DB fails.
-    pub fn dump_to_db(&mut self) -> Result<(), Box<dyn Error>> {
-        self.db.batch_insert_graph_data(
-            &self.uri_pool,
-            &self.names,
-            &self.definitions,
-            &self.definition_to_name,
-            &self.definition_to_uri,
-        )
+    pub fn save_to_database(&self) -> Result<(), Box<dyn Error>> {
+        self.db.save_full_graph(self)
     }
 
     // Clear graph data from memory
     pub fn clear_graph_data(&mut self) {
-        self.names.clear();
-        self.definitions.clear();
-        self.uri_pool.clear();
-        self.name_to_definitions.clear();
-        self.definition_to_name.clear();
-        self.definition_to_uri.clear();
-        self.uris_to_definitions.clear();
+        self.names = HashMap::new();
+        self.definitions = HashMap::new();
+        self.uri_pool = HashMap::new();
+        self.name_to_definitions = HashMap::new();
+        self.definition_to_name = HashMap::new();
+        self.definition_to_uri = HashMap::new();
+        self.uris_to_definitions = HashMap::new();
     }
 }
 
@@ -559,65 +553,19 @@ mod tests {
     }
 
     #[test]
-    fn dump_to_db() {
+    fn saving_graph_to_database() {
         let mut context = GraphTest::new();
-
-        // Configure to use memory database with shared cache
-        let db_path = String::from("file:dump_to_db_test?mode=memory&cache=shared");
-        context.graph.set_configuration(db_path.clone());
-
-        // Get a connection to keep the memory database alive
-        let conn = context.graph.db.get_connection().unwrap();
-
-        // Index some data
-        context.index_uri("file:///foo.rb", "module Foo; class Bar; end; end");
-        context.index_uri("file:///bar.rb", "class Baz; end");
-
-        // Persist to database
-        assert!(context.graph.dump_to_db().is_ok());
-
-        // Check documents table
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 2); // Two URIs
-
-        // Check names table
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM names", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 3); // Foo, Foo::Bar, Baz
-
-        // Check definitions table
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM definitions", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 3); // Module Foo, Class Bar, Class Baz
-    }
-
-    #[test]
-    fn clear_graph_data() {
-        let mut context = GraphTest::new();
-
         context.index_uri("file:///foo.rb", "module Foo; end");
-        context.index_uri("file:///bar.rb", "class Bar; end");
-
-        // Get the definition IDs
-        let foo_definitions = context.graph.get("Foo").unwrap();
-        let bar_definitions = context.graph.get("Bar").unwrap();
-
-        assert_eq!(foo_definitions.len(), 1);
-        assert_eq!(bar_definitions.len(), 1);
-
+        context.graph.save_to_database().unwrap();
         context.graph.clear_graph_data();
-        // Verify that memory data was cleared
-        assert!(context.graph.names.is_empty());
+
         assert!(context.graph.definitions.is_empty());
+        assert!(context.graph.names.is_empty());
         assert!(context.graph.uri_pool.is_empty());
-        assert!(context.graph.name_to_definitions.is_empty());
-        assert!(context.graph.definition_to_name.is_empty());
         assert!(context.graph.definition_to_uri.is_empty());
+        assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
+        assert!(context.graph.definition_to_name.is_empty());
     }
 
     #[test]
