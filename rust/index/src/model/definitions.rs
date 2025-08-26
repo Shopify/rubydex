@@ -29,6 +29,7 @@ use crate::offset::Offset;
 pub enum Definition {
     Class(Box<ClassDefinition>),
     Module(Box<ModuleDefinition>),
+    Constant(Box<ConstantDefinition>),
 }
 
 impl Definition {
@@ -37,6 +38,7 @@ impl Definition {
         match self {
             Definition::Class(it) => it.offset.start_offset(),
             Definition::Module(it) => it.offset.start_offset(),
+            Definition::Constant(it) => it.offset.start_offset(),
         }
     }
 
@@ -45,6 +47,7 @@ impl Definition {
         match self {
             Definition::Class(it) => it.offset.end_offset(),
             Definition::Module(it) => it.offset.end_offset(),
+            Definition::Constant(it) => it.offset.end_offset(),
         }
     }
 
@@ -90,6 +93,24 @@ pub struct ModuleDefinition {
 }
 
 impl ModuleDefinition {
+    #[must_use]
+    pub const fn new(offset: Offset) -> Self {
+        Self { offset }
+    }
+}
+
+/// A constant definition
+///
+/// # Example
+/// ```ruby
+/// FOO = 1
+/// ```
+#[derive(Debug)]
+pub struct ConstantDefinition {
+    offset: Offset,
+}
+
+impl ConstantDefinition {
     #[must_use]
     pub const fn new(offset: Offset) -> Self {
         Self { offset }
