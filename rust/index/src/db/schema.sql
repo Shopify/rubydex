@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS names (
 CREATE TABLE IF NOT EXISTS definitions (
     id TEXT PRIMARY KEY,  -- Blake3 hash converted to hex
     name_id TEXT NOT NULL REFERENCES names(id), -- References names.id
-    definition_type INTEGER NOT NULL CHECK(definition_type IN (0, 1, 2)), -- 0=Class, 1=Module, 2=Constant
+    definition_type INTEGER NOT NULL CHECK(definition_type IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)), -- 0=Class, 1=Module, 2=Constant, 3=GlobalVariable, 4=InstanceVariable, 5=ClassVariable, 6=AttrAccessor, 7=AttrReader, 8=AttrWriter, 9=Method
     document_id TEXT NOT NULL REFERENCES documents(id), -- References documents.id
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
