@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
 
 use crate::model::db::Db;
 use crate::model::definitions::Definition;
@@ -24,6 +25,8 @@ pub struct Graph {
     name_to_definitions: HashMap<NameId, HashSet<DefinitionId>>,
     // Reverse map of a definition to its unique fully qualified name
     definition_to_name: HashMap<DefinitionId, NameId>,
+    // Reverse map of a definition to its URI
+    definition_to_uri: HashMap<DefinitionId, UriId>,
     // Map of URI to all definitions discovered in that document
     uris_to_definitions: HashMap<UriId, HashSet<DefinitionId>>,
     db: Db,
@@ -38,6 +41,7 @@ impl Graph {
             uri_pool: HashMap::new(),
             name_to_definitions: HashMap::new(),
             definition_to_name: HashMap::new(),
+            definition_to_uri: HashMap::new(),
             uris_to_definitions: HashMap::new(),
             db: Db::new(),
         }
@@ -71,6 +75,12 @@ impl Graph {
     #[must_use]
     pub fn definition_to_name(&self) -> &HashMap<DefinitionId, NameId> {
         &self.definition_to_name
+    }
+
+    // Returns an immutable reference to the definition to URI map
+    #[must_use]
+    pub fn definition_to_uri(&self) -> &HashMap<DefinitionId, UriId> {
+        &self.definition_to_uri
     }
 
     // Returns an immutable reference to the URI to definitions map
@@ -124,6 +134,7 @@ impl Graph {
             .or_default()
             .insert(definition_id);
         self.definition_to_name.insert(definition_id, name_id);
+        self.definition_to_uri.insert(definition_id, uri_id);
         self.uris_to_definitions
             .entry(uri_id)
             .or_default()
@@ -137,6 +148,7 @@ impl Graph {
         self.definitions.extend(incomplete_index.definitions);
         self.uri_pool.extend(incomplete_index.uri_pool);
         self.definition_to_name.extend(incomplete_index.definition_to_name);
+        self.definition_to_uri.extend(incomplete_index.definition_to_uri);
         self.uris_to_definitions.extend(incomplete_index.uris_to_definitions);
 
         for (name_id, definition_ids) in incomplete_index.name_to_definitions {
@@ -174,6 +186,7 @@ impl Graph {
                     }
                 }
 
+                self.definition_to_uri.remove(&def_id);
                 self.definitions.remove(&def_id);
             }
         }
@@ -347,7 +360,50 @@ impl Graph {
             },
         );
 
+        checker.add_rule(
+            "Each `definition_to_uri` URI is registered in `uri_pool`",
+            |index, errors| {
+                for uri_id in index.definition_to_uri().values() {
+                    if !index.uri_pool().contains_key(uri_id) {
+                        errors.push(format!(
+                            "URI id '{uri_id}' is registered in `definition_to_uri` but not in `uri_pool`"
+                        ));
+                    }
+                }
+            },
+        );
+
+        checker.add_rule(
+            "Each `definition_to_uri` definition is registered in `definitions`",
+            |index, errors| {
+                for definition_id in index.definition_to_uri().keys() {
+                    if !index.definitions().contains_key(definition_id) {
+                        errors.push(format!(
+                            "Definition '{definition_id}' is registered in `definition_to_uri` but not in `definitions`"
+                        ));
+                    }
+                }
+            },
+        );
+
         checker
+    }
+
+    /// # Errors
+    /// This method will return an error if batch inserting to the DB fails.
+    pub fn save_to_database(&self) -> Result<(), Box<dyn Error>> {
+        self.db.save_full_graph(self)
+    }
+
+    // Clear graph data from memory
+    pub fn clear_graph_data(&mut self) {
+        self.names = HashMap::new();
+        self.definitions = HashMap::new();
+        self.uri_pool = HashMap::new();
+        self.name_to_definitions = HashMap::new();
+        self.definition_to_name = HashMap::new();
+        self.definition_to_uri = HashMap::new();
+        self.uris_to_definitions = HashMap::new();
     }
 }
 
@@ -366,6 +422,7 @@ mod tests {
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.names.is_empty());
         assert!(context.graph.definition_to_name.is_empty());
+        assert!(context.graph.definition_to_uri.is_empty());
         assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
         assert!(context.graph.uri_pool.is_empty());
@@ -384,6 +441,7 @@ mod tests {
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.names.is_empty());
         assert!(context.graph.definition_to_name.is_empty());
+        assert!(context.graph.definition_to_uri.is_empty());
         assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
         // URI remains if the file was not deleted, but definitions got erased
@@ -492,5 +550,69 @@ mod tests {
         assert_eq!([18, 33], offsets[1]);
 
         context.graph.assert_integrity();
+    }
+
+    #[test]
+    fn saving_graph_to_database() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.graph.save_to_database().unwrap();
+        context.graph.clear_graph_data();
+
+        assert!(context.graph.definitions.is_empty());
+        assert!(context.graph.names.is_empty());
+        assert!(context.graph.uri_pool.is_empty());
+        assert!(context.graph.definition_to_uri.is_empty());
+        assert!(context.graph.name_to_definitions.is_empty());
+        assert!(context.graph.uris_to_definitions.is_empty());
+        assert!(context.graph.definition_to_name.is_empty());
+    }
+
+    #[test]
+    fn definition_to_uri_mapping() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.index_uri("file:///bar.rb", "class Bar; end");
+
+        // Get the definition IDs
+        let foo_definitions = context.graph.get("Foo").unwrap();
+        let bar_definitions = context.graph.get("Bar").unwrap();
+
+        assert_eq!(foo_definitions.len(), 1);
+        assert_eq!(bar_definitions.len(), 1);
+
+        // Find the definition IDs by looking them up in the reverse maps
+        let foo_def_id = context
+            .graph
+            .definition_to_name
+            .iter()
+            .find(|&(_, &name_id)| name_id == NameId::new("Foo"))
+            .map(|(&def_id, _)| def_id)
+            .unwrap();
+
+        let bar_def_id = context
+            .graph
+            .definition_to_name
+            .iter()
+            .find(|&(_, &name_id)| name_id == NameId::new("Bar"))
+            .map(|(&def_id, _)| def_id)
+            .unwrap();
+
+        // Verify definition_to_uri mapping is correct
+        assert_eq!(
+            context.graph.definition_to_uri[&foo_def_id],
+            UriId::new("file:///foo.rb")
+        );
+        assert_eq!(
+            context.graph.definition_to_uri[&bar_def_id],
+            UriId::new("file:///bar.rb")
+        );
+
+        // Verify the mapping is cleaned up when a URI is deleted
+        context.delete_uri("file:///foo.rb");
+
+        assert!(!context.graph.definition_to_uri.contains_key(&foo_def_id));
+        assert!(context.graph.definition_to_uri.contains_key(&bar_def_id));
     }
 }

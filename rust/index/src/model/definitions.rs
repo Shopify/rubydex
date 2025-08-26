@@ -47,6 +47,15 @@ impl Definition {
             Definition::Module(it) => it.offset.end_offset(),
         }
     }
+
+    // Mapping of a definition's type to the definition_type enum value in the DB.
+    #[must_use]
+    pub fn type_id(&self) -> u8 {
+        match self {
+            Definition::Class(_) => 1,
+            Definition::Module(_) => 2,
+        }
+    }
 }
 
 /// A class definition

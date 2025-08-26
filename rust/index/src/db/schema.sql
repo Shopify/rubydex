@@ -16,9 +16,9 @@ CREATE TABLE IF NOT EXISTS names (
 -- Table for storing definitions that make up declarations
 CREATE TABLE IF NOT EXISTS definitions (
     id TEXT PRIMARY KEY,  -- Blake3 hash converted to hex
-    name_id TEXT NOT NULL,  -- References names.id
+    name_id TEXT NOT NULL REFERENCES names(id), -- References names.id
     definition_type INTEGER NOT NULL CHECK(definition_type IN (1, 2)), -- 1=Class, 2=Module
-    document_id TEXT NOT NULL,          -- References documents.id
+    document_id TEXT NOT NULL REFERENCES documents(id), -- References documents.id
     start_offset INTEGER NOT NULL,
     end_offset INTEGER NOT NULL,
     FOREIGN KEY (name_id) REFERENCES names (id) ON DELETE CASCADE,
