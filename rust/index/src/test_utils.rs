@@ -87,8 +87,8 @@ mod tests {
 
         let foo_defs = context.graph.get("Foo").unwrap();
         assert_eq!(foo_defs.len(), 1);
-        assert_eq!(foo_defs[0].start_offset(), 0);
-        assert_eq!(foo_defs[0].end_offset(), 14);
+        assert_eq!(foo_defs[0].start(), 0);
+        assert_eq!(foo_defs[0].end(), 14);
     }
 
     #[test]
@@ -105,13 +105,13 @@ mod tests {
 
         let foo_defs = context.graph.get("Foo").unwrap();
         assert_eq!(foo_defs.len(), 1);
-        assert_eq!(foo_defs[0].start_offset(), 0);
-        assert_eq!(foo_defs[0].end_offset(), 30);
+        assert_eq!(foo_defs[0].start(), 0);
+        assert_eq!(foo_defs[0].end(), 30);
 
         let bar_defs = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(bar_defs.len(), 1);
-        assert_eq!(bar_defs[0].start_offset(), 12);
-        assert_eq!(bar_defs[0].end_offset(), 26);
+        assert_eq!(bar_defs[0].start(), 12);
+        assert_eq!(bar_defs[0].end(), 26);
     }
 
     #[test]
@@ -122,7 +122,7 @@ mod tests {
 
         let foo_defs = context.graph.get("Foo").unwrap();
         assert_eq!(foo_defs.len(), 1);
-        assert_eq!(foo_defs[0].start_offset(), 2);
-        assert_eq!(foo_defs[0].end_offset(), 16);
+        assert_eq!(foo_defs[0].start(), 2);
+        assert_eq!(foo_defs[0].end(), 16);
     }
 }

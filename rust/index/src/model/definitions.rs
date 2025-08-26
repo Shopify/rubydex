@@ -34,20 +34,20 @@ pub enum Definition {
 
 impl Definition {
     #[must_use]
-    pub fn start_offset(&self) -> u32 {
+    pub fn start(&self) -> u32 {
         match self {
-            Definition::Class(it) => it.offset.start_offset(),
-            Definition::Module(it) => it.offset.start_offset(),
-            Definition::Constant(it) => it.offset.start_offset(),
+            Definition::Class(it) => it.offset.start(),
+            Definition::Module(it) => it.offset.start(),
+            Definition::Constant(it) => it.offset.start(),
         }
     }
 
     #[must_use]
-    pub fn end_offset(&self) -> u32 {
+    pub fn end(&self) -> u32 {
         match self {
-            Definition::Class(it) => it.offset.end_offset(),
-            Definition::Module(it) => it.offset.end_offset(),
-            Definition::Constant(it) => it.offset.end_offset(),
+            Definition::Class(it) => it.offset.end(),
+            Definition::Module(it) => it.offset.end(),
+            Definition::Constant(it) => it.offset.end(),
         }
     }
 
