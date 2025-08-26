@@ -30,6 +30,7 @@ pub enum Definition {
     Class(Box<ClassDefinition>),
     Module(Box<ModuleDefinition>),
     Constant(Box<ConstantDefinition>),
+    Method(Box<MethodDefinition>),
     AttrAccessor(Box<AttrAccessorDefinition>),
     AttrReader(Box<AttrReaderDefinition>),
     AttrWriter(Box<AttrWriterDefinition>),
@@ -51,6 +52,7 @@ impl Definition {
             Definition::AttrAccessor(it) => it.offset.start(),
             Definition::AttrReader(it) => it.offset.start(),
             Definition::AttrWriter(it) => it.offset.start(),
+            Definition::Method(it) => it.offset.start(),
         }
     }
 
@@ -66,6 +68,7 @@ impl Definition {
             Definition::AttrAccessor(it) => it.offset.end(),
             Definition::AttrReader(it) => it.offset.end(),
             Definition::AttrWriter(it) => it.offset.end(),
+            Definition::Method(it) => it.offset.end(),
         }
     }
 
@@ -83,6 +86,7 @@ impl Definition {
             Definition::AttrAccessor(_) => 6,
             Definition::AttrReader(_) => 7,
             Definition::AttrWriter(_) => 8,
+            Definition::Method(_) => 9,
         }
     }
 }
@@ -141,6 +145,67 @@ impl ConstantDefinition {
     pub const fn new(offset: Offset) -> Self {
         Self { offset }
     }
+}
+
+/// A method definition
+///
+/// # Example
+/// ```ruby
+/// def foo(bar, baz)
+/// end
+/// ```
+#[derive(Debug)]
+pub struct MethodDefinition {
+    offset: Offset,
+    parameters: Vec<Parameter>,
+    is_singleton: bool,
+}
+
+impl MethodDefinition {
+    #[must_use]
+    pub const fn new(offset: Offset, parameters: Vec<Parameter>, is_singleton: bool) -> Self {
+        Self {
+            offset,
+            parameters,
+            is_singleton,
+        }
+    }
+
+    #[must_use]
+    pub fn parameters(&self) -> &Vec<Parameter> {
+        &self.parameters
+    }
+
+    #[must_use]
+    pub fn is_singleton(&self) -> bool {
+        self.is_singleton
+    }
+}
+
+#[derive(Debug)]
+pub struct Parameter {
+    pub offset: Offset,
+    pub name: String,
+    pub kind: ParameterKind,
+}
+
+impl Parameter {
+    #[must_use]
+    pub const fn new(offset: Offset, name: String, kind: ParameterKind) -> Self {
+        Self { offset, name, kind }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParameterKind {
+    RequiredPositional,
+    OptionalPositional,
+    RestPositional,
+    Post,
+    RequiredKeyword,
+    OptionalKeyword,
+    RestKeyword,
+    Block,
 }
 
 /// An attr accessor definition
