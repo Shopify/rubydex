@@ -4,11 +4,13 @@
 //! within a file. It can be used to track positions in source code and convert
 //! between byte offsets and line/column positions.
 
+use serde::{Deserialize, Serialize};
+
 /// Represents a byte offset range within a specific file.
 ///
 /// An `Offset` tracks a contiguous span of bytes from `start` to `end` within a file. This is useful for
 /// representing the location of tokens, AST nodes, or other text spans in source code.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Offset {
     /// The starting byte offset (inclusive)
     start: u32,

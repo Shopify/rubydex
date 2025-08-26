@@ -23,9 +23,11 @@
 //! 1. The declaration for the name `Foo`
 //! 2. The declaration for the name `Foo::Bar`
 
+use serde::{Deserialize, Serialize};
+
 use crate::offset::Offset;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
     Module(Box<ModuleDefinition>),
@@ -98,7 +100,7 @@ impl Definition {
 /// class Foo
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ClassDefinition {
     offset: Offset,
 }
@@ -117,7 +119,7 @@ impl ClassDefinition {
 /// module Foo
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ModuleDefinition {
     offset: Offset,
 }
@@ -135,7 +137,7 @@ impl ModuleDefinition {
 /// ```ruby
 /// FOO = 1
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ConstantDefinition {
     offset: Offset,
 }
@@ -154,7 +156,7 @@ impl ConstantDefinition {
 /// def foo(bar, baz)
 /// end
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MethodDefinition {
     offset: Offset,
     parameters: Vec<Parameter>,
@@ -182,7 +184,7 @@ impl MethodDefinition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Parameter {
     pub offset: Offset,
     pub name: String,
@@ -196,7 +198,7 @@ impl Parameter {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParameterKind {
     RequiredPositional,
     OptionalPositional,
@@ -214,7 +216,7 @@ pub enum ParameterKind {
 /// ```ruby
 /// attr_accessor :foo
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AttrAccessorDefinition {
     offset: Offset,
 }
@@ -232,7 +234,7 @@ impl AttrAccessorDefinition {
 /// ```ruby
 /// attr_reader :foo
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AttrReaderDefinition {
     offset: Offset,
 }
@@ -250,7 +252,7 @@ impl AttrReaderDefinition {
 /// ```ruby
 /// attr_writer :foo
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AttrWriterDefinition {
     offset: Offset,
 }
@@ -268,7 +270,7 @@ impl AttrWriterDefinition {
 /// ```ruby
 /// $foo = 1
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GlobalVariableDefinition {
     pub offset: Offset,
 }
@@ -286,7 +288,7 @@ impl GlobalVariableDefinition {
 /// ```ruby
 /// @foo = 1
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct InstanceVariableDefinition {
     offset: Offset,
 }
@@ -304,7 +306,7 @@ impl InstanceVariableDefinition {
 /// ```ruby
 /// @@foo = 1
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ClassVariableDefinition {
     offset: Offset,
 }
