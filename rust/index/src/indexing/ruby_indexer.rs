@@ -278,13 +278,30 @@ impl Visit<'_> for RubyIndexer {
                         _ => {}
                     }
                 }
-                if let Some(rest) = parameters_list.keyword_rest()
-                    && let Some(rest_param) = rest.as_keyword_rest_parameter_node()
-                {
-                    parameters.push(Parameter::RestKeyword(ParameterStruct::new(
-                        Offset::from_prism_location(&rest.location()),
-                        Self::location_to_string(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
-                    )));
+                if let Some(rest) = parameters_list.keyword_rest() {
+                    match rest {
+                        ruby_prism::Node::KeywordRestParameterNode { .. } => {
+                            parameters.push(Parameter::RestKeyword(ParameterStruct::new(
+                                Offset::from_prism_location(&rest.location()),
+                                Self::location_to_string(
+                                    &rest
+                                        .as_keyword_rest_parameter_node()
+                                        .unwrap()
+                                        .name_loc()
+                                        .unwrap_or_else(|| rest.location()),
+                                ),
+                            )));
+                        }
+                        ruby_prism::Node::ForwardingParameterNode { .. } => {
+                            parameters.push(Parameter::Forward(ParameterStruct::new(
+                                Offset::from_prism_location(&rest.location()),
+                                Self::location_to_string(&rest.as_forwarding_parameter_node().unwrap().location()),
+                            )));
+                        }
+                        _ => {
+                            // Do nothing
+                        }
+                    }
                 }
                 if let Some(block) = parameters_list.block() {
                     parameters.push(Parameter::Block(ParameterStruct::new(
@@ -759,6 +776,32 @@ mod tests {
                         assert_eq!(it.name(), "j");
                     }
                     _ => panic!("Expected block parameter"),
+                }
+            }
+            _ => panic!("Expected method definition"),
+        }
+    }
+
+    #[test]
+    fn index_def_node_with_forward_parameters() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            def foo(...); end
+            "
+        });
+
+        let definitions = context.graph.get("foo").unwrap();
+
+        match definitions[0] {
+            Definition::Method(it) => {
+                assert_eq!(it.parameters().len(), 1);
+                match &it.parameters()[0] {
+                    Parameter::Forward(it) => {
+                        assert_eq!(it.name(), "...");
+                    }
+                    _ => panic!("Expected forward parameter"),
                 }
             }
             _ => panic!("Expected method definition"),

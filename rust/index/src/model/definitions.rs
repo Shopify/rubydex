@@ -193,6 +193,7 @@ pub enum Parameter {
     RequiredKeyword(ParameterStruct),
     OptionalKeyword(ParameterStruct),
     RestKeyword(ParameterStruct),
+    Forward(ParameterStruct),
     Block(ParameterStruct),
 }
 
