@@ -54,10 +54,11 @@ impl Definition {
     // Mapping of a definition's type to the definition_type enum value in the DB.
     #[must_use]
     pub fn type_id(&self) -> u8 {
+        // NOTE: update the schema.sql file to match when adding new types
         match self {
-            Definition::Class(_) => 1,
-            Definition::Module(_) => 2,
-            Definition::Constant(_) => 3,
+            Definition::Class(_) => 0,
+            Definition::Module(_) => 1,
+            Definition::Constant(_) => 2,
         }
     }
 }

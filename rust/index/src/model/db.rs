@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(name, String::from("Foo"));
         assert_eq!(0, start);
         assert_eq!(15, end);
-        assert_eq!(definition_type, 2);
+        assert_eq!(definition_type, 1);
         assert_eq!(document_uri, String::from("file:///foo.rb"));
         assert!(!definition_id.is_empty());
     }
