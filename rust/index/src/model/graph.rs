@@ -117,12 +117,19 @@ impl Graph {
         uri_id
     }
 
-    // Handles when a document (identified by `uri`) is deleted. This removes the URI from the graph along with all
-    // relationships and definitions that had been discovered in it
-    pub fn delete_uri(&mut self, uri: &str) {
+    /// Handles when a document (identified by `uri`) is deleted. This removes the URI from the graph along with all
+    /// relationships and definitions that had been discovered in it
+    ///
+    /// # Errors
+    ///
+    /// Any database errors will prevent the data from being deleted
+    pub fn delete_uri(&mut self, uri: &str) -> Result<(), Box<dyn Error>> {
+        // Delete the data from memory
+        self.unload_uri(uri);
+        // Delete the data from the database
         let uri_id = UriId::from(uri);
-        self.remove_definitions_for_uri(uri_id);
-        self.uri_pool.remove(&uri_id);
+        self.db.delete_data_for_uri(uri_id)?;
+        Ok(())
     }
 
     // Registers a definition into the `Graph`, automatically creating all relationships
@@ -172,6 +179,14 @@ impl Graph {
         Ok(())
     }
 
+    /// Removes all data related to the given URI from memory. This method should only be used for when a document is
+    /// closed. If the file is deleted, we also need to update the database
+    pub fn unload_uri(&mut self, uri: &str) {
+        let uri_id = UriId::from(uri);
+        self.remove_definitions_for_uri(uri_id);
+        self.uri_pool.remove(&uri_id);
+    }
+
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, incomplete_index: Graph) {
@@ -203,7 +218,7 @@ impl Graph {
     }
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
-    // document (identified by `uri_id`) changes
+    // document (identified by `uri_id`) changes or when a document is closed and we need to clean up the memory
     fn remove_definitions_for_uri(&mut self, uri_id: UriId) {
         if let Some(definitions) = self.uris_to_definitions.remove(&uri_id) {
             for def_id in definitions {
@@ -677,5 +692,36 @@ mod tests {
         assert_eq!(context.graph.name_to_definitions.len(), 1);
         assert_eq!(context.graph.uris_to_definitions.len(), 1);
         assert_eq!(context.graph.definition_to_name.len(), 1);
+    }
+
+    #[test]
+    fn unloading_a_document() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context
+            .graph
+            .set_configuration(String::from("file:unload_uri_test?mode=memory&cache=shared"))
+            .unwrap();
+        context.graph.save_to_database().unwrap();
+        context.graph.clear_graph_data();
+        assert!(context.graph.get("Foo").is_none());
+
+        context.graph.load_uri("file:///foo.rb".to_string()).unwrap();
+        assert_eq!(context.graph.definitions.len(), 1);
+        assert_eq!(context.graph.names.len(), 1);
+        assert_eq!(context.graph.uri_pool.len(), 1);
+        assert_eq!(context.graph.definition_to_uri.len(), 1);
+        assert_eq!(context.graph.name_to_definitions.len(), 1);
+        assert_eq!(context.graph.uris_to_definitions.len(), 1);
+        assert_eq!(context.graph.definition_to_name.len(), 1);
+
+        context.graph.unload_uri("file:///foo.rb");
+        assert!(context.graph.definitions.is_empty());
+        assert!(context.graph.names.is_empty());
+        assert!(context.graph.uri_pool.is_empty());
+        assert!(context.graph.definition_to_uri.is_empty());
+        assert!(context.graph.name_to_definitions.is_empty());
+        assert!(context.graph.uris_to_definitions.is_empty());
+        assert!(context.graph.definition_to_name.is_empty());
     }
 }

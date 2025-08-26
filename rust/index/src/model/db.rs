@@ -1,5 +1,5 @@
-use crate::model::definitions::Definition;
 use crate::model::graph::Graph;
+use crate::model::{definitions::Definition, ids::UriId};
 use rusqlite::{Connection, params};
 use std::{cell::RefCell, error::Error, fs, path::Path};
 
@@ -123,6 +123,21 @@ impl Db {
             Self::batch_insert_definitions(&tx, graph)?;
 
             tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Deletes all of the data related to the given URI ID. This method relies on the foreign key constraints to
+    /// cascade the deletion to definitions and names that are no longer referenced
+    ///
+    /// # Errors
+    ///
+    /// Errors on any type of database connection or operation failure
+    pub fn delete_data_for_uri(&self, uri_id: UriId) -> Result<(), Box<dyn Error>> {
+        self.with_connection(|connection| {
+            let id_as_string = uri_id.to_string();
+            let mut stmt = connection.prepare_cached("DELETE FROM documents WHERE id = ?")?;
+            stmt.execute([id_as_string])?;
             Ok(())
         })
     }
@@ -273,5 +288,32 @@ mod tests {
         assert_eq!(0, definition.start());
         assert_eq!(15, definition.end());
         assert_eq!(document_uri, String::from("file:///foo.rb"));
+    }
+
+    #[test]
+    fn deleting_data_for_a_uri() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+
+        let mut db = Db::new();
+        db.initialize_connection(None).unwrap();
+        assert!(db.save_full_graph(&context.graph).is_ok());
+        assert!(db.delete_data_for_uri(UriId::from("file:///foo.rb")).is_ok());
+
+        // Query to grab all of the data
+        let query = "
+            SELECT
+                names.*,
+                definitions.*,
+                documents.*
+            FROM documents
+            JOIN definitions ON documents.id = definitions.document_id
+            JOIN names ON names.id = definitions.name_id
+        ";
+
+        let borrow = db.connection.borrow();
+        let connection = borrow.as_ref().unwrap();
+        let mut stmt = connection.prepare(query).unwrap();
+        assert!(stmt.query_map((), |_| Ok(())).unwrap().next().is_none());
     }
 }

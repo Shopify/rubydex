@@ -71,7 +71,7 @@ impl GraphTest {
     }
 
     pub fn delete_uri(&mut self, uri: &str) {
-        self.graph.delete_uri(uri);
+        self.graph.unload_uri(uri);
     }
 }
 
