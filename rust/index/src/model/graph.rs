@@ -89,8 +89,11 @@ impl Graph {
         &self.uris_to_definitions
     }
 
-    pub fn set_configuration(&mut self, db_path: String) {
-        self.db.set_db_path(db_path);
+    /// # Errors
+    ///
+    /// May error if we fail to initialize the database connection at the specified path
+    pub fn set_configuration(&mut self, db_path: String) -> Result<(), Box<dyn Error>> {
+        self.db.initialize_connection(Some(db_path))
     }
 
     #[must_use]
@@ -139,6 +142,34 @@ impl Graph {
             .entry(uri_id)
             .or_default()
             .insert(definition_id);
+    }
+
+    /// # Errors
+    ///
+    /// Any database errors will prevent the data from being loaded
+    pub fn load_uri(&mut self, uri: String) -> Result<(), Box<dyn Error>> {
+        let uri_id = self.add_uri(uri);
+        let loaded_data = self.db.load_uri(uri_id.to_string())?;
+
+        for load_result in loaded_data {
+            let name_id = NameId::from_string(&load_result.name_id);
+            let definition_id = DefinitionId::from_string(&load_result.definition_id);
+
+            self.names.insert(name_id, load_result.name);
+            self.definitions.insert(definition_id, load_result.definition);
+            self.name_to_definitions
+                .entry(name_id)
+                .or_default()
+                .insert(definition_id);
+            self.definition_to_name.insert(definition_id, name_id);
+            self.uris_to_definitions
+                .entry(uri_id)
+                .or_default()
+                .insert(definition_id);
+            self.definition_to_uri.insert(definition_id, uri_id);
+        }
+
+        Ok(())
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
@@ -556,6 +587,10 @@ mod tests {
     fn saving_graph_to_database() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", "module Foo; end");
+        context
+            .graph
+            .set_configuration(String::from("file:save_graph_test?mode=memory&cache=shared"))
+            .unwrap();
         context.graph.save_to_database().unwrap();
         context.graph.clear_graph_data();
 
@@ -614,5 +649,36 @@ mod tests {
 
         assert!(!context.graph.definition_to_uri.contains_key(&foo_def_id));
         assert!(context.graph.definition_to_uri.contains_key(&bar_def_id));
+    }
+
+    #[test]
+    fn loading_a_document() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context
+            .graph
+            .set_configuration(String::from("file:load_uri_test?mode=memory&cache=shared"))
+            .unwrap();
+        context.graph.save_to_database().unwrap();
+        context.graph.clear_graph_data();
+
+        assert!(context.graph.definitions.is_empty());
+        assert!(context.graph.names.is_empty());
+        assert!(context.graph.uri_pool.is_empty());
+        assert!(context.graph.definition_to_uri.is_empty());
+        assert!(context.graph.name_to_definitions.is_empty());
+        assert!(context.graph.uris_to_definitions.is_empty());
+        assert!(context.graph.definition_to_name.is_empty());
+
+        assert!(context.graph.get("Foo").is_none());
+
+        context.graph.load_uri("file:///foo.rb".to_string()).unwrap();
+        assert_eq!(context.graph.definitions.len(), 1);
+        assert_eq!(context.graph.names.len(), 1);
+        assert_eq!(context.graph.uri_pool.len(), 1);
+        assert_eq!(context.graph.definition_to_uri.len(), 1);
+        assert_eq!(context.graph.name_to_definitions.len(), 1);
+        assert_eq!(context.graph.uris_to_definitions.len(), 1);
+        assert_eq!(context.graph.definition_to_name.len(), 1);
     }
 }

@@ -34,7 +34,13 @@ class GraphTest < Minitest::Test
       graph.set_configuration(123)
     end
 
-    graph.set_configuration(".ruby-lsp/graph.db")
+    assert_raises(RuntimeError) do
+      graph.set_configuration(".non-existing-folder/graph.db")
+    end
+
+    graph.set_configuration("graph.db")
     pass
+  ensure
+    Dir.glob("graph.db*").each { |f| File.delete(f) }
   end
 end

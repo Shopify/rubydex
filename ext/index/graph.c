@@ -86,7 +86,10 @@ static VALUE rb_graph_set_configuration(VALUE self, VALUE db_path) {
     void* graph;
     TypedData_Get_Struct(self, void*, &graph_type, graph);
 
-    idx_graph_set_configuration(graph, StringValueCStr(db_path));
+    if (!idx_graph_set_configuration(graph, StringValueCStr(db_path))) {
+        rb_raise(rb_eRuntimeError, "Failed to set the database configuration");
+    }
+
     return Qnil;
 }
 
