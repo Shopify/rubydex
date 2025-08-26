@@ -1,5 +1,5 @@
 use crate::model::graph::Graph;
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use std::error::Error;
 
 const SCHEMA_VERSION: u16 = 1;
@@ -139,7 +139,7 @@ impl Db {
     /// Performs batch insert of definitions to the database
     fn batch_insert_definitions(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
         let mut stmt = conn.prepare_cached(
-            "INSERT INTO definitions (id, name_id, definition_type, document_id, start_offset, end_offset) VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO definitions (id, name_id, definition_type, document_id, data) VALUES (?, ?, ?, ?, ?)",
         )?;
 
         for (definition_id, definition) in graph.definitions() {
@@ -147,13 +147,14 @@ impl Db {
             let uri_id = graph.definition_to_uri()[definition_id];
             let definition_type = definition.type_id();
 
-            stmt.execute([
+            let data = rmp_serde::to_vec(definition).expect("Serializing definitions should always succeed");
+
+            stmt.execute(params![
                 &definition_id.to_string(),
                 &name_id.to_string(),
                 &definition_type.to_string(),
                 &uri_id.to_string(),
-                &definition.start().to_string(),
-                &definition.end().to_string(),
+                data,
             ])?;
         }
 
@@ -197,10 +198,9 @@ mod tests {
                     row.get::<_, String>(3).unwrap(),
                     row.get::<_, u8>(4).unwrap(),
                     row.get::<_, String>(5).unwrap(),
-                    row.get::<_, u32>(6).unwrap(),
-                    row.get::<_, u32>(7).unwrap(),
+                    row.get::<_, Vec<u8>>(6).unwrap(),
+                    row.get::<_, String>(7).unwrap(),
                     row.get::<_, String>(8).unwrap(),
-                    row.get::<_, String>(9).unwrap(),
                 ))
             })
             .unwrap()
@@ -214,18 +214,19 @@ mod tests {
             definition_name_id,
             definition_type,
             definition_document_id,
-            start,
-            end,
+            definition_data,
             document_id,
             document_uri,
         ) = first.unwrap();
+
+        let definition = rmp_serde::from_slice::<crate::model::definitions::Definition>(&definition_data).unwrap();
 
         // Verify that the data we saved matches what is expected from the graph
         assert_eq!(name_id, definition_name_id);
         assert_eq!(document_id, definition_document_id);
         assert_eq!(name, String::from("Foo"));
-        assert_eq!(0, start);
-        assert_eq!(15, end);
+        assert_eq!(0, definition.start());
+        assert_eq!(15, definition.end());
         assert_eq!(definition_type, 1);
         assert_eq!(document_uri, String::from("file:///foo.rb"));
         assert!(!definition_id.is_empty());

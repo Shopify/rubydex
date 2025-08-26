@@ -19,8 +19,7 @@ CREATE TABLE IF NOT EXISTS definitions (
     name_id TEXT NOT NULL REFERENCES names(id), -- References names.id
     definition_type INTEGER NOT NULL CHECK(definition_type IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)), -- 0=Class, 1=Module, 2=Constant, 3=GlobalVariable, 4=InstanceVariable, 5=ClassVariable, 6=AttrAccessor, 7=AttrReader, 8=AttrWriter, 9=Method
     document_id TEXT NOT NULL REFERENCES documents(id), -- References documents.id
-    start_offset INTEGER NOT NULL,
-    end_offset INTEGER NOT NULL,
+    data BLOB NOT NULL, -- Serialized definition data
     FOREIGN KEY (name_id) REFERENCES names (id) ON DELETE CASCADE,
     FOREIGN KEY (document_id) REFERENCES documents (id) ON DELETE CASCADE
 );
