@@ -1,5 +1,7 @@
 //! This module contains stable ID representations that composed the `Graph` global representation
 
+use std::str::FromStr;
+
 use blake3::Hash;
 
 /// Creates a Blake3 hash from a string input and returns it as a 32-byte array.
@@ -21,6 +23,17 @@ impl UriId {
     #[must_use]
     pub fn new(id: &str) -> Self {
         Self(create_hash(id))
+    }
+
+    /// # Panics
+    ///
+    /// This function will panic if invalid bytes were inserted directly into the database ID fields
+    #[must_use]
+    pub fn from_string(id: &str) -> Self {
+        Self(
+            Hash::from_str(id)
+                .expect("Hash data contains invalid bytes. This means we introduced invalid data into the database"),
+        )
     }
 }
 
@@ -46,6 +59,17 @@ impl NameId {
     pub fn new(id: &str) -> Self {
         Self(create_hash(id))
     }
+
+    /// # Panics
+    ///
+    /// This function will panic if invalid bytes were inserted directly into the database ID fields
+    #[must_use]
+    pub fn from_string(id: &str) -> Self {
+        Self(
+            Hash::from_str(id)
+                .expect("Hash data contains invalid bytes. This means we introduced invalid data into the database"),
+        )
+    }
 }
 
 impl std::fmt::Display for NameId {
@@ -59,10 +83,20 @@ pub struct DefinitionId(Hash);
 
 impl DefinitionId {
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn new(uri_id: UriId, start: u32) -> Self {
         let id = format!("{uri_id}:{start}");
         Self(create_hash(&id))
+    }
+
+    /// # Panics
+    ///
+    /// This function will panic if invalid bytes were inserted directly into the database ID fields
+    #[must_use]
+    pub fn from_string(id: &str) -> Self {
+        Self(
+            Hash::from_str(id)
+                .expect("Hash data contains invalid bytes. This means we introduced invalid data into the database"),
+        )
     }
 }
 

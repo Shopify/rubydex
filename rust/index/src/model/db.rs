@@ -1,33 +1,144 @@
+use crate::model::definitions::Definition;
 use crate::model::graph::Graph;
 use rusqlite::{Connection, params};
-use std::error::Error;
+use std::{cell::RefCell, error::Error, fs, path::Path};
 
 const SCHEMA_VERSION: u16 = 1;
 
-#[derive(Default, Debug)]
-enum ConnectionType {
-    Path(String),
-    #[default]
-    Memory,
+pub struct LoadResult {
+    pub name_id: String,
+    pub name: String,
+    pub definition_id: String,
+    pub definition: Definition,
 }
 
 #[derive(Default, Debug)]
 pub struct Db {
-    connection_type: ConnectionType,
+    connection: RefCell<Option<Connection>>,
 }
 
 impl Db {
     const SCHEMA: &str = include_str!("../db/schema.sql");
+    const LOAD_DOCUMENT: &str = include_str!("../db/load_document.sql");
 
     #[must_use]
     pub fn new() -> Self {
         Self {
-            connection_type: ConnectionType::Memory,
+            connection: RefCell::new(None),
         }
     }
 
-    pub fn set_db_path(&mut self, path: String) {
-        self.connection_type = ConnectionType::Path(path);
+    /// Initialize the database connection. To use an in memory database, pass `None`
+    ///
+    /// # Errors
+    ///
+    /// Initializing the connection may fail due to IO errors
+    pub fn initialize_connection(&mut self, maybe_path: Option<String>) -> Result<(), Box<dyn Error>> {
+        let conn = if let Some(path) = maybe_path {
+            let mut conn = Connection::open(&path)?;
+            let current_version: u16 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+
+            // If we bumped the schema version, recreate the database file from scratch since it's easier than
+            // trying to run incremental migrations
+            if current_version < SCHEMA_VERSION {
+                drop(conn);
+                if Path::new(&path).exists() {
+                    fs::remove_file(&path)?;
+                }
+
+                conn = Connection::open(&path)?;
+                Self::initialize_database(&mut conn)?;
+            }
+
+            conn
+        } else {
+            let mut conn = Connection::open_in_memory()?;
+            Self::initialize_database(&mut conn)?;
+            conn
+        };
+
+        // Set default connection pragmas
+        conn.execute_batch(
+            "
+            PRAGMA synchronous = NORMAL;
+            PRAGMA foreign_keys = ON;
+            PRAGMA locking_mode = EXCLUSIVE;
+            ",
+        )?;
+
+        self.connection.borrow_mut().replace(conn);
+        Ok(())
+    }
+
+    /// Loads all of the graph data related to the given URI ID
+    ///
+    /// # Errors
+    ///
+    /// Loading data for a URI may fail if querying the database fails
+    ///
+    /// # Panics
+    ///
+    /// Will panic if the database connection is not initialized before trying to interact with it
+    pub fn load_uri(&self, uri_id: String) -> Result<Vec<LoadResult>, Box<dyn Error>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(Self::LOAD_DOCUMENT)?;
+
+            statement
+                .query_map([uri_id], |row| {
+                    let name_id = row.get::<_, String>(0)?;
+                    let name = row.get::<_, String>(1)?;
+                    let definition_id = row.get::<_, String>(2)?;
+                    let data = row.get::<_, Vec<u8>>(3)?;
+                    let definition = rmp_serde::from_slice::<Definition>(&data)
+                        .expect("Deserializing the definition from the DB should always succeed");
+
+                    Ok(LoadResult {
+                        name_id,
+                        name,
+                        definition_id,
+                        definition,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(std::convert::Into::into)
+        })
+    }
+
+    /// Saves the full graph to the database. This is ONLY meant to be used for newly created database files and not
+    /// synchronization as it will not try to update existing records for better insertion performance
+    ///
+    /// # Errors
+    ///
+    /// Errors on any type of database connection or operation failure
+    ///
+    /// # Panics
+    ///
+    /// Will panic if the database connection is not initialized before trying to interact with it
+    pub fn save_full_graph(&self, graph: &Graph) -> Result<(), Box<dyn Error>> {
+        self.with_connection(|connection| {
+            let tx = connection.transaction()?;
+
+            Self::batch_insert_documents(&tx, graph)?;
+            Self::batch_insert_names(&tx, graph)?;
+            Self::batch_insert_definitions(&tx, graph)?;
+
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    // Run the given closure with a connection to the database. In the future, we can make the database abstraction more
+    // robust by handling the different rusqlite error codes and trying to recover when possible
+    fn with_connection<F, T>(&self, f: F) -> Result<T, Box<dyn Error>>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, Box<dyn Error>>,
+    {
+        let mut borrow = self.connection.borrow_mut();
+        let connection: &mut Connection = borrow
+            .as_mut()
+            .expect("Database connection has to be initialized ahead of time");
+
+        f(connection)
     }
 
     /// Initializes a fresh database with schema and configuration
@@ -45,73 +156,6 @@ impl Db {
         tx.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
         tx.commit()?;
         Ok(())
-    }
-
-    /// Creates a fresh file database by removing existing file and recreating
-    fn recreate_database(&self) -> Result<Connection, Box<dyn Error>> {
-        match &self.connection_type {
-            ConnectionType::Path(path) => {
-                if std::path::Path::new(path).exists() {
-                    std::fs::remove_file(path)?;
-                }
-                let mut conn = Connection::open(path)?;
-                Self::initialize_database(&mut conn)?;
-                Ok(conn)
-            }
-            ConnectionType::Memory => Err("Cannot recreate in-memory database".into()),
-        }
-    }
-
-    /// Saves the full graph to the database. This is ONLY meant to be used for newly created database files and not
-    /// synchronization as it will not try to update existing records for better insertion performance
-    ///
-    /// # Errors
-    ///
-    /// Errors on any type of database connection or operation failure
-    pub fn save_full_graph(&self, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut conn = self.get_connection()?;
-        let tx = conn.transaction()?;
-
-        Self::batch_insert_documents(&tx, graph)?;
-        Self::batch_insert_names(&tx, graph)?;
-        Self::batch_insert_definitions(&tx, graph)?;
-
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// # Errors
-    /// Will return an Error if we fail to establish or set a connection
-    fn get_connection(&self) -> Result<Connection, Box<dyn Error>> {
-        let conn = match &self.connection_type {
-            ConnectionType::Path(path) => {
-                let conn = Connection::open(path)?;
-                // Check if schema needs to be loaded using user_version pragma.
-                // The default value for user_version is 0.
-                let current_version: u16 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-                if current_version < SCHEMA_VERSION {
-                    drop(conn);
-                    return self.recreate_database();
-                }
-                conn
-            }
-            ConnectionType::Memory => {
-                let mut conn = Connection::open_in_memory()?;
-                Self::initialize_database(&mut conn)?;
-                conn
-            }
-        };
-
-        // Default connection PRAGMAS
-        conn.execute_batch(
-            "
-            PRAGMA synchronous = NORMAL;
-            PRAGMA foreign_keys = ON;
-            PRAGMA locking_mode = EXCLUSIVE;
-            ",
-        )?;
-
-        Ok(conn)
     }
 
     /// Performs batch insert of documents (URIs) to the database
@@ -138,21 +182,18 @@ impl Db {
 
     /// Performs batch insert of definitions to the database
     fn batch_insert_definitions(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO definitions (id, name_id, definition_type, document_id, data) VALUES (?, ?, ?, ?, ?)",
-        )?;
+        let mut stmt =
+            conn.prepare_cached("INSERT INTO definitions (id, name_id, document_id, data) VALUES (?, ?, ?, ?)")?;
 
         for (definition_id, definition) in graph.definitions() {
             let name_id = graph.definition_to_name()[definition_id];
             let uri_id = graph.definition_to_uri()[definition_id];
-            let definition_type = definition.type_id();
 
             let data = rmp_serde::to_vec(definition).expect("Serializing definitions should always succeed");
 
             stmt.execute(params![
                 &definition_id.to_string(),
                 &name_id.to_string(),
-                &definition_type.to_string(),
                 &uri_id.to_string(),
                 data,
             ])?;
@@ -173,8 +214,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "module Foo; end");
 
         let mut db = Db::new();
-        db.set_db_path(String::from("file:batch_insert_graph_test?mode=memory&cache=shared"));
-        let connection = db.get_connection().unwrap();
+        db.initialize_connection(None).unwrap();
         assert!(db.save_full_graph(&context.graph).is_ok());
 
         // Query to grab all of the data
@@ -188,6 +228,8 @@ mod tests {
             JOIN names ON names.id = definitions.name_id
         ";
 
+        let borrow = db.connection.borrow();
+        let connection = borrow.as_ref().unwrap();
         let mut stmt = connection.prepare(query).unwrap();
         let mut data = stmt
             .query_map((), |row| {
@@ -196,11 +238,10 @@ mod tests {
                     row.get::<_, String>(1).unwrap(),
                     row.get::<_, String>(2).unwrap(),
                     row.get::<_, String>(3).unwrap(),
-                    row.get::<_, u8>(4).unwrap(),
-                    row.get::<_, String>(5).unwrap(),
-                    row.get::<_, Vec<u8>>(6).unwrap(),
+                    row.get::<_, String>(4).unwrap(),
+                    row.get::<_, Vec<u8>>(5).unwrap(),
+                    row.get::<_, String>(6).unwrap(),
                     row.get::<_, String>(7).unwrap(),
-                    row.get::<_, String>(8).unwrap(),
                 ))
             })
             .unwrap()
@@ -212,7 +253,6 @@ mod tests {
             name,
             definition_id,
             definition_name_id,
-            definition_type,
             definition_document_id,
             definition_data,
             document_id,
@@ -221,13 +261,17 @@ mod tests {
 
         let definition = rmp_serde::from_slice::<crate::model::definitions::Definition>(&definition_data).unwrap();
 
+        match definition {
+            Definition::Module(_) => {}
+            _ => panic!("Expected a module definition"),
+        }
+
         // Verify that the data we saved matches what is expected from the graph
         assert_eq!(name_id, definition_name_id);
         assert_eq!(document_id, definition_document_id);
         assert_eq!(name, String::from("Foo"));
         assert_eq!(0, definition.start());
         assert_eq!(15, definition.end());
-        assert_eq!(definition_type, 1);
         assert_eq!(document_uri, String::from("file:///foo.rb"));
         assert!(!definition_id.is_empty());
     }

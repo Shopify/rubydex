@@ -79,15 +79,14 @@ pub unsafe extern "C" fn idx_index_all_c(
 ///
 /// This function will panic in case of a dead lock on the graph mutex
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn idx_graph_set_configuration(pointer: GraphPointer, db_path: *const c_char) {
+pub unsafe extern "C" fn idx_graph_set_configuration(pointer: GraphPointer, db_path: *const c_char) -> bool {
     let graph = retain_graph(pointer);
 
     match unsafe { conversions::convert_char_ptr_to_string(db_path) } {
-        Ok(path) => {
-            graph.lock().unwrap().set_configuration(path);
-        }
+        Ok(path) => graph.lock().unwrap().set_configuration(path).is_ok(),
         Err(e) => {
             eprintln!("Failed to convert db_path to String: {e}");
+            false
         }
     }
 }

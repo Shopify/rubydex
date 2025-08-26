@@ -73,24 +73,6 @@ impl Definition {
             Definition::Method(it) => it.offset.end(),
         }
     }
-
-    // Mapping of a definition's type to the definition_type enum value in the DB.
-    #[must_use]
-    pub fn type_id(&self) -> u8 {
-        // NOTE: update the schema.sql file to match when adding new types
-        match self {
-            Definition::Class(_) => 0,
-            Definition::Module(_) => 1,
-            Definition::Constant(_) => 2,
-            Definition::GlobalVariable(_) => 3,
-            Definition::InstanceVariable(_) => 4,
-            Definition::ClassVariable(_) => 5,
-            Definition::AttrAccessor(_) => 6,
-            Definition::AttrReader(_) => 7,
-            Definition::AttrWriter(_) => 8,
-            Definition::Method(_) => 9,
-        }
-    }
 }
 
 /// A class definition
