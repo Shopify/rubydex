@@ -230,18 +230,14 @@ impl Visit<'_> for RubyIndexer {
                     )));
                 }
                 for parameter in parameters_list.optionals().iter() {
-                    if let ruby_prism::Node::OptionalParameterNode { .. } = parameter
-                        && let Some(opt_param) = parameter.as_optional_parameter_node()
-                    {
-                        parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
-                            Offset::from_prism_location(&parameter.location()),
-                            Self::location_to_string(&opt_param.name_loc()),
-                        )));
-                    }
+                    let opt_param = parameter.as_optional_parameter_node().unwrap();
+                    parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
+                        Offset::from_prism_location(&parameter.location()),
+                        Self::location_to_string(&opt_param.name_loc()),
+                    )));
                 }
-                if let Some(rest) = parameters_list.rest()
-                    && let Some(rest_param) = rest.as_rest_parameter_node()
-                {
+                if let Some(rest) = parameters_list.rest() {
+                    let rest_param = rest.as_rest_parameter_node().unwrap();
                     parameters.push(Parameter::RestPositional(ParameterStruct::new(
                         Offset::from_prism_location(&rest.location()),
                         Self::location_to_string(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
@@ -256,24 +252,22 @@ impl Visit<'_> for RubyIndexer {
                 for keyword in parameters_list.keywords().iter() {
                     match keyword {
                         ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
-                            if let Some(required) = keyword.as_required_keyword_parameter_node() {
-                                parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
-                                    Offset::from_prism_location(&keyword.location()),
-                                    Self::location_to_string(&required.name_loc())
-                                        .trim_end_matches(':')
-                                        .to_string(),
-                                )));
-                            }
+                            let required = keyword.as_required_keyword_parameter_node().unwrap();
+                            parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
+                                Offset::from_prism_location(&keyword.location()),
+                                Self::location_to_string(&required.name_loc())
+                                    .trim_end_matches(':')
+                                    .to_string(),
+                            )));
                         }
                         ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
-                            if let Some(optional) = keyword.as_optional_keyword_parameter_node() {
-                                parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
-                                    Offset::from_prism_location(&keyword.location()),
-                                    Self::location_to_string(&optional.name_loc())
-                                        .trim_end_matches(':')
-                                        .to_string(),
-                                )));
-                            }
+                            let optional = keyword.as_optional_keyword_parameter_node().unwrap();
+                            parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
+                                Offset::from_prism_location(&keyword.location()),
+                                Self::location_to_string(&optional.name_loc())
+                                    .trim_end_matches(':')
+                                    .to_string(),
+                            )));
                         }
                         _ => {}
                     }
