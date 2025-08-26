@@ -57,6 +57,7 @@ impl Definition {
         match self {
             Definition::Class(_) => 1,
             Definition::Module(_) => 2,
+            Definition::Constant(_) => 3,
         }
     }
 }
