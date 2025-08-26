@@ -4,7 +4,7 @@ use crate::indexing::errors::IndexingError;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodDefinition,
-    ModuleDefinition, Parameter, ParameterKind,
+    ModuleDefinition, Parameter, ParameterStruct,
 };
 use crate::model::graph::Graph;
 use crate::model::ids::UriId;
@@ -224,61 +224,55 @@ impl Visit<'_> for RubyIndexer {
             let mut parameters: Vec<Parameter> = Vec::new();
             if let Some(parameters_list) = node.parameters() {
                 for parameter in parameters_list.requireds().iter() {
-                    parameters.push(Parameter::new(
+                    parameters.push(Parameter::RequiredPositional(ParameterStruct::new(
                         Offset::from_prism_location(&parameter.location()),
                         Self::location_to_string(&parameter.location()),
-                        ParameterKind::RequiredPositional,
-                    ));
+                    )));
                 }
                 for parameter in parameters_list.optionals().iter() {
                     if let ruby_prism::Node::OptionalParameterNode { .. } = parameter
                         && let Some(opt_param) = parameter.as_optional_parameter_node()
                     {
-                        parameters.push(Parameter::new(
+                        parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
                             Offset::from_prism_location(&parameter.location()),
                             Self::location_to_string(&opt_param.name_loc()),
-                            ParameterKind::OptionalPositional,
-                        ));
+                        )));
                     }
                 }
                 if let Some(rest) = parameters_list.rest()
                     && let Some(rest_param) = rest.as_rest_parameter_node()
                 {
-                    parameters.push(Parameter::new(
+                    parameters.push(Parameter::RestPositional(ParameterStruct::new(
                         Offset::from_prism_location(&rest.location()),
                         Self::location_to_string(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
-                        ParameterKind::RestPositional,
-                    ));
+                    )));
                 }
                 for post in parameters_list.posts().iter() {
-                    parameters.push(Parameter::new(
+                    parameters.push(Parameter::Post(ParameterStruct::new(
                         Offset::from_prism_location(&post.location()),
                         Self::location_to_string(&post.location()),
-                        ParameterKind::Post,
-                    ));
+                    )));
                 }
                 for keyword in parameters_list.keywords().iter() {
                     match keyword {
                         ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
                             if let Some(required) = keyword.as_required_keyword_parameter_node() {
-                                parameters.push(Parameter::new(
+                                parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
                                     Offset::from_prism_location(&keyword.location()),
                                     Self::location_to_string(&required.name_loc())
                                         .trim_end_matches(':')
                                         .to_string(),
-                                    ParameterKind::RequiredKeyword,
-                                ));
+                                )));
                             }
                         }
                         ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
                             if let Some(optional) = keyword.as_optional_keyword_parameter_node() {
-                                parameters.push(Parameter::new(
+                                parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
                                     Offset::from_prism_location(&keyword.location()),
                                     Self::location_to_string(&optional.name_loc())
                                         .trim_end_matches(':')
                                         .to_string(),
-                                    ParameterKind::OptionalKeyword,
-                                ));
+                                )));
                             }
                         }
                         _ => {}
@@ -287,18 +281,16 @@ impl Visit<'_> for RubyIndexer {
                 if let Some(rest) = parameters_list.keyword_rest()
                     && let Some(rest_param) = rest.as_keyword_rest_parameter_node()
                 {
-                    parameters.push(Parameter::new(
+                    parameters.push(Parameter::RestKeyword(ParameterStruct::new(
                         Offset::from_prism_location(&rest.location()),
                         Self::location_to_string(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
-                        ParameterKind::RestKeyword,
-                    ));
+                    )));
                 }
                 if let Some(block) = parameters_list.block() {
-                    parameters.push(Parameter::new(
+                    parameters.push(Parameter::Block(ParameterStruct::new(
                         Offset::from_prism_location(&block.location()),
                         Self::location_to_string(&block.name_loc().unwrap_or_else(|| block.location())),
-                        ParameterKind::Block,
-                    ));
+                    )));
                 }
             }
 
@@ -713,29 +705,61 @@ mod tests {
             Definition::Method(it) => {
                 assert_eq!(it.parameters().len(), 8);
 
-                assert_eq!(it.parameters()[0].name(), "a");
-                assert_eq!(it.parameters()[0].kind(), &ParameterKind::RequiredPositional);
+                match &it.parameters()[0] {
+                    Parameter::RequiredPositional(it) => {
+                        assert_eq!(it.name(), "a");
+                    }
+                    _ => panic!("Expected required positional parameter"),
+                }
 
-                assert_eq!(it.parameters()[1].name(), "b");
-                assert_eq!(it.parameters()[1].kind(), &ParameterKind::OptionalPositional);
+                match &it.parameters()[1] {
+                    Parameter::OptionalPositional(it) => {
+                        assert_eq!(it.name(), "b");
+                    }
+                    _ => panic!("Expected optional positional parameter"),
+                }
 
-                assert_eq!(it.parameters()[2].name(), "c");
-                assert_eq!(it.parameters()[2].kind(), &ParameterKind::RestPositional);
+                match &it.parameters()[2] {
+                    Parameter::RestPositional(it) => {
+                        assert_eq!(it.name(), "c");
+                    }
+                    _ => panic!("Expected rest positional parameter"),
+                }
 
-                assert_eq!(it.parameters()[3].name(), "d");
-                assert_eq!(it.parameters()[3].kind(), &ParameterKind::Post);
+                match &it.parameters()[3] {
+                    Parameter::Post(it) => {
+                        assert_eq!(it.name(), "d");
+                    }
+                    _ => panic!("Expected post parameter"),
+                }
 
-                assert_eq!(it.parameters()[4].name(), "e");
-                assert_eq!(it.parameters()[4].kind(), &ParameterKind::RequiredKeyword);
+                match &it.parameters()[4] {
+                    Parameter::RequiredKeyword(it) => {
+                        assert_eq!(it.name(), "e");
+                    }
+                    _ => panic!("Expected required keyword parameter"),
+                }
 
-                assert_eq!(it.parameters()[5].name(), "g");
-                assert_eq!(it.parameters()[5].kind(), &ParameterKind::OptionalKeyword);
+                match &it.parameters()[5] {
+                    Parameter::OptionalKeyword(it) => {
+                        assert_eq!(it.name(), "g");
+                    }
+                    _ => panic!("Expected optional keyword parameter"),
+                }
 
-                assert_eq!(it.parameters()[6].name(), "i");
-                assert_eq!(it.parameters()[6].kind(), &ParameterKind::RestKeyword);
+                match &it.parameters()[6] {
+                    Parameter::RestKeyword(it) => {
+                        assert_eq!(it.name(), "i");
+                    }
+                    _ => panic!("Expected rest keyword parameter"),
+                }
 
-                assert_eq!(it.parameters()[7].name(), "j");
-                assert_eq!(it.parameters()[7].kind(), &ParameterKind::Block);
+                match &it.parameters()[7] {
+                    Parameter::Block(it) => {
+                        assert_eq!(it.name(), "j");
+                    }
+                    _ => panic!("Expected block parameter"),
+                }
             }
             _ => panic!("Expected method definition"),
         }
