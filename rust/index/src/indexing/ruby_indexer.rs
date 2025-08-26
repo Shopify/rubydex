@@ -2,8 +2,8 @@
 
 use crate::indexing::errors::IndexingError;
 use crate::model::definitions::{
-    ClassDefinition, ClassVariableDefinition, ConstantDefinition, Definition, GlobalVariableDefinition,
-    InstanceVariableDefinition, ModuleDefinition,
+    AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
+    ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, ModuleDefinition,
 };
 use crate::model::graph::Graph;
 use crate::model::ids::UriId;
@@ -214,6 +214,77 @@ impl Visit<'_> for RubyIndexer {
         }
 
         self.visit(&node.value());
+    }
+
+    fn visit_call_node(&mut self, node: &ruby_prism::CallNode) {
+        let message_loc = node.message_loc();
+
+        if message_loc.is_none() {
+            return;
+        }
+
+        let message = Self::location_to_string(&message_loc.unwrap());
+        if message != "attr_accessor" && message != "attr_reader" && message != "attr_writer" {
+            return;
+        }
+
+        if node
+            .receiver()
+            .is_some_and(|receiver| receiver.as_self_node().is_none())
+        {
+            // We don't index `attr_` calls not made on `self`
+            return;
+        }
+
+        let arguments = node.arguments();
+        if let Some(arguments) = arguments {
+            for argument in arguments.arguments().iter() {
+                if let ruby_prism::Node::SymbolNode { .. } = argument {
+                    let symbol = argument.as_symbol_node().unwrap();
+                    let name_with_colon = Self::location_to_string(&symbol.location());
+                    let name = name_with_colon.trim_start_matches(':');
+
+                    self.with_updated_nesting(name, |indexer, fully_qualified_name| match message.as_str() {
+                        "attr_accessor" => {
+                            indexer.local_index.add_definition(
+                                indexer.uri_id,
+                                fully_qualified_name.clone(),
+                                Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                                    Offset::from_prism_location(&symbol.location()),
+                                ))),
+                            );
+
+                            indexer.local_index.add_definition(
+                                indexer.uri_id,
+                                format!("{fully_qualified_name}="),
+                                Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                                    Offset::from_prism_location(&symbol.location()),
+                                ))),
+                            );
+                        }
+                        "attr_reader" => {
+                            indexer.local_index.add_definition(
+                                indexer.uri_id,
+                                fully_qualified_name,
+                                Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                                    Offset::from_prism_location(&symbol.location()),
+                                ))),
+                            );
+                        }
+                        "attr_writer" => {
+                            indexer.local_index.add_definition(
+                                indexer.uri_id,
+                                format!("{fully_qualified_name}="),
+                                Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                                    Offset::from_prism_location(&symbol.location()),
+                                ))),
+                            );
+                        }
+                        _ => panic!("Unexpected message: {message}"),
+                    });
+                }
+            }
+        }
     }
 
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
@@ -463,6 +534,123 @@ mod tests {
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].start(), 49);
         assert_eq!(definitions[0].end(), 54);
+    }
+
+    #[test]
+    fn index_attr_accessor_definition() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            attr_accessor :foo
+
+            class Foo
+              attr_accessor :bar, :baz
+            end
+            "
+        });
+
+        let definitions = context.graph.get("foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 14);
+        assert_eq!(definitions[0].end(), 18);
+
+        let definitions = context.graph.get("foo=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 14);
+        assert_eq!(definitions[0].end(), 18);
+
+        let definitions = context.graph.get("Foo::bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 46);
+        assert_eq!(definitions[0].end(), 50);
+
+        let definitions = context.graph.get("Foo::bar=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 46);
+        assert_eq!(definitions[0].end(), 50);
+
+        let definitions = context.graph.get("Foo::baz").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 52);
+        assert_eq!(definitions[0].end(), 56);
+
+        let definitions = context.graph.get("Foo::baz=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 52);
+        assert_eq!(definitions[0].end(), 56);
+    }
+
+    #[test]
+    fn index_attr_reader_definition() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            attr_reader :foo
+
+            class Foo
+              attr_reader :bar, :baz
+            end
+            "
+        });
+
+        let definitions = context.graph.get("foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 12);
+        assert_eq!(definitions[0].end(), 16);
+
+        assert!(context.graph.get("foo=").is_none());
+
+        let definitions = context.graph.get("Foo::bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 42);
+        assert_eq!(definitions[0].end(), 46);
+
+        assert!(context.graph.get("Foo::bar=").is_none());
+
+        let definitions = context.graph.get("Foo::baz").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 48);
+        assert_eq!(definitions[0].end(), 52);
+
+        assert!(context.graph.get("Foo::baz=").is_none());
+    }
+
+    #[test]
+    fn index_attr_writer_definition() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            attr_writer :foo
+
+            class Foo
+              attr_writer :bar, :baz
+            end
+            "
+        });
+
+        let definitions = context.graph.get("foo=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 12);
+        assert_eq!(definitions[0].end(), 16);
+
+        assert!(context.graph.get("foo").is_none());
+
+        let definitions = context.graph.get("Foo::bar=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 42);
+        assert_eq!(definitions[0].end(), 46);
+
+        assert!(context.graph.get("Foo::bar").is_none());
+
+        let definitions = context.graph.get("Foo::baz=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 48);
+        assert_eq!(definitions[0].end(), 52);
+
+        assert!(context.graph.get("Foo::baz").is_none());
     }
 
     #[test]
