@@ -186,15 +186,30 @@ impl MethodDefinition {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Parameter {
-    pub offset: Offset,
-    pub name: String,
-    pub kind: ParameterKind,
+    offset: Offset,
+    name: String,
+    kind: ParameterKind,
 }
 
 impl Parameter {
     #[must_use]
     pub const fn new(offset: Offset, name: String, kind: ParameterKind) -> Self {
         Self { offset, name, kind }
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> &ParameterKind {
+        &self.kind
     }
 }
 

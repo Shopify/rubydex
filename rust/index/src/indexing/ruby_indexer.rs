@@ -713,29 +713,29 @@ mod tests {
             Definition::Method(it) => {
                 assert_eq!(it.parameters().len(), 8);
 
-                assert_eq!(it.parameters()[0].name, "a");
-                assert_eq!(it.parameters()[0].kind, ParameterKind::RequiredPositional);
+                assert_eq!(it.parameters()[0].name(), "a");
+                assert_eq!(it.parameters()[0].kind(), &ParameterKind::RequiredPositional);
 
-                assert_eq!(it.parameters()[1].name, "b");
-                assert_eq!(it.parameters()[1].kind, ParameterKind::OptionalPositional);
+                assert_eq!(it.parameters()[1].name(), "b");
+                assert_eq!(it.parameters()[1].kind(), &ParameterKind::OptionalPositional);
 
-                assert_eq!(it.parameters()[2].name, "c");
-                assert_eq!(it.parameters()[2].kind, ParameterKind::RestPositional);
+                assert_eq!(it.parameters()[2].name(), "c");
+                assert_eq!(it.parameters()[2].kind(), &ParameterKind::RestPositional);
 
-                assert_eq!(it.parameters()[3].name, "d");
-                assert_eq!(it.parameters()[3].kind, ParameterKind::Post);
+                assert_eq!(it.parameters()[3].name(), "d");
+                assert_eq!(it.parameters()[3].kind(), &ParameterKind::Post);
 
-                assert_eq!(it.parameters()[4].name, "e");
-                assert_eq!(it.parameters()[4].kind, ParameterKind::RequiredKeyword);
+                assert_eq!(it.parameters()[4].name(), "e");
+                assert_eq!(it.parameters()[4].kind(), &ParameterKind::RequiredKeyword);
 
-                assert_eq!(it.parameters()[5].name, "g");
-                assert_eq!(it.parameters()[5].kind, ParameterKind::OptionalKeyword);
+                assert_eq!(it.parameters()[5].name(), "g");
+                assert_eq!(it.parameters()[5].kind(), &ParameterKind::OptionalKeyword);
 
-                assert_eq!(it.parameters()[6].name, "i");
-                assert_eq!(it.parameters()[6].kind, ParameterKind::RestKeyword);
+                assert_eq!(it.parameters()[6].name(), "i");
+                assert_eq!(it.parameters()[6].kind(), &ParameterKind::RestKeyword);
 
-                assert_eq!(it.parameters()[7].name, "j");
-                assert_eq!(it.parameters()[7].kind, ParameterKind::Block);
+                assert_eq!(it.parameters()[7].name(), "j");
+                assert_eq!(it.parameters()[7].kind(), &ParameterKind::Block);
             }
             _ => panic!("Expected method definition"),
         }
