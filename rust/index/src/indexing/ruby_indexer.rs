@@ -199,18 +199,18 @@ mod tests {
 
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 0);
-        assert_eq!(definitions[0].end_offset(), 50);
+        assert_eq!(definitions[0].start(), 0);
+        assert_eq!(definitions[0].end(), 50);
 
         let definitions = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 12);
-        assert_eq!(definitions[0].end_offset(), 46);
+        assert_eq!(definitions[0].start(), 12);
+        assert_eq!(definitions[0].end(), 46);
 
         let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 26);
-        assert_eq!(definitions[0].end_offset(), 40);
+        assert_eq!(definitions[0].start(), 26);
+        assert_eq!(definitions[0].end(), 40);
 
         let not_found = context.graph.get("Foo::Bar::Baz::Qux");
         assert!(not_found.is_none());
@@ -251,18 +251,18 @@ mod tests {
 
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 0);
-        assert_eq!(definitions[0].end_offset(), 53);
+        assert_eq!(definitions[0].start(), 0);
+        assert_eq!(definitions[0].end(), 53);
 
         let definitions = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 13);
-        assert_eq!(definitions[0].end_offset(), 49);
+        assert_eq!(definitions[0].start(), 13);
+        assert_eq!(definitions[0].end(), 49);
 
         let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 28);
-        assert_eq!(definitions[0].end_offset(), 43);
+        assert_eq!(definitions[0].start(), 28);
+        assert_eq!(definitions[0].end(), 43);
 
         let not_found = context.graph.get("Foo::Bar::Baz::Qux");
         assert!(not_found.is_none());
@@ -303,13 +303,13 @@ mod tests {
 
         let definitions = context.graph.get("FOO").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 0);
-        assert_eq!(definitions[0].end_offset(), 3);
+        assert_eq!(definitions[0].start(), 0);
+        assert_eq!(definitions[0].end(), 3);
 
         let definitions = context.graph.get("Foo::FOO").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 21);
-        assert_eq!(definitions[0].end_offset(), 24);
+        assert_eq!(definitions[0].start(), 21);
+        assert_eq!(definitions[0].end(), 24);
     }
 
     #[test]
@@ -329,18 +329,18 @@ mod tests {
 
         let definitions = context.graph.get("FOO::BAR").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 0);
-        assert_eq!(definitions[0].end_offset(), 8);
+        assert_eq!(definitions[0].start(), 0);
+        assert_eq!(definitions[0].end(), 8);
 
         let definitions = context.graph.get("Foo::FOO::BAR").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 26);
-        assert_eq!(definitions[0].end_offset(), 34);
+        assert_eq!(definitions[0].start(), 26);
+        assert_eq!(definitions[0].end(), 34);
 
         let definitions = context.graph.get("BAZ").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 41);
-        assert_eq!(definitions[0].end_offset(), 46);
+        assert_eq!(definitions[0].start(), 41);
+        assert_eq!(definitions[0].end(), 46);
     }
 
     #[test]
@@ -359,27 +359,27 @@ mod tests {
 
         let definitions = context.graph.get("FOO").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 0);
-        assert_eq!(definitions[0].end_offset(), 3);
+        assert_eq!(definitions[0].start(), 0);
+        assert_eq!(definitions[0].end(), 3);
 
         let definitions = context.graph.get("BAR::BAZ").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 5);
-        assert_eq!(definitions[0].end_offset(), 13);
+        assert_eq!(definitions[0].start(), 5);
+        assert_eq!(definitions[0].end(), 13);
 
         let definitions = context.graph.get("Foo::FOO").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 34);
-        assert_eq!(definitions[0].end_offset(), 37);
+        assert_eq!(definitions[0].start(), 34);
+        assert_eq!(definitions[0].end(), 37);
 
         let definitions = context.graph.get("Foo::BAR::BAZ").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 39);
-        assert_eq!(definitions[0].end_offset(), 47);
+        assert_eq!(definitions[0].start(), 39);
+        assert_eq!(definitions[0].end(), 47);
 
         let definitions = context.graph.get("BAZ").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 49);
-        assert_eq!(definitions[0].end_offset(), 54);
+        assert_eq!(definitions[0].start(), 49);
+        assert_eq!(definitions[0].end(), 54);
     }
 }

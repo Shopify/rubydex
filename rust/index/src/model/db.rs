@@ -152,8 +152,8 @@ impl Db {
                 &name_id.to_string(),
                 &definition_type.to_string(),
                 &uri_id.to_string(),
-                &definition.start_offset().to_string(),
-                &definition.end_offset().to_string(),
+                &definition.start().to_string(),
+                &definition.end().to_string(),
             ])?;
         }
 
@@ -214,8 +214,8 @@ mod tests {
             definition_name_id,
             definition_type,
             definition_document_id,
-            start_offset,
-            end_offset,
+            start,
+            end,
             document_id,
             document_uri,
         ) = first.unwrap();
@@ -224,8 +224,8 @@ mod tests {
         assert_eq!(name_id, definition_name_id);
         assert_eq!(document_id, definition_document_id);
         assert_eq!(name, String::from("Foo"));
-        assert_eq!(0, start_offset);
-        assert_eq!(15, end_offset);
+        assert_eq!(0, start);
+        assert_eq!(15, end);
         assert_eq!(definition_type, 2);
         assert_eq!(document_uri, String::from("file:///foo.rb"));
         assert!(!definition_id.is_empty());

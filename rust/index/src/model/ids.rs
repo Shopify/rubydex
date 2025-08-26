@@ -60,8 +60,8 @@ pub struct DefinitionId(Hash);
 impl DefinitionId {
     #[must_use]
     #[allow(clippy::cast_possible_truncation)]
-    pub fn new(uri_id: UriId, start_offset: u32) -> Self {
-        let id = format!("{uri_id}:{start_offset}");
+    pub fn new(uri_id: UriId, start: u32) -> Self {
+        let id = format!("{uri_id}:{start}");
         Self(create_hash(&id))
     }
 }

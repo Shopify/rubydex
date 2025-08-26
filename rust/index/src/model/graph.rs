@@ -125,7 +125,7 @@ impl Graph {
     // Registers a definition into the `Graph`, automatically creating all relationships
     pub fn add_definition(&mut self, uri_id: UriId, name: String, definition: Definition) {
         let name_id = NameId::new(&name);
-        let definition_id = DefinitionId::new(uri_id, definition.start_offset());
+        let definition_id = DefinitionId::new(uri_id, definition.start());
 
         self.names.insert(name_id, name);
         self.definitions.insert(definition_id, definition);
@@ -501,7 +501,7 @@ mod tests {
 
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start_offset(), 6);
+        assert_eq!(definitions[0].start(), 6);
 
         context.graph.assert_integrity();
     }
@@ -514,7 +514,7 @@ mod tests {
         context.index_uri("file:///foo2.rb", "\n\n\n\n\nmodule Foo; end");
 
         let definitions = context.graph.get("Foo").unwrap();
-        let mut offsets = definitions.iter().map(|d| d.start_offset()).collect::<Vec<_>>();
+        let mut offsets = definitions.iter().map(|d| d.start()).collect::<Vec<_>>();
         offsets.sort_unstable();
         assert_eq!(definitions.len(), 2);
         assert_eq!(vec![0, 5], offsets);
@@ -543,7 +543,7 @@ mod tests {
 
         let mut offsets = definitions
             .iter()
-            .map(|d| [d.start_offset(), d.end_offset()])
+            .map(|d| [d.start(), d.end()])
             .collect::<Vec<_>>();
         offsets.sort_unstable();
         assert_eq!([0, 15], offsets[0]);
