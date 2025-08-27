@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Indexed {} files", documents.len());
         println!("Found {} names", graph.declarations().len());
         println!("Found {} definitions", graph.definitions().len());
-        println!("Found {} URIs", graph.uri_pool().len());
+        println!("Found {} URIs", graph.documents().len());
     }
 
     Ok(())

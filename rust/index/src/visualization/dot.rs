@@ -32,30 +32,30 @@ pub fn generate(graph: &Graph) -> String {
 
     write_declaration_nodes(&mut output, graph);
     write_definition_nodes(&mut output, graph);
-    write_uri_nodes(&mut output, graph);
-    write_name_to_definition_edges(&mut output, graph);
-    write_definition_to_uri_edges(&mut output, graph);
+    write_document_nodes(&mut output, graph);
 
     output.push_str("}\n");
     output
 }
 
 fn write_declaration_nodes(output: &mut String, graph: &Graph) {
-    let mut names: Vec<_> = graph
-        .declarations()
-        .values()
-        .map(super::super::model::declaration::Declaration::name)
-        .collect();
-    names.sort_unstable();
+    let mut declarations: Vec<_> = graph.declarations().values().collect();
+    declarations.sort_by(|a, b| a.name().cmp(b.name()));
 
-    for name in names {
+    for declaration in declarations {
+        let name = declaration.name();
         let escaped_name = escape_dot_string(name);
         let node_id = format!("Name:{name}");
         let _ = writeln!(
             output,
             "    \"{node_id}\" [label=\"{escaped_name}\",shape={NAME_NODE_SHAPE}];"
         );
+
+        for def_id in declaration.definitions() {
+            let _ = writeln!(output, "    \"{node_id}\" -> \"def_{def_id}\" [dir=both];");
+        }
     }
+
     output.push('\n');
 }
 
@@ -82,11 +82,12 @@ fn write_definition_nodes(output: &mut String, graph: &Graph) {
     output.push('\n');
 }
 
-fn write_uri_nodes(output: &mut String, graph: &Graph) {
-    let mut uris: Vec<_> = graph.uri_pool().values().collect();
-    uris.sort();
+fn write_document_nodes(output: &mut String, graph: &Graph) {
+    let mut documents: Vec<_> = graph.documents().values().collect();
+    documents.sort_by(|a, b| a.uri().cmp(b.uri()));
 
-    for uri in uris {
+    for document in documents {
+        let uri = document.uri();
         let label = uri.rsplit('/').next().unwrap_or(uri);
         let escaped_uri = escape_dot_string(uri);
         let escaped_label = escape_dot_string(label);
@@ -94,45 +95,12 @@ fn write_uri_nodes(output: &mut String, graph: &Graph) {
             output,
             "    \"{escaped_uri}\" [label=\"{escaped_label}\",shape={URI_NODE_SHAPE}];"
         );
+
+        for def_id in document.definitions() {
+            let _ = writeln!(output, "    \"def_{def_id}\" -> \"{escaped_uri}\";");
+        }
     }
     output.push('\n');
-}
-
-fn write_name_to_definition_edges(output: &mut String, graph: &Graph) {
-    let mut name_to_def_edges: Vec<_> = Vec::new();
-
-    for declaration in graph.declarations().values() {
-        for def_id in declaration.definitions() {
-            if graph.definitions().contains_key(def_id) {
-                name_to_def_edges.push((declaration.name(), def_id.to_string()));
-            }
-        }
-    }
-    name_to_def_edges.sort();
-
-    for (name, def_id) in name_to_def_edges {
-        let name_node = format!("Name:{}", escape_dot_string(name));
-        let _ = writeln!(output, "    \"{name_node}\" -> \"def_{def_id}\" [dir=both];");
-    }
-}
-
-fn write_definition_to_uri_edges(output: &mut String, graph: &Graph) {
-    let mut uri_edges: Vec<_> = graph.uris_to_definitions().iter().collect();
-    uri_edges.sort_by_key(|(uri_id, _)| uri_id.to_string());
-
-    for (uri_id, definition_ids) in uri_edges {
-        if let Some(uri) = graph.uri_pool().get(uri_id) {
-            let escaped_uri = escape_dot_string(uri);
-            let mut sorted_def_ids: Vec<_> = definition_ids.iter().collect();
-            sorted_def_ids.sort_by_key(std::string::ToString::to_string);
-
-            for def_id in sorted_def_ids {
-                if graph.definitions().contains_key(def_id) {
-                    let _ = writeln!(output, "    \"def_{def_id}\" -> \"{escaped_uri}\";");
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -179,17 +147,17 @@ mod tests {
     rankdir=TB;
 
     "Name:TestClass" [label="TestClass",shape=hexagon];
+    "Name:TestClass" -> "def_{class_def_id}" [dir=both];
     "Name:TestModule" [label="TestModule",shape=hexagon];
+    "Name:TestModule" -> "def_{module_def_id}" [dir=both];
 
     "def_{class_def_id}" [label="Class(TestClass)",shape=ellipse];
     "def_{module_def_id}" [label="Module(TestModule)",shape=ellipse];
 
     "file:///test.rb" [label="test.rb",shape=box];
-
-    "Name:TestClass" -> "def_{class_def_id}" [dir=both];
-    "Name:TestModule" -> "def_{module_def_id}" [dir=both];
-    "def_{class_def_id}" -> "file:///test.rb";
     "def_{module_def_id}" -> "file:///test.rb";
+    "def_{class_def_id}" -> "file:///test.rb";
+
 }}
 "#
         );
