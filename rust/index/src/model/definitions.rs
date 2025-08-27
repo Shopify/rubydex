@@ -167,29 +167,39 @@ impl MethodDefinition {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Parameter {
-    pub offset: Offset,
-    pub name: String,
-    pub kind: ParameterKind,
+pub enum Parameter {
+    RequiredPositional(ParameterStruct),
+    OptionalPositional(ParameterStruct),
+    RestPositional(ParameterStruct),
+    Post(ParameterStruct),
+    RequiredKeyword(ParameterStruct),
+    OptionalKeyword(ParameterStruct),
+    RestKeyword(ParameterStruct),
+    Forward(ParameterStruct),
+    Block(ParameterStruct),
 }
 
-impl Parameter {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ParameterStruct {
+    offset: Offset,
+    name: String,
+}
+
+impl ParameterStruct {
     #[must_use]
-    pub const fn new(offset: Offset, name: String, kind: ParameterKind) -> Self {
-        Self { offset, name, kind }
+    pub const fn new(offset: Offset, name: String) -> Self {
+        Self { offset, name }
     }
-}
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ParameterKind {
-    RequiredPositional,
-    OptionalPositional,
-    RestPositional,
-    Post,
-    RequiredKeyword,
-    OptionalKeyword,
-    RestKeyword,
-    Block,
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// An attr accessor definition
