@@ -325,70 +325,111 @@ impl Visit<'_> for RubyIndexer {
         let message_loc = node.message_loc();
 
         if message_loc.is_none() {
+            // No message, we can't index this node
             return;
         }
 
         let message = Self::location_to_string(&message_loc.unwrap());
-        if message != "attr_accessor" && message != "attr_reader" && message != "attr_writer" {
-            return;
-        }
 
-        if node
-            .receiver()
-            .is_some_and(|receiver| receiver.as_self_node().is_none())
-        {
-            // We don't index `attr_` calls not made on `self`
-            return;
-        }
+        match message.as_str() {
+            "attr_accessor" => {
+                if (node.receiver().is_none() || node.receiver().unwrap().as_self_node().is_some())
+                    && let Some(arguments) = node.arguments()
+                {
+                    for argument in arguments.arguments().iter() {
+                        if let ruby_prism::Node::SymbolNode { .. } = argument {
+                            let symbol = argument.as_symbol_node().unwrap();
+                            let name_with_colon = Self::location_to_string(&symbol.location());
+                            let name = name_with_colon.trim_start_matches(':');
 
-        let arguments = node.arguments();
-        if let Some(arguments) = arguments {
-            for argument in arguments.arguments().iter() {
-                if let ruby_prism::Node::SymbolNode { .. } = argument {
-                    let symbol = argument.as_symbol_node().unwrap();
-                    let name_with_colon = Self::location_to_string(&symbol.location());
-                    let name = name_with_colon.trim_start_matches(':');
+                            self.with_updated_nesting(name, |indexer, fully_qualified_name| {
+                                indexer.local_index.add_definition(
+                                    indexer.uri_id,
+                                    fully_qualified_name.clone(),
+                                    Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                                        Offset::from_prism_location(&symbol.location()),
+                                    ))),
+                                );
 
-                    self.with_updated_nesting(name, |indexer, fully_qualified_name| match message.as_str() {
-                        "attr_accessor" => {
-                            indexer.local_index.add_definition(
-                                indexer.uri_id,
-                                fully_qualified_name.clone(),
-                                Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                                    Offset::from_prism_location(&symbol.location()),
-                                ))),
-                            );
-
-                            indexer.local_index.add_definition(
-                                indexer.uri_id,
-                                format!("{fully_qualified_name}="),
-                                Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                                    Offset::from_prism_location(&symbol.location()),
-                                ))),
-                            );
+                                indexer.local_index.add_definition(
+                                    indexer.uri_id,
+                                    format!("{fully_qualified_name}="),
+                                    Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                                        Offset::from_prism_location(&symbol.location()),
+                                    ))),
+                                );
+                            });
                         }
-                        "attr_reader" => {
-                            indexer.local_index.add_definition(
-                                indexer.uri_id,
-                                fully_qualified_name,
-                                Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                                    Offset::from_prism_location(&symbol.location()),
-                                ))),
-                            );
-                        }
-                        "attr_writer" => {
-                            indexer.local_index.add_definition(
-                                indexer.uri_id,
-                                format!("{fully_qualified_name}="),
-                                Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                                    Offset::from_prism_location(&symbol.location()),
-                                ))),
-                            );
-                        }
-                        _ => panic!("Unexpected message: {message}"),
-                    });
+                    }
+
+                    return;
                 }
             }
+            "attr_reader" => {
+                if (node.receiver().is_none() || node.receiver().unwrap().as_self_node().is_some())
+                    && let Some(arguments) = node.arguments()
+                {
+                    for argument in arguments.arguments().iter() {
+                        if let ruby_prism::Node::SymbolNode { .. } = argument {
+                            let symbol = argument.as_symbol_node().unwrap();
+                            let name_with_colon = Self::location_to_string(&symbol.location());
+                            let name = name_with_colon.trim_start_matches(':');
+
+                            self.with_updated_nesting(name, |indexer, fully_qualified_name| {
+                                indexer.local_index.add_definition(
+                                    indexer.uri_id,
+                                    fully_qualified_name,
+                                    Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                                        Offset::from_prism_location(&symbol.location()),
+                                    ))),
+                                );
+                            });
+                        }
+                    }
+
+                    return;
+                }
+            }
+            "attr_writer" => {
+                if (node.receiver().is_none() || node.receiver().unwrap().as_self_node().is_some())
+                    && let Some(arguments) = node.arguments()
+                {
+                    for argument in arguments.arguments().iter() {
+                        if let ruby_prism::Node::SymbolNode { .. } = argument {
+                            let symbol = argument.as_symbol_node().unwrap();
+                            let name_with_colon = Self::location_to_string(&symbol.location());
+                            let name = name_with_colon.trim_start_matches(':');
+
+                            self.with_updated_nesting(name, |indexer, fully_qualified_name| {
+                                indexer.local_index.add_definition(
+                                    indexer.uri_id,
+                                    format!("{fully_qualified_name}="),
+                                    Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                                        Offset::from_prism_location(&symbol.location()),
+                                    ))),
+                                );
+                            });
+                        }
+                    }
+
+                    return;
+                }
+            }
+            _ => {
+                // We don't index other calls
+            }
+        }
+
+        if let Some(receiver) = node.receiver() {
+            self.visit(&receiver);
+        }
+
+        if let Some(arguments) = node.arguments() {
+            self.visit(&arguments.as_node());
+        }
+
+        if let Some(block) = node.block() {
+            self.visit(&block);
         }
     }
 
@@ -752,6 +793,9 @@ mod tests {
             class Foo
               attr_accessor :bar, :baz
             end
+
+            self.attr_accessor :qux
+            foo.attr_accessor :not_indexed
             "
         });
 
@@ -784,6 +828,19 @@ mod tests {
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].start(), 52);
         assert_eq!(definitions[0].end(), 56);
+
+        let definitions = context.graph.get("qux").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 81);
+        assert_eq!(definitions[0].end(), 85);
+
+        let definitions = context.graph.get("qux=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].start(), 81);
+        assert_eq!(definitions[0].end(), 85);
+
+        assert!(context.graph.get("not_indexed").is_none());
+        assert!(context.graph.get("not_indexed=").is_none());
     }
 
     #[test]
