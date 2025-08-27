@@ -98,7 +98,7 @@ impl Graph {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
-        let name_id = NameId::new(name);
+        let name_id = NameId::from(name);
         let owned_definitions = self.name_to_definitions.get(&name_id)?;
 
         Some(
@@ -112,7 +112,7 @@ impl Graph {
     // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
     // then all definitions discovered in it get associated to the ID
     pub fn add_uri(&mut self, uri: String) -> UriId {
-        let uri_id = UriId::new(&uri);
+        let uri_id = UriId::from(&uri);
         self.uri_pool.insert(uri_id, uri);
         uri_id
     }
@@ -120,15 +120,15 @@ impl Graph {
     // Handles when a document (identified by `uri`) is deleted. This removes the URI from the graph along with all
     // relationships and definitions that had been discovered in it
     pub fn delete_uri(&mut self, uri: &str) {
-        let uri_id = UriId::new(uri);
+        let uri_id = UriId::from(uri);
         self.remove_definitions_for_uri(uri_id);
         self.uri_pool.remove(&uri_id);
     }
 
     // Registers a definition into the `Graph`, automatically creating all relationships
     pub fn add_definition(&mut self, uri_id: UriId, name: String, definition: Definition) {
-        let name_id = NameId::new(&name);
-        let definition_id = DefinitionId::new(uri_id, definition.start());
+        let name_id = NameId::from(&name);
+        let definition_id = DefinitionId::from(&format!("{uri_id}{}", definition.start()));
 
         self.names.insert(name_id, name);
         self.definitions.insert(definition_id, definition);
@@ -152,8 +152,8 @@ impl Graph {
         let loaded_data = self.db.load_uri(uri_id.to_string())?;
 
         for load_result in loaded_data {
-            let name_id = NameId::from_string(&load_result.name_id);
-            let definition_id = DefinitionId::from_string(&load_result.definition_id);
+            let name_id = NameId::new(load_result.name_id);
+            let definition_id = DefinitionId::new(load_result.definition_id);
 
             self.names.insert(name_id, load_result.name);
             self.definitions.insert(definition_id, load_result.definition);
@@ -488,16 +488,16 @@ mod tests {
         context.index_uri("file:///foo.rb", "module Foo; end");
 
         assert_eq!(context.graph.definitions.len(), 1);
-        assert_eq!(context.graph.names.get(&NameId::new("Foo")).unwrap(), "Foo");
+        assert_eq!(context.graph.names.get(&NameId::from("Foo")).unwrap(), "Foo");
         assert_eq!(
-            context.graph.uri_pool.get(&UriId::new("file:///foo.rb")).unwrap(),
+            context.graph.uri_pool.get(&UriId::from("file:///foo.rb")).unwrap(),
             "file:///foo.rb"
         );
         assert_eq!(
             context
                 .graph
                 .name_to_definitions
-                .get(&NameId::new("Foo"))
+                .get(&NameId::from("Foo"))
                 .unwrap()
                 .len(),
             1
@@ -506,7 +506,7 @@ mod tests {
             context
                 .graph
                 .uris_to_definitions
-                .get(&UriId::new("file:///foo.rb"))
+                .get(&UriId::from("file:///foo.rb"))
                 .unwrap()
                 .len(),
             1
@@ -524,9 +524,9 @@ mod tests {
         context.index_uri("file:///foo.rb", "\n\n\n\n\n\nmodule Foo; end");
 
         assert_eq!(context.graph.definitions.len(), 1);
-        assert_eq!(context.graph.names.get(&NameId::new("Foo")).unwrap(), "Foo");
+        assert_eq!(context.graph.names.get(&NameId::from("Foo")).unwrap(), "Foo");
         assert_eq!(
-            context.graph.uri_pool.get(&UriId::new("file:///foo.rb")).unwrap(),
+            context.graph.uri_pool.get(&UriId::from("file:///foo.rb")).unwrap(),
             "file:///foo.rb"
         );
 
@@ -572,10 +572,7 @@ mod tests {
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 2);
 
-        let mut offsets = definitions
-            .iter()
-            .map(|d| [d.start(), d.end()])
-            .collect::<Vec<_>>();
+        let mut offsets = definitions.iter().map(|d| [d.start(), d.end()]).collect::<Vec<_>>();
         offsets.sort_unstable();
         assert_eq!([0, 15], offsets[0]);
         assert_eq!([18, 33], offsets[1]);
@@ -622,7 +619,7 @@ mod tests {
             .graph
             .definition_to_name
             .iter()
-            .find(|&(_, &name_id)| name_id == NameId::new("Foo"))
+            .find(|&(_, &name_id)| name_id == NameId::from("Foo"))
             .map(|(&def_id, _)| def_id)
             .unwrap();
 
@@ -630,18 +627,18 @@ mod tests {
             .graph
             .definition_to_name
             .iter()
-            .find(|&(_, &name_id)| name_id == NameId::new("Bar"))
+            .find(|&(_, &name_id)| name_id == NameId::from("Bar"))
             .map(|(&def_id, _)| def_id)
             .unwrap();
 
         // Verify definition_to_uri mapping is correct
         assert_eq!(
             context.graph.definition_to_uri[&foo_def_id],
-            UriId::new("file:///foo.rb")
+            UriId::from("file:///foo.rb")
         );
         assert_eq!(
             context.graph.definition_to_uri[&bar_def_id],
-            UriId::new("file:///bar.rb")
+            UriId::from("file:///bar.rb")
         );
 
         // Verify the mapping is cleaned up when a URI is deleted
