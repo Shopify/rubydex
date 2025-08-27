@@ -1,8 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 
 use crate::model::db::Db;
 use crate::model::definitions::Definition;
+use crate::model::identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
 
@@ -13,22 +14,22 @@ pub struct Graph {
     // *** Graph nodes: the following represent possible nodes in our graph ***
 
     // Map of fully qualified names. These represent global declarations, like `Foo`, `Foo#bar` or `Foo.baz`
-    names: HashMap<NameId, String>,
+    names: IdentityHashMap<NameId, String>,
     // Map of URIs currently loaded in memory
-    uri_pool: HashMap<UriId, String>,
+    uri_pool: IdentityHashMap<UriId, String>,
     // Map of definitions
-    definitions: HashMap<DefinitionId, Definition>,
+    definitions: IdentityHashMap<DefinitionId, Definition>,
 
     // *** Graph edges: the following represent relationships between nodes ***
 
     // Map of a fully qualified name to all definitions we discovered for it
-    name_to_definitions: HashMap<NameId, HashSet<DefinitionId>>,
+    name_to_definitions: IdentityHashMap<NameId, IdentityHashSet<DefinitionId>>,
     // Reverse map of a definition to its unique fully qualified name
-    definition_to_name: HashMap<DefinitionId, NameId>,
+    definition_to_name: IdentityHashMap<DefinitionId, NameId>,
     // Reverse map of a definition to its URI
-    definition_to_uri: HashMap<DefinitionId, UriId>,
+    definition_to_uri: IdentityHashMap<DefinitionId, UriId>,
     // Map of URI to all definitions discovered in that document
-    uris_to_definitions: HashMap<UriId, HashSet<DefinitionId>>,
+    uris_to_definitions: IdentityHashMap<UriId, IdentityHashSet<DefinitionId>>,
     db: Db,
 }
 
@@ -36,56 +37,56 @@ impl Graph {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            names: HashMap::new(),
-            definitions: HashMap::new(),
-            uri_pool: HashMap::new(),
-            name_to_definitions: HashMap::new(),
-            definition_to_name: HashMap::new(),
-            definition_to_uri: HashMap::new(),
-            uris_to_definitions: HashMap::new(),
+            names: HashMap::with_hasher(IdentityHashBuilder),
+            definitions: HashMap::with_hasher(IdentityHashBuilder),
+            uri_pool: HashMap::with_hasher(IdentityHashBuilder),
+            name_to_definitions: HashMap::with_hasher(IdentityHashBuilder),
+            definition_to_name: HashMap::with_hasher(IdentityHashBuilder),
+            definition_to_uri: HashMap::with_hasher(IdentityHashBuilder),
+            uris_to_definitions: HashMap::with_hasher(IdentityHashBuilder),
             db: Db::new(),
         }
     }
 
     // Returns an immutable reference to the names map
     #[must_use]
-    pub fn names(&self) -> &HashMap<NameId, String> {
+    pub fn names(&self) -> &IdentityHashMap<NameId, String> {
         &self.names
     }
 
     // Returns an immutable reference to the definitions map
     #[must_use]
-    pub fn definitions(&self) -> &HashMap<DefinitionId, Definition> {
+    pub fn definitions(&self) -> &IdentityHashMap<DefinitionId, Definition> {
         &self.definitions
     }
 
     // Returns an immutable reference to the URI pool map
     #[must_use]
-    pub fn uri_pool(&self) -> &HashMap<UriId, String> {
+    pub fn uri_pool(&self) -> &IdentityHashMap<UriId, String> {
         &self.uri_pool
     }
 
     // Returns an immutable reference to the name to definitions map
     #[must_use]
-    pub fn name_to_definitions(&self) -> &HashMap<NameId, HashSet<DefinitionId>> {
+    pub fn name_to_definitions(&self) -> &IdentityHashMap<NameId, IdentityHashSet<DefinitionId>> {
         &self.name_to_definitions
     }
 
     // Returns an immutable reference to the definition to name map
     #[must_use]
-    pub fn definition_to_name(&self) -> &HashMap<DefinitionId, NameId> {
+    pub fn definition_to_name(&self) -> &IdentityHashMap<DefinitionId, NameId> {
         &self.definition_to_name
     }
 
     // Returns an immutable reference to the definition to URI map
     #[must_use]
-    pub fn definition_to_uri(&self) -> &HashMap<DefinitionId, UriId> {
+    pub fn definition_to_uri(&self) -> &IdentityHashMap<DefinitionId, UriId> {
         &self.definition_to_uri
     }
 
     // Returns an immutable reference to the URI to definitions map
     #[must_use]
-    pub fn uris_to_definitions(&self) -> &HashMap<UriId, HashSet<DefinitionId>> {
+    pub fn uris_to_definitions(&self) -> &IdentityHashMap<UriId, IdentityHashSet<DefinitionId>> {
         &self.uris_to_definitions
     }
 
@@ -443,13 +444,13 @@ impl Graph {
 
     // Clear graph data from memory
     pub fn clear_graph_data(&mut self) {
-        self.names = HashMap::new();
-        self.definitions = HashMap::new();
-        self.uri_pool = HashMap::new();
-        self.name_to_definitions = HashMap::new();
-        self.definition_to_name = HashMap::new();
-        self.definition_to_uri = HashMap::new();
-        self.uris_to_definitions = HashMap::new();
+        self.names = HashMap::with_hasher(IdentityHashBuilder);
+        self.definitions = HashMap::with_hasher(IdentityHashBuilder);
+        self.uri_pool = HashMap::with_hasher(IdentityHashBuilder);
+        self.name_to_definitions = HashMap::with_hasher(IdentityHashBuilder);
+        self.definition_to_name = HashMap::with_hasher(IdentityHashBuilder);
+        self.definition_to_uri = HashMap::with_hasher(IdentityHashBuilder);
+        self.uris_to_definitions = HashMap::with_hasher(IdentityHashBuilder);
     }
 }
 
