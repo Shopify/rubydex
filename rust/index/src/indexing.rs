@@ -1,6 +1,6 @@
 use std::{
-    cmp, fs,
-    path::PathBuf,
+    fs,
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -11,6 +11,7 @@ use crate::{
     },
     model::graph::Graph,
 };
+use glob::glob;
 use rayon::prelude::*;
 use url::Url;
 pub mod errors;
@@ -61,37 +62,30 @@ impl Document {
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) -> Result<(), MultipleErrors> {
-    let chunk_size = cmp::max(10, documents.len() / rayon::current_num_threads());
-
     let indexers: Vec<RubyIndexer> = documents
-        .par_chunks(chunk_size)
-        .flat_map(|chunk| {
-            chunk
-                .iter()
-                .map(|document| {
-                    let mut ruby_indexer = RubyIndexer::new(document.uri.to_string());
-                    // If the document includes the source, use it directly to index (especially since the content may not
-                    // be committed to disk yet). Otherwise, read it from disk
-                    if let Some(source) = &document.source {
-                        ruby_indexer.index(source);
-                    } else {
-                        match fs::read_to_string(document.path()) {
-                            Ok(source) => {
-                                ruby_indexer.index(&source);
-                            }
-                            Err(e) => {
-                                ruby_indexer.add_error(IndexingError::FileReadError(format!(
-                                    "Failed to read {}: {}",
-                                    document.path(),
-                                    e
-                                )));
-                            }
-                        }
+        .par_iter()
+        .map(|document| {
+            let mut ruby_indexer = RubyIndexer::new(document.uri.to_string());
+            // If the document includes the source, use it directly to index (especially since the content may not
+            // be committed to disk yet). Otherwise, read it from disk
+            if let Some(source) = &document.source {
+                ruby_indexer.index(source);
+            } else {
+                match fs::read_to_string(document.path()) {
+                    Ok(source) => {
+                        ruby_indexer.index(&source);
                     }
+                    Err(e) => {
+                        ruby_indexer.add_error(IndexingError::FileReadError(format!(
+                            "Failed to read {}: {}",
+                            document.path(),
+                            e
+                        )));
+                    }
+                }
+            }
 
-                    ruby_indexer
-                })
-                .collect::<Vec<_>>()
+            ruby_indexer
         })
         .collect();
 
@@ -118,69 +112,52 @@ pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) 
 ///
 /// Panics if there's a bug in how we're handling the arc mutex, like trying to acquire locks twice
 #[must_use]
-pub fn collect_documents_in_parallel(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingError>) {
-    let chunk_size = cmp::max(10, paths.len() / rayon::current_num_threads());
-    let errors = Arc::new(Mutex::new(Vec::new()));
+pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingError>) {
+    let mut errors = Vec::new();
+    let mut documents = Vec::new();
 
-    let documents = paths
-        .into_par_iter()
-        .chunks(chunk_size)
-        .flat_map(|chunk| {
-            let mut documents = Vec::new();
+    for path in paths {
+        let path_obj = Path::new(&path);
 
-            for path in chunk {
-                collect_documents_recursively(&PathBuf::from(path), &mut documents, &errors);
+        if path_obj.is_dir() {
+            match glob(&format!("{path}/**/*.rb")) {
+                Ok(entries) => {
+                    for entry in entries {
+                        match entry {
+                            Ok(path) => match Document::from_file_path(&path.to_string_lossy()) {
+                                Ok(document) => documents.push(document),
+                                Err(e) => errors.push(e),
+                            },
+                            Err(e) => errors.push(IndexingError::FileReadError(format!(
+                                "Failed to read glob entry in '{path}': {e}"
+                            ))),
+                        }
+                    }
+                }
+                Err(e) => {
+                    errors.push(IndexingError::FileReadError(format!(
+                        "Failed to read glob pattern '{path}/**/*.rb': {e}"
+                    )));
+                }
             }
+            continue;
+        }
 
-            documents
-        })
-        .collect();
-
-    (documents, Arc::try_unwrap(errors).unwrap().into_inner().unwrap())
-}
-
-fn collect_documents_recursively(
-    path: &PathBuf,
-    documents: &mut Vec<Document>,
-    errors: &Arc<Mutex<Vec<IndexingError>>>,
-) {
-    // If the file is a Ruby one, then include it. Otherwise, if it's a file of another type, we still want to return
-    // early
-    if path.is_file() {
-        if path.extension().filter(|ext| *ext == "rb").is_some()
-            && let Ok(absolute_path) = path.canonicalize()
-        {
-            match Document::from_file_path(&absolute_path.to_string_lossy()) {
+        if path_obj.exists() {
+            match Document::from_file_path(&path) {
                 Ok(document) => documents.push(document),
-                Err(e) => errors.lock().unwrap().push(IndexingError::InvalidUri(format!(
-                    "Invalid URI for document '{}': {}",
-                    absolute_path.display(),
-                    e
-                ))),
+                Err(e) => errors.push(e),
             }
         }
-
-        return;
     }
 
-    // If it's a directory, go through all entries and recursively continue collecting documents
-    match fs::read_dir(path) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                collect_documents_recursively(&path, documents, errors);
-            }
-        }
-        Err(e) => errors.lock().unwrap().push(IndexingError::FileReadError(format!(
-            "Error reading path '{}': {}",
-            path.display(),
-            e
-        ))),
-    }
+    (documents, errors)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -194,7 +171,7 @@ mod tests {
             root.join("lib/index").to_str().unwrap().to_string(),
         ];
 
-        let (documents, errors) = collect_documents_in_parallel(paths);
+        let (documents, errors) = collect_documents(paths);
         assert!(errors.is_empty(), "Errors: {errors:#?}");
         assert!(documents.len() > 2);
     }
@@ -203,8 +180,8 @@ mod tests {
     fn collecting_a_non_existing_path() {
         let paths = vec!["/non_existing_file.rb".to_string(), "/non_existing_dir".to_string()];
 
-        let (documents, errors) = collect_documents_in_parallel(paths);
+        let (documents, errors) = collect_documents(paths);
         assert!(documents.is_empty());
-        assert_eq!(errors.len(), 2);
+        assert!(errors.is_empty());
     }
 }
