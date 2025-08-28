@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let mut graph = Graph::new();
     graph.set_configuration(format!("{}/graph.db", &args.dir))?;
-    let (documents, errors) = indexing::collect_documents_in_parallel(vec![args.dir]);
+    let (documents, errors) = indexing::collect_documents(vec![args.dir]);
 
     if !errors.is_empty() {
         return Err(Box::new(MultipleErrors(errors)));
