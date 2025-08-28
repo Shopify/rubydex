@@ -6,9 +6,9 @@ use std::{cell::RefCell, error::Error, fs, path::Path};
 const SCHEMA_VERSION: u16 = 1;
 
 pub struct LoadResult {
-    pub name_id: String,
+    pub name_id: u64,
     pub name: String,
-    pub definition_id: String,
+    pub definition_id: u64,
     pub definition: Definition,
 }
 
@@ -85,9 +85,9 @@ impl Db {
 
             statement
                 .query_map([uri_id], |row| {
-                    let name_id = row.get::<_, String>(0)?;
+                    let name_id = row.get::<_, u64>(0)?;
                     let name = row.get::<_, String>(1)?;
-                    let definition_id = row.get::<_, String>(2)?;
+                    let definition_id = row.get::<_, u64>(2)?;
                     let data = row.get::<_, Vec<u8>>(3)?;
                     let definition = rmp_serde::from_slice::<Definition>(&data)
                         .expect("Deserializing the definition from the DB should always succeed");
@@ -234,13 +234,13 @@ mod tests {
         let mut data = stmt
             .query_map((), |row| {
                 Ok((
-                    row.get::<_, String>(0).unwrap(),
+                    row.get::<_, u64>(0).unwrap(),
                     row.get::<_, String>(1).unwrap(),
-                    row.get::<_, String>(2).unwrap(),
-                    row.get::<_, String>(3).unwrap(),
-                    row.get::<_, String>(4).unwrap(),
+                    row.get::<_, u64>(2).unwrap(),
+                    row.get::<_, u64>(3).unwrap(),
+                    row.get::<_, u64>(4).unwrap(),
                     row.get::<_, Vec<u8>>(5).unwrap(),
-                    row.get::<_, String>(6).unwrap(),
+                    row.get::<_, u64>(6).unwrap(),
                     row.get::<_, String>(7).unwrap(),
                 ))
             })
@@ -251,7 +251,7 @@ mod tests {
         let (
             name_id,
             name,
-            definition_id,
+            _definition_id,
             definition_name_id,
             definition_document_id,
             definition_data,
@@ -273,6 +273,5 @@ mod tests {
         assert_eq!(0, definition.start());
         assert_eq!(15, definition.end());
         assert_eq!(document_uri, String::from("file:///foo.rb"));
-        assert!(!definition_id.is_empty());
     }
 }
