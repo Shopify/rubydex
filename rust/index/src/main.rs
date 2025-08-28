@@ -1,7 +1,4 @@
-use std::{
-    error::Error,
-    sync::{Arc, Mutex},
-};
+use std::error::Error;
 
 use clap::Parser;
 
@@ -37,13 +34,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err(Box::new(MultipleErrors(errors)));
     }
 
-    let graph_arc = Arc::new(Mutex::new(graph));
-    indexing::index_in_parallel(&graph_arc, &documents)?;
+    indexing::index_in_parallel(&mut graph, &documents)?;
 
     // Run integrity checks if requested
     if args.check_integrity {
-        let graph_lock = graph_arc.lock().unwrap();
-        let errors = Graph::integrity_checker().apply(&graph_lock);
+        let errors = Graph::integrity_checker().apply(&graph);
 
         if errors.is_empty() {
             println!("✓ Index integrity check passed");
@@ -57,14 +52,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Generate visualization or print statistics
-    let graph_lock = graph_arc.lock().unwrap();
     if args.visualize {
-        println!("{}", dot::generate(&graph_lock));
+        println!("{}", dot::generate(&graph));
     } else {
         println!("Indexed {} files", documents.len());
-        println!("Found {} names", graph_lock.names().len());
-        println!("Found {} definitions", graph_lock.definitions().len());
-        println!("Found {} URIs", graph_lock.uri_pool().len());
+        println!("Found {} names", graph.names().len());
+        println!("Found {} definitions", graph.definitions().len());
+        println!("Found {} URIs", graph.uri_pool().len());
     }
 
     Ok(())

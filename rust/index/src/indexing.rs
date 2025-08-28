@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{fs, path::Path};
 
 use crate::{
     indexing::{
@@ -61,7 +57,7 @@ impl Document {
 /// # Panics
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
-pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) -> Result<(), MultipleErrors> {
+pub fn index_in_parallel(graph: &mut Graph, documents: &[Document]) -> Result<(), MultipleErrors> {
     let indexers: Vec<RubyIndexer> = documents
         .par_iter()
         .map(|document| {
@@ -91,11 +87,10 @@ pub fn index_in_parallel(graph_arc: &Arc<Mutex<Graph>>, documents: &[Document]) 
 
     // Insert all discovered definitions into the global graph
     let mut all_errors = Vec::new();
-    let mut graph_guard = graph_arc.lock().unwrap();
 
     for indexer in indexers {
         let (local_graph, errors) = indexer.into_parts();
-        graph_guard.update(local_graph);
+        graph.update(local_graph);
         all_errors.extend(errors);
     }
 
