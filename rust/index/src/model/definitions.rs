@@ -73,6 +73,22 @@ impl Definition {
             Definition::Method(it) => it.offset.end(),
         }
     }
+
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Definition::Class(_) => "Class",
+            Definition::Module(_) => "Module",
+            Definition::Constant(_) => "Constant",
+            Definition::Method(_) => "Method",
+            Definition::AttrAccessor(_) => "AttrAccessor",
+            Definition::AttrReader(_) => "AttrReader",
+            Definition::AttrWriter(_) => "AttrWriter",
+            Definition::GlobalVariable(_) => "GlobalVariable",
+            Definition::InstanceVariable(_) => "InstanceVariable",
+            Definition::ClassVariable(_) => "ClassVariable",
+        }
+    }
 }
 
 /// A class definition

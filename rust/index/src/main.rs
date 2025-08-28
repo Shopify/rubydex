@@ -8,6 +8,7 @@ use clap::Parser;
 use index::{
     indexing::{self, errors::MultipleErrors},
     model::graph::Graph,
+    visualization::dot,
 };
 
 #[derive(Parser, Debug)]
@@ -21,6 +22,9 @@ struct Args {
         help = "Run integrity checks on the index after processing"
     )]
     check_integrity: bool,
+
+    #[arg(long = "visualize")]
+    visualize: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -50,6 +54,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             std::process::exit(1);
         }
+    }
+
+    // Generate visualization or print statistics
+    let graph_lock = graph_arc.lock().unwrap();
+    if args.visualize {
+        println!("{}", dot::generate(&graph_lock));
+    } else {
+        println!("Indexed {} files", documents.len());
+        println!("Found {} names", graph_lock.names().len());
+        println!("Found {} definitions", graph_lock.definitions().len());
+        println!("Found {} URIs", graph_lock.uri_pool().len());
     }
 
     Ok(())

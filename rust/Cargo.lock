@@ -508,6 +508,7 @@ dependencies = [
  "glob",
  "predicates",
  "rayon",
+ "regex",
  "rmp-serde",
  "ruby-prism",
  "rusqlite",
