@@ -11,6 +11,8 @@
 *.o
 *.a
 *.dSYM
+*.db
+*.db-*
 /ext/index/Makefile
 mkmf.log
 target/
