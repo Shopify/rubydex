@@ -1,3 +1,4 @@
+use super::normalize_indentation;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
 use crate::source_location::UTF8SourceLocationConverter;
@@ -21,53 +22,8 @@ impl GraphTest {
         indexer.into_parts().0
     }
 
-    #[must_use]
-    fn normalize_indentation(input: &str) -> String {
-        // If the input starts with a newline followed by indentation, drop that
-        // very first newline so that the first content line can start at 0.
-        // If the first newline is not followed by indentation, preserve it.
-        let input = if let Some(rest) = input.strip_prefix('\n') {
-            match rest.chars().next() {
-                Some(' ' | '\t') => rest,
-                _ => input,
-            }
-        } else {
-            input
-        };
-
-        let lines: Vec<&str> = input.lines().collect();
-
-        if lines.is_empty() {
-            return String::new();
-        }
-
-        // Determine base indentation from the first non-empty line, but do not
-        // remove or trim any leading/trailing blank lines. We only strip
-        // indentation from each line while preserving all newlines.
-        let first_non_empty_line = match lines.iter().find(|line| !line.trim().is_empty()) {
-            Some(line) => *line,
-            None => return input.to_string(),
-        };
-
-        let base_indent = first_non_empty_line.len() - first_non_empty_line.trim_start().len();
-
-        lines
-            .iter()
-            .map(|line| {
-                if line.trim().is_empty() {
-                    ""
-                } else if line.len() >= base_indent && line.chars().take(base_indent).all(char::is_whitespace) {
-                    &line[base_indent..]
-                } else {
-                    line
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     pub fn index_uri(&mut self, uri: &str, source: &str) {
-        let source = Self::normalize_indentation(source);
+        let source = normalize_indentation(source);
         let local_index = Self::index_source(uri, &source);
         self.graph.update(local_index);
     }
