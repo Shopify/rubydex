@@ -1,5 +1,7 @@
+mod context;
 mod graph_test;
 
+pub use context::Context;
 pub use graph_test::GraphTest;
 
 #[must_use]
