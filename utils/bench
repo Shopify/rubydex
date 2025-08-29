@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# A script to benchmark indexing against the huge corpus in release mode. Use this to check for any performance
+# improvements or regressions
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+CORPUS_PATH="$(dirname "$PROJECT_ROOT")/huge_corpus"
+
+# 1. Generate the huge corpus if it doesn't exist
+# 2. Compile in release mode (cargo build --release)
+# 3. Run the benchmark and time it
+
+if [ ! -d "$CORPUS_PATH" ]; then
+    echo "Generating huge corpus at $CORPUS_PATH..."
+    $SCRIPT_DIR/generate-corpus "$CORPUS_PATH" -s 1000
+fi
+
+cd "$PROJECT_ROOT/rust" && cargo build --release
+cd $PROJECT_ROOT
+utils/mem-use "$PROJECT_ROOT/rust/target/release/index_cli" "$CORPUS_PATH"
