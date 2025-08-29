@@ -55,6 +55,95 @@ impl RubyIndexer {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
+    fn collect_parameters(node: &ruby_prism::DefNode) -> Vec<Parameter> {
+        let mut parameters: Vec<Parameter> = Vec::new();
+
+        if let Some(parameters_list) = node.parameters() {
+            for parameter in parameters_list.requireds().iter() {
+                parameters.push(Parameter::RequiredPositional(ParameterStruct::new(
+                    Offset::from_prism_location(&parameter.location()),
+                    Self::location_to_string(&parameter.location()),
+                )));
+            }
+            for parameter in parameters_list.optionals().iter() {
+                let opt_param = parameter.as_optional_parameter_node().unwrap();
+                parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
+                    Offset::from_prism_location(&parameter.location()),
+                    Self::location_to_string(&opt_param.name_loc()),
+                )));
+            }
+            if let Some(rest) = parameters_list.rest() {
+                let rest_param = rest.as_rest_parameter_node().unwrap();
+                parameters.push(Parameter::RestPositional(ParameterStruct::new(
+                    Offset::from_prism_location(&rest.location()),
+                    Self::location_to_string(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
+                )));
+            }
+            for post in parameters_list.posts().iter() {
+                parameters.push(Parameter::Post(ParameterStruct::new(
+                    Offset::from_prism_location(&post.location()),
+                    Self::location_to_string(&post.location()),
+                )));
+            }
+            for keyword in parameters_list.keywords().iter() {
+                match keyword {
+                    ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
+                        let required = keyword.as_required_keyword_parameter_node().unwrap();
+                        parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
+                            Offset::from_prism_location(&keyword.location()),
+                            Self::location_to_string(&required.name_loc())
+                                .trim_end_matches(':')
+                                .to_string(),
+                        )));
+                    }
+                    ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
+                        let optional = keyword.as_optional_keyword_parameter_node().unwrap();
+                        parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
+                            Offset::from_prism_location(&keyword.location()),
+                            Self::location_to_string(&optional.name_loc())
+                                .trim_end_matches(':')
+                                .to_string(),
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(rest) = parameters_list.keyword_rest() {
+                match rest {
+                    ruby_prism::Node::KeywordRestParameterNode { .. } => {
+                        parameters.push(Parameter::RestKeyword(ParameterStruct::new(
+                            Offset::from_prism_location(&rest.location()),
+                            Self::location_to_string(
+                                &rest
+                                    .as_keyword_rest_parameter_node()
+                                    .unwrap()
+                                    .name_loc()
+                                    .unwrap_or_else(|| rest.location()),
+                            ),
+                        )));
+                    }
+                    ruby_prism::Node::ForwardingParameterNode { .. } => {
+                        parameters.push(Parameter::Forward(ParameterStruct::new(
+                            Offset::from_prism_location(&rest.location()),
+                            Self::location_to_string(&rest.as_forwarding_parameter_node().unwrap().location()),
+                        )));
+                    }
+                    _ => {
+                        // Do nothing
+                    }
+                }
+            }
+            if let Some(block) = parameters_list.block() {
+                parameters.push(Parameter::Block(ParameterStruct::new(
+                    Offset::from_prism_location(&block.location()),
+                    Self::location_to_string(&block.name_loc().unwrap_or_else(|| block.location())),
+                )));
+            }
+        }
+
+        parameters
+    }
+
     fn with_updated_nesting<F>(&mut self, name: &str, perform_visit: F)
     where
         F: FnOnce(&mut Self, String),
@@ -245,96 +334,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.name_loc());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let mut parameters: Vec<Parameter> = Vec::new();
-            if let Some(parameters_list) = node.parameters() {
-                for parameter in parameters_list.requireds().iter() {
-                    parameters.push(Parameter::RequiredPositional(ParameterStruct::new(
-                        Offset::from_prism_location(&parameter.location()),
-                        Self::location_to_string(&parameter.location()),
-                    )));
-                }
-                for parameter in parameters_list.optionals().iter() {
-                    let opt_param = parameter.as_optional_parameter_node().unwrap();
-                    parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
-                        Offset::from_prism_location(&parameter.location()),
-                        Self::location_to_string(&opt_param.name_loc()),
-                    )));
-                }
-                if let Some(rest) = parameters_list.rest() {
-                    let rest_param = rest.as_rest_parameter_node().unwrap();
-                    parameters.push(Parameter::RestPositional(ParameterStruct::new(
-                        Offset::from_prism_location(&rest.location()),
-                        Self::location_to_string(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
-                    )));
-                }
-                for post in parameters_list.posts().iter() {
-                    parameters.push(Parameter::Post(ParameterStruct::new(
-                        Offset::from_prism_location(&post.location()),
-                        Self::location_to_string(&post.location()),
-                    )));
-                }
-                for keyword in parameters_list.keywords().iter() {
-                    match keyword {
-                        ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
-                            let required = keyword.as_required_keyword_parameter_node().unwrap();
-                            parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
-                                Offset::from_prism_location(&keyword.location()),
-                                Self::location_to_string(&required.name_loc())
-                                    .trim_end_matches(':')
-                                    .to_string(),
-                            )));
-                        }
-                        ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
-                            let optional = keyword.as_optional_keyword_parameter_node().unwrap();
-                            parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
-                                Offset::from_prism_location(&keyword.location()),
-                                Self::location_to_string(&optional.name_loc())
-                                    .trim_end_matches(':')
-                                    .to_string(),
-                            )));
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(rest) = parameters_list.keyword_rest() {
-                    match rest {
-                        ruby_prism::Node::KeywordRestParameterNode { .. } => {
-                            parameters.push(Parameter::RestKeyword(ParameterStruct::new(
-                                Offset::from_prism_location(&rest.location()),
-                                Self::location_to_string(
-                                    &rest
-                                        .as_keyword_rest_parameter_node()
-                                        .unwrap()
-                                        .name_loc()
-                                        .unwrap_or_else(|| rest.location()),
-                                ),
-                            )));
-                        }
-                        ruby_prism::Node::ForwardingParameterNode { .. } => {
-                            parameters.push(Parameter::Forward(ParameterStruct::new(
-                                Offset::from_prism_location(&rest.location()),
-                                Self::location_to_string(&rest.as_forwarding_parameter_node().unwrap().location()),
-                            )));
-                        }
-                        _ => {
-                            // Do nothing
-                        }
-                    }
-                }
-                if let Some(block) = parameters_list.block() {
-                    parameters.push(Parameter::Block(ParameterStruct::new(
-                        Offset::from_prism_location(&block.location()),
-                        Self::location_to_string(&block.name_loc().unwrap_or_else(|| block.location())),
-                    )));
-                }
-            }
-
             let name_id = NameId::from(&fully_qualified_name);
             let method = MethodDefinition::new(
                 name_id,
                 indexer.uri_id,
                 Offset::from_prism_location(&node.location()),
-                parameters,
+                Self::collect_parameters(node),
                 node.receiver()
                     .is_some_and(|receiver| receiver.as_self_node().is_some()),
             );
