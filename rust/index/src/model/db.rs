@@ -201,17 +201,11 @@ impl Db {
             conn.prepare_cached("INSERT INTO definitions (id, name_id, document_id, data) VALUES (?, ?, ?, ?)")?;
 
         for (definition_id, definition) in graph.definitions() {
-            let name_id = graph.definition_to_name()[definition_id];
-            let uri_id = graph.definition_to_uri()[definition_id];
-
             let data = rmp_serde::to_vec(definition).expect("Serializing definitions should always succeed");
+            let name_id = *definition.name_id();
+            let uri_id = *definition.uri_id();
 
-            stmt.execute(params![
-                &definition_id.to_string(),
-                &name_id.to_string(),
-                &uri_id.to_string(),
-                data,
-            ])?;
+            stmt.execute(params![&definition_id.to_string(), *name_id, *uri_id, data,])?;
         }
 
         Ok(())

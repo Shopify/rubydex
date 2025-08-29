@@ -1,5 +1,6 @@
 //! This module contains stable ID representations that compose the `Graph` global representation
 
+use serde::{Deserialize, Serialize};
 use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
@@ -7,7 +8,7 @@ use std::{
 };
 use xxhash_rust::xxh3::xxh3_64;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Id<T> {
     value: u64,
     _marker: PhantomData<T>,

@@ -60,17 +60,13 @@ fn write_definition_nodes(output: &mut String, graph: &Graph) {
         .definitions()
         .iter()
         .filter_map(|(def_id, definition)| {
-            graph
-                .definition_to_name()
-                .get(def_id)
-                .and_then(|name_id| graph.names().get(name_id))
-                .map(|name| {
-                    let def_type = definition.kind();
-                    let escaped_name = escape_dot_string(name);
-                    let label = format!("{def_type}({escaped_name})");
-                    let line = format!("    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];\n");
-                    (label, line)
-                })
+            graph.names().get(definition.name_id()).map(|name| {
+                let def_type = definition.kind();
+                let escaped_name = escape_dot_string(name);
+                let label = format!("{def_type}({escaped_name})");
+                let line = format!("    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];\n");
+                (label, line)
+            })
         })
         .collect();
 

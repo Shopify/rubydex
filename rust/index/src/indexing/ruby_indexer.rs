@@ -7,7 +7,7 @@ use crate::model::definitions::{
     ModuleDefinition, Parameter, ParameterStruct,
 };
 use crate::model::graph::Graph;
-use crate::model::ids::UriId;
+use crate::model::ids::{NameId, UriId};
 use crate::offset::Offset;
 
 use ruby_prism::Visit;
@@ -96,9 +96,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.constant_path().location());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Class(Box::new(ClassDefinition::new(Offset::from_prism_location(
-                &node.location(),
-            ))));
+            let name_id = NameId::from(&fully_qualified_name);
+            let definition = Definition::Class(Box::new(ClassDefinition::new(
+                name_id,
+                indexer.uri_id,
+                Offset::from_prism_location(&node.location()),
+            )));
 
             indexer
                 .local_index
@@ -114,9 +117,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.constant_path().location());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Module(Box::new(ModuleDefinition::new(Offset::from_prism_location(
-                &node.location(),
-            ))));
+            let name_id = NameId::from(&fully_qualified_name);
+            let definition = Definition::Module(Box::new(ModuleDefinition::new(
+                name_id,
+                indexer.uri_id,
+                Offset::from_prism_location(&node.location()),
+            )));
             indexer
                 .local_index
                 .add_definition(indexer.uri_id, fully_qualified_name, definition);
@@ -131,9 +137,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.name_loc());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Constant(Box::new(ConstantDefinition::new(Offset::from_prism_location(
-                &node.name_loc(),
-            ))));
+            let name_id = NameId::from(&fully_qualified_name);
+            let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+                name_id,
+                indexer.uri_id,
+                Offset::from_prism_location(&node.name_loc()),
+            )));
 
             indexer
                 .local_index
@@ -147,9 +156,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.target().location());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Constant(Box::new(ConstantDefinition::new(Offset::from_prism_location(
-                &node.target().location(),
-            ))));
+            let name_id = NameId::from(&fully_qualified_name);
+            let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+                name_id,
+                indexer.uri_id,
+                Offset::from_prism_location(&node.target().location()),
+            )));
 
             indexer
                 .local_index
@@ -166,7 +178,10 @@ impl Visit<'_> for RubyIndexer {
                     let name = Self::location_to_string(&left.location());
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let name_id = NameId::from(&fully_qualified_name);
                         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+                            name_id,
+                            indexer.uri_id,
                             Offset::from_prism_location(&left.location()),
                         )));
 
@@ -177,8 +192,11 @@ impl Visit<'_> for RubyIndexer {
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     let name = Self::location_to_string(&left.location());
+                    let name_id = NameId::from(&name);
 
                     let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                        name_id,
+                        self.uri_id,
                         Offset::from_prism_location(&left.location()),
                     )));
 
@@ -188,7 +206,10 @@ impl Visit<'_> for RubyIndexer {
                     let name = Self::location_to_string(&left.location());
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let name_id = NameId::from(&fully_qualified_name);
                         let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                            name_id,
+                            indexer.uri_id,
                             Offset::from_prism_location(&left.location()),
                         )));
 
@@ -201,7 +222,10 @@ impl Visit<'_> for RubyIndexer {
                     let name = Self::location_to_string(&left.location());
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let name_id = NameId::from(&fully_qualified_name);
                         let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                            name_id,
+                            indexer.uri_id,
                             Offset::from_prism_location(&left.location()),
                         )));
 
@@ -305,7 +329,10 @@ impl Visit<'_> for RubyIndexer {
                 }
             }
 
+            let name_id = NameId::from(&fully_qualified_name);
             let method = MethodDefinition::new(
+                name_id,
+                indexer.uri_id,
                 Offset::from_prism_location(&node.location()),
                 parameters,
                 node.receiver()
@@ -346,18 +373,24 @@ impl Visit<'_> for RubyIndexer {
                             let name = name_with_colon.trim_start_matches(':');
 
                             self.with_updated_nesting(name, |indexer, fully_qualified_name| {
+                                let name_id = NameId::from(&fully_qualified_name);
                                 indexer.local_index.add_definition(
                                     indexer.uri_id,
                                     fully_qualified_name.clone(),
                                     Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                                        name_id,
+                                        indexer.uri_id,
                                         Offset::from_prism_location(&symbol.location()),
                                     ))),
                                 );
-
+                                let writer_name = format!("{fully_qualified_name}=");
+                                let writer_name_id = NameId::from(&writer_name);
                                 indexer.local_index.add_definition(
                                     indexer.uri_id,
-                                    format!("{fully_qualified_name}="),
+                                    writer_name,
                                     Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                                        writer_name_id,
+                                        indexer.uri_id,
                                         Offset::from_prism_location(&symbol.location()),
                                     ))),
                                 );
@@ -379,10 +412,13 @@ impl Visit<'_> for RubyIndexer {
                             let name = name_with_colon.trim_start_matches(':');
 
                             self.with_updated_nesting(name, |indexer, fully_qualified_name| {
+                                let name_id = NameId::from(&fully_qualified_name);
                                 indexer.local_index.add_definition(
                                     indexer.uri_id,
                                     fully_qualified_name,
                                     Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                                        name_id,
+                                        indexer.uri_id,
                                         Offset::from_prism_location(&symbol.location()),
                                     ))),
                                 );
@@ -404,10 +440,15 @@ impl Visit<'_> for RubyIndexer {
                             let name = name_with_colon.trim_start_matches(':');
 
                             self.with_updated_nesting(name, |indexer, fully_qualified_name| {
+                                let writer_name = format!("{fully_qualified_name}=");
+                                let name_id = NameId::from(&writer_name);
+
                                 indexer.local_index.add_definition(
                                     indexer.uri_id,
-                                    format!("{fully_qualified_name}="),
+                                    writer_name,
                                     Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                                        name_id,
+                                        indexer.uri_id,
                                         Offset::from_prism_location(&symbol.location()),
                                     ))),
                                 );
@@ -438,8 +479,11 @@ impl Visit<'_> for RubyIndexer {
 
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
         let name = Self::location_to_string(&node.name_loc());
+        let name_id = NameId::from(&name);
 
         let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+            name_id,
+            self.uri_id,
             Offset::from_prism_location(&node.name_loc()),
         )));
 
@@ -452,7 +496,10 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.name_loc());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+            let name_id = NameId::from(&fully_qualified_name);
             let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                name_id,
+                indexer.uri_id,
                 Offset::from_prism_location(&node.name_loc()),
             )));
 
@@ -468,7 +515,10 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.name_loc());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+            let name_id = NameId::from(&fully_qualified_name);
             let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                name_id,
+                indexer.uri_id,
                 Offset::from_prism_location(&node.name_loc()),
             )));
 
