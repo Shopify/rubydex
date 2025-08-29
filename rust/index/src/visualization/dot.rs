@@ -56,21 +56,28 @@ fn write_name_nodes(output: &mut String, graph: &Graph) {
 }
 
 fn write_definition_nodes(output: &mut String, graph: &Graph) {
-    let mut definitions: Vec<_> = graph.definitions().iter().collect();
-    definitions.sort_by_key(|(def_id, _)| def_id.to_string());
+    let mut definitions: Vec<_> = graph
+        .definitions()
+        .iter()
+        .filter_map(|(def_id, definition)| {
+            graph
+                .definition_to_name()
+                .get(def_id)
+                .and_then(|name_id| graph.names().get(name_id))
+                .map(|name| {
+                    let def_type = definition.kind();
+                    let escaped_name = escape_dot_string(name);
+                    let label = format!("{def_type}({escaped_name})");
+                    let line = format!("    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];\n");
+                    (label, line)
+                })
+        })
+        .collect();
 
-    for (def_id, definition) in definitions {
-        if let Some(name_id) = graph.definition_to_name().get(def_id)
-            && let Some(name) = graph.names().get(name_id)
-        {
-            let def_type = definition.kind();
-            let escaped_name = escape_dot_string(name);
+    definitions.sort_by(|a, b| a.0.cmp(&b.0));
 
-            let _ = writeln!(
-                output,
-                "    \"def_{def_id}\" [label=\"{def_type}({escaped_name})\",shape={DEFINITION_NODE_SHAPE}];"
-            );
-        }
+    for (_, line) in definitions {
+        output.push_str(&line);
     }
     output.push('\n');
 }
@@ -176,15 +183,15 @@ mod tests {
     "Name:TestClass" [label="TestClass",shape=hexagon];
     "Name:TestModule" [label="TestModule",shape=hexagon];
 
-    "def_{module_def_id}" [label="Module(TestModule)",shape=ellipse];
     "def_{class_def_id}" [label="Class(TestClass)",shape=ellipse];
+    "def_{module_def_id}" [label="Module(TestModule)",shape=ellipse];
 
     "file:///test.rb" [label="test.rb",shape=box];
 
     "Name:TestClass" -> "def_{class_def_id}" [dir=both];
     "Name:TestModule" -> "def_{module_def_id}" [dir=both];
-    "def_{module_def_id}" -> "file:///test.rb";
     "def_{class_def_id}" -> "file:///test.rb";
+    "def_{module_def_id}" -> "file:///test.rb";
 }}
 "#
         );
