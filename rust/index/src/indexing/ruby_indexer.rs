@@ -47,8 +47,13 @@ impl RubyIndexer {
     }
 
     pub fn index(&mut self, source: &str) {
+        self.local_index.timers().parse_ruby().start();
         let result = ruby_prism::parse(source.as_ref());
+        self.local_index.timers().parse_ruby().stop();
+
+        self.local_index.timers().visit_ruby().start();
         self.visit(&result.node());
+        self.local_index.timers().visit_ruby().stop();
     }
 
     fn location_to_string(location: &ruby_prism::Location) -> String {
@@ -88,6 +93,10 @@ impl RubyIndexer {
 
             current_stack.pop();
         }
+    }
+
+    pub fn graph(&self) -> &Graph {
+        &self.local_index
     }
 }
 

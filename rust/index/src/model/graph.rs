@@ -5,6 +5,7 @@ use crate::model::db::Db;
 use crate::model::definitions::Definition;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
+use crate::timers::Timers;
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
@@ -29,7 +30,9 @@ pub struct Graph {
     definition_to_uri: HashMap<DefinitionId, UriId>,
     // Map of URI to all definitions discovered in that document
     uris_to_definitions: HashMap<UriId, HashSet<DefinitionId>>,
+
     db: Db,
+    timers: Timers,
 }
 
 impl Graph {
@@ -44,7 +47,18 @@ impl Graph {
             definition_to_uri: HashMap::new(),
             uris_to_definitions: HashMap::new(),
             db: Db::new(),
+            timers: Timers::new(),
         }
+    }
+
+    #[must_use]
+    pub fn timers(&mut self) -> &mut Timers {
+        &mut self.timers
+    }
+
+    #[must_use]
+    pub fn timers_ref(&self) -> &Timers {
+        &self.timers
     }
 
     // Returns an immutable reference to the names map
@@ -112,8 +126,13 @@ impl Graph {
     // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
     // then all definitions discovered in it get associated to the ID
     pub fn add_uri(&mut self, uri: String) -> UriId {
+        self.timers.add_uri().start();
+
         let uri_id = UriId::from(&uri);
         self.uri_pool.insert(uri_id, uri);
+
+        self.timers.add_uri().stop();
+
         uri_id
     }
 
@@ -134,6 +153,8 @@ impl Graph {
 
     // Registers a definition into the `Graph`, automatically creating all relationships
     pub fn add_definition(&mut self, uri_id: UriId, name: String, definition: Definition) {
+        self.timers.add_definition().start();
+
         let name_id = NameId::from(&name);
         let definition_id = DefinitionId::from(&format!("{uri_id}{}", definition.start()));
 
@@ -149,6 +170,8 @@ impl Graph {
             .entry(uri_id)
             .or_default()
             .insert(definition_id);
+
+        self.timers.add_definition().stop();
     }
 
     /// # Errors
@@ -190,6 +213,8 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, incomplete_index: Graph) {
+        self.timers.extend_graph().start();
+
         self.names.extend(incomplete_index.names);
         self.definitions.extend(incomplete_index.definitions);
         self.uri_pool.extend(incomplete_index.uri_pool);
@@ -203,6 +228,8 @@ impl Graph {
                 .or_default()
                 .extend(definition_ids);
         }
+
+        self.timers.extend_graph().stop();
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and

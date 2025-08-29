@@ -90,6 +90,7 @@ pub fn index_in_parallel(graph: &mut Graph, documents: &[Document]) -> Result<()
 
     for indexer in indexers {
         let (local_graph, errors) = indexer.into_parts();
+        graph.timers().add(local_graph.timers_ref());
         graph.update(local_graph);
         all_errors.extend(errors);
     }
