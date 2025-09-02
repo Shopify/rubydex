@@ -12,7 +12,9 @@ pub struct IdentityHasher {
 }
 
 impl Hasher for IdentityHasher {
-    fn write(&mut self, _bytes: &[u8]) {}
+    fn write(&mut self, _bytes: &[u8]) {
+        unreachable!("IdentityHasher only supports write_u64");
+    }
 
     fn write_u64(&mut self, i: u64) {
         self.hash = i;
@@ -35,4 +37,18 @@ impl BuildHasher for IdentityHashBuilder {
 }
 
 pub type IdentityHashMap<K, V> = HashMap<K, V, IdentityHashBuilder>;
-pub type IdentityHashSet<K> = HashSet<K, IdentityHashBuilder>;
+pub type IdentityHashSet<T> = HashSet<T, IdentityHashBuilder>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_hasher_uses_value_as_is() {
+        let builder = IdentityHashBuilder;
+        let mut hasher = builder.build_hasher();
+
+        hasher.write_u64(42);
+        assert_eq!(hasher.finish(), 42);
+    }
+}
