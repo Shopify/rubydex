@@ -24,10 +24,6 @@ pub struct Graph {
 
     // Map of a fully qualified name to all definitions we discovered for it
     name_to_definitions: IdentityHashMap<NameId, IdentityHashSet<DefinitionId>>,
-    // Reverse map of a definition to its unique fully qualified name
-    definition_to_name: IdentityHashMap<DefinitionId, NameId>,
-    // Reverse map of a definition to its URI
-    definition_to_uri: IdentityHashMap<DefinitionId, UriId>,
     // Map of URI to all definitions discovered in that document
     uris_to_definitions: IdentityHashMap<UriId, IdentityHashSet<DefinitionId>>,
     db: Db,
@@ -41,8 +37,6 @@ impl Graph {
             definitions: HashMap::with_hasher(IdentityHashBuilder),
             uri_pool: HashMap::with_hasher(IdentityHashBuilder),
             name_to_definitions: HashMap::with_hasher(IdentityHashBuilder),
-            definition_to_name: HashMap::with_hasher(IdentityHashBuilder),
-            definition_to_uri: HashMap::with_hasher(IdentityHashBuilder),
             uris_to_definitions: HashMap::with_hasher(IdentityHashBuilder),
             db: Db::new(),
         }
@@ -70,18 +64,6 @@ impl Graph {
     #[must_use]
     pub fn name_to_definitions(&self) -> &IdentityHashMap<NameId, IdentityHashSet<DefinitionId>> {
         &self.name_to_definitions
-    }
-
-    // Returns an immutable reference to the definition to name map
-    #[must_use]
-    pub fn definition_to_name(&self) -> &IdentityHashMap<DefinitionId, NameId> {
-        &self.definition_to_name
-    }
-
-    // Returns an immutable reference to the definition to URI map
-    #[must_use]
-    pub fn definition_to_uri(&self) -> &IdentityHashMap<DefinitionId, UriId> {
-        &self.definition_to_uri
     }
 
     // Returns an immutable reference to the URI to definitions map
@@ -135,8 +117,8 @@ impl Graph {
 
     // Registers a definition into the `Graph`, automatically creating all relationships
     pub fn add_definition(&mut self, uri_id: UriId, name: String, definition: Definition) {
-        let name_id = NameId::from(&name);
         let definition_id = DefinitionId::from(&format!("{uri_id}{}", definition.start()));
+        let name_id = *definition.name_id();
 
         self.names.insert(name_id, name);
         self.definitions.insert(definition_id, definition);
@@ -144,8 +126,6 @@ impl Graph {
             .entry(name_id)
             .or_default()
             .insert(definition_id);
-        self.definition_to_name.insert(definition_id, name_id);
-        self.definition_to_uri.insert(definition_id, uri_id);
         self.uris_to_definitions
             .entry(uri_id)
             .or_default()
@@ -169,12 +149,10 @@ impl Graph {
                 .entry(name_id)
                 .or_default()
                 .insert(definition_id);
-            self.definition_to_name.insert(definition_id, name_id);
             self.uris_to_definitions
                 .entry(uri_id)
                 .or_default()
                 .insert(definition_id);
-            self.definition_to_uri.insert(definition_id, uri_id);
         }
 
         Ok(())
@@ -194,8 +172,6 @@ impl Graph {
         self.names.extend(incomplete_index.names);
         self.definitions.extend(incomplete_index.definitions);
         self.uri_pool.extend(incomplete_index.uri_pool);
-        self.definition_to_name.extend(incomplete_index.definition_to_name);
-        self.definition_to_uri.extend(incomplete_index.definition_to_uri);
         self.uris_to_definitions.extend(incomplete_index.uris_to_definitions);
 
         for (name_id, definition_ids) in incomplete_index.name_to_definitions {
@@ -223,18 +199,16 @@ impl Graph {
     fn remove_definitions_for_uri(&mut self, uri_id: UriId) {
         if let Some(definitions) = self.uris_to_definitions.remove(&uri_id) {
             for def_id in definitions {
-                if let Some(name_id) = self.definition_to_name.remove(&def_id)
-                    && let Some(definitions) = self.name_to_definitions.get_mut(&name_id)
+                if let Some(definition) = self.definitions.remove(&def_id)
+                    && let Some(name_definitions) = self.name_to_definitions.get_mut(definition.name_id())
                 {
-                    definitions.remove(&def_id);
-                    if definitions.is_empty() {
-                        self.names.remove(&name_id);
-                        self.name_to_definitions.remove(&name_id);
+                    name_definitions.remove(&def_id);
+
+                    if name_definitions.is_empty() {
+                        self.names.remove(definition.name_id());
+                        self.name_to_definitions.remove(definition.name_id());
                     }
                 }
-
-                self.definition_to_uri.remove(&def_id);
-                self.definitions.remove(&def_id);
             }
         }
     }
@@ -268,25 +242,13 @@ impl Graph {
         );
 
         checker.add_rule(
-            "Each `definition_to_name` name is registered in `names`",
+            "Each `definition name` name is registered in `names`",
             |index, errors| {
-                for definition_name in index.definition_to_name().values() {
-                    if !index.names().contains_key(definition_name) {
+                for definition in index.definitions().values() {
+                    let name = definition.name_id();
+                    if !index.names().contains_key(name) {
                         errors.push(format!(
-                            "Definition name '{definition_name}' exists in `definition_to_name` but not in `names`"
-                        ));
-                    }
-                }
-            },
-        );
-
-        checker.add_rule(
-            "Each `definition_to_name` definition is registered in `definitions`",
-            |index, errors| {
-                for definition_id in index.definition_to_name().keys() {
-                    if !index.definitions().contains_key(definition_id) {
-                        errors.push(format!(
-                            "Definition '{definition_id}' exists in `definition_to_name` but not in `definitions`"
+                            "Definition name '{name}' exists in `definition_to_name` but not in `names`"
                         ));
                     }
                 }
@@ -296,7 +258,8 @@ impl Graph {
         checker.add_rule(
             "Each `definition_to_name` name is registered in `name_to_definitions`",
             |index, errors| {
-                for name_id in index.definition_to_name().values() {
+                for definition in index.definitions().values() {
+                    let name_id = definition.name_id();
                     if !index.name_to_definitions().contains_key(name_id) {
                         errors.push(format!(
                             "Name '{name_id}' exists in `definition_to_name` but not in `name_to_definitions`"
@@ -335,28 +298,15 @@ impl Graph {
         );
 
         checker.add_rule(
-            "Each `name_to_definitions` definition is registered in `definition_to_name`",
+            "Each `name_to_definitions` definition is registered in `definitions`",
             |index, errors| {
                 for (name_id, definition_ids) in index.name_to_definitions() {
                     for definition_id in definition_ids {
-                        if index.definition_to_name().get(definition_id) != Some(name_id) {
+                        if index.definitions().get(definition_id).map(super::definitions::Definition::name_id) != Some(name_id) {
                             errors.push(format!(
                                 "Definition '{definition_id}' exists in `name_to_definitions` but not in `definition_to_name`"
                             ));
                         }
-                    }
-                }
-            },
-        );
-
-        checker.add_rule(
-            "Each `definitions` definition has a name in `definition_to_name`",
-            |index, errors| {
-                for definition_id in index.definitions().keys() {
-                    if !index.definition_to_name().contains_key(definition_id) {
-                        errors.push(format!(
-                            "Definition '{definition_id}' exists in `definitions` but not in `definition_to_name`"
-                        ));
                     }
                 }
             },
@@ -407,31 +357,16 @@ impl Graph {
             },
         );
 
-        checker.add_rule(
-            "Each `definition_to_uri` URI is registered in `uri_pool`",
-            |index, errors| {
-                for uri_id in index.definition_to_uri().values() {
-                    if !index.uri_pool().contains_key(uri_id) {
-                        errors.push(format!(
-                            "URI id '{uri_id}' is registered in `definition_to_uri` but not in `uri_pool`"
-                        ));
-                    }
+        checker.add_rule("Each `definitions` URI is registered in `uri_pool`", |index, errors| {
+            for definition in index.definitions().values() {
+                let uri_id = definition.uri_id();
+                if !index.uri_pool().contains_key(uri_id) {
+                    errors.push(format!(
+                        "URI id '{uri_id}' is registered in `definition_to_uri` but not in `uri_pool`"
+                    ));
                 }
-            },
-        );
-
-        checker.add_rule(
-            "Each `definition_to_uri` definition is registered in `definitions`",
-            |index, errors| {
-                for definition_id in index.definition_to_uri().keys() {
-                    if !index.definitions().contains_key(definition_id) {
-                        errors.push(format!(
-                            "Definition '{definition_id}' is registered in `definition_to_uri` but not in `definitions`"
-                        ));
-                    }
-                }
-            },
-        );
+            }
+        });
 
         checker
     }
@@ -448,8 +383,6 @@ impl Graph {
         self.definitions = HashMap::with_hasher(IdentityHashBuilder);
         self.uri_pool = HashMap::with_hasher(IdentityHashBuilder);
         self.name_to_definitions = HashMap::with_hasher(IdentityHashBuilder);
-        self.definition_to_name = HashMap::with_hasher(IdentityHashBuilder);
-        self.definition_to_uri = HashMap::with_hasher(IdentityHashBuilder);
         self.uris_to_definitions = HashMap::with_hasher(IdentityHashBuilder);
     }
 }
@@ -468,8 +401,6 @@ mod tests {
 
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.names.is_empty());
-        assert!(context.graph.definition_to_name.is_empty());
-        assert!(context.graph.definition_to_uri.is_empty());
         assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
         assert!(context.graph.uri_pool.is_empty());
@@ -487,8 +418,6 @@ mod tests {
 
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.names.is_empty());
-        assert!(context.graph.definition_to_name.is_empty());
-        assert!(context.graph.definition_to_uri.is_empty());
         assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
         // URI remains if the file was not deleted, but definitions got erased
@@ -610,58 +539,8 @@ mod tests {
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.names.is_empty());
         assert!(context.graph.uri_pool.is_empty());
-        assert!(context.graph.definition_to_uri.is_empty());
         assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
-        assert!(context.graph.definition_to_name.is_empty());
-    }
-
-    #[test]
-    fn definition_to_uri_mapping() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", "module Foo; end");
-        context.index_uri("file:///bar.rb", "class Bar; end");
-
-        // Get the definition IDs
-        let foo_definitions = context.graph.get("Foo").unwrap();
-        let bar_definitions = context.graph.get("Bar").unwrap();
-
-        assert_eq!(foo_definitions.len(), 1);
-        assert_eq!(bar_definitions.len(), 1);
-
-        // Find the definition IDs by looking them up in the reverse maps
-        let foo_def_id = context
-            .graph
-            .definition_to_name
-            .iter()
-            .find(|&(_, &name_id)| name_id == NameId::from("Foo"))
-            .map(|(&def_id, _)| def_id)
-            .unwrap();
-
-        let bar_def_id = context
-            .graph
-            .definition_to_name
-            .iter()
-            .find(|&(_, &name_id)| name_id == NameId::from("Bar"))
-            .map(|(&def_id, _)| def_id)
-            .unwrap();
-
-        // Verify definition_to_uri mapping is correct
-        assert_eq!(
-            context.graph.definition_to_uri[&foo_def_id],
-            UriId::from("file:///foo.rb")
-        );
-        assert_eq!(
-            context.graph.definition_to_uri[&bar_def_id],
-            UriId::from("file:///bar.rb")
-        );
-
-        // Verify the mapping is cleaned up when a URI is deleted
-        context.delete_uri("file:///foo.rb");
-
-        assert!(!context.graph.definition_to_uri.contains_key(&foo_def_id));
-        assert!(context.graph.definition_to_uri.contains_key(&bar_def_id));
     }
 
     #[test]
@@ -678,10 +557,8 @@ mod tests {
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.names.is_empty());
         assert!(context.graph.uri_pool.is_empty());
-        assert!(context.graph.definition_to_uri.is_empty());
         assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
-        assert!(context.graph.definition_to_name.is_empty());
 
         assert!(context.graph.get("Foo").is_none());
 
@@ -689,10 +566,8 @@ mod tests {
         assert_eq!(context.graph.definitions.len(), 1);
         assert_eq!(context.graph.names.len(), 1);
         assert_eq!(context.graph.uri_pool.len(), 1);
-        assert_eq!(context.graph.definition_to_uri.len(), 1);
         assert_eq!(context.graph.name_to_definitions.len(), 1);
         assert_eq!(context.graph.uris_to_definitions.len(), 1);
-        assert_eq!(context.graph.definition_to_name.len(), 1);
     }
 
     #[test]
@@ -711,18 +586,14 @@ mod tests {
         assert_eq!(context.graph.definitions.len(), 1);
         assert_eq!(context.graph.names.len(), 1);
         assert_eq!(context.graph.uri_pool.len(), 1);
-        assert_eq!(context.graph.definition_to_uri.len(), 1);
         assert_eq!(context.graph.name_to_definitions.len(), 1);
         assert_eq!(context.graph.uris_to_definitions.len(), 1);
-        assert_eq!(context.graph.definition_to_name.len(), 1);
 
         context.graph.unload_uri("file:///foo.rb");
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.names.is_empty());
         assert!(context.graph.uri_pool.is_empty());
-        assert!(context.graph.definition_to_uri.is_empty());
         assert!(context.graph.name_to_definitions.is_empty());
         assert!(context.graph.uris_to_definitions.is_empty());
-        assert!(context.graph.definition_to_name.is_empty());
     }
 }

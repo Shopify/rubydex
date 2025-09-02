@@ -7,7 +7,7 @@ use crate::model::definitions::{
     ModuleDefinition, Parameter, ParameterStruct,
 };
 use crate::model::graph::Graph;
-use crate::model::ids::UriId;
+use crate::model::ids::{NameId, UriId};
 use crate::offset::Offset;
 
 use ruby_prism::Visit;
@@ -55,6 +55,127 @@ impl RubyIndexer {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
+    fn collect_parameters(node: &ruby_prism::DefNode) -> Vec<Parameter> {
+        let mut parameters: Vec<Parameter> = Vec::new();
+
+        if let Some(parameters_list) = node.parameters() {
+            for parameter in parameters_list.requireds().iter() {
+                parameters.push(Parameter::RequiredPositional(ParameterStruct::new(
+                    Offset::from_prism_location(&parameter.location()),
+                    Self::location_to_string(&parameter.location()),
+                )));
+            }
+            for parameter in parameters_list.optionals().iter() {
+                let opt_param = parameter.as_optional_parameter_node().unwrap();
+                parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
+                    Offset::from_prism_location(&parameter.location()),
+                    Self::location_to_string(&opt_param.name_loc()),
+                )));
+            }
+            if let Some(rest) = parameters_list.rest() {
+                let rest_param = rest.as_rest_parameter_node().unwrap();
+                parameters.push(Parameter::RestPositional(ParameterStruct::new(
+                    Offset::from_prism_location(&rest.location()),
+                    Self::location_to_string(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
+                )));
+            }
+            for post in parameters_list.posts().iter() {
+                parameters.push(Parameter::Post(ParameterStruct::new(
+                    Offset::from_prism_location(&post.location()),
+                    Self::location_to_string(&post.location()),
+                )));
+            }
+            for keyword in parameters_list.keywords().iter() {
+                match keyword {
+                    ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
+                        let required = keyword.as_required_keyword_parameter_node().unwrap();
+                        parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
+                            Offset::from_prism_location(&keyword.location()),
+                            Self::location_to_string(&required.name_loc())
+                                .trim_end_matches(':')
+                                .to_string(),
+                        )));
+                    }
+                    ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
+                        let optional = keyword.as_optional_keyword_parameter_node().unwrap();
+                        parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
+                            Offset::from_prism_location(&keyword.location()),
+                            Self::location_to_string(&optional.name_loc())
+                                .trim_end_matches(':')
+                                .to_string(),
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(rest) = parameters_list.keyword_rest() {
+                match rest {
+                    ruby_prism::Node::KeywordRestParameterNode { .. } => {
+                        parameters.push(Parameter::RestKeyword(ParameterStruct::new(
+                            Offset::from_prism_location(&rest.location()),
+                            Self::location_to_string(
+                                &rest
+                                    .as_keyword_rest_parameter_node()
+                                    .unwrap()
+                                    .name_loc()
+                                    .unwrap_or_else(|| rest.location()),
+                            ),
+                        )));
+                    }
+                    ruby_prism::Node::ForwardingParameterNode { .. } => {
+                        parameters.push(Parameter::Forward(ParameterStruct::new(
+                            Offset::from_prism_location(&rest.location()),
+                            Self::location_to_string(&rest.as_forwarding_parameter_node().unwrap().location()),
+                        )));
+                    }
+                    _ => {
+                        // Do nothing
+                    }
+                }
+            }
+            if let Some(block) = parameters_list.block() {
+                parameters.push(Parameter::Block(ParameterStruct::new(
+                    Offset::from_prism_location(&block.location()),
+                    Self::location_to_string(&block.name_loc().unwrap_or_else(|| block.location())),
+                )));
+            }
+        }
+
+        parameters
+    }
+
+    // Runs the given closure if the given call `node` is invoked directly on `self` for each one of its string or
+    // symbol arguments
+    fn each_string_or_symbol_arg<F>(node: &ruby_prism::CallNode, mut f: F)
+    where
+        F: FnMut(String, ruby_prism::Location),
+    {
+        let receiver = node.receiver();
+
+        if (receiver.is_none() || receiver.unwrap().as_self_node().is_some())
+            && let Some(arguments) = node.arguments()
+        {
+            for argument in arguments.arguments().iter() {
+                match argument {
+                    ruby_prism::Node::SymbolNode { .. } => {
+                        let symbol = argument.as_symbol_node().unwrap();
+
+                        if let Some(value_loc) = symbol.value_loc() {
+                            let name = Self::location_to_string(&value_loc);
+                            f(name, value_loc);
+                        }
+                    }
+                    ruby_prism::Node::StringNode { .. } => {
+                        let string = argument.as_string_node().unwrap();
+                        let name = String::from_utf8_lossy(string.unescaped()).to_string();
+                        f(name, node.location());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     fn with_updated_nesting<F>(&mut self, name: &str, perform_visit: F)
     where
         F: FnOnce(&mut Self, String),
@@ -96,9 +217,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.constant_path().location());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Class(Box::new(ClassDefinition::new(Offset::from_prism_location(
-                &node.location(),
-            ))));
+            let name_id = NameId::from(&fully_qualified_name);
+            let definition = Definition::Class(Box::new(ClassDefinition::new(
+                name_id,
+                indexer.uri_id,
+                Offset::from_prism_location(&node.location()),
+            )));
 
             indexer
                 .local_index
@@ -114,9 +238,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.constant_path().location());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Module(Box::new(ModuleDefinition::new(Offset::from_prism_location(
-                &node.location(),
-            ))));
+            let name_id = NameId::from(&fully_qualified_name);
+            let definition = Definition::Module(Box::new(ModuleDefinition::new(
+                name_id,
+                indexer.uri_id,
+                Offset::from_prism_location(&node.location()),
+            )));
             indexer
                 .local_index
                 .add_definition(indexer.uri_id, fully_qualified_name, definition);
@@ -131,9 +258,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.name_loc());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Constant(Box::new(ConstantDefinition::new(Offset::from_prism_location(
-                &node.name_loc(),
-            ))));
+            let name_id = NameId::from(&fully_qualified_name);
+            let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+                name_id,
+                indexer.uri_id,
+                Offset::from_prism_location(&node.name_loc()),
+            )));
 
             indexer
                 .local_index
@@ -147,9 +277,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.target().location());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let definition = Definition::Constant(Box::new(ConstantDefinition::new(Offset::from_prism_location(
-                &node.target().location(),
-            ))));
+            let name_id = NameId::from(&fully_qualified_name);
+            let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+                name_id,
+                indexer.uri_id,
+                Offset::from_prism_location(&node.target().location()),
+            )));
 
             indexer
                 .local_index
@@ -166,7 +299,10 @@ impl Visit<'_> for RubyIndexer {
                     let name = Self::location_to_string(&left.location());
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let name_id = NameId::from(&fully_qualified_name);
                         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+                            name_id,
+                            indexer.uri_id,
                             Offset::from_prism_location(&left.location()),
                         )));
 
@@ -177,8 +313,11 @@ impl Visit<'_> for RubyIndexer {
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     let name = Self::location_to_string(&left.location());
+                    let name_id = NameId::from(&name);
 
                     let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                        name_id,
+                        self.uri_id,
                         Offset::from_prism_location(&left.location()),
                     )));
 
@@ -188,7 +327,10 @@ impl Visit<'_> for RubyIndexer {
                     let name = Self::location_to_string(&left.location());
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let name_id = NameId::from(&fully_qualified_name);
                         let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                            name_id,
+                            indexer.uri_id,
                             Offset::from_prism_location(&left.location()),
                         )));
 
@@ -201,7 +343,10 @@ impl Visit<'_> for RubyIndexer {
                     let name = Self::location_to_string(&left.location());
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let name_id = NameId::from(&fully_qualified_name);
                         let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                            name_id,
+                            indexer.uri_id,
                             Offset::from_prism_location(&left.location()),
                         )));
 
@@ -221,93 +366,12 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.name_loc());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let mut parameters: Vec<Parameter> = Vec::new();
-            if let Some(parameters_list) = node.parameters() {
-                for parameter in parameters_list.requireds().iter() {
-                    parameters.push(Parameter::RequiredPositional(ParameterStruct::new(
-                        Offset::from_prism_location(&parameter.location()),
-                        Self::location_to_string(&parameter.location()),
-                    )));
-                }
-                for parameter in parameters_list.optionals().iter() {
-                    let opt_param = parameter.as_optional_parameter_node().unwrap();
-                    parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
-                        Offset::from_prism_location(&parameter.location()),
-                        Self::location_to_string(&opt_param.name_loc()),
-                    )));
-                }
-                if let Some(rest) = parameters_list.rest() {
-                    let rest_param = rest.as_rest_parameter_node().unwrap();
-                    parameters.push(Parameter::RestPositional(ParameterStruct::new(
-                        Offset::from_prism_location(&rest.location()),
-                        Self::location_to_string(&rest_param.name_loc().unwrap_or_else(|| rest.location())),
-                    )));
-                }
-                for post in parameters_list.posts().iter() {
-                    parameters.push(Parameter::Post(ParameterStruct::new(
-                        Offset::from_prism_location(&post.location()),
-                        Self::location_to_string(&post.location()),
-                    )));
-                }
-                for keyword in parameters_list.keywords().iter() {
-                    match keyword {
-                        ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
-                            let required = keyword.as_required_keyword_parameter_node().unwrap();
-                            parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
-                                Offset::from_prism_location(&keyword.location()),
-                                Self::location_to_string(&required.name_loc())
-                                    .trim_end_matches(':')
-                                    .to_string(),
-                            )));
-                        }
-                        ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
-                            let optional = keyword.as_optional_keyword_parameter_node().unwrap();
-                            parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
-                                Offset::from_prism_location(&keyword.location()),
-                                Self::location_to_string(&optional.name_loc())
-                                    .trim_end_matches(':')
-                                    .to_string(),
-                            )));
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(rest) = parameters_list.keyword_rest() {
-                    match rest {
-                        ruby_prism::Node::KeywordRestParameterNode { .. } => {
-                            parameters.push(Parameter::RestKeyword(ParameterStruct::new(
-                                Offset::from_prism_location(&rest.location()),
-                                Self::location_to_string(
-                                    &rest
-                                        .as_keyword_rest_parameter_node()
-                                        .unwrap()
-                                        .name_loc()
-                                        .unwrap_or_else(|| rest.location()),
-                                ),
-                            )));
-                        }
-                        ruby_prism::Node::ForwardingParameterNode { .. } => {
-                            parameters.push(Parameter::Forward(ParameterStruct::new(
-                                Offset::from_prism_location(&rest.location()),
-                                Self::location_to_string(&rest.as_forwarding_parameter_node().unwrap().location()),
-                            )));
-                        }
-                        _ => {
-                            // Do nothing
-                        }
-                    }
-                }
-                if let Some(block) = parameters_list.block() {
-                    parameters.push(Parameter::Block(ParameterStruct::new(
-                        Offset::from_prism_location(&block.location()),
-                        Self::location_to_string(&block.name_loc().unwrap_or_else(|| block.location())),
-                    )));
-                }
-            }
-
+            let name_id = NameId::from(&fully_qualified_name);
             let method = MethodDefinition::new(
+                name_id,
+                indexer.uri_id,
                 Offset::from_prism_location(&node.location()),
-                parameters,
+                Self::collect_parameters(node),
                 node.receiver()
                     .is_some_and(|receiver| receiver.as_self_node().is_some()),
             );
@@ -336,87 +400,66 @@ impl Visit<'_> for RubyIndexer {
 
         match message.as_str() {
             "attr_accessor" => {
-                if (node.receiver().is_none() || node.receiver().unwrap().as_self_node().is_some())
-                    && let Some(arguments) = node.arguments()
-                {
-                    for argument in arguments.arguments().iter() {
-                        if let ruby_prism::Node::SymbolNode { .. } = argument {
-                            let symbol = argument.as_symbol_node().unwrap();
-                            let name_with_colon = Self::location_to_string(&symbol.location());
-                            let name = name_with_colon.trim_start_matches(':');
+                Self::each_string_or_symbol_arg(node, |name, location| {
+                    self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let name_id = NameId::from(&fully_qualified_name);
+                        indexer.local_index.add_definition(
+                            indexer.uri_id,
+                            fully_qualified_name.clone(),
+                            Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                                name_id,
+                                indexer.uri_id,
+                                Offset::from_prism_location(&location),
+                            ))),
+                        );
 
-                            self.with_updated_nesting(name, |indexer, fully_qualified_name| {
-                                indexer.local_index.add_definition(
-                                    indexer.uri_id,
-                                    fully_qualified_name.clone(),
-                                    Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                                        Offset::from_prism_location(&symbol.location()),
-                                    ))),
-                                );
-
-                                indexer.local_index.add_definition(
-                                    indexer.uri_id,
-                                    format!("{fully_qualified_name}="),
-                                    Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                                        Offset::from_prism_location(&symbol.location()),
-                                    ))),
-                                );
-                            });
-                        }
-                    }
-
-                    return;
-                }
+                        let writer_name = format!("{fully_qualified_name}=");
+                        let writer_name_id = NameId::from(&writer_name);
+                        indexer.local_index.add_definition(
+                            indexer.uri_id,
+                            writer_name,
+                            Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                                writer_name_id,
+                                indexer.uri_id,
+                                Offset::from_prism_location(&location),
+                            ))),
+                        );
+                    });
+                });
             }
             "attr_reader" => {
-                if (node.receiver().is_none() || node.receiver().unwrap().as_self_node().is_some())
-                    && let Some(arguments) = node.arguments()
-                {
-                    for argument in arguments.arguments().iter() {
-                        if let ruby_prism::Node::SymbolNode { .. } = argument {
-                            let symbol = argument.as_symbol_node().unwrap();
-                            let name_with_colon = Self::location_to_string(&symbol.location());
-                            let name = name_with_colon.trim_start_matches(':');
-
-                            self.with_updated_nesting(name, |indexer, fully_qualified_name| {
-                                indexer.local_index.add_definition(
-                                    indexer.uri_id,
-                                    fully_qualified_name,
-                                    Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                                        Offset::from_prism_location(&symbol.location()),
-                                    ))),
-                                );
-                            });
-                        }
-                    }
-
-                    return;
-                }
+                Self::each_string_or_symbol_arg(node, |name, location| {
+                    self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let name_id = NameId::from(&fully_qualified_name);
+                        indexer.local_index.add_definition(
+                            indexer.uri_id,
+                            fully_qualified_name,
+                            Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                                name_id,
+                                indexer.uri_id,
+                                Offset::from_prism_location(&location),
+                            ))),
+                        );
+                    });
+                });
             }
             "attr_writer" => {
-                if (node.receiver().is_none() || node.receiver().unwrap().as_self_node().is_some())
-                    && let Some(arguments) = node.arguments()
-                {
-                    for argument in arguments.arguments().iter() {
-                        if let ruby_prism::Node::SymbolNode { .. } = argument {
-                            let symbol = argument.as_symbol_node().unwrap();
-                            let name_with_colon = Self::location_to_string(&symbol.location());
-                            let name = name_with_colon.trim_start_matches(':');
+                Self::each_string_or_symbol_arg(node, |name, location| {
+                    self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                        let writer_name = format!("{fully_qualified_name}=");
+                        let name_id = NameId::from(&writer_name);
 
-                            self.with_updated_nesting(name, |indexer, fully_qualified_name| {
-                                indexer.local_index.add_definition(
-                                    indexer.uri_id,
-                                    format!("{fully_qualified_name}="),
-                                    Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                                        Offset::from_prism_location(&symbol.location()),
-                                    ))),
-                                );
-                            });
-                        }
-                    }
-
-                    return;
-                }
+                        indexer.local_index.add_definition(
+                            indexer.uri_id,
+                            writer_name,
+                            Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                                name_id,
+                                indexer.uri_id,
+                                Offset::from_prism_location(&location),
+                            ))),
+                        );
+                    });
+                });
             }
             _ => {
                 // We don't index other calls
@@ -438,8 +481,11 @@ impl Visit<'_> for RubyIndexer {
 
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
         let name = Self::location_to_string(&node.name_loc());
+        let name_id = NameId::from(&name);
 
         let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+            name_id,
+            self.uri_id,
             Offset::from_prism_location(&node.name_loc()),
         )));
 
@@ -452,7 +498,10 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.name_loc());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+            let name_id = NameId::from(&fully_qualified_name);
             let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                name_id,
+                indexer.uri_id,
                 Offset::from_prism_location(&node.name_loc()),
             )));
 
@@ -468,7 +517,10 @@ impl Visit<'_> for RubyIndexer {
         let name = Self::location_to_string(&node.name_loc());
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+            let name_id = NameId::from(&fully_qualified_name);
             let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                name_id,
+                indexer.uri_id,
                 Offset::from_prism_location(&node.name_loc()),
             )));
 
@@ -862,42 +914,42 @@ mod tests {
 
         let definitions = context.graph.get("foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 14);
+        assert_eq!(definitions[0].start(), 15);
         assert_eq!(definitions[0].end(), 18);
 
         let definitions = context.graph.get("foo=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 14);
+        assert_eq!(definitions[0].start(), 15);
         assert_eq!(definitions[0].end(), 18);
 
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 46);
+        assert_eq!(definitions[0].start(), 47);
         assert_eq!(definitions[0].end(), 50);
 
         let definitions = context.graph.get("Foo::bar=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 46);
+        assert_eq!(definitions[0].start(), 47);
         assert_eq!(definitions[0].end(), 50);
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 52);
+        assert_eq!(definitions[0].start(), 53);
         assert_eq!(definitions[0].end(), 56);
 
         let definitions = context.graph.get("Foo::baz=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 52);
+        assert_eq!(definitions[0].start(), 53);
         assert_eq!(definitions[0].end(), 56);
 
         let definitions = context.graph.get("qux").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 81);
+        assert_eq!(definitions[0].start(), 82);
         assert_eq!(definitions[0].end(), 85);
 
         let definitions = context.graph.get("qux=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 81);
+        assert_eq!(definitions[0].start(), 82);
         assert_eq!(definitions[0].end(), 85);
 
         assert!(context.graph.get("not_indexed").is_none());
@@ -920,21 +972,21 @@ mod tests {
 
         let definitions = context.graph.get("foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 12);
+        assert_eq!(definitions[0].start(), 13);
         assert_eq!(definitions[0].end(), 16);
 
         assert!(context.graph.get("foo=").is_none());
 
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 42);
+        assert_eq!(definitions[0].start(), 43);
         assert_eq!(definitions[0].end(), 46);
 
         assert!(context.graph.get("Foo::bar=").is_none());
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 48);
+        assert_eq!(definitions[0].start(), 49);
         assert_eq!(definitions[0].end(), 52);
 
         assert!(context.graph.get("Foo::baz=").is_none());
@@ -956,21 +1008,21 @@ mod tests {
 
         let definitions = context.graph.get("foo=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 12);
+        assert_eq!(definitions[0].start(), 13);
         assert_eq!(definitions[0].end(), 16);
 
         assert!(context.graph.get("foo").is_none());
 
         let definitions = context.graph.get("Foo::bar=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 42);
+        assert_eq!(definitions[0].start(), 43);
         assert_eq!(definitions[0].end(), 46);
 
         assert!(context.graph.get("Foo::bar").is_none());
 
         let definitions = context.graph.get("Foo::baz=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 48);
+        assert_eq!(definitions[0].start(), 49);
         assert_eq!(definitions[0].end(), 52);
 
         assert!(context.graph.get("Foo::baz").is_none());

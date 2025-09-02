@@ -25,7 +25,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::offset::Offset;
+use crate::{
+    model::ids::{NameId, UriId},
+    offset::Offset,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Definition {
@@ -89,6 +92,38 @@ impl Definition {
             Definition::ClassVariable(_) => "ClassVariable",
         }
     }
+
+    #[must_use]
+    pub fn name_id(&self) -> &NameId {
+        match self {
+            Definition::Class(it) => &it.name_id,
+            Definition::Module(it) => &it.name_id,
+            Definition::Constant(it) => &it.name_id,
+            Definition::GlobalVariable(it) => &it.name_id,
+            Definition::InstanceVariable(it) => &it.name_id,
+            Definition::ClassVariable(it) => &it.name_id,
+            Definition::AttrAccessor(it) => &it.name_id,
+            Definition::AttrReader(it) => &it.name_id,
+            Definition::AttrWriter(it) => &it.name_id,
+            Definition::Method(it) => &it.name_id,
+        }
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        match self {
+            Definition::Class(it) => &it.uri_id,
+            Definition::Module(it) => &it.uri_id,
+            Definition::Constant(it) => &it.uri_id,
+            Definition::GlobalVariable(it) => &it.uri_id,
+            Definition::InstanceVariable(it) => &it.uri_id,
+            Definition::ClassVariable(it) => &it.uri_id,
+            Definition::AttrAccessor(it) => &it.uri_id,
+            Definition::AttrReader(it) => &it.uri_id,
+            Definition::AttrWriter(it) => &it.uri_id,
+            Definition::Method(it) => &it.uri_id,
+        }
+    }
 }
 
 /// A class definition
@@ -100,13 +135,19 @@ impl Definition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClassDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
 }
 
 impl ClassDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
 
@@ -119,13 +160,19 @@ impl ClassDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModuleDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
 }
 
 impl ModuleDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
 
@@ -137,13 +184,19 @@ impl ModuleDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConstantDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
 }
 
 impl ConstantDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
 
@@ -156,6 +209,8 @@ impl ConstantDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MethodDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
     parameters: Vec<Parameter>,
     is_singleton: bool,
@@ -163,8 +218,16 @@ pub struct MethodDefinition {
 
 impl MethodDefinition {
     #[must_use]
-    pub const fn new(offset: Offset, parameters: Vec<Parameter>, is_singleton: bool) -> Self {
+    pub const fn new(
+        name_id: NameId,
+        uri_id: UriId,
+        offset: Offset,
+        parameters: Vec<Parameter>,
+        is_singleton: bool,
+    ) -> Self {
         Self {
+            name_id,
+            uri_id,
             offset,
             parameters,
             is_singleton,
@@ -226,13 +289,19 @@ impl ParameterStruct {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttrAccessorDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
 }
 
 impl AttrAccessorDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
 
@@ -244,13 +313,19 @@ impl AttrAccessorDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttrReaderDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
 }
 
 impl AttrReaderDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
 
@@ -262,13 +337,19 @@ impl AttrReaderDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttrWriterDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
 }
 
 impl AttrWriterDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
 
@@ -280,13 +361,19 @@ impl AttrWriterDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GlobalVariableDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     pub offset: Offset,
 }
 
 impl GlobalVariableDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
 
@@ -298,13 +385,19 @@ impl GlobalVariableDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstanceVariableDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
 }
 
 impl InstanceVariableDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
 
@@ -316,12 +409,18 @@ impl InstanceVariableDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClassVariableDefinition {
+    name_id: NameId,
+    uri_id: UriId,
     offset: Offset,
 }
 
 impl ClassVariableDefinition {
     #[must_use]
-    pub const fn new(offset: Offset) -> Self {
-        Self { offset }
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+        }
     }
 }
