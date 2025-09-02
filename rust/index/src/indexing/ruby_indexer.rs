@@ -9,6 +9,7 @@ use crate::model::definitions::{
 use crate::model::graph::Graph;
 use crate::model::ids::UriId;
 use crate::offset::Offset;
+use crate::timer;
 
 use ruby_prism::Visit;
 
@@ -47,13 +48,15 @@ impl RubyIndexer {
     }
 
     pub fn index(&mut self, source: &str) {
-        self.local_index.timers().parse_ruby().start();
-        let result = ruby_prism::parse(source.as_ref());
-        self.local_index.timers().parse_ruby().stop();
+        let result;
 
-        self.local_index.timers().visit_ruby().start();
-        self.visit(&result.node());
-        self.local_index.timers().visit_ruby().stop();
+        timer!(self.local_index, parse_ruby, {
+            result = ruby_prism::parse(source.as_ref());
+        });
+
+        timer!(self.local_index, visit_ruby, {
+            self.visit(&result.node());
+        });
     }
 
     fn location_to_string(location: &ruby_prism::Location) -> String {

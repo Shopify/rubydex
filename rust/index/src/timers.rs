@@ -101,3 +101,13 @@ impl Default for Timers {
         Self::new()
     }
 }
+
+#[macro_export]
+macro_rules! timer {
+    ($index:expr, $timer:ident, $block:block) => {{
+        $index.timers().$timer().start();
+        let __result = { $block };
+        $index.timers().$timer().stop();
+        __result
+    }};
+}
