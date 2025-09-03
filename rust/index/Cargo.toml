@@ -15,7 +15,6 @@ crate-type = ["rlib"]
 ruby-prism = "1.4.0"
 url = "2.5.4"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
-rayon = "1.10.0"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 clap = { version = "4.5.16", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
