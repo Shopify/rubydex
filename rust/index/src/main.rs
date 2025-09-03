@@ -29,12 +29,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut graph = Graph::new();
     graph.set_configuration(format!("{}/graph.db", &args.dir))?;
     let (documents, errors) = indexing::collect_documents(vec![args.dir]);
+    let document_count = documents.len();
 
     if !errors.is_empty() {
         return Err(Box::new(MultipleErrors(errors)));
     }
 
-    indexing::index_in_parallel(&mut graph, &documents)?;
+    indexing::index_in_parallel(&mut graph, documents)?;
 
     // Run integrity checks if requested
     if args.check_integrity {
@@ -55,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.visualize {
         println!("{}", dot::generate(&graph));
     } else {
-        println!("Indexed {} files", documents.len());
+        println!("Indexed {document_count} files");
         println!("Found {} names", graph.declarations().len());
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.documents().len());
