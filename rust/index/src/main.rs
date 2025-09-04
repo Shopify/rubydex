@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, mem};
 
 use clap::Parser;
 
@@ -61,6 +61,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.documents().len());
     }
+
+    mem::forget(graph);
 
     Ok(())
 }
