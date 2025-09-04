@@ -6,7 +6,7 @@ task index_top_gems: :compile_release do
   require "net/http"
   require "rubygems/package"
   require "fileutils"
-  require "index"
+  require "saturn"
   require "yaml"
   require "json"
 
@@ -50,7 +50,7 @@ task index_top_gems: :compile_release do
             File.delete(filepath)
 
             # Index the gem's files and yield errors back to the main Ractor
-            graph = Index::Graph.new
+            graph = Saturn::Graph.new
             error = graph.index_all(Dir.glob("#{gem_dir}/**/*.rb"))
             next unless error
 

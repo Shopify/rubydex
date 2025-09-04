@@ -2,9 +2,9 @@
 
 require "bundler"
 
-require "index/version"
-require "index/index"
-require "index/graph"
+require "saturn/version"
+require "saturn/saturn"
+require "saturn/graph"
 
-module Index
+module Saturn
 end

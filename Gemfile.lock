@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    index (0.1.0)
+    saturn (0.1.0)
 
 GEM
   remote: https://rubygems.org/
@@ -58,13 +58,13 @@ PLATFORMS
 
 DEPENDENCIES
   extconf_compile_commands_json
-  index!
   minitest
   rake (~> 13.0)
   rake-compiler
   rubocop
   rubocop-shopify
   ruby_memcheck
+  saturn!
 
 BUNDLED WITH
    2.6.2
