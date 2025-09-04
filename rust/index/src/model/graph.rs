@@ -5,7 +5,8 @@ use std::error::Error;
 use crate::model::db::Db;
 use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
-use crate::model::identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet};
+use crate::model::document::Document;
+use crate::model::identity_maps::{IdentityHashBuilder, IdentityHashMap};
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
 
@@ -13,19 +14,12 @@ use crate::model::integrity::IntegrityChecker;
 // relationships
 #[derive(Default, Debug)]
 pub struct Graph {
-    // *** Graph nodes: the following represent possible nodes in our graph ***
-
-    // Map of fully qualified names to global declarations
+    // Map of declaration nodes
     declarations: IdentityHashMap<NameId, Declaration>,
-    // Map of URIs currently loaded in memory
-    uri_pool: IdentityHashMap<UriId, String>,
-    // Map of definitions
+    // Map of document nodes
+    documents: IdentityHashMap<UriId, Document>,
+    // Map of definition nodes
     definitions: IdentityHashMap<DefinitionId, Definition>,
-
-    // *** Graph edges: the following represent relationships between nodes ***
-
-    // Map of URI to all definitions discovered in that document
-    uris_to_definitions: IdentityHashMap<UriId, IdentityHashSet<DefinitionId>>,
     db: Db,
 }
 
@@ -35,8 +29,7 @@ impl Graph {
         Self {
             declarations: HashMap::with_hasher(IdentityHashBuilder),
             definitions: HashMap::with_hasher(IdentityHashBuilder),
-            uri_pool: HashMap::with_hasher(IdentityHashBuilder),
-            uris_to_definitions: HashMap::with_hasher(IdentityHashBuilder),
+            documents: HashMap::with_hasher(IdentityHashBuilder),
             db: Db::new(),
         }
     }
@@ -55,14 +48,8 @@ impl Graph {
 
     // Returns an immutable reference to the URI pool map
     #[must_use]
-    pub fn uri_pool(&self) -> &IdentityHashMap<UriId, String> {
-        &self.uri_pool
-    }
-
-    // Returns an immutable reference to the URI to definitions map
-    #[must_use]
-    pub fn uris_to_definitions(&self) -> &IdentityHashMap<UriId, IdentityHashSet<DefinitionId>> {
-        &self.uris_to_definitions
+    pub fn documents(&self) -> &IdentityHashMap<UriId, Document> {
+        &self.documents
     }
 
     /// # Errors
@@ -90,7 +77,7 @@ impl Graph {
     // then all definitions discovered in it get associated to the ID
     pub fn add_uri(&mut self, uri: String) -> UriId {
         let uri_id = UriId::from(&uri);
-        self.uri_pool.insert(uri_id, uri);
+        self.documents.entry(uri_id).or_insert_with(|| Document::new(uri));
         uri_id
     }
 
@@ -118,12 +105,10 @@ impl Graph {
             .entry(name_id)
             .or_insert_with(|| Declaration::new(name))
             .add_definition(definition_id);
-
         self.definitions.insert(definition_id, definition);
-        self.uris_to_definitions
+        self.documents
             .entry(uri_id)
-            .or_default()
-            .insert(definition_id);
+            .and_modify(|doc| doc.add_definition(definition_id));
     }
 
     /// # Errors
@@ -143,10 +128,9 @@ impl Graph {
                 .add_definition(definition_id);
 
             self.definitions.insert(definition_id, load_result.definition);
-            self.uris_to_definitions
+            self.documents
                 .entry(uri_id)
-                .or_default()
-                .insert(definition_id);
+                .and_modify(|doc| doc.add_definition(definition_id));
         }
 
         Ok(())
@@ -157,15 +141,13 @@ impl Graph {
     pub fn unload_uri(&mut self, uri: &str) {
         let uri_id = UriId::from(uri);
         self.remove_definitions_for_uri(uri_id);
-        self.uri_pool.remove(&uri_id);
+        self.documents.remove(&uri_id);
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, incomplete_index: Graph) {
         self.definitions.extend(incomplete_index.definitions);
-        self.uri_pool.extend(incomplete_index.uri_pool);
-        self.uris_to_definitions.extend(incomplete_index.uris_to_definitions);
 
         for (name_id, declaration) in incomplete_index.declarations {
             match self.declarations.entry(name_id) {
@@ -177,6 +159,20 @@ impl Graph {
                 }
             }
         }
+
+        for (uri_id, document) in incomplete_index.documents {
+            match self.documents.entry(uri_id) {
+                Entry::Vacant(entry) => {
+                    entry.insert(document);
+                }
+                Entry::Occupied(mut entry) => {
+                    let existing_doc = entry.get_mut();
+                    for def_id in document.definitions() {
+                        existing_doc.add_definition(*def_id);
+                    }
+                }
+            }
+        }
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
@@ -184,7 +180,7 @@ impl Graph {
     pub fn update(&mut self, other: Graph) {
         // For each URI that was indexed through `other`, check what was discovered and update our current global
         // representation
-        for uri_id in other.uri_pool.keys() {
+        for uri_id in other.documents.keys() {
             self.remove_definitions_for_uri(*uri_id);
         }
 
@@ -194,11 +190,11 @@ impl Graph {
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
     // document (identified by `uri_id`) changes or when a document is closed and we need to clean up the memory
     fn remove_definitions_for_uri(&mut self, uri_id: UriId) {
-        if let Some(definitions) = self.uris_to_definitions.remove(&uri_id) {
-            for def_id in definitions {
-                if let Some(definition) = self.definitions.remove(&def_id)
+        if let Some(document) = self.documents.remove(&uri_id) {
+            for def_id in document.definitions() {
+                if let Some(definition) = self.definitions.remove(def_id)
                     && let Some(declaration) = self.declarations.get_mut(definition.name_id())
-                    && declaration.remove_definition(&def_id)
+                    && declaration.remove_definition(def_id)
                 {
                     self.declarations.remove(definition.name_id());
                 }
@@ -257,24 +253,22 @@ impl Graph {
             },
         );
 
-        checker.add_rule(
-            "Each `uris_to_definitions` URI is registered in `uri_pool`",
-            |index, errors| {
-                for uri_id in index.uris_to_definitions().keys() {
-                    if !index.uri_pool().contains_key(uri_id) {
-                        errors.push(format!(
-                            "URI id '{uri_id}' is registered in `uris_to_definitions` but not in `uri_pool`"
-                        ));
-                    }
+        checker.add_rule("Each `definition` URI is registered in `documents`", |index, errors| {
+            for definition in index.definitions().values() {
+                let uri_id = definition.uri_id();
+                if !index.documents().contains_key(uri_id) {
+                    errors.push(format!(
+                        "URI id '{uri_id}' is registered in `definitions` but not in `documents`"
+                    ));
                 }
-            },
-        );
+            }
+        });
 
         checker.add_rule(
-            "Each `uris_to_definitions` definition is registered in `definitions`",
+            "Each `document` definition is registered in `definitions`",
             |index, errors| {
-                for definition_ids in index.uris_to_definitions().values() {
-                    for definition_id in definition_ids {
+                for document in index.documents().values() {
+                    for definition_id in document.definitions() {
                         if !index.definitions().contains_key(definition_id) {
                             errors.push(format!(
                                 "Definition '{definition_id}' is registered in `uris_to_definitions` but not in `definitions`"
@@ -285,27 +279,10 @@ impl Graph {
             },
         );
 
-        checker.add_rule(
-            "Each `definitions` definition has at least one entry in `uris_to_definitions`",
-            |index, errors| {
-                for definition_id in index.definitions().keys() {
-                    if !index
-                        .uris_to_definitions()
-                        .values()
-                        .any(|ids| ids.contains(definition_id))
-                    {
-                        errors.push(format!(
-                            "Definition '{definition_id}' exists in `definitions` but not in `uris_to_definitions`"
-                        ));
-                    }
-                }
-            },
-        );
-
         checker.add_rule("Each `definitions` URI is registered in `uri_pool`", |index, errors| {
             for definition in index.definitions().values() {
                 let uri_id = definition.uri_id();
-                if !index.uri_pool().contains_key(uri_id) {
+                if !index.documents().contains_key(uri_id) {
                     errors.push(format!(
                         "URI id '{uri_id}' is referenced by a definition but not present in `uri_pool`"
                     ));
@@ -326,8 +303,7 @@ impl Graph {
     pub fn clear_graph_data(&mut self) {
         self.declarations = HashMap::with_hasher(IdentityHashBuilder);
         self.definitions = HashMap::with_hasher(IdentityHashBuilder);
-        self.uri_pool = HashMap::with_hasher(IdentityHashBuilder);
-        self.uris_to_definitions = HashMap::with_hasher(IdentityHashBuilder);
+        self.documents = HashMap::with_hasher(IdentityHashBuilder);
     }
 }
 
@@ -345,8 +321,7 @@ mod tests {
 
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.declarations.is_empty());
-        assert!(context.graph.uris_to_definitions.is_empty());
-        assert!(context.graph.uri_pool.is_empty());
+        assert!(context.graph.documents.is_empty());
 
         context.graph.assert_integrity();
     }
@@ -361,9 +336,8 @@ mod tests {
 
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.declarations.is_empty());
-        assert!(context.graph.uris_to_definitions.is_empty());
         // URI remains if the file was not deleted, but definitions got erased
-        assert_eq!(context.graph.uri_pool.len(), 1);
+        assert_eq!(context.graph.documents.len(), 1);
 
         context.graph.assert_integrity();
     }
@@ -377,20 +351,10 @@ mod tests {
         assert_eq!(context.graph.definitions.len(), 1);
         let declaration = context.graph.declarations.get(&NameId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
-        assert_eq!(
-            context.graph.uri_pool.get(&UriId::from("file:///foo.rb")).unwrap(),
-            "file:///foo.rb"
-        );
+        let document = context.graph.documents.get(&UriId::from("file:///foo.rb")).unwrap();
+        assert_eq!(document.uri(), "file:///foo.rb");
         assert_eq!(declaration.definitions().len(), 1);
-        assert_eq!(
-            context
-                .graph
-                .uris_to_definitions
-                .get(&UriId::from("file:///foo.rb"))
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(document.definitions().len(), 1);
 
         context.graph.assert_integrity();
     }
@@ -407,7 +371,12 @@ mod tests {
         let declaration = context.graph.declarations.get(&NameId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         assert_eq!(
-            context.graph.uri_pool.get(&UriId::from("file:///foo.rb")).unwrap(),
+            context
+                .graph
+                .documents
+                .get(&UriId::from("file:///foo.rb"))
+                .unwrap()
+                .uri(),
             "file:///foo.rb"
         );
 
@@ -474,8 +443,7 @@ mod tests {
 
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.declarations.is_empty());
-        assert!(context.graph.uri_pool.is_empty());
-        assert!(context.graph.uris_to_definitions.is_empty());
+        assert!(context.graph.documents.is_empty());
     }
 
     #[test]
@@ -491,16 +459,14 @@ mod tests {
 
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.declarations.is_empty());
-        assert!(context.graph.uri_pool.is_empty());
-        assert!(context.graph.uris_to_definitions.is_empty());
+        assert!(context.graph.documents.is_empty());
 
         assert!(context.graph.get("Foo").is_none());
 
         context.graph.load_uri("file:///foo.rb".to_string()).unwrap();
         assert_eq!(context.graph.definitions.len(), 1);
         assert_eq!(context.graph.declarations.len(), 1);
-        assert_eq!(context.graph.uri_pool.len(), 1);
-        assert_eq!(context.graph.uris_to_definitions.len(), 1);
+        assert_eq!(context.graph.documents.len(), 1);
     }
 
     #[test]
@@ -518,17 +484,15 @@ mod tests {
         context.graph.load_uri("file:///foo.rb".to_string()).unwrap();
         assert_eq!(context.graph.definitions.len(), 1);
         assert_eq!(context.graph.declarations.len(), 1);
-        assert_eq!(context.graph.uri_pool.len(), 1);
+        assert_eq!(context.graph.documents.len(), 1);
 
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(context.graph.uris_to_definitions.len(), 1);
 
         context.graph.unload_uri("file:///foo.rb");
         assert!(context.graph.definitions.is_empty());
         assert!(context.graph.declarations.is_empty());
-        assert!(context.graph.uri_pool.is_empty());
+        assert!(context.graph.documents.is_empty());
         assert!(context.graph.get("Foo").is_none());
-        assert!(context.graph.uris_to_definitions.is_empty());
     }
 }

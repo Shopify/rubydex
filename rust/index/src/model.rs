@@ -1,6 +1,7 @@
 pub mod db;
 pub mod declaration;
 pub mod definitions;
+pub mod document;
 pub mod graph;
 pub mod id;
 pub mod identity_maps;

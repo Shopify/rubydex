@@ -177,8 +177,8 @@ impl Db {
     fn batch_insert_documents(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
         let mut stmt = conn.prepare_cached("INSERT INTO documents (id, uri) VALUES (?, ?)")?;
 
-        for (uri_id, uri) in graph.uri_pool() {
-            stmt.execute([&uri_id.to_string(), uri])?;
+        for (uri_id, document) in graph.documents() {
+            stmt.execute([&uri_id.to_string(), document.uri()])?;
         }
 
         Ok(())
