@@ -242,9 +242,7 @@ impl Visit<'_> for RubyIndexer {
                 Offset::from_prism_location(&node.location()),
             )));
 
-            indexer
-                .local_index
-                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+            indexer.local_index.add_definition(fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
                 indexer.visit(&body);
@@ -262,9 +260,7 @@ impl Visit<'_> for RubyIndexer {
                 indexer.uri_id,
                 Offset::from_prism_location(&node.location()),
             )));
-            indexer
-                .local_index
-                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+            indexer.local_index.add_definition(fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
                 indexer.visit(&body);
@@ -284,9 +280,7 @@ impl Visit<'_> for RubyIndexer {
                 Offset::from_prism_location(&name_loc),
             )));
 
-            indexer
-                .local_index
-                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+            indexer.local_index.add_definition(fully_qualified_name, definition);
         });
 
         self.visit(&node.value());
@@ -304,9 +298,7 @@ impl Visit<'_> for RubyIndexer {
                 Offset::from_prism_location(&location),
             )));
 
-            indexer
-                .local_index
-                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+            indexer.local_index.add_definition(fully_qualified_name, definition);
         });
 
         self.visit(&node.value());
@@ -327,9 +319,7 @@ impl Visit<'_> for RubyIndexer {
                             Offset::from_prism_location(&location),
                         )));
 
-                        indexer
-                            .local_index
-                            .add_definition(indexer.uri_id, fully_qualified_name, definition);
+                        indexer.local_index.add_definition(fully_qualified_name, definition);
                     });
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
@@ -343,7 +333,7 @@ impl Visit<'_> for RubyIndexer {
                         Offset::from_prism_location(&location),
                     )));
 
-                    self.local_index.add_definition(self.uri_id, name, definition);
+                    self.local_index.add_definition(name, definition);
                 }
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
                     let location = left.location();
@@ -357,9 +347,7 @@ impl Visit<'_> for RubyIndexer {
                             Offset::from_prism_location(&location),
                         )));
 
-                        indexer
-                            .local_index
-                            .add_definition(indexer.uri_id, fully_qualified_name, definition);
+                        indexer.local_index.add_definition(fully_qualified_name, definition);
                     });
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
@@ -374,9 +362,7 @@ impl Visit<'_> for RubyIndexer {
                             Offset::from_prism_location(&location),
                         )));
 
-                        indexer
-                            .local_index
-                            .add_definition(indexer.uri_id, fully_qualified_name, definition);
+                        indexer.local_index.add_definition(fully_qualified_name, definition);
                     });
                 }
                 _ => {}
@@ -400,11 +386,9 @@ impl Visit<'_> for RubyIndexer {
                     .is_some_and(|receiver| receiver.as_self_node().is_some()),
             );
 
-            indexer.local_index.add_definition(
-                indexer.uri_id,
-                fully_qualified_name,
-                Definition::Method(Box::new(method)),
-            );
+            indexer
+                .local_index
+                .add_definition(fully_qualified_name, Definition::Method(Box::new(method)));
         });
 
         if let Some(body) = node.body() {
@@ -428,7 +412,6 @@ impl Visit<'_> for RubyIndexer {
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
                         indexer.local_index.add_definition(
-                            indexer.uri_id,
                             fully_qualified_name.clone(),
                             Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
                                 name_id,
@@ -440,7 +423,6 @@ impl Visit<'_> for RubyIndexer {
                         let writer_name = format!("{fully_qualified_name}=");
                         let writer_name_id = NameId::from(&writer_name);
                         indexer.local_index.add_definition(
-                            indexer.uri_id,
                             writer_name,
                             Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
                                 writer_name_id,
@@ -456,7 +438,6 @@ impl Visit<'_> for RubyIndexer {
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
                         indexer.local_index.add_definition(
-                            indexer.uri_id,
                             fully_qualified_name,
                             Definition::AttrReader(Box::new(AttrReaderDefinition::new(
                                 name_id,
@@ -474,7 +455,6 @@ impl Visit<'_> for RubyIndexer {
                         let name_id = NameId::from(&writer_name);
 
                         indexer.local_index.add_definition(
-                            indexer.uri_id,
                             writer_name,
                             Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
                                 name_id,
@@ -514,7 +494,7 @@ impl Visit<'_> for RubyIndexer {
             Offset::from_prism_location(&name_loc),
         )));
 
-        self.local_index.add_definition(self.uri_id, name, definition);
+        self.local_index.add_definition(name, definition);
 
         self.visit(&node.value());
     }
@@ -531,9 +511,7 @@ impl Visit<'_> for RubyIndexer {
                 Offset::from_prism_location(&name_loc),
             )));
 
-            indexer
-                .local_index
-                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+            indexer.local_index.add_definition(fully_qualified_name, definition);
         });
 
         self.visit(&node.value());
@@ -551,9 +529,7 @@ impl Visit<'_> for RubyIndexer {
                 Offset::from_prism_location(&name_loc),
             )));
 
-            indexer
-                .local_index
-                .add_definition(indexer.uri_id, fully_qualified_name, definition);
+            indexer.local_index.add_definition(fully_qualified_name, definition);
         });
 
         self.visit(&node.value());
