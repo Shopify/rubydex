@@ -188,8 +188,8 @@ impl Db {
     fn batch_insert_names(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
         let mut stmt = conn.prepare_cached("INSERT INTO names (id, name) VALUES (?, ?)")?;
 
-        for (name_id, name) in graph.names() {
-            stmt.execute([&name_id.to_string(), name])?;
+        for (name_id, declaration) in graph.declarations() {
+            stmt.execute([&name_id.to_string(), declaration.name()])?;
         }
 
         Ok(())

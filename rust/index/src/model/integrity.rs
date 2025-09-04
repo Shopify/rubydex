@@ -111,7 +111,7 @@ mod tests {
         let mut checker = IntegrityChecker::new();
 
         checker.add_rule("Index must be empty", |index, errors| {
-            if !index.names().is_empty() {
+            if !index.declarations().is_empty() {
                 errors.push("Index is not empty".to_string());
             }
         });

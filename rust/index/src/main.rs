@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("{}", dot::generate(&graph));
     } else {
         println!("Indexed {} files", documents.len());
-        println!("Found {} names", graph.names().len());
+        println!("Found {} names", graph.declarations().len());
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.uri_pool().len());
     }

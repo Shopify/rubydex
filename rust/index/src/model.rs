@@ -1,4 +1,5 @@
 pub mod db;
+pub mod declaration;
 pub mod definitions;
 pub mod graph;
 pub mod id;

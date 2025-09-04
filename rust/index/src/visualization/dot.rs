@@ -30,7 +30,7 @@ pub fn generate(graph: &Graph) -> String {
     output.push_str("digraph {\n");
     output.push_str("    rankdir=TB;\n\n");
 
-    write_name_nodes(&mut output, graph);
+    write_declaration_nodes(&mut output, graph);
     write_definition_nodes(&mut output, graph);
     write_uri_nodes(&mut output, graph);
     write_name_to_definition_edges(&mut output, graph);
@@ -40,9 +40,13 @@ pub fn generate(graph: &Graph) -> String {
     output
 }
 
-fn write_name_nodes(output: &mut String, graph: &Graph) {
-    let mut names: Vec<_> = graph.names().values().collect();
-    names.sort();
+fn write_declaration_nodes(output: &mut String, graph: &Graph) {
+    let mut names: Vec<_> = graph
+        .declarations()
+        .values()
+        .map(super::super::model::declaration::Declaration::name)
+        .collect();
+    names.sort_unstable();
 
     for name in names {
         let escaped_name = escape_dot_string(name);
@@ -60,9 +64,9 @@ fn write_definition_nodes(output: &mut String, graph: &Graph) {
         .definitions()
         .iter()
         .filter_map(|(def_id, definition)| {
-            graph.names().get(definition.name_id()).map(|name| {
+            graph.declarations().get(definition.name_id()).map(|declaration| {
                 let def_type = definition.kind();
-                let escaped_name = escape_dot_string(name);
+                let escaped_name = escape_dot_string(declaration.name());
                 let label = format!("{def_type}({escaped_name})");
                 let line = format!("    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];\n");
                 (label, line)
@@ -97,19 +101,17 @@ fn write_uri_nodes(output: &mut String, graph: &Graph) {
 fn write_name_to_definition_edges(output: &mut String, graph: &Graph) {
     let mut name_to_def_edges: Vec<_> = Vec::new();
 
-    for (name_id, definition_ids) in graph.name_to_definitions() {
-        if let Some(name) = graph.names().get(name_id) {
-            for def_id in definition_ids {
-                if graph.definitions().contains_key(def_id) {
-                    name_to_def_edges.push((name.clone(), def_id.to_string()));
-                }
+    for declaration in graph.declarations().values() {
+        for def_id in declaration.definitions() {
+            if graph.definitions().contains_key(def_id) {
+                name_to_def_edges.push((declaration.name(), def_id.to_string()));
             }
         }
     }
     name_to_def_edges.sort();
 
     for (name, def_id) in name_to_def_edges {
-        let name_node = format!("Name:{}", escape_dot_string(&name));
+        let name_node = format!("Name:{}", escape_dot_string(name));
         let _ = writeln!(output, "    \"{name_node}\" -> \"def_{def_id}\" [dir=both];");
     }
 }
