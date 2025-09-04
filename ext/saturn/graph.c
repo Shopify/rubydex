@@ -7,7 +7,7 @@ static VALUE cGraph;
 // Rust to free data allocated by it
 static void graph_free(void *ptr) {
     if (ptr) {
-        idx_graph_free(ptr);
+        sat_graph_free(ptr);
     }
 }
 
@@ -17,7 +17,7 @@ static const rb_data_type_t graph_type = {
 // Custom allocator for the Graph class. Calls into Rust to create a new
 // `Arc<Mutex<Graph>>` that gets stored internally as a void pointer
 static VALUE rb_graph_alloc(VALUE klass) {
-    void *graph = idx_graph_new();
+    void *graph = sat_graph_new();
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
 }
 
@@ -63,7 +63,7 @@ static VALUE rb_graph_index_all(VALUE self, VALUE file_paths) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
     const char *error_messages =
-        idx_index_all_c(graph, (const char **)converted_file_paths, length);
+        sat_index_all_c(graph, (const char **)converted_file_paths, length);
 
     // Free the converted file paths and allow the GC to collect them
     for (size_t i = 0; i < length; i++) {
@@ -88,7 +88,7 @@ static VALUE rb_graph_set_configuration(VALUE self, VALUE db_path) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    if (!idx_graph_set_configuration(graph, StringValueCStr(db_path))) {
+    if (!sat_graph_set_configuration(graph, StringValueCStr(db_path))) {
         rb_raise(rb_eRuntimeError, "Failed to set the database configuration");
     }
 

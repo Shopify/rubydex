@@ -11,13 +11,13 @@ pub type GraphPointer = *mut c_void;
 
 /// Creates a new graph within a mutex. This is meant to be used when creating new Graph objects in Ruby
 #[unsafe(no_mangle)]
-pub extern "C" fn idx_graph_new() -> GraphPointer {
+pub extern "C" fn sat_graph_new() -> GraphPointer {
     Box::into_raw(Box::new(Graph::new())) as GraphPointer
 }
 
 /// Frees a Graph through its pointer
 #[unsafe(no_mangle)]
-pub extern "C" fn idx_graph_free(pointer: GraphPointer) {
+pub extern "C" fn sat_graph_free(pointer: GraphPointer) {
     unsafe {
         let _ = Box::from_raw(pointer.cast::<Graph>());
     }
@@ -44,7 +44,7 @@ where
 /// This function is unsafe because it dereferences raw pointers coming from C. The caller has to ensure that the Ruby
 /// VM will not free the pointers related to the string array while they are in use by Rust
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn idx_index_all_c(
+pub unsafe extern "C" fn sat_index_all_c(
     pointer: GraphPointer,
     file_paths: *const *const c_char,
     count: usize,
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn idx_index_all_c(
 ///
 /// This function will panic in case of a dead lock on the graph mutex
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn idx_graph_set_configuration(pointer: GraphPointer, db_path: *const c_char) -> bool {
+pub unsafe extern "C" fn sat_graph_set_configuration(pointer: GraphPointer, db_path: *const c_char) -> bool {
     with_graph(pointer, |graph| {
         match unsafe { conversions::convert_char_ptr_to_string(db_path) } {
             Ok(path) => graph.set_configuration(path).is_ok(),
