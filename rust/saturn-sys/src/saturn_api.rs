@@ -1,9 +1,9 @@
 //! This file provides the C API for the Graph object
 
 use crate::conversions;
-use index::indexing;
-use index::model::graph::Graph;
 use libc::{c_char, c_void};
+use saturn::indexing;
+use saturn::model::graph::Graph;
 use std::ffi::CString;
 use std::{mem, ptr};
 

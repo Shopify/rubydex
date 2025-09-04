@@ -2,7 +2,7 @@ use std::error::Error;
 
 use clap::Parser;
 
-use index::{
+use saturn::{
     indexing::{self, errors::MultipleErrors},
     model::graph::Graph,
     timer::{Timer, time_it},
@@ -10,7 +10,7 @@ use index::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "index_cli", about = "A Ruby code indexer", version)]
+#[command(name = "saturn_cli", about = "A Static Analysis Toolkit for Ruby", version)]
 #[allow(clippy::struct_excessive_bools)]
 struct Args {
     #[arg(value_name = "DIR", default_value = ".")]
