@@ -95,8 +95,8 @@ static VALUE rb_graph_set_configuration(VALUE self, VALUE db_path) {
     return Qnil;
 }
 
-void initialize_graph(VALUE mIndex) {
-    cGraph = rb_define_class_under(mIndex, "Graph", rb_cObject);
+void initialize_graph(VALUE mSaturn) {
+    cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
 
     rb_define_alloc_func(cGraph, rb_graph_alloc);
     rb_define_method(cGraph, "index_all", rb_graph_index_all, 1);

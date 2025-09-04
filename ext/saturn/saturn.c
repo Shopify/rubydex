@@ -2,10 +2,10 @@
 #include "ruby.h"
 #include "rustbindings.h"
 
-VALUE mIndex;
-void Init_index(void) {
+VALUE mSaturn;
+void Init_saturn(void) {
     rb_ext_ractor_safe(true);
 
-    mIndex = rb_define_module("Index");
-    initialize_graph(mIndex);
+    mSaturn = rb_define_module("Saturn");
+    initialize_graph(mSaturn);
 }

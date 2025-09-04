@@ -23,5 +23,5 @@ Gem::Specification.new do |spec|
   spec.bindir = "exe"
   spec.executables = Dir.glob("exe/*").map { |f| File.basename(f) }
   spec.require_paths = ["lib"]
-  spec.extensions = ["ext/index/extconf.rb"]
+  spec.extensions = ["ext/saturn/extconf.rb"]
 end

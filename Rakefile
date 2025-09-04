@@ -6,10 +6,10 @@ require "rake/extensiontask"
 require "rake/testtask"
 require "ruby_memcheck"
 
-GEMSPEC = Gem::Specification.load("index.gemspec")
+GEMSPEC = Gem::Specification.load("saturn.gemspec")
 
-Rake::ExtensionTask.new("index", GEMSPEC) do |ext|
-  ext.lib_dir = "lib/index"
+Rake::ExtensionTask.new("saturn", GEMSPEC) do |ext|
+  ext.lib_dir = "lib/saturn"
 end
 
 test_config = lambda do |t|
