@@ -60,7 +60,7 @@ impl Db {
         // Set default connection pragmas
         conn.execute_batch(
             "
-            PRAGMA synchronous = NORMAL;
+            PRAGMA synchronous = OFF;
             PRAGMA foreign_keys = ON;
             PRAGMA locking_mode = EXCLUSIVE;
             ",
@@ -85,17 +85,17 @@ impl Db {
 
             statement
                 .query_map([uri_id], |row| {
-                    let name_id = row.get::<_, u64>(0)?;
+                    let name_id = row.get::<_, String>(0)?;
                     let name = row.get::<_, String>(1)?;
-                    let definition_id = row.get::<_, u64>(2)?;
+                    let definition_id = row.get::<_, String>(2)?;
                     let data = row.get::<_, Vec<u8>>(3)?;
                     let definition = rmp_serde::from_slice::<Definition>(&data)
                         .expect("Deserializing the definition from the DB should always succeed");
 
                     Ok(LoadResult {
-                        name_id,
+                        name_id: name_id.parse().expect("IDs should always be valid u64s"),
                         name,
-                        definition_id,
+                        definition_id: definition_id.parse().expect("IDs should always be valid u64s"),
                         definition,
                     })
                 })?
@@ -159,11 +159,7 @@ impl Db {
     /// Initializes a fresh database with schema and configuration
     fn initialize_database(conn: &mut Connection) -> Result<(), Box<dyn Error>> {
         // Set Pragmas first
-        conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            ",
-        )?;
+        conn.execute_batch("PRAGMA journal_mode = memory;")?;
 
         // Perform remaining DB init within at tx
         let tx = conn.transaction()?;
@@ -178,7 +174,7 @@ impl Db {
         let mut stmt = conn.prepare_cached("INSERT INTO documents (id, uri) VALUES (?, ?)")?;
 
         for (uri_id, document) in graph.documents() {
-            stmt.execute([&uri_id.to_string(), document.uri()])?;
+            stmt.execute(params![uri_id.to_string(), document.uri()])?;
         }
 
         Ok(())
@@ -189,7 +185,7 @@ impl Db {
         let mut stmt = conn.prepare_cached("INSERT INTO names (id, name) VALUES (?, ?)")?;
 
         for (name_id, declaration) in graph.declarations() {
-            stmt.execute([&name_id.to_string(), declaration.name()])?;
+            stmt.execute(params![name_id.to_string(), declaration.name()])?;
         }
 
         Ok(())
@@ -202,10 +198,10 @@ impl Db {
 
         for (definition_id, definition) in graph.definitions() {
             let data = rmp_serde::to_vec(definition).expect("Serializing definitions should always succeed");
-            let name_id = *definition.name_id();
-            let uri_id = *definition.uri_id();
+            let name_id = definition.name_id().to_string();
+            let uri_id = definition.uri_id().to_string();
 
-            stmt.execute(params![&definition_id.to_string(), *name_id, *uri_id, data,])?;
+            stmt.execute(params![definition_id.to_string(), name_id, uri_id, data])?;
         }
 
         Ok(())
@@ -220,11 +216,26 @@ mod tests {
     #[test]
     fn saving_graph_to_the_database() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              module Bar
+                module Baz
+                  class Qux
+                    def initialize
+                      @name = 'hi'
+                    end
+                  end
+                end
+              end
+            end
+            ",
+        );
 
         let mut db = Db::new();
         db.initialize_connection(None).unwrap();
-        assert!(db.save_full_graph(&context.graph).is_ok());
+        db.save_full_graph(&context.graph).unwrap();
 
         // Query to grab all of the data
         let query = "
@@ -235,6 +246,7 @@ mod tests {
             FROM documents
             JOIN definitions ON documents.id = definitions.document_id
             JOIN names ON names.id = definitions.name_id
+            ORDER BY names.name ASC
         ";
 
         let borrow = db.connection.borrow();
@@ -243,20 +255,19 @@ mod tests {
         let mut data = stmt
             .query_map((), |row| {
                 Ok((
-                    row.get::<_, u64>(0).unwrap(),
+                    row.get::<_, String>(0).unwrap(),
                     row.get::<_, String>(1).unwrap(),
-                    row.get::<_, u64>(2).unwrap(),
-                    row.get::<_, u64>(3).unwrap(),
-                    row.get::<_, u64>(4).unwrap(),
+                    row.get::<_, String>(2).unwrap(),
+                    row.get::<_, String>(3).unwrap(),
+                    row.get::<_, String>(4).unwrap(),
                     row.get::<_, Vec<u8>>(5).unwrap(),
-                    row.get::<_, u64>(6).unwrap(),
+                    row.get::<_, String>(6).unwrap(),
                     row.get::<_, String>(7).unwrap(),
                 ))
             })
             .unwrap()
             .collect::<Vec<_>>();
 
-        let first = data.pop().unwrap();
         let (
             name_id,
             name,
@@ -266,7 +277,7 @@ mod tests {
             definition_data,
             document_id,
             document_uri,
-        ) = first.unwrap();
+        ) = data.remove(0).unwrap();
 
         let definition = rmp_serde::from_slice::<crate::model::definitions::Definition>(&definition_data).unwrap();
 
@@ -280,7 +291,7 @@ mod tests {
         assert_eq!(document_id, definition_document_id);
         assert_eq!(name, String::from("Foo"));
         assert_eq!(0, definition.start());
-        assert_eq!(15, definition.end());
+        assert_eq!(140, definition.end());
         assert_eq!(document_uri, String::from("file:///foo.rb"));
     }
 
