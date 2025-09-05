@@ -124,7 +124,7 @@ mod tests {
         let uri_id = graph.add_uri("file:///foo.rb".to_string());
         let name_id = NameId::from("Foo");
         let definition = Definition::Module(Box::new(ModuleDefinition::new(name_id, uri_id, Offset::new(0, 15))));
-        graph.add_definition(uri_id, "Foo".to_string(), definition);
+        graph.add_definition("Foo".to_string(), definition);
 
         // Should fail since the index is not empty
         let errors = checker.apply(&graph);
