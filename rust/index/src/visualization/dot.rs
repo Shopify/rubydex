@@ -155,8 +155,8 @@ mod tests {
     "def_{module_def_id}" [label="Module(TestModule)",shape=ellipse];
 
     "file:///test.rb" [label="test.rb",shape=box];
-    "def_{module_def_id}" -> "file:///test.rb";
     "def_{class_def_id}" -> "file:///test.rb";
+    "def_{module_def_id}" -> "file:///test.rb";
 
 }}
 "#
