@@ -22,7 +22,35 @@ require "fileutils"
 require "stringio"
 
 module Symbols
+  module CommentUtils
+    CommentInput = Data.define(:probability, :line_count, :line_length)
+
+    # These numbers are based on Shopify core repo comment distribution
+    COMMENT_PARAMS = {
+      "Symbols::Class" => CommentInput.new(0.19, 2, 26),
+      "Symbols::Module" => CommentInput.new(0.41, 2, 27),
+      "Symbols::Method" => CommentInput.new(0.13, 1, 33),
+      "Symbols::SingletonClass" => CommentInput.new(0.16, 2, 20),
+      "Symbols::Constant" => CommentInput.new(0.09, 1, 36),
+    }
+
+    CHARACTERS = ("a".."z").to_a + [" "]
+
+    def write_comments(buffer, indent:)
+      comment_params = COMMENT_PARAMS.fetch(self.class.name)
+      return if rand > comment_params.probability
+
+      comments = comment_params.line_count.times.map do
+        "#{" " * indent}# " + CHARACTERS.sample(comment_params.line_length - 2).join
+      end.join("\n")
+
+      buffer.puts comments
+    end
+  end
+
   class Tree
+    include CommentUtils
+
     attr_reader :children
 
     def initialize
@@ -60,6 +88,7 @@ module Symbols
     attr_accessor :superclass
 
     def write(buffer, indent:)
+      write_comments(buffer, indent:)
       if @superclass
         buffer.puts "#{" " * indent}class #{@name} < #{@superclass.name}"
       else
@@ -72,6 +101,7 @@ module Symbols
 
   class Module < NamedTree
     def write(buffer, indent:)
+      write_comments(buffer, indent:)
       buffer.puts "#{" " * indent}module #{@name}"
       write_children(buffer, indent: indent)
       buffer.puts "#{" " * indent}end"
@@ -80,6 +110,7 @@ module Symbols
 
   class SingletonClass < Tree
     def write(buffer, indent:)
+      write_comments(buffer, indent:)
       buffer.puts "#{" " * indent}class << self"
       write_children(buffer, indent: indent)
       buffer.puts "#{" " * indent}end"
@@ -87,17 +118,21 @@ module Symbols
   end
 
   class Constant
+    include CommentUtils
+
     def initialize(name)
       @name = name
     end
 
     def write(buffer, indent:)
+      write_comments(buffer, indent:)
       buffer.puts "#{" " * indent}#{@name} = 42"
     end
   end
 
   class Method < NamedTree
     def write(buffer, indent:)
+      write_comments(buffer, indent:)
       params = rand(0..10).times.map { |i| "param#{i}" }
       if params.empty?
         buffer.puts "#{" " * indent}def #{@name}"
