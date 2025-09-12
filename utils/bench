@@ -18,6 +18,6 @@ if [ ! -d "$CORPUS_PATH" ]; then
     $SCRIPT_DIR/generate-corpus "$CORPUS_PATH" -s 1000
 fi
 
-cd "$PROJECT_ROOT/rust" && cargo build --release
+cd "$PROJECT_ROOT/rust" && cargo build --release --bin bench
 cd $PROJECT_ROOT
-utils/mem-use "$PROJECT_ROOT/rust/target/release/index_cli" "$CORPUS_PATH"
+utils/mem-use "$PROJECT_ROOT/rust/target/release/bench" "$CORPUS_PATH"
