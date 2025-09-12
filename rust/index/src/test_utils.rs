@@ -1,5 +1,6 @@
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
+use crate::source_location::UTF8SourceLocationConverter;
 
 #[derive(Default)]
 pub struct GraphTest {
@@ -14,7 +15,8 @@ impl GraphTest {
 
     #[must_use]
     fn index_source(uri: &str, source: &str) -> Graph {
-        let mut indexer = RubyIndexer::new(uri.to_string());
+        let converter = UTF8SourceLocationConverter::new(source);
+        let mut indexer = RubyIndexer::new(uri.to_string(), &converter);
         indexer.index(source);
         indexer.into_parts().0
     }

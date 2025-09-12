@@ -1,9 +1,9 @@
 use crate::{
     indexing::{
         errors::{IndexingError, MultipleErrors},
-        ruby_indexer::RubyIndexer,
+        ruby_indexer::{RubyIndexer, IndexerParts},
     },
-    model::graph::Graph,
+    model::graph::Graph, source_location::{UTF8SourceLocationConverter},
 };
 use glob::glob;
 use std::sync::{
@@ -61,7 +61,7 @@ impl Document {
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<(), MultipleErrors> {
-    let (tx, rx): (Sender<RubyIndexer>, Receiver<RubyIndexer>) = mpsc::channel();
+    let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let mut threads = Vec::with_capacity(num_threads);
     let document_queue = Arc::new(Mutex::new(documents));
@@ -72,29 +72,39 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
 
         let handle = thread::spawn(move || {
             while let Some(document) = { queue.lock().unwrap().pop() } {
-                let mut ruby_indexer = RubyIndexer::new(document.uri.to_string());
+                let (source, errors) = {
+                    let mut errors = Vec::new();
 
-                // If the document includes the source, use it directly to index (especially since the content may not
-                // be committed to disk yet). Otherwise, read it from disk
-                if let Some(source) = &document.source {
-                    ruby_indexer.index(source);
+                    let source: String =
+                        if let Some(source) = &document.source {
+                            source.clone()
+                        } else {
+                            fs::read_to_string(document.path()).unwrap_or_else(|e| {
+                                errors.push(IndexingError::FileReadError(format!(
+                                    "Failed to read {}: {}",
+                                    document.path(),
+                                    e
+                                )));
+                                String::new()
+                            })
+                        };
+                    
+                    (source, errors)
+                };
+                
+                let converter = UTF8SourceLocationConverter::new(&source);
+                let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter);
+
+                if errors.is_empty() {
+                    ruby_indexer.index(&source);
                 } else {
-                    match fs::read_to_string(document.path()) {
-                        Ok(source) => {
-                            ruby_indexer.index(&source);
-                        }
-                        Err(e) => {
-                            ruby_indexer.add_error(IndexingError::FileReadError(format!(
-                                "Failed to read {}: {}",
-                                document.path(),
-                                e
-                            )));
-                        }
+                    for error in errors {
+                        ruby_indexer.add_error(error);
                     }
                 }
 
                 thread_tx
-                    .send(ruby_indexer)
+                    .send(ruby_indexer.into_parts())
                     .expect("Receiver end should not be closed until all threads are done");
             }
         });
@@ -107,8 +117,7 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
     // Insert all discovered definitions into the global graph
     let mut all_errors = Vec::new();
 
-    for indexer in rx {
-        let (local_graph, errors) = indexer.into_parts();
+    for (local_graph, errors) in rx {
         graph.update(local_graph);
         all_errors.extend(errors);
     }
