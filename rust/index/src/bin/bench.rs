@@ -55,6 +55,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         indexing_duration = indexing_dur;
 
         let ((), querying_dur) = time_it(|| {
+            for declaration in graph.declarations().values() {
+                let _ = graph.get_documentation(declaration.name());
+            }
+
             println!("Found {} names", graph.declarations().len());
             println!("Found {} definitions", graph.definitions().len());
             println!("Found {} URIs", graph.documents().len());

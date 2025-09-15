@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::error::Error;
+use std::fs;
 
 use crate::model::db::Db;
 use crate::model::declaration::Declaration;
@@ -71,6 +72,148 @@ impl Graph {
                 .filter_map(|id| self.definitions.get(id))
                 .collect(),
         )
+    }
+
+    #[must_use]
+    pub fn get_documentation(&self, name: &str) -> Option<String> {
+        let name_id = NameId::from(name);
+        let declaration = self.declarations.get(&name_id)?;
+
+        Some(
+            declaration
+                .definitions()
+                .iter()
+                .filter_map(|id| self.definitions.get(id))
+                .filter_map(|definition| {
+                    let document = self.documents.get(definition.uri_id())?;
+                    let source = fs::read_to_string(document.uri()).ok()?;
+                    let result = ruby_prism::parse(source.as_ref());
+                    let comment = Self::find_comments_for(*definition.uri_id(), definition.start(), &source, &result);
+
+                    if comment.is_empty() { None } else { Some(comment) }
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    }
+
+    fn find_comments_for(
+        _uri_id: UriId,
+        definition_start_offset: u32,
+        source: &str,
+        parse_result: &ruby_prism::ParseResult,
+    ) -> String {
+        let start_offset = definition_start_offset as usize;
+        let source_bytes = source.as_bytes();
+
+        // Collect comments into a vector and sort by start offset
+        let mut comment_list = Vec::new();
+        for comment in parse_result.comments() {
+            comment_list.push(comment);
+        }
+
+        if comment_list.is_empty() {
+            return String::new();
+        }
+        comment_list.sort_by_key(|comment| comment.location().end_offset());
+
+        // Binary search to find the comment with the largest end_offset that is smaller than start_offset
+        let idx = match comment_list.binary_search_by_key(&start_offset, |comment| comment.location().end_offset()) {
+            Ok(_) => {
+                // This should never happen in valid Ruby syntax - a comment cannot end exactly
+                // where a definition begins (there must be at least a newline between them)
+                return String::new();
+            }
+            Err(i) if i > 0 => i - 1,
+            Err(_) => return String::new(),
+        };
+
+        let closest_comment = &comment_list[idx];
+        let comment_end = closest_comment.location().end_offset();
+
+        // Validate that the comment is either directly above or has one blank line in between
+        let between = &source_bytes[comment_end..start_offset];
+        if !between.iter().all(|&b| b.is_ascii_whitespace()) {
+            return String::new();
+        }
+
+        // Count newlines - should be 1 (directly above) or 2 (one blank line)
+        let newline_count = bytecount::count(between, b'\n');
+        if newline_count > 2 {
+            return String::new();
+        }
+
+        // Start from the found comment and traverse backwards to find continuous block
+        let mut comment_block = Vec::new();
+        let mut current_idx = idx;
+
+        loop {
+            let current_comment = &comment_list[current_idx];
+            let comment_text = String::from_utf8_lossy(current_comment.location().as_slice()).to_string();
+
+            // Skip magic comments but continue traversing
+            if !Self::is_magic_or_rbs_comment(&comment_text) {
+                // Clean up comment text
+                let cleaned = comment_text
+                    .trim()
+                    .strip_prefix("# ")
+                    .unwrap_or(comment_text.trim())
+                    .to_string();
+                comment_block.push(cleaned);
+            }
+
+            // Check if there's a previous comment that's continuous
+            if current_idx == 0 {
+                break;
+            }
+
+            let prev_idx = current_idx - 1;
+            let prev_comment = &comment_list[prev_idx];
+            let prev_end = prev_comment.location().end_offset();
+            let current_start = current_comment.location().start_offset();
+
+            if prev_end >= current_start {
+                break;
+            }
+
+            let between_comments = &source_bytes[prev_end..current_start];
+            if !between_comments.iter().all(|&b| b.is_ascii_whitespace()) {
+                break;
+            }
+
+            let between_newlines = bytecount::count(between_comments, b'\n');
+            if between_newlines > 1 {
+                break;
+            }
+
+            current_idx = prev_idx;
+        }
+
+        // Reverse to get correct order (top to bottom)
+        comment_block.reverse();
+        comment_block.join("\n")
+    }
+
+    fn is_magic_or_rbs_comment(text: &str) -> bool {
+        const MAGIC_PREFIXES: &[&str] = &[
+            "frozen_string_literal:",
+            "typed:",
+            "compiled:",
+            "encoding:",
+            "shareable_constant_value:",
+            "warn_indent:",
+            "rubocop:",
+            "nodoc:",
+            "doc:",
+            "coding:",
+            "warn_past_scope:",
+        ];
+        const RBS_PREFIXES: &[&str] = &["#:", "#|"];
+
+        MAGIC_PREFIXES
+            .iter()
+            .chain(RBS_PREFIXES.iter())
+            .any(|&prefix| text.contains(prefix))
     }
 
     // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
