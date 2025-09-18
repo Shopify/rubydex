@@ -5,7 +5,9 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-CORPUS_PATH="$(dirname "$PROJECT_ROOT")/huge_corpus"
+if [ -z "$CORPUS_PATH" ]; then
+    CORPUS_PATH="$(dirname "$PROJECT_ROOT")/huge_corpus"
+fi
 
 # 1. Generate the huge corpus if it doesn't exist
 # 2. Compile in release mode (cargo build --release)
