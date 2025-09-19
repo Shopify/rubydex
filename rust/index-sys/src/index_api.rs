@@ -56,7 +56,7 @@ pub unsafe extern "C" fn idx_index_all_c(
     all_errors.extend(document_errors);
 
     with_graph(pointer, |graph| {
-        if let Err(errors) = indexing::index_in_parallel(graph, documents) {
+        if let Err(errors) = indexing::index_and_sync(graph, documents) {
             all_errors.extend(errors.0);
         }
 

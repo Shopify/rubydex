@@ -51,6 +51,7 @@ task index_top_gems: :compile_release do
 
             # Index the gem's files and yield errors back to the main Ractor
             graph = Index::Graph.new
+            graph.set_configuration(File.join(@gems_dir, "#{gem}.db"))
             error = graph.index_all(Dir.glob("#{gem_dir}/**/*.rb"))
             next unless error
 

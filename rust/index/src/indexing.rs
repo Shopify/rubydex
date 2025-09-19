@@ -11,17 +11,18 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{Receiver, Sender},
 };
-use std::{fs, path::Path};
+use std::{collections::HashMap, collections::HashSet, fs, path::Path};
 use std::{sync::mpsc, thread};
 use url::Url;
+use xxhash_rust::xxh3::xxh3_64;
 pub mod errors;
 pub mod ruby_indexer;
 
-// Represents a document to be indexed. If `source` is `Some(String)`, we're indexing a file state that's not committed
-// to disk yet and should then use the given `source` instead of reading from disk
+#[derive(Clone)]
 pub struct Document {
     uri: Url,
-    source: Option<String>,
+    source: String,
+    content_hash: i64,
 }
 
 impl Document {
@@ -29,9 +30,19 @@ impl Document {
     ///
     /// Creating a new document fails on invalid URIs
     pub fn new(uri: &str, source: Option<String>) -> Result<Self, IndexingError> {
+        let uri = Url::parse(uri).map_err(|e| IndexingError::InvalidUri(e.to_string()))?;
+
+        // Try to get the file content from the source first. If not try to read from the disk
+        let file_content = source.map_or_else(
+            || fs::read_to_string(uri.path()).map_err(|e| IndexingError::FileReadError(e.to_string())),
+            Ok,
+        )?;
+        let content_hash = xxh3_64(file_content.as_bytes()).cast_signed();
+
         Ok(Self {
-            uri: Url::parse(uri).map_err(|e| IndexingError::InvalidUri(format!("Failed to parse URI '{uri}': {e}")))?,
-            source,
+            uri,
+            source: file_content,
+            content_hash,
         })
     }
 
@@ -39,16 +50,26 @@ impl Document {
     ///
     /// Errors if the file path cannot be turned into a URI
     pub fn from_file_path(path: &str) -> Result<Self, IndexingError> {
+        let uri = Url::from_file_path(path)
+            .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't build URI from path '{path}'")))?;
+        let file_content = fs::read_to_string(path).map_err(|e| IndexingError::FileReadError(e.to_string()))?;
+        let content_hash = xxh3_64(file_content.as_bytes()).cast_signed();
+
         Ok(Self {
-            uri: Url::from_file_path(path)
-                .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't build URI from path '{path}'")))?,
-            source: None,
+            uri,
+            source: file_content,
+            content_hash,
         })
     }
 
     #[must_use]
     pub fn path(&self) -> &str {
         self.uri.path()
+    }
+
+    #[must_use]
+    pub fn content_hash(&self) -> i64 {
+        self.content_hash
     }
 }
 
@@ -73,35 +94,9 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
 
         let handle = thread::spawn(move || {
             while let Some(document) = { queue.lock().unwrap().pop() } {
-                let (source, errors) = {
-                    let mut errors = Vec::new();
-
-                    let source: String = if let Some(source) = &document.source {
-                        source.clone()
-                    } else {
-                        fs::read_to_string(document.path()).unwrap_or_else(|e| {
-                            errors.push(IndexingError::FileReadError(format!(
-                                "Failed to read {}: {}",
-                                document.path(),
-                                e
-                            )));
-                            String::new()
-                        })
-                    };
-
-                    (source, errors)
-                };
-
-                let converter = UTF8SourceLocationConverter::new(&source);
-                let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source);
-
-                if errors.is_empty() {
-                    ruby_indexer.index();
-                } else {
-                    for error in errors {
-                        ruby_indexer.add_error(error);
-                    }
-                }
+                let converter = UTF8SourceLocationConverter::new(&document.source);
+                let mut ruby_indexer = RubyIndexer::new(&document, &converter);
+                ruby_indexer.index();
 
                 thread_tx
                     .send(ruby_indexer.into_parts())
@@ -177,11 +172,77 @@ pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingErro
     (documents, errors)
 }
 
+/// Indexes the given documents and syncs them with the database.
+///
+/// This function performs a complete indexing workflow:
+/// 1. Syncs the documents with the database to determine what needs to be updated
+/// 2. Indexes the documents that require processing in parallel
+/// 3. Saves the updated graph back to the database
+///
+/// # Errors
+///
+/// Returns `MultipleErrors` if any of the following operations fail:
+/// - Database synchronization operations
+/// - Parallel indexing of documents
+/// - Saving the graph to the database
+pub fn index_and_sync(graph: &mut Graph, documents: Vec<Document>) -> Result<(), MultipleErrors> {
+    let db_documents = graph.db.all_documents_hashes_by_uri()?;
+    let (new_uris, stale_uris) = calculate_diff(&documents, &db_documents);
+    stale_uris.iter().try_for_each(|uri| graph.delete_uri(uri))?;
+    let documents_to_index = documents
+        .into_iter()
+        .filter(|doc| new_uris.contains(doc.uri.as_str()))
+        .collect();
+
+    index_in_parallel(graph, documents_to_index)?;
+    graph.save_to_database()?;
+    Ok(())
+}
+
+/// Calculates which documents need to be indexed and which need to be removed.
+///
+/// Returns `(new_uris, stale_uris)` where:
+/// - `new_uris`: Documents to index (includes new and updated documents)
+/// - `stale_uris`: Documents to delete from graph/DB (includes deleted and updated documents)
+///
+/// Updated documents appear in both sets to ensure clean updates: first the old data
+/// is completely removed, then the document is re-indexed fresh with new data.
+fn calculate_diff(
+    incoming_documents: &[Document],
+    db_documents: &HashMap<String, i64>,
+) -> (HashSet<String>, HashSet<String>) {
+    let incoming_docs_lookup: HashMap<&str, i64> = incoming_documents
+        .iter()
+        .map(|doc| (doc.uri.as_str(), doc.content_hash))
+        .collect();
+
+    let db_uris: HashSet<&str> = db_documents.keys().map(String::as_str).collect();
+    let incoming_document_uris: HashSet<&str> = incoming_docs_lookup.keys().copied().collect();
+
+    let new: HashSet<&str> = incoming_document_uris.difference(&db_uris).copied().collect();
+    let deleted: HashSet<&str> = db_uris.difference(&incoming_document_uris).copied().collect();
+    let updated: HashSet<&str> = db_uris
+        .intersection(&incoming_document_uris)
+        .filter_map(|&uri_str| {
+            let incoming_hash = incoming_docs_lookup.get(uri_str)?;
+            let db_hash = db_documents.get(uri_str)?;
+
+            (incoming_hash != db_hash).then_some(uri_str)
+        })
+        .collect();
+
+    let new_uris = new.union(&updated).map(|&s| s.to_string()).collect();
+    let stale_uris = deleted.union(&updated).map(|&s| s.to_string()).collect();
+
+    (new_uris, stale_uris)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::model::ids::UriId;
 
     #[test]
     fn collecting_documents_in_parallel() {
@@ -206,5 +267,70 @@ mod tests {
         let (documents, errors) = collect_documents(paths);
         assert!(documents.is_empty());
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn index_and_sync_works() {
+        let mut graph = Graph::new();
+        graph.db.initialize_connection(None).unwrap();
+
+        // Set up initial state
+        let initial_documents = vec![
+            Document::new("file:///existing.rb", Some("module Existing; end".to_string())).unwrap(),
+            Document::new("file:///updated.rb", Some("class OldVersion; end".to_string())).unwrap(),
+            Document::new("file:///to_delete.rb", Some("class ToDelete; end".to_string())).unwrap(),
+        ];
+        index_and_sync(&mut graph, initial_documents).unwrap();
+
+        let initial_db_docs = graph.db.all_documents_hashes_by_uri().unwrap();
+        assert_eq!(initial_db_docs.len(), 3);
+
+        // Test sync with updated document set
+        let incoming_documents = vec![
+            Document::new("file:///new.rb", Some("module New; end".to_string())).unwrap(),
+            Document::new("file:///existing.rb", Some("module Existing; end".to_string())).unwrap(), // Same content
+            Document::new("file:///updated.rb", Some("class NewVersion; end".to_string())).unwrap(), // Updated content
+        ];
+
+        index_and_sync(&mut graph, incoming_documents).unwrap();
+
+        let result_db_docs = graph.db.all_documents_hashes_by_uri().unwrap();
+        assert_eq!(result_db_docs.len(), 3);
+        assert!(result_db_docs.contains_key("file:///new.rb"));
+        assert!(result_db_docs.contains_key("file:///existing.rb"));
+        assert!(result_db_docs.contains_key("file:///updated.rb"));
+
+        assert!(
+            graph
+                .db
+                .load_uri(UriId::from("file:///new.rb"))
+                .unwrap()
+                .iter()
+                .any(|result| result.name == "New")
+        );
+        assert!(
+            graph
+                .db
+                .load_uri(UriId::from("file:///existing.rb"))
+                .unwrap()
+                .iter()
+                .any(|result| result.name == "Existing")
+        );
+        assert!(
+            graph
+                .db
+                .load_uri(UriId::from("file:///updated.rb"))
+                .unwrap()
+                .iter()
+                .any(|result| result.name == "NewVersion")
+        );
+
+        graph.assert_integrity();
+
+        let documents: Vec<_> = graph.documents().values().collect();
+        assert_eq!(documents.len(), 3);
+        assert!(documents.iter().any(|doc| doc.uri() == "file:///new.rb"));
+        assert!(documents.iter().any(|doc| doc.uri() == "file:///existing.rb"));
+        assert!(documents.iter().any(|doc| doc.uri() == "file:///updated.rb"));
     }
 }

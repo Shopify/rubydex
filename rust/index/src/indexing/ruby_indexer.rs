@@ -47,9 +47,9 @@ pub struct RubyIndexer<'a> {
 
 impl<'a> RubyIndexer<'a> {
     #[must_use]
-    pub fn new(uri: String, location_converter: &'a dyn SourceLocationConverter, source: &'a str) -> Self {
+    pub fn new(document: &'a crate::indexing::Document, location_converter: &'a dyn SourceLocationConverter) -> Self {
         let mut local_index = Graph::new();
-        let uri_id = local_index.add_uri(uri);
+        let uri_id = local_index.add_document(document.uri.to_string(), Some(document.content_hash));
 
         Self {
             uri_id,
@@ -58,7 +58,7 @@ impl<'a> RubyIndexer<'a> {
             errors: Vec::new(),
             location_converter,
             comments: Vec::new(),
-            source,
+            source: &document.source,
         }
     }
 
@@ -247,7 +247,7 @@ impl<'a> RubyIndexer<'a> {
     // symbol arguments
     fn each_string_or_symbol_arg<F>(node: &ruby_prism::CallNode, mut f: F)
     where
-        F: FnMut(String, ruby_prism::Location),
+        F: FnMut(String, ruby_prism::Location<'_>),
     {
         let receiver = node.receiver();
 

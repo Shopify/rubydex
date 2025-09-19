@@ -11,11 +11,24 @@ impl std::fmt::Display for MultipleErrors {
 
 impl Error for MultipleErrors {}
 
+impl From<Box<dyn Error>> for MultipleErrors {
+    fn from(error: Box<dyn Error>) -> Self {
+        MultipleErrors(vec![IndexingError::FailedDbOperation(error.to_string())])
+    }
+}
+
+impl From<IndexingError> for MultipleErrors {
+    fn from(error: IndexingError) -> Self {
+        MultipleErrors(vec![error])
+    }
+}
+
 // Enum representing all types of indexing errors that may happen
 #[derive(Debug)]
 pub enum IndexingError {
     FileReadError(String),
     InvalidUri(String),
+    FailedDbOperation(String),
 }
 
 impl std::fmt::Display for IndexingError {
@@ -23,6 +36,7 @@ impl std::fmt::Display for IndexingError {
         match self {
             IndexingError::FileReadError(msg) => write!(f, "File read error: {msg}"),
             IndexingError::InvalidUri(msg) => write!(f, "Invalid URI: {msg}"),
+            IndexingError::FailedDbOperation(msg) => write!(f, "Db operation failed: {msg}"),
         }
     }
 }

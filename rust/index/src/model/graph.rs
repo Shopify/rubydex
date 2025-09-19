@@ -20,7 +20,7 @@ pub struct Graph {
     documents: IdentityHashMap<UriId, Document>,
     // Map of definition nodes
     definitions: IdentityHashMap<DefinitionId, Definition>,
-    db: Db,
+    pub db: Db,
 }
 
 impl Graph {
@@ -85,15 +85,18 @@ impl Graph {
         if comments.is_empty() {
             None
         } else {
-            Some(comments.join("\n"))
+            Some(comments.join("\n\n"))
         }
     }
 
-    // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
+    // Registers a document into the graph and returns the generated ID.
+    // This happens once when starting to index the URI and
     // then all definitions discovered in it get associated to the ID
-    pub fn add_uri(&mut self, uri: String) -> UriId {
+    pub fn add_document(&mut self, uri: String, content_hash: Option<i64>) -> UriId {
         let uri_id = UriId::from(&uri);
-        self.documents.entry(uri_id).or_insert_with(|| Document::new(uri));
+        self.documents
+            .entry(uri_id)
+            .or_insert_with(|| Document::new(uri, content_hash));
         uri_id
     }
 
@@ -133,7 +136,7 @@ impl Graph {
     ///
     /// Any database errors will prevent the data from being loaded
     pub fn load_uri(&mut self, uri: String) -> Result<(), Box<dyn Error>> {
-        let uri_id = self.add_uri(uri);
+        let uri_id = self.add_document(uri, None);
         let loaded_data = self.db.load_uri(uri_id)?;
 
         for load_result in loaded_data {

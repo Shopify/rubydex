@@ -121,7 +121,7 @@ mod tests {
         // Should pass since the index is empty
         checker.assert_integrity(&graph);
 
-        let uri_id = graph.add_uri("file:///foo.rb".to_string());
+        let uri_id = graph.add_document("file:///foo.rb".to_string(), None);
         let name_id = NameId::from("Foo");
         let definition = Definition::Module(Box::new(ModuleDefinition::new(
             name_id,

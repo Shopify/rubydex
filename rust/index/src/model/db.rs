@@ -4,7 +4,7 @@ use crate::model::{
     ids::{DefinitionId, NameId, UriId},
 };
 use rusqlite::{Connection, params};
-use std::{cell::RefCell, error::Error, fs, path::Path};
+use std::{cell::RefCell, collections::HashMap, error::Error, fs, path::Path};
 
 const SCHEMA_VERSION: u16 = 1;
 
@@ -106,6 +106,30 @@ impl Db {
         })
     }
 
+    /// Returns all URIs and their content hash currently stored in the database
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database query fails
+    ///
+    /// # Panics
+    ///
+    /// Will panic if the database connection is not initialized before trying to interact with it
+    pub fn all_documents_hashes_by_uri(&self) -> Result<HashMap<String, i64>, Box<dyn Error>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare("SELECT uri, content_hash FROM documents")?;
+
+            statement
+                .query_map([], |row| {
+                    let uri = row.get::<_, String>(0)?;
+                    let content_hash = row.get::<_, i64>(1)?;
+                    Ok((uri, content_hash))
+                })?
+                .collect::<Result<HashMap<_, _>, _>>()
+                .map_err(Into::into)
+        })
+    }
+
     /// Saves the full graph to the database. This is ONLY meant to be used for newly created database files and not
     /// synchronization as it will not try to update existing records for better insertion performance
     ///
@@ -120,9 +144,9 @@ impl Db {
         self.with_connection(|connection| {
             let tx = connection.transaction()?;
 
-            Self::batch_insert_documents(&tx, graph)?;
-            Self::batch_insert_names(&tx, graph)?;
-            Self::batch_insert_definitions(&tx, graph)?;
+            Self::batch_find_or_insert_documents(&tx, graph)?;
+            Self::batch_find_or_insert_names(&tx, graph)?;
+            Self::batch_find_or_insert_definitions(&tx, graph)?;
 
             tx.commit()?;
             Ok(())
@@ -202,19 +226,19 @@ impl Db {
     }
 
     /// Performs batch insert of documents (URIs) to the database
-    fn batch_insert_documents(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt = conn.prepare_cached("INSERT INTO documents (id, uri) VALUES (?, ?)")?;
+    fn batch_find_or_insert_documents(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
+        let mut stmt = conn.prepare_cached("INSERT OR IGNORE INTO documents (id, uri, content_hash) VALUES (?, ?, ?)")?;
 
         for (uri_id, document) in graph.documents() {
-            stmt.execute(rusqlite::params![*uri_id, document.uri()])?;
+            stmt.execute(params![*uri_id, document.uri(), document.content_hash().unwrap()])?;
         }
 
         Ok(())
     }
 
     /// Performs batch insert of names to the database
-    fn batch_insert_names(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt = conn.prepare_cached("INSERT INTO names (id, name) VALUES (?, ?)")?;
+    fn batch_find_or_insert_names(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
+        let mut stmt = conn.prepare_cached("INSERT OR IGNORE INTO names (id, name) VALUES (?, ?)")?;
 
         for (name_id, declaration) in graph.declarations() {
             stmt.execute(rusqlite::params![*name_id, declaration.name()])?;
@@ -224,9 +248,9 @@ impl Db {
     }
 
     /// Performs batch insert of definitions to the database
-    fn batch_insert_definitions(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
+    fn batch_find_or_insert_definitions(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
         let mut stmt =
-            conn.prepare_cached("INSERT INTO definitions (id, name_id, document_id, data) VALUES (?, ?, ?, ?)")?;
+            conn.prepare_cached("INSERT OR IGNORE INTO definitions (id, name_id, document_id, data) VALUES (?, ?, ?, ?)")?;
 
         for (definition_id, definition) in graph.definitions() {
             let data = rmp_serde::to_vec(definition).expect("Serializing definitions should always succeed");
