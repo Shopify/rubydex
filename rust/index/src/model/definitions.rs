@@ -124,6 +124,22 @@ impl Definition {
             Definition::Method(it) => &it.uri_id,
         }
     }
+
+    #[must_use]
+    pub fn comments(&self) -> &str {
+        match self {
+            Definition::Class(it) => &it.comments,
+            Definition::Module(it) => &it.comments,
+            Definition::Constant(it) => &it.comments,
+            Definition::Method(it) => &it.comments,
+            Definition::AttrAccessor(it) => &it.comments,
+            Definition::AttrReader(it) => &it.comments,
+            Definition::AttrWriter(it) => &it.comments,
+            Definition::GlobalVariable(it) => &it.comments,
+            Definition::InstanceVariable(it) => &it.comments,
+            Definition::ClassVariable(it) => &it.comments,
+        }
+    }
 }
 
 /// A class definition
@@ -138,15 +154,17 @@ pub struct ClassDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    comments: String,
 }
 
 impl ClassDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }
@@ -163,15 +181,17 @@ pub struct ModuleDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    comments: String,
 }
 
 impl ModuleDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }
@@ -187,15 +207,17 @@ pub struct ConstantDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    comments: String,
 }
 
 impl ConstantDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }
@@ -214,6 +236,7 @@ pub struct MethodDefinition {
     offset: Offset,
     parameters: Vec<Parameter>,
     is_singleton: bool,
+    comments: String,
 }
 
 impl MethodDefinition {
@@ -224,6 +247,7 @@ impl MethodDefinition {
         offset: Offset,
         parameters: Vec<Parameter>,
         is_singleton: bool,
+        comments: String,
     ) -> Self {
         Self {
             name_id,
@@ -231,6 +255,7 @@ impl MethodDefinition {
             offset,
             parameters,
             is_singleton,
+            comments,
         }
     }
 
@@ -292,15 +317,17 @@ pub struct AttrAccessorDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    comments: String,
 }
 
 impl AttrAccessorDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }
@@ -316,15 +343,17 @@ pub struct AttrReaderDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    comments: String,
 }
 
 impl AttrReaderDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }
@@ -340,15 +369,17 @@ pub struct AttrWriterDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    comments: String,
 }
 
 impl AttrWriterDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }
@@ -364,15 +395,17 @@ pub struct GlobalVariableDefinition {
     name_id: NameId,
     uri_id: UriId,
     pub offset: Offset,
+    comments: String,
 }
 
 impl GlobalVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }
@@ -388,15 +421,17 @@ pub struct InstanceVariableDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    comments: String,
 }
 
 impl InstanceVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }
@@ -412,15 +447,17 @@ pub struct ClassVariableDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    comments: String,
 }
 
 impl ClassVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
+    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            comments,
         }
     }
 }

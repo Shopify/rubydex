@@ -1,9 +1,10 @@
 use crate::{
     indexing::{
         errors::{IndexingError, MultipleErrors},
-        ruby_indexer::{RubyIndexer, IndexerParts},
+        ruby_indexer::{IndexerParts, RubyIndexer},
     },
-    model::graph::Graph, source_location::{UTF8SourceLocationConverter},
+    model::graph::Graph,
+    source_location::UTF8SourceLocationConverter,
 };
 use glob::glob;
 use std::sync::{
@@ -75,28 +76,27 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
                 let (source, errors) = {
                     let mut errors = Vec::new();
 
-                    let source: String =
-                        if let Some(source) = &document.source {
-                            source.clone()
-                        } else {
-                            fs::read_to_string(document.path()).unwrap_or_else(|e| {
-                                errors.push(IndexingError::FileReadError(format!(
-                                    "Failed to read {}: {}",
-                                    document.path(),
-                                    e
-                                )));
-                                String::new()
-                            })
-                        };
-                    
+                    let source: String = if let Some(source) = &document.source {
+                        source.clone()
+                    } else {
+                        fs::read_to_string(document.path()).unwrap_or_else(|e| {
+                            errors.push(IndexingError::FileReadError(format!(
+                                "Failed to read {}: {}",
+                                document.path(),
+                                e
+                            )));
+                            String::new()
+                        })
+                    };
+
                     (source, errors)
                 };
-                
+
                 let converter = UTF8SourceLocationConverter::new(&source);
-                let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter);
+                let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source);
 
                 if errors.is_empty() {
-                    ruby_indexer.index(&source);
+                    ruby_indexer.index();
                 } else {
                     for error in errors {
                         ruby_indexer.add_error(error);

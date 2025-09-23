@@ -16,8 +16,8 @@ impl GraphTest {
     #[must_use]
     fn index_source(uri: &str, source: &str) -> Graph {
         let converter = UTF8SourceLocationConverter::new(source);
-        let mut indexer = RubyIndexer::new(uri.to_string(), &converter);
-        indexer.index(source);
+        let mut indexer = RubyIndexer::new(uri.to_string(), &converter, source);
+        indexer.index();
         indexer.into_parts().0
     }
 

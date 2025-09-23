@@ -225,6 +225,8 @@ mod tests {
         context.index_uri("file:///complex.rb", {
             "
             module Outer
+              # Class comment
+              # Another class comment
               class Inner
                 def method_name
                   puts 'hello'
@@ -247,8 +249,8 @@ mod tests {
         assert!(load_results.len() == 4);
 
         // Verify we can find expected definitions
-        let outer_def = load_results.iter().find(|r| r.name == "Outer").unwrap();
-        let inner_def = load_results.iter().find(|r| r.name == "Outer::Inner").unwrap();
+        let module_def = load_results.iter().find(|r| r.name == "Outer").unwrap();
+        let class_def = load_results.iter().find(|r| r.name == "Outer::Inner").unwrap();
         let method_def = load_results
             .iter()
             .find(|r| r.name == "Outer::Inner::method_name")
@@ -258,10 +260,13 @@ mod tests {
             .find(|r| r.name == "Outer::Inner::CONSTANT")
             .unwrap();
 
-        assert!(matches!(outer_def.definition, Definition::Module(_)));
-        assert!(matches!(inner_def.definition, Definition::Class(_)));
+        assert!(matches!(module_def.definition, Definition::Module(_)));
+        assert!(matches!(class_def.definition, Definition::Class(_)));
         assert!(matches!(method_def.definition, Definition::Method(_)));
         assert!(matches!(constant_def.definition, Definition::Constant(_)));
+
+        let comments = class_def.definition.comments();
+        assert_eq!(comments, "Class comment\nAnother class comment");
     }
 
     #[test]
