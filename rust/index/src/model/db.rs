@@ -220,7 +220,10 @@ mod tests {
     #[test]
     fn saving_graph_to_the_database() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.index_uri(
+            "file:///foo.rb",
+            "# This is a comment\n# Another comment line\nmodule Foo; end",
+        );
 
         let mut db = Db::new();
         db.initialize_connection(None).unwrap();
@@ -279,9 +282,13 @@ mod tests {
         assert_eq!(name_id, definition_name_id);
         assert_eq!(document_id, definition_document_id);
         assert_eq!(name, String::from("Foo"));
-        assert_eq!(0, definition.start());
-        assert_eq!(15, definition.end());
+        assert_eq!(43, definition.start());
+        assert_eq!(58, definition.end());
         assert_eq!(document_uri, String::from("file:///foo.rb"));
+
+        // Verify that comments are correctly serialized and deserialized
+        let comments = definition.comments();
+        assert_eq!(comments, "This is a comment\nAnother comment line");
     }
 
     #[test]
