@@ -1,5 +1,6 @@
 //! This module contains stable ID representations that compose the `Graph` global representation
 
+use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, Value, ValueRef};
 use serde::{Deserialize, Serialize};
 use std::{
     hash::{Hash, Hasher},
@@ -10,13 +11,13 @@ use xxhash_rust::xxh3::xxh3_64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Id<T> {
-    value: u64,
+    value: i64,
     _marker: PhantomData<T>,
 }
 
 impl<T> Id<T> {
     #[must_use]
-    pub fn new(value: u64) -> Self {
+    pub fn new(value: i64) -> Self {
         Self {
             value,
             _marker: PhantomData,
@@ -25,7 +26,7 @@ impl<T> Id<T> {
 }
 
 impl<T> Deref for Id<T> {
-    type Target = u64;
+    type Target = i64;
 
     fn deref(&self) -> &Self::Target {
         &self.value
@@ -40,19 +41,33 @@ impl<T> std::fmt::Display for Id<T> {
 
 impl<T> Hash for Id<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u64(self.value);
+        state.write_i64(self.value);
     }
 }
 
 impl<T> From<&str> for Id<T> {
     fn from(value: &str) -> Self {
-        Self::new(xxh3_64(value.as_bytes()))
+        let hash = xxh3_64(value.as_bytes());
+        Self::new(hash.cast_signed())
     }
 }
 
 impl<T> From<&String> for Id<T> {
     fn from(value: &String) -> Self {
-        Self::new(xxh3_64(value.as_bytes()))
+        let hash = xxh3_64(value.as_bytes());
+        Self::new(hash.cast_signed())
+    }
+}
+
+impl<T> ToSql for Id<T> {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::Owned(Value::Integer(self.value)))
+    }
+}
+
+impl<T> FromSql for Id<T> {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        Ok(Self::new(value.as_i64()?))
     }
 }
 
@@ -80,5 +95,28 @@ mod tests {
     fn deref_unwraps_value() {
         let id = TestId::new(123);
         assert_eq!(*id, 123);
+    }
+
+    #[test]
+    fn test_sql_conversion_roundtrip() {
+        use rusqlite::types::{FromSql, ToSql, Value, ValueRef};
+
+        // Test small values
+        let id1 = TestId::new(12345);
+        let sql_val = id1.to_sql().unwrap();
+        if let rusqlite::types::ToSqlOutput::Owned(Value::Integer(i64_val)) = sql_val {
+            let value_ref = ValueRef::Integer(i64_val);
+            let recovered = TestId::column_result(value_ref).unwrap();
+            assert_eq!(id1, recovered);
+        }
+
+        // Test values generated from hash masking
+        let id2 = TestId::from("file:///test.rb"); // Use actual hash generation
+        let sql_val = id2.to_sql().unwrap();
+        if let rusqlite::types::ToSqlOutput::Owned(Value::Integer(i64_val)) = sql_val {
+            let value_ref = ValueRef::Integer(i64_val);
+            let recovered = TestId::column_result(value_ref).unwrap();
+            assert_eq!(id2, recovered);
+        }
     }
 }
