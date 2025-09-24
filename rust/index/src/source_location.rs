@@ -1,3 +1,5 @@
+use std::ops::Index;
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Position {
     pub line: u32,
@@ -329,6 +331,74 @@ impl SourceLocationConverter for UTF32SourceLocationConverter<'_> {
     }
 }
 
+pub struct Cursor<'a> {
+    current_offset: u32,
+
+    current_line: u32,
+
+    location_converter: &'a dyn SourceLocationConverter,
+}
+
+impl Cursor<'_> {
+    #[must_use]
+    pub fn new(location_converter: &dyn SourceLocationConverter) -> Cursor<'_> {
+        let source = location_converter.source();
+        let mut cursor = Cursor { current_offset: 0, current_line: 0, location_converter };
+        cursor.reset();
+        cursor
+    }
+
+    fn reset(&mut self) {
+        let source = self.location_converter.source();
+        self.current_offset = source.text_len;
+        self.current_line = source.lines.len() as u32;
+    }
+
+    fn binary_search(&mut self, byte_offset: u32) -> Option<Position> {
+        let position = self.location_converter.byte_offset_to_position(byte_offset);
+
+        if let Some(pos) = position {
+            self.current_offset = byte_offset;
+            self.current_line = pos.line;
+        }
+
+        position
+    }
+
+    #[must_use]
+    pub fn byte_offset_to_position(&mut self, byte_offset: u32) -> Option<Position> {
+        if self.current_offset > byte_offset {
+            return self.binary_search(byte_offset);
+        }
+
+        // let gap = byte_offset - self.current_offset;
+        // let all_lines = self.location_converter.source().lines.len() as u32;
+        // let lines_left = all_lines - self.current_line;
+        // if gap > self.location_converter.source().text_len / 4 && lines_left > all_lines / 4{
+        //     return self.binary_search(byte_offset);
+        // }
+        
+        let lines = &self.location_converter.source().lines[self.current_line as usize..];
+        let mut current_line = self.current_line;
+
+        for line in lines {
+            assert!(line.start_offset <= byte_offset, "The lines are not sorted by start_offset");
+
+            let line_end_offset = line.start_offset + line.line_len;
+
+            if byte_offset <= line_end_offset {
+                self.current_offset = byte_offset;
+                self.current_line = current_line;
+                return Some(self.location_converter.position_with_line_offset(self.current_line, byte_offset - line.start_offset, line.line_slice))
+            }
+
+            current_line += 1;
+        }
+
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,5 +624,27 @@ mod tests {
                 Position { line: 2, column: 1 }
             ],
         );
+    }
+
+    #[test]
+    fn test_cursor() {
+        let converter = UTF8SourceLocationConverter::new(ASCII_STRING);
+        let mut cursor = Cursor::new(&converter);
+
+        assert_eq!(cursor.byte_offset_to_position(0), Some(Position { line: 0, column: 0 }));
+        assert_eq!(cursor.byte_offset_to_position(1), Some(Position { line: 0, column: 1 }));
+        assert_eq!(cursor.byte_offset_to_position(5), Some(Position { line: 0, column: 5 }));
+        assert_eq!(cursor.byte_offset_to_position(6), Some(Position { line: 1, column: 0 }));
+        assert_eq!(cursor.byte_offset_to_position(11), Some(Position { line: 1, column: 5 }));
+        assert_eq!(cursor.byte_offset_to_position(12), Some(Position { line: 2, column: 0 }));
+
+        assert_eq!(cursor.byte_offset_to_position(13), None);
+
+        assert_eq!(cursor.byte_offset_to_position(12), Some(Position { line: 2, column: 0 }));
+        assert_eq!(cursor.byte_offset_to_position(11), Some(Position { line: 1, column: 5 }));
+        assert_eq!(cursor.byte_offset_to_position(6), Some(Position { line: 1, column: 0 }));
+        assert_eq!(cursor.byte_offset_to_position(5), Some(Position { line: 0, column: 5 }));
+        assert_eq!(cursor.byte_offset_to_position(1), Some(Position { line: 0, column: 1 }));
+        assert_eq!(cursor.byte_offset_to_position(0), Some(Position { line: 0, column: 0 }));
     }
 }
