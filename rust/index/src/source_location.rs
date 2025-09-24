@@ -53,6 +53,9 @@ pub trait SourceLocationConverter {
     /// It panics if the ``line_offset`` is out of range of the ``line_slice``.
     #[must_use]
     fn position_with_line_offset(&self, line: u32, line_offset: u32, line_slice: &str) -> Position;
+
+    #[must_use]
+    fn source(&self) -> &SourceLines<'_>;
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -71,13 +74,13 @@ pub struct SourceLine<'a> {
 #[derive(Debug)]
 pub struct SourceLines<'a> {
     /// The byte size of the entire text
-    text_len: u32,
+    pub text_len: u32,
 
     /// A vector of (byte offset of the line start, line slice, line length in bytes without new-line char).
     /// 
     /// The lines end with '\n' except for the last line.
     /// If the content ends with a newline, there will be an empty line at the end.
-    lines: Vec<SourceLine<'a>>,
+    pub lines: Vec<SourceLine<'a>>,
 }
 
 impl<'a> SourceLines<'a> {
@@ -157,6 +160,10 @@ impl<'a> UTF8SourceLocationConverter<'a> {
 }
 
 impl SourceLocationConverter for UTF8SourceLocationConverter<'_> {
+    fn source(&self) -> &SourceLines<'_> {
+        &self.source
+    }
+
     fn byte_offset_to_line_slice(&self, byte_offset: u32) -> Option<(u32, SourceLine<'_>)> {
        self.source.get_line_slice_from_byte_offset(byte_offset)
      }
@@ -200,6 +207,10 @@ impl<'a> UTF16SourceLocationConverter<'a> {
 }
 
 impl SourceLocationConverter for UTF16SourceLocationConverter<'_> {
+    fn source(&self) -> &SourceLines<'_> {
+        &self.source
+    }    
+
     fn byte_offset_to_line_slice(&self, byte_offset: u32) -> Option<(u32, SourceLine<'_>)> {
        self.source.get_line_slice_from_byte_offset(byte_offset)
      }
@@ -260,6 +271,10 @@ impl<'a> UTF32SourceLocationConverter<'a> {
 }
 
 impl SourceLocationConverter for UTF32SourceLocationConverter<'_> {
+    fn source(&self) -> &SourceLines<'_> {
+        &self.source
+    }
+    
     fn byte_offset_to_line_slice(&self, byte_offset: u32) -> Option<(u32, SourceLine<'_>)> {
         self.source.get_line_slice_from_byte_offset(byte_offset)
     }

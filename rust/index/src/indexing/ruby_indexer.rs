@@ -9,7 +9,7 @@ use crate::model::definitions::{
 use crate::model::graph::Graph;
 use crate::model::ids::{NameId, UriId};
 use crate::offset::Offset;
-use crate::source_location::SourceLocationConverter;
+use crate::source_location::{Position, SourceLocationConverter};
 use std::collections::HashMap;
 
 use ruby_prism::{ParseResult, Visit};
@@ -106,9 +106,7 @@ impl<'a> RubyIndexer<'a> {
         curr_line: Option<u32>,
         comment_group: &mut Vec<String>,
     ) -> Option<u32> {
-        let (next_start_pos, _) = self
-            .location_converter
-            .offset_to_position(&Offset::from_prism_location(&next.location()))?;
+        let next_start_pos = self.location_converter.byte_offset_to_position(next.location().start_offset() as u32)?;
         let next_start_line = next_start_pos.line;
 
         // First comment in group is always accepted
@@ -119,7 +117,8 @@ impl<'a> RubyIndexer<'a> {
             return None;
         }
 
-        let text = String::from_utf8_lossy(next.location().as_slice()).to_string();
+        let text = unsafe { String::from_utf8_unchecked(next.location().as_slice().to_vec()) }.to_string();
+
         // For the magic comments, what we want to do is the following:
         // 1. still move the group end offset to the end of the magic comment
         // 2. not add the comment to the comments array
@@ -133,14 +132,14 @@ impl<'a> RubyIndexer<'a> {
     }
 
     fn location_to_string(location: &ruby_prism::Location) -> String {
-        String::from_utf8_lossy(location.as_slice()).to_string()
+        // SAFETY: location.as_slice() is guaranteed to be valid UTF-8
+        unsafe { String::from_utf8_unchecked(location.as_slice().to_vec()) }
     }
 
-    fn find_comments_for(&self, offset: &Offset) -> Option<String> {
+    fn find_comments_for(&self, start_pos: &Position) -> Option<String> {
         if self.comments.is_empty() {
             return None;
         }
-        let (start_pos, _) = self.location_converter.offset_to_position(offset)?;
 
         // Try the line immediately before the definition first
         if start_pos.line > 0 {
@@ -149,14 +148,13 @@ impl<'a> RubyIndexer<'a> {
             }
 
             // Try two lines before, but only if the intervening line is blank
-            if start_pos.line > 1 {
-                if let Some(comment) = self.comments.get(&(start_pos.line - 2)) {
+            if start_pos.line > 1
+                && let Some(comment) = self.comments.get(&(start_pos.line - 2)) {
                     // Check if the line between the comment and definition is blank/empty
                     if self.is_line_blank(start_pos.line - 1) {
                         return Some(comment.clone());
                     }
                 }
-            }
         }
 
         None
@@ -164,9 +162,8 @@ impl<'a> RubyIndexer<'a> {
 
     fn is_line_blank(&self, line_number: u32) -> bool {
         // Convert line number to source position and check if that line is empty/whitespace
-        let lines: Vec<&str> = self.source.lines().collect();
-        if let Some(line) = lines.get(line_number as usize) {
-            line.trim().is_empty()
+        if let Some(line) = self.location_converter.source().lines.get(line_number as usize) {
+            line.line_slice.chars().all(char::is_whitespace)
         } else {
             // If we can't find the line, assume it's not blank
             false
@@ -352,12 +349,12 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         let name = Self::location_to_string(&node.constant_path().location());
         let offset = Offset::from_prism_location(&node.location());
-        let comments = self.find_comments_for(&offset).unwrap_or_default();
+        // Uses `location_converter` to evaluate the performance impact of the conversion
+        let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+        let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
-            // Uses `location_converter` to evaluate the performance impact of the conversion
-            indexer.location_converter.offset_to_position(&offset).unwrap();
 
             let definition = Definition::Class(Box::new(ClassDefinition::new(
                 name_id,
@@ -377,12 +374,11 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
         let name = Self::location_to_string(&node.constant_path().location());
         let offset = Offset::from_prism_location(&node.location());
-        let comments = self.find_comments_for(&offset).unwrap_or_default();
+        let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+        let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
-            // Uses `location_converter` to evaluate the performance impact of the conversion
-            indexer.location_converter.offset_to_position(&offset).unwrap();
             let definition = Definition::Module(Box::new(ModuleDefinition::new(
                 name_id,
                 indexer.uri_id,
@@ -401,12 +397,11 @@ impl Visit<'_> for RubyIndexer<'_> {
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
         let offset = Offset::from_prism_location(&name_loc);
-        let comments = self.find_comments_for(&offset).unwrap_or_default();
+        let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+        let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
-            // Uses `location_converter` to evaluate the performance impact of the conversion
-            indexer.location_converter.offset_to_position(&offset).unwrap();
             let definition = Definition::Constant(Box::new(ConstantDefinition::new(
                 name_id,
                 indexer.uri_id,
@@ -425,12 +420,11 @@ impl Visit<'_> for RubyIndexer<'_> {
         let name = Self::location_to_string(&location);
 
         let offset = Offset::from_prism_location(&location);
-        let comments = self.find_comments_for(&offset).unwrap_or_default();
+        let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+        let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
-            // Uses `location_converter` to evaluate the performance impact of the conversion
-            indexer.location_converter.offset_to_position(&offset).unwrap();
             let definition = Definition::Constant(Box::new(ConstantDefinition::new(
                 name_id,
                 indexer.uri_id,
@@ -451,12 +445,11 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
                     let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(&offset).unwrap_or_default();
+                    let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+                    let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        indexer.location_converter.offset_to_position(&offset).unwrap();
 
                         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
                             name_id,
@@ -473,10 +466,9 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let name = Self::location_to_string(&location);
                     let name_id = NameId::from(&name);
                     let offset = Offset::from_prism_location(&location);
-                    // Uses `location_converter` to evaluate the performance impact of the conversion
-                    self.location_converter.offset_to_position(&offset).unwrap();
+                    let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
 
-                    let comments = self.find_comments_for(&offset).unwrap_or_default();
+                    let comments = self.find_comments_for(&start_pos).unwrap_or_default();
                     let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
                         name_id,
                         self.uri_id,
@@ -490,12 +482,12 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
                     let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(&offset).unwrap_or_default();
+                    let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+                    let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        indexer.location_converter.offset_to_position(&offset).unwrap();
+
 
                         let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
                             name_id,
@@ -511,12 +503,11 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
                     let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(&offset).unwrap_or_default();
+                    let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+                    let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        indexer.location_converter.offset_to_position(&offset).unwrap();
 
                         let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
                             name_id,
@@ -538,9 +529,8 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode) {
         let name = Self::location_to_string(&node.name_loc());
         let offset = Offset::from_prism_location(&node.location());
-        // Uses `location_converter` to evaluate the performance impact of the conversion
-        self.location_converter.offset_to_position(&offset).unwrap();
-        let comments = self.find_comments_for(&offset).unwrap_or_default();
+        let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+        let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
@@ -579,12 +569,11 @@ impl Visit<'_> for RubyIndexer<'_> {
             "attr_accessor" => {
                 Self::each_string_or_symbol_arg(node, |name, location| {
                     let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(&offset).unwrap_or_default();
+                    let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+                    let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        indexer.location_converter.offset_to_position(&offset).unwrap();
                         indexer.local_index.add_definition(
                             fully_qualified_name.clone(),
                             Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
@@ -612,12 +601,11 @@ impl Visit<'_> for RubyIndexer<'_> {
             "attr_reader" => {
                 Self::each_string_or_symbol_arg(node, |name, location| {
                     let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(&offset).unwrap_or_default();
+                    let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+                    let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        indexer.location_converter.offset_to_position(&offset).unwrap();
 
                         indexer.local_index.add_definition(
                             fully_qualified_name,
@@ -634,13 +622,12 @@ impl Visit<'_> for RubyIndexer<'_> {
             "attr_writer" => {
                 Self::each_string_or_symbol_arg(node, |name, location| {
                     let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(&offset).unwrap_or_default();
+                    let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+                    let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let writer_name = format!("{fully_qualified_name}=");
                         let name_id = NameId::from(&writer_name);
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        indexer.location_converter.offset_to_position(&offset).unwrap();
                         indexer.local_index.add_definition(
                             writer_name,
                             Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
@@ -677,7 +664,8 @@ impl Visit<'_> for RubyIndexer<'_> {
         let name_id = NameId::from(&name);
 
         let offset = Offset::from_prism_location(&name_loc);
-        let comments = self.find_comments_for(&offset).unwrap_or_default();
+        let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+        let comments = self.find_comments_for(&start_pos).unwrap_or_default();
         let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
             name_id,
             self.uri_id,
@@ -695,12 +683,11 @@ impl Visit<'_> for RubyIndexer<'_> {
         let name = Self::location_to_string(&name_loc);
 
         let offset = Offset::from_prism_location(&name_loc);
-        let comments = self.find_comments_for(&offset).unwrap_or_default();
+        let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+        let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
-            // Uses `location_converter` to evaluate the performance impact of the conversion
-            indexer.location_converter.offset_to_position(&offset).unwrap();
 
             let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
                 name_id,
@@ -721,7 +708,8 @@ impl Visit<'_> for RubyIndexer<'_> {
         let offset = Offset::from_prism_location(&name_loc);
         // Uses `location_converter` to evaluate the performance impact of the conversion
         self.location_converter.offset_to_position(&offset).unwrap();
-        let comments = self.find_comments_for(&offset).unwrap_or_default();
+        let (start_pos, _) = self.location_converter.offset_to_position(&offset).unwrap();
+        let comments = self.find_comments_for(&start_pos).unwrap_or_default();
 
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
