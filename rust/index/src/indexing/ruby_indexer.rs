@@ -82,6 +82,11 @@ impl<'a> RubyIndexer<'a> {
         let mut iter = parse_result.comments().peekable();
         let mut result = HashMap::new();
 
+        // if (parse_result.comments().count() > 0) {
+        //     println!("Parsing comments into groups: {} comments found", parse_result.comments().count());
+        // }
+        
+
         while let Some(comment) = iter.next() {
             let mut comment_group = vec![];
             let mut curr_line = self.add_next(&comment, None, &mut comment_group).unwrap();
@@ -106,7 +111,25 @@ impl<'a> RubyIndexer<'a> {
         curr_line: Option<u32>,
         comment_group: &mut Vec<String>,
     ) -> Option<u32> {
-        let next_start_pos = self.location_converter.byte_offset_to_position(next.location().start_offset() as u32)?;
+        let offset = next.location().start_offset() as u32;
+        let next_start_pos: Position = 
+            if let Some(last_line) = curr_line {
+                // println!("Looking for next comment after line {}", last_line);
+
+                let new_pos = self.location_converter.byte_offset_to_position_in_line(offset, last_line+1);
+                
+                match new_pos {
+                    Some(pos) => {
+                        // println!("Found next comment at line {}", pos.line);
+                        new_pos
+                    },
+                    None => None,
+                }
+            } else {
+                self.location_converter.byte_offset_to_position(offset)
+            }?;
+        
+        //let next_start_pos = self.location_converter.byte_offset_to_position_in_line(offset, line_number)?;
         let next_start_line = next_start_pos.line;
 
         // First comment in group is always accepted

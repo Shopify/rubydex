@@ -30,6 +30,22 @@ pub trait SourceLocationConverter {
         Some((start, end))
     }
 
+    /// Utility function to convert a byte offset to a Position within a specific line.
+    /// 
+    /// If the ``byte_offset`` is at the given line number, returns a position.
+    /// If not, returns ``None``.
+    /// 
+    /// This function is a fast path if the line number of the byte offset is already known.
+    #[must_use]
+    fn byte_offset_to_position_in_line(&self, byte_offset: u32, line_number: u32) -> Option<Position> {
+        let line = self.source().lines.get(line_number as usize)?;
+        if line.start_offset <= byte_offset && byte_offset <= line.start_offset + line.line_len {
+            Some(self.position_with_line_offset(line_number, byte_offset - line.start_offset, line.line_slice))
+        } else {
+            None
+        }
+    }
+
     /// Converts a Position (line and column) to a byte offset.
     /// 
     /// Note that the ``byte_offset`` is the number based on an UTF-8 encoded source code.
