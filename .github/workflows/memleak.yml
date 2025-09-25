@@ -23,7 +23,7 @@ jobs:
         with:
           bundler-cache: true
 
-      - run: sudo apt-get install -y valgrind
+      - run: sudo apt-get update && sudo apt-get install -y valgrind
 
       - name: Install Rust tools
         run: |
