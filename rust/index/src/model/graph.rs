@@ -117,11 +117,11 @@ impl Graph {
     /// Any database errors will prevent the data from being loaded
     pub fn load_uri(&mut self, uri: String) -> Result<(), Box<dyn Error>> {
         let uri_id = self.add_uri(uri);
-        let loaded_data = self.db.load_uri(uri_id.to_string())?;
+        let loaded_data = self.db.load_uri(uri_id)?;
 
         for load_result in loaded_data {
-            let name_id = NameId::new(load_result.name_id);
-            let definition_id = DefinitionId::new(load_result.definition_id);
+            let name_id = load_result.name_id;
+            let definition_id = load_result.definition_id;
 
             self.declarations
                 .entry(name_id)

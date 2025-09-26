@@ -1,14 +1,17 @@
 use crate::model::graph::Graph;
-use crate::model::{definitions::Definition, ids::UriId};
+use crate::model::{
+    definitions::Definition,
+    ids::{DefinitionId, NameId, UriId},
+};
 use rusqlite::{Connection, params};
 use std::{cell::RefCell, error::Error, fs, path::Path};
 
 const SCHEMA_VERSION: u16 = 1;
 
 pub struct LoadResult {
-    pub name_id: u64,
+    pub name_id: NameId,
     pub name: String,
-    pub definition_id: u64,
+    pub definition_id: DefinitionId,
     pub definition: Definition,
 }
 
@@ -79,15 +82,15 @@ impl Db {
     /// # Panics
     ///
     /// Will panic if the database connection is not initialized before trying to interact with it
-    pub fn load_uri(&self, uri_id: String) -> Result<Vec<LoadResult>, Box<dyn Error>> {
+    pub fn load_uri(&self, uri_id: UriId) -> Result<Vec<LoadResult>, Box<dyn Error>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(Self::LOAD_DOCUMENT)?;
 
             statement
-                .query_map([uri_id], |row| {
-                    let name_id = row.get::<_, u64>(0)?;
+                .query_map([*uri_id], |row| {
+                    let name_id: NameId = row.get(0)?;
                     let name = row.get::<_, String>(1)?;
-                    let definition_id = row.get::<_, u64>(2)?;
+                    let definition_id: DefinitionId = row.get(2)?;
                     let data = row.get::<_, Vec<u8>>(3)?;
                     let definition = rmp_serde::from_slice::<Definition>(&data)
                         .expect("Deserializing the definition from the DB should always succeed");
@@ -135,9 +138,8 @@ impl Db {
     /// Errors on any type of database connection or operation failure
     pub fn delete_data_for_uri(&self, uri_id: UriId) -> Result<(), Box<dyn Error>> {
         self.with_connection(|connection| {
-            let id_as_string = uri_id.to_string();
             let mut stmt = connection.prepare_cached("DELETE FROM documents WHERE id = ?")?;
-            stmt.execute([id_as_string])?;
+            stmt.execute([*uri_id])?;
             Ok(())
         })
     }
@@ -178,7 +180,7 @@ impl Db {
         let mut stmt = conn.prepare_cached("INSERT INTO documents (id, uri) VALUES (?, ?)")?;
 
         for (uri_id, document) in graph.documents() {
-            stmt.execute([&uri_id.to_string(), document.uri()])?;
+            stmt.execute(rusqlite::params![*uri_id, document.uri()])?;
         }
 
         Ok(())
@@ -189,7 +191,7 @@ impl Db {
         let mut stmt = conn.prepare_cached("INSERT INTO names (id, name) VALUES (?, ?)")?;
 
         for (name_id, declaration) in graph.declarations() {
-            stmt.execute([&name_id.to_string(), declaration.name()])?;
+            stmt.execute(rusqlite::params![*name_id, declaration.name()])?;
         }
 
         Ok(())
@@ -205,7 +207,7 @@ impl Db {
             let name_id = *definition.name_id();
             let uri_id = *definition.uri_id();
 
-            stmt.execute(params![&definition_id.to_string(), *name_id, *uri_id, data,])?;
+            stmt.execute(params![*definition_id, *name_id, *uri_id, data])?;
         }
 
         Ok(())
@@ -220,68 +222,46 @@ mod tests {
     #[test]
     fn saving_graph_to_the_database() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.index_uri("file:///complex.rb", {
+            "
+            module Outer
+              class Inner
+                def method_name
+                  puts 'hello'
+                end
+                CONSTANT = 42
+              end
+            end
+            "
+        });
 
         let mut db = Db::new();
         db.initialize_connection(None).unwrap();
         assert!(db.save_full_graph(&context.graph).is_ok());
 
-        // Query to grab all of the data
-        let query = "
-            SELECT
-                names.*,
-                definitions.*,
-                documents.*
-            FROM documents
-            JOIN definitions ON documents.id = definitions.document_id
-            JOIN names ON names.id = definitions.name_id
-        ";
+        // Test loading the saved data using load_uri
+        let uri_id = UriId::from("file:///complex.rb");
+        let load_results = db.load_uri(uri_id).unwrap();
 
-        let borrow = db.connection.borrow();
-        let connection = borrow.as_ref().unwrap();
-        let mut stmt = connection.prepare(query).unwrap();
-        let mut data = stmt
-            .query_map((), |row| {
-                Ok((
-                    row.get::<_, u64>(0).unwrap(),
-                    row.get::<_, String>(1).unwrap(),
-                    row.get::<_, u64>(2).unwrap(),
-                    row.get::<_, u64>(3).unwrap(),
-                    row.get::<_, u64>(4).unwrap(),
-                    row.get::<_, Vec<u8>>(5).unwrap(),
-                    row.get::<_, u64>(6).unwrap(),
-                    row.get::<_, String>(7).unwrap(),
-                ))
-            })
-            .unwrap()
-            .collect::<Vec<_>>();
+        // Should have multiple definitions: Outer, Inner, method_name, CONSTANT
+        assert!(load_results.len() == 4);
 
-        let first = data.pop().unwrap();
-        let (
-            name_id,
-            name,
-            _definition_id,
-            definition_name_id,
-            definition_document_id,
-            definition_data,
-            document_id,
-            document_uri,
-        ) = first.unwrap();
+        // Verify we can find expected definitions
+        let outer_def = load_results.iter().find(|r| r.name == "Outer").unwrap();
+        let inner_def = load_results.iter().find(|r| r.name == "Outer::Inner").unwrap();
+        let method_def = load_results
+            .iter()
+            .find(|r| r.name == "Outer::Inner::method_name")
+            .unwrap();
+        let constant_def = load_results
+            .iter()
+            .find(|r| r.name == "Outer::Inner::CONSTANT")
+            .unwrap();
 
-        let definition = rmp_serde::from_slice::<crate::model::definitions::Definition>(&definition_data).unwrap();
-
-        match definition {
-            Definition::Module(_) => {}
-            _ => panic!("Expected a module definition"),
-        }
-
-        // Verify that the data we saved matches what is expected from the graph
-        assert_eq!(name_id, definition_name_id);
-        assert_eq!(document_id, definition_document_id);
-        assert_eq!(name, String::from("Foo"));
-        assert_eq!(0, definition.start());
-        assert_eq!(15, definition.end());
-        assert_eq!(document_uri, String::from("file:///foo.rb"));
+        assert!(matches!(outer_def.definition, Definition::Module(_)));
+        assert!(matches!(inner_def.definition, Definition::Class(_)));
+        assert!(matches!(method_def.definition, Definition::Method(_)));
+        assert!(matches!(constant_def.definition, Definition::Constant(_)));
     }
 
     #[test]

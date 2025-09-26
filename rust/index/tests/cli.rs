@@ -50,7 +50,7 @@ fn prints_index_metrics() {
 }
 
 fn normalize_visualization_output(output: &str) -> String {
-    let def_re = Regex::new(r"def_[a-f0-9]+").unwrap();
+    let def_re = Regex::new(r"def_-?[a-f0-9]+").unwrap();
     let uri_re = Regex::new(r#"file://[^"]+/([^/"]+\.rb)"#).unwrap();
 
     let normalized = def_re.replace_all(output, "def_<ID>");
