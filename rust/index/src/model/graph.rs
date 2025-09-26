@@ -73,6 +73,22 @@ impl Graph {
         )
     }
 
+    #[must_use]
+    pub fn get_documentation(&self, name: &str) -> Option<String> {
+        let definitions = self.get(name)?;
+        let comments: Vec<&str> = definitions
+            .iter()
+            .map(|def| def.comments())
+            .filter(|comments| !comments.is_empty())
+            .collect();
+
+        if comments.is_empty() {
+            None
+        } else {
+            Some(comments.join("\n"))
+        }
+    }
+
     // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
     // then all definitions discovered in it get associated to the ID
     pub fn add_uri(&mut self, uri: String) -> UriId {
@@ -495,5 +511,35 @@ mod tests {
         assert!(context.graph.declarations.is_empty());
         assert!(context.graph.documents.is_empty());
         assert!(context.graph.get("Foo").is_none());
+    }
+
+    #[test]
+    fn get_documentation() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            # This is a class comment
+            # Multi-line comment
+            class CommentedClass; end
+
+            # Module comment
+            module CommentedModule; end
+            
+            class NoCommentClass; end
+            "
+        });
+
+        let doc = context.graph.get_documentation("CommentedClass");
+        assert_eq!(doc, Some("This is a class comment\nMulti-line comment".to_string()));
+
+        let doc = context.graph.get_documentation("CommentedModule");
+        assert_eq!(doc, Some("Module comment".to_string()));
+
+        let doc = context.graph.get_documentation("NoCommentClass");
+        assert_eq!(doc, None);
+
+        let doc = context.graph.get_documentation("NonExistent");
+        assert_eq!(doc, None);
     }
 }
