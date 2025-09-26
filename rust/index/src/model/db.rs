@@ -131,15 +131,28 @@ impl Db {
     }
 
     /// Deletes all of the data related to the given URI ID. This method relies on the foreign key constraints to
-    /// cascade the deletion to definitions and names that are no longer referenced
+    /// cascade the deletion to definitions, and explicitly deletes orphaned names that are no longer referenced
     ///
     /// # Errors
     ///
     /// Errors on any type of database connection or operation failure
     pub fn delete_data_for_uri(&self, uri_id: UriId) -> Result<(), Box<dyn Error>> {
         self.with_connection(|connection| {
-            let mut stmt = connection.prepare_cached("DELETE FROM documents WHERE id = ?")?;
-            stmt.execute([*uri_id])?;
+            let tx = connection.transaction()?;
+
+            {
+                let mut stmt = tx.prepare_cached("DELETE FROM documents WHERE id = ?")?;
+                stmt.execute([*uri_id])?;
+            }
+
+            tx.execute(
+                "DELETE FROM names WHERE NOT EXISTS (
+                    SELECT 1 FROM definitions WHERE name_id = names.id
+                )",
+                [],
+            )?;
+
+            tx.commit()?;
             Ok(())
         })
     }
@@ -279,20 +292,28 @@ mod tests {
         assert!(db.save_full_graph(&context.graph).is_ok());
         assert!(db.delete_data_for_uri(UriId::from("file:///foo.rb")).is_ok());
 
-        // Query to grab all of the data
-        let query = "
-            SELECT
-                names.*,
-                definitions.*,
-                documents.*
-            FROM documents
-            JOIN definitions ON documents.id = definitions.document_id
-            JOIN names ON names.id = definitions.name_id
-        ";
-
         let borrow = db.connection.borrow();
         let connection = borrow.as_ref().unwrap();
-        let mut stmt = connection.prepare(query).unwrap();
-        assert!(stmt.query_map((), |_| Ok(())).unwrap().next().is_none());
+
+        let count: i64 = connection
+            .prepare("SELECT COUNT(*) FROM documents")
+            .unwrap()
+            .query_row((), |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "documents table should be empty");
+
+        let count: i64 = connection
+            .prepare("SELECT COUNT(*) FROM definitions")
+            .unwrap()
+            .query_row((), |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "definitions table should be empty");
+
+        let count: i64 = connection
+            .prepare("SELECT COUNT(*) FROM names")
+            .unwrap()
+            .query_row((), |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "names table should be empty");
     }
 }
