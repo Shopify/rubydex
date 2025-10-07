@@ -30,14 +30,19 @@ impl Declaration {
         &self.definition_ids
     }
 
-    // Deletes a definition from this declaration. Returns `true` if this declaration is now empty, which indicates that
-    // it must be removed from the graph
+    // Deletes a definition from this declaration
     pub fn remove_definition(&mut self, definition_id: &DefinitionId) -> bool {
         if let Some(pos) = self.definition_ids.iter().position(|id| id == definition_id) {
             self.definition_ids.swap_remove(pos);
             self.definition_ids.shrink_to_fit();
+            true
+        } else {
+            false
         }
+    }
 
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.definition_ids.is_empty()
     }
 
