@@ -574,7 +574,86 @@ impl Visit<'_> for RubyIndexer<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode) {
+        fn create_attr_accessor(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
+            RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
+                indexer.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                    let name_id = NameId::from(&fully_qualified_name);
+                    let writer_name = format!("{fully_qualified_name}=");
+                    let writer_name_id = NameId::from(&writer_name);
+                    let offset = Offset::from_prism_location(&location);
+                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    // Uses `location_converter` to evaluate the performance impact of the conversion
+                    indexer.location_converter.offset_to_position(&offset).unwrap();
+                    indexer.local_index.add_definition(
+                        fully_qualified_name,
+                        Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                            name_id,
+                            indexer.uri_id,
+                            offset,
+                            comments.clone(),
+                        ))),
+                    );
+
+                    indexer.local_index.add_definition(
+                        writer_name,
+                        Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                            writer_name_id,
+                            indexer.uri_id,
+                            Offset::from_prism_location(&location),
+                            comments.clone(),
+                        ))),
+                    );
+                });
+            });
+        }
+
+        fn create_attr_reader(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
+            RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
+                indexer.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                    let name_id = NameId::from(&fully_qualified_name);
+                    let offset = Offset::from_prism_location(&location);
+                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    // Uses `location_converter` to evaluate the performance impact of the conversion
+                    indexer.location_converter.offset_to_position(&offset).unwrap();
+
+                    indexer.local_index.add_definition(
+                        fully_qualified_name,
+                        Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                            name_id,
+                            indexer.uri_id,
+                            offset,
+                            comments,
+                        ))),
+                    );
+                });
+            });
+        }
+
+        fn create_attr_writer(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
+            RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
+                indexer.with_updated_nesting(&name, |indexer, fully_qualified_name| {
+                    let writer_name = format!("{fully_qualified_name}=");
+                    let name_id = NameId::from(&writer_name);
+                    let offset = Offset::from_prism_location(&location);
+                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    // Uses `location_converter` to evaluate the performance impact of the conversion
+                    indexer.location_converter.offset_to_position(&offset).unwrap();
+
+                    indexer.local_index.add_definition(
+                        writer_name,
+                        Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                            name_id,
+                            indexer.uri_id,
+                            offset,
+                            comments,
+                        ))),
+                    );
+                });
+            });
+        }
+
         let message_loc = node.message_loc();
 
         if message_loc.is_none() {
@@ -586,79 +665,30 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         match message.as_str() {
             "attr_accessor" => {
-                Self::each_string_or_symbol_arg(node, |name, location| {
-                    self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-                        let name_id = NameId::from(&fully_qualified_name);
-                        let offset = Offset::from_prism_location(&location);
-                        let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        self.location_converter.offset_to_position(&offset).unwrap();
-                        indexer.local_index.add_definition(
-                            fully_qualified_name.clone(),
-                            Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                                name_id,
-                                indexer.uri_id,
-                                offset,
-                                comments.clone(),
-                            ))),
-                        );
-
-                        let writer_name = format!("{fully_qualified_name}=");
-                        let writer_name_id = NameId::from(&writer_name);
-                        indexer.local_index.add_definition(
-                            writer_name,
-                            Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                                writer_name_id,
-                                indexer.uri_id,
-                                Offset::from_prism_location(&location),
-                                comments.clone(),
-                            ))),
-                        );
-                    });
-                });
+                create_attr_accessor(self, node);
             }
             "attr_reader" => {
-                Self::each_string_or_symbol_arg(node, |name, location| {
-                    self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-                        let name_id = NameId::from(&fully_qualified_name);
-                        let offset = Offset::from_prism_location(&location);
-                        let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        self.location_converter.offset_to_position(&offset).unwrap();
-
-                        indexer.local_index.add_definition(
-                            fully_qualified_name,
-                            Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                                name_id,
-                                indexer.uri_id,
-                                offset,
-                                comments,
-                            ))),
-                        );
-                    });
-                });
+                create_attr_reader(self, node);
             }
             "attr_writer" => {
-                Self::each_string_or_symbol_arg(node, |name, location| {
-                    self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-                        let writer_name = format!("{fully_qualified_name}=");
-                        let name_id = NameId::from(&writer_name);
-                        let offset = Offset::from_prism_location(&location);
-                        let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        self.location_converter.offset_to_position(&offset).unwrap();
+                create_attr_writer(self, node);
+            }
+            "attr" => {
+                // attr :foo, true  => both reader and writer
+                // attr :foo, false => only reader
+                // attr :foo        => only reader
+                let create_writer = if let Some(arguments) = node.arguments() {
+                    let args_vec: Vec<_> = arguments.arguments().iter().collect();
+                    matches!(args_vec.as_slice(), [_, ruby_prism::Node::TrueNode { .. }, ..])
+                } else {
+                    false
+                };
 
-                        indexer.local_index.add_definition(
-                            writer_name,
-                            Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                                name_id,
-                                indexer.uri_id,
-                                offset,
-                                comments,
-                            ))),
-                        );
-                    });
-                });
+                if create_writer {
+                    create_attr_accessor(self, node);
+                } else {
+                    create_attr_reader(self, node);
+                }
             }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
@@ -1350,7 +1380,7 @@ mod tests {
             module TestModule
               # Constant comment
               FOO = 42
-              
+
               # Nested module
               module Nested; end
             end
@@ -1573,5 +1603,86 @@ mod tests {
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].start(), 43);
         assert_eq!(definitions[0].end(), 48);
+    }
+
+    #[test]
+    fn index_attr_with_no_parameter() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r#"
+            class Foo
+              attr "foo"
+              attr :bar
+            end
+            "#
+        });
+
+        let definitions = context.graph.get("Foo::foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!(matches!(definitions[0], Definition::AttrReader(_)));
+
+        assert!(context.graph.get("Foo::foo=").is_none());
+
+        let definitions = context.graph.get("Foo::bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!(matches!(definitions[0], Definition::AttrReader(_)));
+
+        assert!(context.graph.get("Foo::bar=").is_none());
+    }
+
+    #[test]
+    fn index_attr_with_false_parameter() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r#"
+            class Foo
+              attr "foo", false
+              attr :bar, false
+            end
+            "#
+        });
+
+        let definitions = context.graph.get("Foo::foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!(matches!(definitions[0], Definition::AttrReader(_)));
+
+        assert!(context.graph.get("Foo::foo=").is_none());
+
+        let definitions = context.graph.get("Foo::bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!(matches!(definitions[0], Definition::AttrReader(_)));
+
+        assert!(context.graph.get("Foo::bar=").is_none());
+    }
+
+    #[test]
+    fn index_attr_with_true_parameter() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r#"
+            class Foo
+              attr "foo", true
+              attr :bar, true
+            end
+            "#
+        });
+        let definitions = context.graph.get("Foo::foo").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
+
+        let definitions = context.graph.get("Foo::foo=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
+
+        let definitions = context.graph.get("Foo::bar").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
+
+        let definitions = context.graph.get("Foo::bar=").unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
     }
 }
