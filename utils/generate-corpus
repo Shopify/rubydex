@@ -133,12 +133,15 @@ module Symbols
   class Method < NamedTree
     def write(buffer, indent:)
       write_comments(buffer, indent:)
-      params = rand(0..10).times.map { |i| "param#{i}" }
+
+      params = randomized_parameters
+
       if params.empty?
         buffer.puts "#{" " * indent}def #{@name}"
       else
         buffer.puts "#{" " * indent}def #{@name}(#{params.join(", ")})"
       end
+
       write_children(buffer, indent: indent)
 
       if children.any?
@@ -146,6 +149,63 @@ module Symbols
       end
 
       buffer.puts "#{" " * indent}end"
+    end
+
+    def randomized_parameters
+      required_roll = rand
+
+      params = if required_roll < 0.01
+        rand(4..10)
+      elsif required_roll < 0.05
+        3
+      elsif required_roll < 0.15
+        2
+      elsif required_roll < 0.30
+        0
+      else
+        1
+      end.times.map { |i| "pa#{randomize_parameter_name}#{i}" }
+
+      params << "op#{randomize_parameter_name} = 42" if rand < 0.05
+      params << "*rp#{randomize_parameter_name}" if rand < 0.02
+
+      # Posts parameters are used less than 1%, but they would appear at this point
+
+      keyword_roll = rand
+      params.concat(
+        if keyword_roll < 0.015
+          rand(5..10)
+        elsif keyword_roll < 0.03
+          3
+        elsif keyword_roll < 0.065
+          2
+        elsif keyword_roll < 0.085
+          1
+        else
+          0
+        end.times.map { |i| "kp#{randomize_parameter_name}#{i}:" },
+      )
+
+      optional_keyword_roll = rand
+      params.concat(
+        if optional_keyword_roll < 0.015
+          rand(3..8)
+        elsif optional_keyword_roll < 0.03
+          2
+        elsif optional_keyword_roll < 0.07
+          1
+        else
+          0
+        end.times.map { |i| "ok#{randomize_parameter_name}#{i}: 123" },
+      )
+
+      params << "**kr#{randomize_parameter_name}" if rand < 0.014
+      params << "&ba#{randomize_parameter_name}" if rand < 0.022
+      params
+    end
+
+    def randomize_parameter_name
+      (2...rand(5..10)).map { ("a".."z").to_a[rand(26)] }.join
     end
   end
 
@@ -195,7 +255,7 @@ class Generator
 
   def distribute(counts)
     files = counts[:files].times.map { |i| Symbols::File.new("file_#{i}.rb") }
-    puts "Instanciated #{counts[:files]} files"
+    puts "Instantiated #{counts[:files]} files"
 
     scopes = []
     classes = []
@@ -228,7 +288,7 @@ class Generator
       scopes << scope
     end
 
-    puts "Instanciated #{counts[:classes]} classes"
+    puts "Instantiated #{counts[:classes]} classes"
 
     counts[:constants].times do |i|
       const = Symbols::Constant.new("Constant#{i}")
@@ -241,7 +301,7 @@ class Generator
       end
     end
 
-    puts "Instanciated #{counts[:constants]} constants"
+    puts "Instantiated #{counts[:constants]} constants"
 
     methods = []
 
@@ -258,7 +318,7 @@ class Generator
       methods << method
     end
 
-    puts "Instanciated #{counts[:methods]} methods"
+    puts "Instantiated #{counts[:methods]} methods"
 
     counts[:variables].times do |i|
       variable = if rand < 0.0001
@@ -274,7 +334,7 @@ class Generator
       methods.sample.children << variable
     end
 
-    puts "Instanciated #{counts[:variables]} variables"
+    puts "Instantiated #{counts[:variables]} variables"
 
     files
   end
