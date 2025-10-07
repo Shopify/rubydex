@@ -16,11 +16,9 @@ CREATE TABLE IF NOT EXISTS names (
 -- Table for storing definitions that make up declarations
 CREATE TABLE IF NOT EXISTS definitions (
     id INTEGER PRIMARY KEY,  -- Blake3 hash converted to hex
-    name_id INTEGER NOT NULL REFERENCES names(id), -- References names.id
-    document_id INTEGER NOT NULL REFERENCES documents(id), -- References documents.id
-    data BLOB NOT NULL, -- Serialized definition data
-    FOREIGN KEY (name_id) REFERENCES names (id) ON DELETE CASCADE,
-    FOREIGN KEY (document_id) REFERENCES documents (id) ON DELETE CASCADE
+    name_id INTEGER NOT NULL, -- References names.id
+    document_id INTEGER NOT NULL, -- References documents.id
+    data BLOB NOT NULL -- Serialized definition data
 );
 
 -- Indexes for fast lookups

@@ -109,6 +109,7 @@ impl Graph {
         // Delete the data from the database
         let uri_id = UriId::from(uri);
         self.db.delete_data_for_uri(uri_id)?;
+        self.db.remove_orphaned_entries()?;
         Ok(())
     }
 
