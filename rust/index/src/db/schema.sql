@@ -25,5 +25,3 @@ CREATE TABLE IF NOT EXISTS definitions (
 
 -- Indexes for fast lookups
 CREATE INDEX IF NOT EXISTS names_name_index ON names (name);
-CREATE INDEX IF NOT EXISTS definitions_name_id_index ON definitions (name_id);
-CREATE INDEX IF NOT EXISTS definitions_document_id_index ON definitions (document_id);
