@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::error::Error;
 
@@ -6,7 +5,7 @@ use crate::model::db::Db;
 use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
-use crate::model::identity_maps::{IdentityHashBuilder, IdentityHashMap};
+use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
 
@@ -27,9 +26,9 @@ impl Graph {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            declarations: HashMap::with_hasher(IdentityHashBuilder),
-            definitions: HashMap::with_hasher(IdentityHashBuilder),
-            documents: HashMap::with_hasher(IdentityHashBuilder),
+            declarations: IdentityHashMap::default(),
+            definitions: IdentityHashMap::default(),
+            documents: IdentityHashMap::default(),
             db: Db::new(),
         }
     }
@@ -318,9 +317,9 @@ impl Graph {
 
     // Clear graph data from memory
     pub fn clear_graph_data(&mut self) {
-        self.declarations = HashMap::with_hasher(IdentityHashBuilder);
-        self.definitions = HashMap::with_hasher(IdentityHashBuilder);
-        self.documents = HashMap::with_hasher(IdentityHashBuilder);
+        self.declarations = IdentityHashMap::default();
+        self.definitions = IdentityHashMap::default();
+        self.documents = IdentityHashMap::default();
     }
 }
 
