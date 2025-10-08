@@ -9,6 +9,11 @@ use std::{
 };
 use xxhash_rust::xxh3::xxh3_64;
 
+/// A stable ID representation using i64.
+///
+/// We use i64 instead of u64 because SQLite doesn't support unsigned integers.
+/// IDs are generated from xxh3_64 hashes (u64) then cast to i64, preserving all bits.
+/// Negative values are expected and normal - not a sign of memory corruption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Id<T> {
     value: i64,
