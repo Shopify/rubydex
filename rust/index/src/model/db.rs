@@ -63,7 +63,7 @@ impl Db {
         // Set default connection pragmas
         conn.execute_batch(
             "
-            PRAGMA synchronous = NORMAL;
+            PRAGMA synchronous = OFF;
             PRAGMA locking_mode = EXCLUSIVE;
             ",
         )?;
