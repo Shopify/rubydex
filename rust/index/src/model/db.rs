@@ -64,7 +64,6 @@ impl Db {
         conn.execute_batch(
             "
             PRAGMA synchronous = NORMAL;
-            PRAGMA foreign_keys = ON;
             PRAGMA locking_mode = EXCLUSIVE;
             ",
         )?;
@@ -140,6 +139,33 @@ impl Db {
         self.with_connection(|connection| {
             let mut stmt = connection.prepare_cached("DELETE FROM documents WHERE id = ?")?;
             stmt.execute([*uri_id])?;
+            Ok(())
+        })
+    }
+
+    /// Delete all the definitions and names that are no longer referenced.
+    ///
+    /// # Errors
+    ///
+    /// Errors on any type of database connection or operation failure
+    pub fn remove_orphaned_entries(&self) -> Result<(), Box<dyn Error>> {
+        self.with_connection(|connection| {
+            let tx = connection.transaction()?;
+            // First, delete definitions where document_id no longer exists
+            tx.prepare_cached(
+                "DELETE FROM definitions WHERE NOT EXISTS (
+                SELECT 1 FROM documents WHERE id = definitions.document_id
+            )",
+            )?
+            .execute([])?;
+            // Then, delete names that are no longer referenced by any definitions
+            tx.prepare_cached(
+                "DELETE FROM names WHERE NOT EXISTS (
+                SELECT 1 FROM definitions WHERE name_id = names.id
+            )",
+            )?
+            .execute([])?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -270,29 +296,39 @@ mod tests {
     }
 
     #[test]
-    fn deleting_data_for_a_uri() {
+    fn removing_orphaned_entries() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", "module Foo; end");
 
         let mut db = Db::new();
         db.initialize_connection(None).unwrap();
         assert!(db.save_full_graph(&context.graph).is_ok());
-        assert!(db.delete_data_for_uri(UriId::from("file:///foo.rb")).is_ok());
 
-        // Query to grab all of the data
-        let query = "
-            SELECT
-                names.*,
-                definitions.*,
-                documents.*
-            FROM documents
-            JOIN definitions ON documents.id = definitions.document_id
-            JOIN names ON names.id = definitions.name_id
-        ";
+        assert!(db.delete_data_for_uri(UriId::from("file:///foo.rb")).is_ok());
+        assert!(db.remove_orphaned_entries().is_ok());
 
         let borrow = db.connection.borrow();
         let connection = borrow.as_ref().unwrap();
-        let mut stmt = connection.prepare(query).unwrap();
-        assert!(stmt.query_map((), |_| Ok(())).unwrap().next().is_none());
+
+        let count: i64 = connection
+            .prepare("SELECT COUNT(*) FROM documents")
+            .unwrap()
+            .query_row((), |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "documents table should be empty");
+
+        let count: i64 = connection
+            .prepare("SELECT COUNT(*) FROM definitions")
+            .unwrap()
+            .query_row((), |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "definitions table should be empty");
+
+        let count: i64 = connection
+            .prepare("SELECT COUNT(*) FROM names")
+            .unwrap()
+            .query_row((), |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "names table should be empty");
     }
 }
