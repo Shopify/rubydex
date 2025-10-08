@@ -1,4 +1,4 @@
-use crate::model::graph::Graph;
+use crate::model::graph::{Graph, RemovedIds};
 use crate::model::{
     definitions::Definition,
     ids::{DefinitionId, NameId, UriId},
@@ -129,42 +129,30 @@ impl Db {
         })
     }
 
-    /// Deletes all of the data related to the given URI ID. This method relies on the foreign key constraints to
-    /// cascade the deletion to definitions and names that are no longer referenced
+    /// Deletes all of the data related to the given URI ID along with the removed definitions and names.
     ///
     /// # Errors
     ///
     /// Errors on any type of database connection or operation failure
-    pub fn delete_data_for_uri(&self, uri_id: UriId) -> Result<(), Box<dyn Error>> {
-        self.with_connection(|connection| {
-            let mut stmt = connection.prepare_cached("DELETE FROM documents WHERE id = ?")?;
-            stmt.execute([*uri_id])?;
-            Ok(())
-        })
-    }
-
-    /// Delete all the definitions and names that are no longer referenced.
-    ///
-    /// # Errors
-    ///
-    /// Errors on any type of database connection or operation failure
-    pub fn remove_orphaned_entries(&self) -> Result<(), Box<dyn Error>> {
+    pub fn delete_data_for_uri(&self, uri_id: UriId, removed_ids: &RemovedIds) -> Result<(), Box<dyn Error>> {
         self.with_connection(|connection| {
             let tx = connection.transaction()?;
-            // First, delete definitions where document_id no longer exists
-            tx.prepare_cached(
-                "DELETE FROM definitions WHERE NOT EXISTS (
-                SELECT 1 FROM documents WHERE id = definitions.document_id
-            )",
-            )?
-            .execute([])?;
-            // Then, delete names that are no longer referenced by any definitions
-            tx.prepare_cached(
-                "DELETE FROM names WHERE NOT EXISTS (
-                SELECT 1 FROM definitions WHERE name_id = names.id
-            )",
-            )?
-            .execute([])?;
+
+            {
+                tx.prepare_cached("DELETE FROM documents WHERE id = ?")?
+                    .execute([*uri_id])?;
+
+                let mut stmt = tx.prepare_cached("DELETE FROM definitions WHERE id = ?")?;
+                for id in &removed_ids.definition_ids {
+                    stmt.execute([**id])?;
+                }
+
+                stmt = tx.prepare_cached("DELETE FROM names WHERE id = ?")?;
+                for id in &removed_ids.name_ids {
+                    stmt.execute([**id])?;
+                }
+            }
+
             tx.commit()?;
             Ok(())
         })
@@ -298,37 +286,82 @@ mod tests {
     #[test]
     fn removing_orphaned_entries() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "module Foo; end");
+
+        context.index_uri("file:///sample.rb", {
+            "
+            module TopLevel
+              class OuterClass
+                module InnerModule
+                  # Important constant
+                  IMPORTANT_CONSTANT = 'value'
+
+                  class DeepClass
+                    def instance_method
+                      puts 'instance'
+                    end
+
+                    def self.class_method
+                      puts 'class'
+                    end
+
+                    private
+
+                    def private_method
+                      'private'
+                    end
+                  end
+
+                  def self.module_method
+                    'module level'
+                  end
+                end
+
+                OUTER_CONSTANT = 42
+
+                def outer_method
+                  'outer'
+                end
+              end
+            end
+            "
+        });
 
         let mut db = Db::new();
         db.initialize_connection(None).unwrap();
         assert!(db.save_full_graph(&context.graph).is_ok());
 
-        assert!(db.delete_data_for_uri(UriId::from("file:///foo.rb")).is_ok());
-        assert!(db.remove_orphaned_entries().is_ok());
+        let removed_ids = context.graph.unload_uri("file:///sample.rb");
+
+        assert_eq!(removed_ids.definition_ids.len(), 11);
+        assert_eq!(removed_ids.name_ids.len(), 11);
+
+        assert!(
+            db.delete_data_for_uri(UriId::from("file:///sample.rb"), &removed_ids)
+                .is_ok()
+        );
 
         let borrow = db.connection.borrow();
         let connection = borrow.as_ref().unwrap();
 
-        let count: i64 = connection
+        let doc_count: i64 = connection
             .prepare("SELECT COUNT(*) FROM documents")
             .unwrap()
             .query_row((), |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 0, "documents table should be empty");
+        assert_eq!(doc_count, 0);
 
-        let count: i64 = connection
+        let def_count: i64 = connection
             .prepare("SELECT COUNT(*) FROM definitions")
             .unwrap()
             .query_row((), |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 0, "definitions table should be empty");
+        assert_eq!(def_count, 0,);
 
-        let count: i64 = connection
+        let name_count: i64 = connection
             .prepare("SELECT COUNT(*) FROM names")
             .unwrap()
             .query_row((), |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 0, "names table should be empty");
+        assert_eq!(name_count, 0,);
     }
 }
