@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let total_start = Instant::now();
     let setup_duration;
     let indexing_duration;
-    let querying_duration;
+    let db_duration;
 
     {
         let ((mut graph, documents, errors), setup_dur) = time_it(|| {
@@ -54,19 +54,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
         indexing_duration = indexing_dur;
 
-        let ((), querying_dur) = time_it(|| {
-            for declaration in graph.declarations().values() {
-                let _ = graph.get_documentation(declaration.name());
-            }
-            println!("Found {} names", graph.declarations().len());
-            println!("Found {} definitions", graph.definitions().len());
-            println!("Found {} URIs", graph.documents().len());
+        let ((), db_dur) = time_it(|| {
+            graph.save_to_database().unwrap();
         });
-        querying_duration = querying_dur;
+        db_duration = db_dur;
+
+        println!("Found {} names", graph.declarations().len());
+        println!("Found {} definitions", graph.definitions().len());
+        println!("Found {} URIs", graph.documents().len());
     }
 
     let total_duration = total_start.elapsed();
-    let cleanup_duration = total_duration - (setup_duration + indexing_duration + querying_duration);
+    let cleanup_duration = total_duration - (setup_duration + indexing_duration + db_duration);
 
     println!();
     println!("PERFORMANCE BREAKDOWN");
@@ -75,7 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let total_time = total_duration.as_secs_f64();
     let setup_time = setup_duration.as_secs_f64();
     let indexing_time = indexing_duration.as_secs_f64();
-    let querying_time = querying_duration.as_secs_f64();
+    let db_time = db_duration.as_secs_f64();
     let cleanup_time = cleanup_duration.as_secs_f64();
 
     println!(
@@ -89,9 +88,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         indexing_time * 100.0 / total_time
     );
     println!(
-        "Querying:       {:8.3}s ({:5.1}%)",
-        querying_time,
-        querying_time * 100.0 / total_time
+        "Db operation:   {:8.3}s ({:5.1}%)",
+        db_time,
+        db_time * 100.0 / total_time
     );
     println!(
         "Cleanup:        {:8.3}s ({:5.1}%)",
