@@ -674,12 +674,22 @@ impl Visit<'_> for RubyIndexer<'_> {
                 create_attr_writer(self, node);
             }
             "attr" => {
-                // attr :foo, true  => both reader and writer
-                // attr :foo, false => only reader
-                // attr :foo        => only reader
+                // attr :foo, true        => both reader and writer
+                // attr :foo, false       => only reader
+                // attr :foo              => only reader
+                // attr :foo, "bar", :baz => both reader and writer for foo, bar, and baz
                 let create_writer = if let Some(arguments) = node.arguments() {
                     let args_vec: Vec<_> = arguments.arguments().iter().collect();
-                    matches!(args_vec.as_slice(), [_, ruby_prism::Node::TrueNode { .. }, ..])
+
+                    matches!(
+                        args_vec.as_slice(),
+                        [_, ruby_prism::Node::TrueNode { .. }]
+                            | [
+                                _,
+                                ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. },
+                                ..,
+                            ]
+                    )
                 } else {
                     false
                 };
@@ -1618,17 +1628,15 @@ mod tests {
             "#
         });
 
-        let definitions = context.graph.get("Foo::foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrReader(_)));
+        for reader_name in ["Foo::foo", "Foo::bar"] {
+            let definitions = context.graph.get(reader_name).unwrap();
+            assert_eq!(definitions.len(), 1);
+            assert!(matches!(definitions[0], Definition::AttrReader(_)));
+        }
 
-        assert!(context.graph.get("Foo::foo=").is_none());
-
-        let definitions = context.graph.get("Foo::bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrReader(_)));
-
-        assert!(context.graph.get("Foo::bar=").is_none());
+        for writer_name in ["Foo::foo=", "Foo::bar="] {
+            assert!(context.graph.get(writer_name).is_none());
+        }
     }
 
     #[test]
@@ -1644,17 +1652,15 @@ mod tests {
             "#
         });
 
-        let definitions = context.graph.get("Foo::foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrReader(_)));
+        for reader_name in ["Foo::foo", "Foo::bar"] {
+            let definitions = context.graph.get(reader_name).unwrap();
+            assert_eq!(definitions.len(), 1);
+            assert!(matches!(definitions[0], Definition::AttrReader(_)));
+        }
 
-        assert!(context.graph.get("Foo::foo=").is_none());
-
-        let definitions = context.graph.get("Foo::bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrReader(_)));
-
-        assert!(context.graph.get("Foo::bar=").is_none());
+        for writer_name in ["Foo::foo=", "Foo::bar="] {
+            assert!(context.graph.get(writer_name).is_none());
+        }
     }
 
     #[test]
@@ -1669,20 +1675,66 @@ mod tests {
             end
             "#
         });
+
+        for name in ["Foo::foo", "Foo::foo=", "Foo::bar", "Foo::bar="] {
+            let definitions = context.graph.get(name).unwrap();
+            assert_eq!(definitions.len(), 1);
+            assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
+        }
+    }
+
+    #[test]
+    fn index_attr_with_string_and_symbol_parameter() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r#"
+            class Foo
+              attr "foo", :bar, :baz
+              attr :a, "b", "c", :d
+            end
+            "#
+        });
+
+        for name in [
+            "Foo::foo",
+            "Foo::foo=",
+            "Foo::bar",
+            "Foo::bar=",
+            "Foo::baz",
+            "Foo::baz=",
+            "Foo::a",
+            "Foo::a=",
+            "Foo::b",
+            "Foo::b=",
+            "Foo::c",
+            "Foo::c=",
+            "Foo::d",
+            "Foo::d=",
+        ] {
+            let definitions = context.graph.get(name).unwrap();
+            assert_eq!(definitions.len(), 1);
+            assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
+        }
+    }
+
+    #[test]
+    fn rejects_attr_with_incorrect_parameter() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r#"
+            class Foo
+              attr "foo", 123
+            end
+            "#
+        });
+
         let definitions = context.graph.get("Foo::foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
+        assert!(matches!(definitions[0], Definition::AttrReader(_)));
 
-        let definitions = context.graph.get("Foo::foo=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
-
-        let definitions = context.graph.get("Foo::bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
-
-        let definitions = context.graph.get("Foo::bar=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
+        assert!(context.graph.get("Foo::foo=").is_none());
+        assert!(context.graph.get("Foo::123").is_none());
     }
 }
