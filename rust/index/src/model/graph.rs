@@ -8,6 +8,7 @@ use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
+use crate::model::references::UnresolvedReference;
 
 /// Holds IDs of entities that were removed from the graph
 pub struct RemovedIds {
@@ -25,6 +26,8 @@ pub struct Graph {
     documents: IdentityHashMap<UriId, Document>,
     // Map of definition nodes
     definitions: IdentityHashMap<DefinitionId, Definition>,
+    // List of references that still need to be resolved
+    unresolved_references: Vec<UnresolvedReference>,
     db: Db,
 }
 
@@ -35,6 +38,7 @@ impl Graph {
             declarations: IdentityHashMap::default(),
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
+            unresolved_references: Vec::new(),
             db: Db::new(),
         }
     }
@@ -131,6 +135,11 @@ impl Graph {
             .and_modify(|doc| doc.add_definition(definition_id));
     }
 
+    // Register an unresolved reference to something (e.g.: constant, method, variable), which has to be resolved later
+    pub fn add_unresolved_reference(&mut self, reference: UnresolvedReference) {
+        self.unresolved_references.push(reference);
+    }
+
     /// # Errors
     ///
     /// Any database errors will prevent the data from being loaded
@@ -169,6 +178,8 @@ impl Graph {
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, incomplete_index: Graph) {
         self.definitions.extend(incomplete_index.definitions);
+        self.unresolved_references
+            .extend(incomplete_index.unresolved_references);
 
         for (name_id, declaration) in incomplete_index.declarations {
             match self.declarations.entry(name_id) {
@@ -335,6 +346,7 @@ impl Graph {
         self.declarations = IdentityHashMap::default();
         self.definitions = IdentityHashMap::default();
         self.documents = IdentityHashMap::default();
+        self.unresolved_references = Vec::new();
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -405,7 +417,7 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::GraphTest;
+    use crate::{offset::Offset, test_utils::GraphTest};
 
     #[test]
     fn deleting_a_uri() {
@@ -619,5 +631,95 @@ mod tests {
 
         let doc = context.graph.get_documentation("NonExistent");
         assert_eq!(doc, None);
+    }
+
+    #[test]
+    fn tracking_unresolved_constant_references_inside_compact_namespace() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar::Baz
+                String
+              end
+            end
+            "
+        });
+
+        let refs = context.graph.unresolved_references;
+        assert_eq!(refs.len(), 1);
+
+        let reference = &refs[0];
+
+        match reference {
+            UnresolvedReference::Constant(unresolved) => {
+                assert_eq!(unresolved.name(), "String");
+                assert_eq!(
+                    unresolved.nesting(),
+                    vec![NameId::from("Foo"), NameId::from("Bar::Baz")]
+                );
+                assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
+                assert_eq!(unresolved.offset(), &Offset::new(32, 38));
+            }
+        }
+    }
+
+    #[test]
+    fn tracking_unresolved_constant_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar
+                String
+              end
+            end
+            "
+        });
+
+        let refs = context.graph.unresolved_references;
+        assert_eq!(refs.len(), 1);
+
+        let reference = &refs[0];
+
+        match reference {
+            UnresolvedReference::Constant(unresolved) => {
+                assert_eq!(unresolved.name(), "String");
+                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
+                assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
+                assert_eq!(unresolved.offset(), &Offset::new(27, 33));
+            }
+        }
+    }
+
+    #[test]
+    fn tracking_unresolved_constant_path_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar
+                Object::String
+              end
+            end
+            "
+        });
+
+        let refs = context.graph.unresolved_references;
+        assert_eq!(refs.len(), 1);
+
+        let reference = &refs[0];
+
+        match reference {
+            UnresolvedReference::Constant(unresolved) => {
+                assert_eq!(unresolved.name(), "Object::String");
+                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
+                assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
+                assert_eq!(unresolved.offset(), &Offset::new(27, 41));
+            }
+        }
     }
 }
