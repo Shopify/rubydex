@@ -212,6 +212,7 @@ impl Graph {
                 if let Some(definition) = self.definitions.remove(def_id)
                     && let Some(declaration) = self.declarations.get_mut(definition.name_id())
                     && declaration.remove_definition(def_id)
+                    && declaration.is_empty()
                 {
                     self.declarations.remove(definition.name_id());
                 }
@@ -525,7 +526,7 @@ mod tests {
 
             # Module comment
             module CommentedModule; end
-            
+
             class NoCommentClass; end
             "
         });
