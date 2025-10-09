@@ -119,7 +119,7 @@ impl Graph {
     // Registers a definition into the `Graph`, automatically creating all relationships
     pub fn add_definition(&mut self, name: String, definition: Definition) {
         let uri_id = *definition.uri_id();
-        let definition_id = DefinitionId::from(&format!("{uri_id}{}", definition.start()));
+        let definition_id = DefinitionId::from(&format!("{uri_id}{}{}", definition.start(), &name));
         let name_id = *definition.name_id();
 
         self.declarations

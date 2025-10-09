@@ -28,6 +28,28 @@ impl Document {
     }
 
     pub fn add_definition(&mut self, definition_id: DefinitionId) {
+        debug_assert!(
+            !self.definition_ids.contains(&definition_id),
+            "Cannot add the same exact definition to a document twice. Duplicate definition IDs"
+        );
+
         self.definition_ids.push(definition_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "Cannot add the same exact definition to a document twice. Duplicate definition IDs")]
+    fn inserting_duplicate_definitions() {
+        let mut document = Document::new("file:///foo.rb".to_string());
+        let def_id = DefinitionId::new(123);
+
+        document.add_definition(def_id);
+        document.add_definition(def_id);
+
+        assert_eq!(document.definitions().len(), 1);
     }
 }

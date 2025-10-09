@@ -267,7 +267,7 @@ impl<'a> RubyIndexer<'a> {
                     ruby_prism::Node::StringNode { .. } => {
                         let string = argument.as_string_node().unwrap();
                         let name = String::from_utf8_lossy(string.unescaped()).to_string();
-                        f(name, node.location());
+                        f(name, argument.location());
                     }
                     _ => {}
                 }
