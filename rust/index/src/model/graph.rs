@@ -337,6 +337,70 @@ impl Graph {
         self.definitions = HashMap::with_hasher(IdentityHashBuilder);
         self.documents = HashMap::with_hasher(IdentityHashBuilder);
     }
+
+    #[allow(clippy::cast_precision_loss)]
+    pub fn print_query_statistics(&self) {
+        use std::collections::HashMap;
+
+        let mut declarations_with_docs = 0;
+        let mut total_doc_size = 0;
+        let mut definition_types: HashMap<&str, usize> = HashMap::new();
+        let mut multi_definition_count = 0;
+
+        for declaration in self.declarations().values() {
+            // Check documentation
+            if let Some(definitions) = self.get(declaration.name()) {
+                let has_docs = definitions.iter().any(|def| !def.comments().is_empty());
+                if has_docs {
+                    declarations_with_docs += 1;
+                    let doc_size: usize = definitions.iter().map(|def| def.comments().len()).sum();
+                    total_doc_size += doc_size;
+                }
+            }
+
+            // Count definitions by type
+            let definition_count = declaration.definitions().len();
+            if definition_count > 1 {
+                multi_definition_count += 1;
+            }
+
+            for def_id in declaration.definitions() {
+                if let Some(def) = self.definitions().get(def_id) {
+                    *definition_types.entry(def.kind()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        println!();
+        println!("Query statistics");
+        println!();
+        let total_declarations = self.declarations().len();
+        println!("Total declarations:         {total_declarations}");
+        println!(
+            "With documentation:         {} ({:.1}%)",
+            declarations_with_docs,
+            (declarations_with_docs as f64 / total_declarations as f64) * 100.0
+        );
+        println!(
+            "Without documentation:      {} ({:.1}%)",
+            total_declarations - declarations_with_docs,
+            ((total_declarations - declarations_with_docs) as f64 / total_declarations as f64) * 100.0
+        );
+        println!("Total documentation size:   {total_doc_size} bytes");
+        println!(
+            "Multi-definition names:     {} ({:.1}%)",
+            multi_definition_count,
+            (f64::from(multi_definition_count) / total_declarations as f64) * 100.0
+        );
+
+        println!();
+        println!("Definition breakdown:");
+        let mut types: Vec<_> = definition_types.iter().collect();
+        types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+        for (kind, count) in types {
+            println!("  {kind:20} {count:6}");
+        }
+    }
 }
 
 #[cfg(test)]

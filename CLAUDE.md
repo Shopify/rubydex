@@ -57,10 +57,16 @@ AST to save in the global graph
 
 ### Commands
 
-When necessary, commands can be executed for the Ruby code.
+When necessary, commands can be executed for the Rust code.
 
 - `cargo build`: compiles the Rust code
+- `cargo run -- <directory>`: runs the indexer on the specified directory (must use absolute paths or $HOME, not ~)
+- `cargo run -- <directory> --stats`: runs the indexer with detailed performance breakdown
+- `cargo run -- <directory> --check-integrity`: runs integrity checks on the index after processing
+- `cargo run -- <directory> --visualize`: generates a DOT visualization of the graph
 - `cargo test`: runs Rust tests
-- `cargo test test_name `: runs a specific tests example
+- `cargo test test_name`: runs a specific tests example
 - `bundle exec rake lint_rust`: lints the Rust code
 - `bundle exec rake format_rust`: auto formats the Rust code
+
+Note: Due to a bug, the indexer requires absolute paths or shell-expanded variables (e.g., `$HOME/path`). Tilde (`~`) is not automatically expanded by Rust. The SQLite database file (`graph.db`) will be automatically created in the target directory.
