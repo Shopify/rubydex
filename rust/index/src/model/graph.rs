@@ -10,6 +10,12 @@ use crate::model::identity_maps::{IdentityHashBuilder, IdentityHashMap};
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
 
+/// Holds IDs of entities that were removed from the graph
+pub struct RemovedIds {
+    pub definition_ids: Vec<DefinitionId>,
+    pub name_ids: Vec<NameId>,
+}
+
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
 #[derive(Default, Debug)]
@@ -104,12 +110,9 @@ impl Graph {
     ///
     /// Any database errors will prevent the data from being deleted
     pub fn delete_uri(&mut self, uri: &str) -> Result<(), Box<dyn Error>> {
-        // Delete the data from memory
-        self.unload_uri(uri);
-        // Delete the data from the database
+        let removed_ids = self.unload_uri(uri);
         let uri_id = UriId::from(uri);
-        self.db.delete_data_for_uri(uri_id)?;
-        self.db.remove_orphaned_entries()?;
+        self.db.delete_data_for_uri(uri_id, &removed_ids)?;
         Ok(())
     }
 
@@ -156,10 +159,11 @@ impl Graph {
 
     /// Removes all data related to the given URI from memory. This method should only be used for when a document is
     /// closed. If the file is deleted, we also need to update the database
-    pub fn unload_uri(&mut self, uri: &str) {
+    pub fn unload_uri(&mut self, uri: &str) -> RemovedIds {
         let uri_id = UriId::from(uri);
-        self.remove_definitions_for_uri(uri_id);
+        let removed = self.remove_definitions_for_uri(uri_id);
         self.documents.remove(&uri_id);
+        removed
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
@@ -199,7 +203,7 @@ impl Graph {
         // For each URI that was indexed through `other`, check what was discovered and update our current global
         // representation
         for uri_id in other.documents.keys() {
-            self.remove_definitions_for_uri(*uri_id);
+            let _ = self.remove_definitions_for_uri(*uri_id);
         }
 
         self.extend(other);
@@ -207,18 +211,27 @@ impl Graph {
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
     // document (identified by `uri_id`) changes or when a document is closed and we need to clean up the memory
-    fn remove_definitions_for_uri(&mut self, uri_id: UriId) {
+    fn remove_definitions_for_uri(&mut self, uri_id: UriId) -> RemovedIds {
+        let mut removed = RemovedIds {
+            definition_ids: Vec::new(),
+            name_ids: Vec::new(),
+        };
+
         if let Some(document) = self.documents.remove(&uri_id) {
             for def_id in document.definitions() {
+                removed.definition_ids.push(*def_id);
                 if let Some(definition) = self.definitions.remove(def_id)
                     && let Some(declaration) = self.declarations.get_mut(definition.name_id())
                     && declaration.remove_definition(def_id)
                     && declaration.is_empty()
                 {
                     self.declarations.remove(definition.name_id());
+                    removed.name_ids.push(*definition.name_id());
                 }
             }
         }
+
+        removed
     }
 
     /// Asserts that the index is in a valid state.
