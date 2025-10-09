@@ -354,10 +354,10 @@ impl Graph {
         for declaration in self.declarations().values() {
             // Check documentation
             if let Some(definitions) = self.get(declaration.name()) {
-                let has_docs = definitions.iter().any(|def| !def.comments().is_empty());
+                let has_docs = definitions.iter().any(|def| def.comments().is_some_and(|c| !c.is_empty()));
                 if has_docs {
                     declarations_with_docs += 1;
-                    let doc_size: usize = definitions.iter().map(|def| def.comments().len()).sum();
+                    let doc_size: usize = definitions.iter().map(|def| def.comments().map_or(0, |c| c.len())).sum();
                     total_doc_size += doc_size;
                 }
             }
@@ -615,15 +615,18 @@ mod tests {
 
         let definitions = context.graph.get("CommentedClass").unwrap();
         let def = definitions.first().unwrap();
-        assert_eq!(def.comments(), "This is a class comment\nMulti-line comment");
+        assert_eq!(
+            def.comments(),
+            Some(&["This is a class comment".to_string(), "Multi-line comment".to_string()][..])
+        );
 
         let definitions = context.graph.get("CommentedModule").unwrap();
         let def = definitions.first().unwrap();
-        assert_eq!(def.comments(), "Module comment");
+        assert_eq!(def.comments(), Some(&["Module comment".to_string()][..]));
 
         let definitions = context.graph.get("NoCommentClass").unwrap();
         let def = definitions.first().unwrap();
-        assert!(def.comments().is_empty());
+        assert_eq!(def.comments(), None);
 
         assert!(context.graph.get("NonExistent").is_none());
     }

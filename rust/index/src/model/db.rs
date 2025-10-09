@@ -309,7 +309,10 @@ mod tests {
         assert!(matches!(constant_def.definition, Definition::Constant(_)));
 
         let comments = class_def.definition.comments();
-        assert_eq!(comments, "Class comment\nAnother class comment");
+        assert_eq!(
+            comments,
+            Some(&["Class comment".to_string(), "Another class comment".to_string()][..])
+        );
     }
 
     #[test]

@@ -127,7 +127,7 @@ mod tests {
             name_id,
             uri_id,
             Offset::new(0, 15),
-            String::new(),
+            None,
         )));
         graph.add_definition("Foo".to_string(), definition);
 

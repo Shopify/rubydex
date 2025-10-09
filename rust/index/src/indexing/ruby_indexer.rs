@@ -86,7 +86,7 @@ impl<'a> RubyIndexer<'a> {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
-    fn find_comments_for(&self, offset: u32) -> Option<String> {
+    fn find_comments_for(&self, offset: u32) -> Option<Vec<String>> {
         let offset_usize = offset as usize;
         if self.comments.is_empty() {
             return None;
@@ -317,7 +317,7 @@ impl<'a> RubyIndexer<'a> {
 
 struct CommentGroup {
     end_offset: usize,
-    comments: String,
+    comments: Vec<String>,
 }
 
 impl CommentGroup {
@@ -325,7 +325,7 @@ impl CommentGroup {
     pub fn new() -> Self {
         Self {
             end_offset: 0,
-            comments: String::new(),
+            comments: Vec::new(),
         }
     }
 
@@ -347,12 +347,8 @@ impl CommentGroup {
     fn add_comment(&mut self, comment: &ruby_prism::Comment) {
         self.end_offset = comment.location().end_offset();
         let text = String::from_utf8_lossy(comment.location().as_slice()).to_string();
-
-        let trimmed = text.trim().strip_prefix("# ").unwrap_or(text.trim());
-        if !self.comments.is_empty() {
-            self.comments.push('\n');
-        }
-        self.comments.push_str(trimmed);
+        let trimmed = text.trim().strip_prefix("# ").unwrap_or(text.trim()).to_string();
+        self.comments.push(trimmed);
     }
 }
 
@@ -363,7 +359,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
             let offset = Offset::from_prism_location(&node.location());
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+            let comments = indexer.find_comments_for(offset.start());
             // Uses `location_converter` to evaluate the performance impact of the conversion
             self.location_converter.offset_to_position(&offset).unwrap();
 
@@ -388,7 +384,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
             let offset = Offset::from_prism_location(&node.location());
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+            let comments = indexer.find_comments_for(offset.start());
             // Uses `location_converter` to evaluate the performance impact of the conversion
             self.location_converter.offset_to_position(&offset).unwrap();
             let definition = Definition::Module(Box::new(ModuleDefinition::new(
@@ -412,7 +408,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
             let offset = Offset::from_prism_location(&name_loc);
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+            let comments = indexer.find_comments_for(offset.start());
             // Uses `location_converter` to evaluate the performance impact of the conversion
             self.location_converter.offset_to_position(&offset).unwrap();
             let definition = Definition::Constant(Box::new(ConstantDefinition::new(
@@ -435,7 +431,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
             let offset = Offset::from_prism_location(&location);
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+            let comments = indexer.find_comments_for(offset.start());
             // Uses `location_converter` to evaluate the performance impact of the conversion
             self.location_converter.offset_to_position(&offset).unwrap();
             let definition = Definition::Constant(Box::new(ConstantDefinition::new(
@@ -469,7 +465,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
                         let offset = Offset::from_prism_location(&location);
-                        let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                        let comments = indexer.find_comments_for(offset.start());
                         // Uses `location_converter` to evaluate the performance impact of the conversion
                         self.location_converter.offset_to_position(&offset).unwrap();
 
@@ -491,7 +487,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     // Uses `location_converter` to evaluate the performance impact of the conversion
                     self.location_converter.offset_to_position(&offset).unwrap();
 
-                    let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                    let comments = self.find_comments_for(offset.start());
                     let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
                         name_id,
                         self.uri_id,
@@ -508,7 +504,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
                         let offset = Offset::from_prism_location(&location);
-                        let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                        let comments = indexer.find_comments_for(offset.start());
                         // Uses `location_converter` to evaluate the performance impact of the conversion
                         self.location_converter.offset_to_position(&offset).unwrap();
 
@@ -529,7 +525,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                         let name_id = NameId::from(&fully_qualified_name);
                         let offset = Offset::from_prism_location(&location);
-                        let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                        let comments = indexer.find_comments_for(offset.start());
                         // Uses `location_converter` to evaluate the performance impact of the conversion
                         self.location_converter.offset_to_position(&offset).unwrap();
 
@@ -556,7 +552,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
             let offset = Offset::from_prism_location(&node.location());
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+            let comments = indexer.find_comments_for(offset.start());
             // Uses `location_converter` to evaluate the performance impact of the conversion
             self.location_converter.offset_to_position(&offset).unwrap();
 
@@ -589,7 +585,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let writer_name = format!("{fully_qualified_name}=");
                     let writer_name_id = NameId::from(&writer_name);
                     let offset = Offset::from_prism_location(&location);
-                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    let comments = indexer.find_comments_for(offset.start());
                     // Uses `location_converter` to evaluate the performance impact of the conversion
                     indexer.location_converter.offset_to_position(&offset).unwrap();
                     indexer.local_index.add_definition(
@@ -620,7 +616,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 indexer.with_updated_nesting(&name, |indexer, fully_qualified_name| {
                     let name_id = NameId::from(&fully_qualified_name);
                     let offset = Offset::from_prism_location(&location);
-                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    let comments = indexer.find_comments_for(offset.start());
                     // Uses `location_converter` to evaluate the performance impact of the conversion
                     indexer.location_converter.offset_to_position(&offset).unwrap();
 
@@ -643,7 +639,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let writer_name = format!("{fully_qualified_name}=");
                     let name_id = NameId::from(&writer_name);
                     let offset = Offset::from_prism_location(&location);
-                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    let comments = indexer.find_comments_for(offset.start());
                     // Uses `location_converter` to evaluate the performance impact of the conversion
                     indexer.location_converter.offset_to_position(&offset).unwrap();
 
@@ -730,7 +726,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let name_id = NameId::from(&name);
         let offset = Offset::from_prism_location(&name_loc);
 
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let comments = self.find_comments_for(offset.start());
         let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
             name_id,
             self.uri_id,
@@ -750,7 +746,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
             let offset = Offset::from_prism_location(&name_loc);
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+            let comments = indexer.find_comments_for(offset.start());
             // Uses `location_converter` to evaluate the performance impact of the conversion
             self.location_converter.offset_to_position(&offset).unwrap();
 
@@ -774,7 +770,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
             let name_id = NameId::from(&fully_qualified_name);
             let offset = Offset::from_prism_location(&name_loc);
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+            let comments = indexer.find_comments_for(offset.start());
             // Uses `location_converter` to evaluate the performance impact of the conversion
             self.location_converter.offset_to_position(&offset).unwrap();
 
@@ -1243,7 +1239,7 @@ mod tests {
         let single = context.graph.get("Single").unwrap();
         match &single[0] {
             Definition::Class(_) => {
-                assert_eq!(single[0].comments(), "Single comment");
+                assert_eq!(single[0].comments(), Some(&["Single comment".to_string()][..]));
             }
             _ => panic!("Expected class"),
         }
@@ -1253,7 +1249,13 @@ mod tests {
             Definition::Class(_) => {
                 assert_eq!(
                     multi[0].comments(),
-                    "Multi-line comment 1\nMulti-line comment 2\nMulti-line comment 3"
+                    Some(
+                        &[
+                            "Multi-line comment 1".to_string(),
+                            "Multi-line comment 2".to_string(),
+                            "Multi-line comment 3".to_string()
+                        ][..]
+                    )
                 );
             }
             _ => panic!("Expected class"),
@@ -1262,7 +1264,10 @@ mod tests {
         let no_gap = context.graph.get("NoGap").unwrap();
         match &no_gap[0] {
             Definition::Class(_) => {
-                assert_eq!(no_gap[0].comments(), "Comment directly above (no gap)");
+                assert_eq!(
+                    no_gap[0].comments(),
+                    Some(&["Comment directly above (no gap)".to_string()][..])
+                );
             }
             _ => panic!("Expected class"),
         }
@@ -1270,7 +1275,7 @@ mod tests {
         let blank = context.graph.get("BlankLine").unwrap();
         match &blank[0] {
             Definition::Class(_) => {
-                assert_eq!(blank[0].comments(), "Comment with blank line");
+                assert_eq!(blank[0].comments(), Some(&["Comment with blank line".to_string()][..]));
             }
             _ => panic!("Expected class"),
         }
@@ -1278,7 +1283,7 @@ mod tests {
         let no_comment = context.graph.get("NoComment").unwrap();
         match &no_comment[0] {
             Definition::Class(_) => {
-                assert!(no_comment[0].comments().is_empty());
+                assert_eq!(no_comment[0].comments(), None);
             }
             _ => panic!("Expected class"),
         }
@@ -1307,7 +1312,7 @@ mod tests {
         let too_far = context.graph.get("TooFar").unwrap();
         match &too_far[0] {
             Definition::Class(_) => {
-                assert!(too_far[0].comments().is_empty(), "Comment too far should not attach");
+                assert_eq!(too_far[0].comments(), None, "Comment too far should not attach");
             }
             _ => panic!("Expected class"),
         }
@@ -1315,8 +1320,9 @@ mod tests {
         let code_between = context.graph.get("CodeBetween").unwrap();
         match &code_between[0] {
             Definition::Class(_) => {
-                assert!(
-                    code_between[0].comments().is_empty(),
+                assert_eq!(
+                    code_between[0].comments(),
+                    None,
                     "Comment with code between should not attach"
                 );
             }
@@ -1326,7 +1332,7 @@ mod tests {
         let foo = context.graph.get("Foo").unwrap();
         match &foo[0] {
             Definition::Class(_) => {
-                assert_eq!(foo[0].comments(), "Comment for Foo");
+                assert_eq!(foo[0].comments(), Some(&["Comment for Foo".to_string()][..]));
             }
             _ => panic!("Expected class"),
         }
@@ -1356,7 +1362,7 @@ mod tests {
         let outer = context.graph.get("Outer").unwrap();
         match &outer[0] {
             Definition::Class(_) => {
-                assert_eq!(outer[0].comments(), "Outer class");
+                assert_eq!(outer[0].comments(), Some(&["Outer class".to_string()][..]));
             }
             _ => panic!("Expected class"),
         }
@@ -1364,7 +1370,7 @@ mod tests {
         let inner = context.graph.get("Outer::Inner").unwrap();
         match &inner[0] {
             Definition::Class(_) => {
-                assert_eq!(inner[0].comments(), "Inner class at 2 spaces");
+                assert_eq!(inner[0].comments(), Some(&["Inner class at 2 spaces".to_string()][..]));
             }
             _ => panic!("Expected class"),
         }
@@ -1372,7 +1378,7 @@ mod tests {
         let deep = context.graph.get("Outer::Inner::Deep").unwrap();
         match &deep[0] {
             Definition::Class(_) => {
-                assert_eq!(deep[0].comments(), "Deep class at 4 spaces");
+                assert_eq!(deep[0].comments(), Some(&["Deep class at 4 spaces".to_string()][..]));
             }
             _ => panic!("Expected class"),
         }
@@ -1380,7 +1386,10 @@ mod tests {
         let another = context.graph.get("Outer::AnotherInner").unwrap();
         match &another[0] {
             Definition::Class(_) => {
-                assert_eq!(another[0].comments(), "Another inner class\nwith multiple lines");
+                assert_eq!(
+                    another[0].comments(),
+                    Some(&["Another inner class".to_string(), "with multiple lines".to_string()][..])
+                );
             }
             _ => panic!("Expected class"),
         }
@@ -1409,7 +1418,7 @@ mod tests {
         let module = context.graph.get("TestModule").unwrap();
         match &module[0] {
             Definition::Module(_) => {
-                assert_eq!(module[0].comments(), "Module comment");
+                assert_eq!(module[0].comments(), Some(&["Module comment".to_string()][..]));
             }
             _ => panic!("Expected module"),
         }
@@ -1417,7 +1426,7 @@ mod tests {
         let constant = context.graph.get("TestModule::FOO").unwrap();
         match &constant[0] {
             Definition::Constant(_) => {
-                assert_eq!(constant[0].comments(), "Constant comment");
+                assert_eq!(constant[0].comments(), Some(&["Constant comment".to_string()][..]));
             }
             _ => panic!("Expected constant"),
         }
@@ -1425,7 +1434,7 @@ mod tests {
         let nested = context.graph.get("TestModule::Nested").unwrap();
         match &nested[0] {
             Definition::Module(_) => {
-                assert_eq!(nested[0].comments(), "Nested module");
+                assert_eq!(nested[0].comments(), Some(&["Nested module".to_string()][..]));
             }
             _ => panic!("Expected module"),
         }
@@ -1433,7 +1442,7 @@ mod tests {
         let multi_a = context.graph.get("A").unwrap();
         match &multi_a[0] {
             Definition::Constant(_) => {
-                assert_eq!(multi_a[0].comments(), "Multi-write constant");
+                assert_eq!(multi_a[0].comments(), Some(&["Multi-write constant".to_string()][..]));
             }
             _ => panic!("Expected constant"),
         }

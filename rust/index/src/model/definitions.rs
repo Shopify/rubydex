@@ -99,8 +99,8 @@ impl Definition {
     }
 
     #[must_use]
-    pub fn comments(&self) -> &str {
-        all_definitions!(self, it => &it.comments)
+    pub fn comments(&self) -> Option<&[String]> {
+        all_definitions!(self, it => it.comments.as_deref())
     }
 }
 
@@ -116,17 +116,17 @@ pub struct ClassDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl ClassDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
@@ -143,17 +143,17 @@ pub struct ModuleDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl ModuleDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
@@ -169,17 +169,17 @@ pub struct ConstantDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl ConstantDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
@@ -198,18 +198,18 @@ pub struct MethodDefinition {
     offset: Offset,
     parameters: Vec<Parameter>,
     is_singleton: bool,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl MethodDefinition {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         name_id: NameId,
         uri_id: UriId,
         offset: Offset,
         parameters: Vec<Parameter>,
         is_singleton: bool,
-        comments: String,
+        comments: Option<Vec<String>>,
     ) -> Self {
         Self {
             name_id,
@@ -217,7 +217,7 @@ impl MethodDefinition {
             offset,
             parameters,
             is_singleton,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 
@@ -279,17 +279,17 @@ pub struct AttrAccessorDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl AttrAccessorDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
@@ -305,17 +305,17 @@ pub struct AttrReaderDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl AttrReaderDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
@@ -331,17 +331,17 @@ pub struct AttrWriterDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl AttrWriterDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
@@ -357,17 +357,17 @@ pub struct GlobalVariableDefinition {
     name_id: NameId,
     uri_id: UriId,
     pub offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl GlobalVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
@@ -383,17 +383,17 @@ pub struct InstanceVariableDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl InstanceVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
@@ -409,17 +409,17 @@ pub struct ClassVariableDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
-    comments: String,
+    comments: Option<Box<[String]>>,
 }
 
 impl ClassVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: Option<Vec<String>>) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
-            comments,
+            comments: comments.map(|c| c.into_boxed_slice()),
         }
     }
 }
