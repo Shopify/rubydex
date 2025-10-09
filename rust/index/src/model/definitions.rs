@@ -44,37 +44,32 @@ pub enum Definition {
     ClassVariable(Box<ClassVariableDefinition>),
 }
 
+macro_rules! all_definitions {
+    ($value:expr, $var:ident => $expr:expr) => {
+        match $value {
+            Definition::Class($var) => $expr,
+            Definition::Module($var) => $expr,
+            Definition::Constant($var) => $expr,
+            Definition::GlobalVariable($var) => $expr,
+            Definition::InstanceVariable($var) => $expr,
+            Definition::ClassVariable($var) => $expr,
+            Definition::AttrAccessor($var) => $expr,
+            Definition::AttrReader($var) => $expr,
+            Definition::AttrWriter($var) => $expr,
+            Definition::Method($var) => $expr,
+        }
+    };
+}
+
 impl Definition {
     #[must_use]
     pub fn start(&self) -> u32 {
-        match self {
-            Definition::Class(it) => it.offset.start(),
-            Definition::Module(it) => it.offset.start(),
-            Definition::Constant(it) => it.offset.start(),
-            Definition::GlobalVariable(it) => it.offset.start(),
-            Definition::InstanceVariable(it) => it.offset.start(),
-            Definition::ClassVariable(it) => it.offset.start(),
-            Definition::AttrAccessor(it) => it.offset.start(),
-            Definition::AttrReader(it) => it.offset.start(),
-            Definition::AttrWriter(it) => it.offset.start(),
-            Definition::Method(it) => it.offset.start(),
-        }
+        all_definitions!(self, it => it.offset.start())
     }
 
     #[must_use]
     pub fn end(&self) -> u32 {
-        match self {
-            Definition::Class(it) => it.offset.end(),
-            Definition::Module(it) => it.offset.end(),
-            Definition::Constant(it) => it.offset.end(),
-            Definition::GlobalVariable(it) => it.offset.end(),
-            Definition::InstanceVariable(it) => it.offset.end(),
-            Definition::ClassVariable(it) => it.offset.end(),
-            Definition::AttrAccessor(it) => it.offset.end(),
-            Definition::AttrReader(it) => it.offset.end(),
-            Definition::AttrWriter(it) => it.offset.end(),
-            Definition::Method(it) => it.offset.end(),
-        }
+        all_definitions!(self, it => it.offset.end())
     }
 
     #[must_use]
@@ -95,50 +90,17 @@ impl Definition {
 
     #[must_use]
     pub fn name_id(&self) -> &NameId {
-        match self {
-            Definition::Class(it) => &it.name_id,
-            Definition::Module(it) => &it.name_id,
-            Definition::Constant(it) => &it.name_id,
-            Definition::GlobalVariable(it) => &it.name_id,
-            Definition::InstanceVariable(it) => &it.name_id,
-            Definition::ClassVariable(it) => &it.name_id,
-            Definition::AttrAccessor(it) => &it.name_id,
-            Definition::AttrReader(it) => &it.name_id,
-            Definition::AttrWriter(it) => &it.name_id,
-            Definition::Method(it) => &it.name_id,
-        }
+        all_definitions!(self, it => &it.name_id)
     }
 
     #[must_use]
     pub fn uri_id(&self) -> &UriId {
-        match self {
-            Definition::Class(it) => &it.uri_id,
-            Definition::Module(it) => &it.uri_id,
-            Definition::Constant(it) => &it.uri_id,
-            Definition::GlobalVariable(it) => &it.uri_id,
-            Definition::InstanceVariable(it) => &it.uri_id,
-            Definition::ClassVariable(it) => &it.uri_id,
-            Definition::AttrAccessor(it) => &it.uri_id,
-            Definition::AttrReader(it) => &it.uri_id,
-            Definition::AttrWriter(it) => &it.uri_id,
-            Definition::Method(it) => &it.uri_id,
-        }
+        all_definitions!(self, it => &it.uri_id)
     }
 
     #[must_use]
     pub fn comments(&self) -> &str {
-        match self {
-            Definition::Class(it) => &it.comments,
-            Definition::Module(it) => &it.comments,
-            Definition::Constant(it) => &it.comments,
-            Definition::Method(it) => &it.comments,
-            Definition::AttrAccessor(it) => &it.comments,
-            Definition::AttrReader(it) => &it.comments,
-            Definition::AttrWriter(it) => &it.comments,
-            Definition::GlobalVariable(it) => &it.comments,
-            Definition::InstanceVariable(it) => &it.comments,
-            Definition::ClassVariable(it) => &it.comments,
-        }
+        all_definitions!(self, it => &it.comments)
     }
 }
 
