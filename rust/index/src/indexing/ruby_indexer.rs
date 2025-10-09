@@ -16,22 +16,6 @@ use ruby_prism::{ParseResult, Visit};
 
 pub type IndexerParts = (Graph, Vec<IndexingError>);
 
-const MAGIC_AND_RBS_COMMENT_PREFIX: &[&str] = &[
-    "frozen_string_literal:",
-    "typed:",
-    "compiled:",
-    "encoding:",
-    "shareable_constant_value:",
-    "warn_indent:",
-    "rubocop:",
-    "nodoc:",
-    "doc:",
-    "coding:",
-    "warn_past_scope:",
-    "#:",
-    "#|",
-];
-
 /// The indexer for the definitions found in the Ruby source code.
 ///
 /// It implements the `Visit` trait from `ruby_prism` to visit the AST and create a hash of definitions that must be
@@ -360,21 +344,15 @@ impl CommentGroup {
         bytecount::count(between, b'\n') <= 1
     }
 
-    // For the magic comments, what we want to do is the following:
-    // 1. still move the group end offset to the end of the magic comment
-    // 2. not add the comment to the comments array
     fn add_comment(&mut self, comment: &ruby_prism::Comment) {
         self.end_offset = comment.location().end_offset();
         let text = String::from_utf8_lossy(comment.location().as_slice()).to_string();
-        if MAGIC_AND_RBS_COMMENT_PREFIX.iter().any(|&prefix| text.contains(prefix)) {
-            return;
-        }
 
-        let parsed_comment = text.trim().strip_prefix("# ").unwrap_or(text.trim());
+        let trimmed = text.trim().strip_prefix("# ").unwrap_or(text.trim());
         if !self.comments.is_empty() {
             self.comments.push('\n');
         }
-        self.comments.push_str(parsed_comment);
+        self.comments.push_str(trimmed);
     }
 }
 
