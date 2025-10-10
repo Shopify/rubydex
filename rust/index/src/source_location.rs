@@ -1,14 +1,14 @@
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Position {
-    pub line: u32,
-    pub column: u32,
+    line: u32,
+    column: u32,
 }
 
 pub trait SourceLocationConverter {
     /// Converts a byte offset to a Position (line and column).
-    /// 
+    ///
     /// Note that the ``byte_offset`` is the number based on an UTF-8 encoded source code.
-    /// 
+    ///
     /// Returns ``None`` if the byte offset is out of range.
     #[must_use]
     fn byte_offset_to_position(&self, byte_offset: u32) -> Option<Position> {
@@ -17,10 +17,10 @@ pub trait SourceLocationConverter {
     }
 
     /// Converts a pair of byte offsets (start and end) to a pair of Positions.
-    /// 
+    ///
     /// If both offsets are valid, returns ``Some((start_position, end_position))``.
     /// If either offset is invalid, returns ``None``.
-    /// 
+    ///
     /// There are currently no optimization for this implementation.
     /// It simply translates each offset individually.
     #[must_use]
@@ -31,24 +31,24 @@ pub trait SourceLocationConverter {
     }
 
     /// Converts a Position (line and column) to a byte offset.
-    /// 
+    ///
     /// Note that the ``byte_offset`` is the number based on an UTF-8 encoded source code.
-    /// 
+    ///
     /// Returns ``None`` if the line number is out of range, or the column number is out of range of the line.
-    /// 
+    ///
     #[must_use]
     fn byte_offset_from_position(&self, position: Position) -> Option<u32>;
 
     /// A helper function to get the line number and the source line struct.
-    /// 
+    ///
     /// Returns ``None`` if the line number is out of range.
     #[must_use]
     fn byte_offset_to_line_slice(&self, byte_offset: u32) -> Option<(u32, SourceLine<'_>)>;
 
     /// A helper function to create a Position from a line number and a byte offset within the line.
-    /// 
+    ///
     /// The ``line_slice`` is the string slice of the line, which can be used to calculate the column number.
-    /// 
+    ///
     /// The ``line_offset`` and ``line_slice`` are assumed to be consistent.
     /// It panics if the ``line_offset`` is out of range of the ``line_slice``.
     #[must_use]
@@ -58,13 +58,13 @@ pub trait SourceLocationConverter {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct SourceLine<'a> {
     /// The byte offset of the beginning of the line in the entire text
-    pub start_offset: u32,
+    start_offset: u32,
 
     /// The slice of the line, with or without the '\n' at the end
-    pub line_slice: &'a str,
+    line_slice: &'a str,
 
     /// The length of the line in bytes without new-line char
-    pub line_len: u32,
+    line_len: u32,
 }
 
 /// A helper struct to hold the source text and precomputed line bytes offsets
@@ -74,7 +74,7 @@ pub struct SourceLines<'a> {
     text_len: u32,
 
     /// A vector of (byte offset of the line start, line slice, line length in bytes without new-line char).
-    /// 
+    ///
     /// The lines end with '\n' except for the last line.
     /// If the content ends with a newline, there will be an empty line at the end.
     lines: Vec<SourceLine<'a>>,
@@ -95,21 +95,29 @@ impl<'a> SourceLines<'a> {
         for (byte_pos, ch) in text.char_indices() {
             if ch == '\n' {
                 let line_slice = &text[line_start..=byte_pos];
-                lines.push(SourceLine { start_offset: line_start as u32, line_slice, line_len: (byte_pos - line_start) as u32 });
+                lines.push(SourceLine {
+                    start_offset: line_start as u32,
+                    line_slice,
+                    line_len: (byte_pos - line_start) as u32,
+                });
 
                 // Start a new line, with additional byte for '\n'
                 line_start = byte_pos + 1;
             }
         }
-        
+
         let line_slice = &text[line_start..];
-        lines.push(SourceLine { start_offset: line_start as u32, line_slice, line_len: line_slice.len() as u32 });
+        lines.push(SourceLine {
+            start_offset: line_start as u32,
+            line_slice,
+            line_len: line_slice.len() as u32,
+        });
 
         SourceLines::new(text.len() as u32, lines)
     }
 
     /// Returns the possible line number of the given byte offset.
-    /// 
+    ///
     /// Returns ``None`` if the byte offset is out of range.
     #[must_use]
     #[allow(clippy::cast_possible_truncation)]
@@ -142,7 +150,7 @@ impl<'a> SourceLines<'a> {
 }
 
 /// A source location converter for UTF-8 encoding.
-/// 
+///
 /// The column number is the UTF-8 code units with the line. (This is equivalent to the byte offset.)
 pub struct UTF8SourceLocationConverter<'a> {
     source: SourceLines<'a>,
@@ -158,11 +166,14 @@ impl<'a> UTF8SourceLocationConverter<'a> {
 
 impl SourceLocationConverter for UTF8SourceLocationConverter<'_> {
     fn byte_offset_to_line_slice(&self, byte_offset: u32) -> Option<(u32, SourceLine<'_>)> {
-       self.source.get_line_slice_from_byte_offset(byte_offset)
-     }
+        self.source.get_line_slice_from_byte_offset(byte_offset)
+    }
 
     fn position_with_line_offset(&self, line: u32, line_offset: u32, _line_slice: &str) -> Position {
-        Position { line, column: line_offset }
+        Position {
+            line,
+            column: line_offset,
+        }
     }
 
     fn byte_offset_from_position(&self, position: Position) -> Option<u32> {
@@ -183,7 +194,7 @@ impl SourceLocationConverter for UTF8SourceLocationConverter<'_> {
 }
 
 /// A source location converter for UTF-16 encoding.
-/// 
+///
 /// The column number is the UTF-16 code units with the line.
 /// 1 for most of the unicode characters.
 /// 2 for characters outside the BMP (Basic Multilingual Plane) that are represented as surrogate pairs.
@@ -201,8 +212,8 @@ impl<'a> UTF16SourceLocationConverter<'a> {
 
 impl SourceLocationConverter for UTF16SourceLocationConverter<'_> {
     fn byte_offset_to_line_slice(&self, byte_offset: u32) -> Option<(u32, SourceLine<'_>)> {
-       self.source.get_line_slice_from_byte_offset(byte_offset)
-     }
+        self.source.get_line_slice_from_byte_offset(byte_offset)
+    }
 
     #[allow(clippy::cast_possible_truncation)]
     fn position_with_line_offset(&self, line: u32, line_offset: u32, line_slice: &str) -> Position {
@@ -212,7 +223,10 @@ impl SourceLocationConverter for UTF16SourceLocationConverter<'_> {
             if byte_pos as u32 == line_offset {
                 break;
             }
-            assert!((byte_pos as u32) < line_offset, "The line_offset doesn't look like it's on a boundary between characters: {line_offset}, {line_slice}");
+            assert!(
+                (byte_pos as u32) < line_offset,
+                "The line_offset doesn't look like it's on a boundary between characters: {line_offset}, {line_slice}"
+            );
 
             column += ch.len_utf16() as u32;
         }
@@ -222,7 +236,7 @@ impl SourceLocationConverter for UTF16SourceLocationConverter<'_> {
 
     #[allow(clippy::cast_possible_truncation)]
     fn byte_offset_from_position(&self, position: Position) -> Option<u32> {
-        let source_line  = self.source.lines.get(position.line as usize)?;
+        let source_line = self.source.lines.get(position.line as usize)?;
 
         let mut current_column = 0u32;
 
@@ -230,7 +244,10 @@ impl SourceLocationConverter for UTF16SourceLocationConverter<'_> {
             return Some(source_line.start_offset);
         }
 
-        let char_indices = source_line.line_slice.char_indices().take(source_line.line_len as usize);
+        let char_indices = source_line
+            .line_slice
+            .char_indices()
+            .take(source_line.line_len as usize);
 
         for (byte_pos, ch) in char_indices {
             let code_units = ch.len_utf16() as u32;
@@ -246,7 +263,7 @@ impl SourceLocationConverter for UTF16SourceLocationConverter<'_> {
 }
 
 /// A source location converter for UTF-32 position encoding.
-/// 
+///
 /// The column number is the UTF-32 code units with the line.
 pub struct UTF32SourceLocationConverter<'a> {
     source: SourceLines<'a>,
@@ -255,7 +272,9 @@ pub struct UTF32SourceLocationConverter<'a> {
 impl<'a> UTF32SourceLocationConverter<'a> {
     #[must_use]
     pub fn new(text: &'a str) -> Self {
-        Self { source: SourceLines::from_text(text) }
+        Self {
+            source: SourceLines::from_text(text),
+        }
     }
 }
 
@@ -272,7 +291,10 @@ impl SourceLocationConverter for UTF32SourceLocationConverter<'_> {
             if byte_pos as u32 == line_offset {
                 break;
             }
-            assert!((byte_pos as u32) < line_offset, "The line_offset doesn't look like it's on a boundary between characters: {line_offset}, {line_slice}");
+            assert!(
+                (byte_pos as u32) < line_offset,
+                "The line_offset doesn't look like it's on a boundary between characters: {line_offset}, {line_slice}"
+            );
 
             column += 1;
         }
@@ -292,7 +314,7 @@ impl SourceLocationConverter for UTF32SourceLocationConverter<'_> {
             Some((byte_pos, _ch)) => {
                 let offset = source_line.start_offset + byte_pos as u32;
                 Some(offset)
-            },
+            }
             None => None,
         }
     }
@@ -311,9 +333,21 @@ mod tests {
         assert_eq!(
             source.lines,
             vec![
-                SourceLine { start_offset: 0, line_slice: "Hello\n", line_len: 5 },
-                SourceLine { start_offset: 6, line_slice: "世界\n", line_len: 6 },
-                SourceLine { start_offset: 13, line_slice: "", line_len: 0 },
+                SourceLine {
+                    start_offset: 0,
+                    line_slice: "Hello\n",
+                    line_len: 5
+                },
+                SourceLine {
+                    start_offset: 6,
+                    line_slice: "世界\n",
+                    line_len: 6
+                },
+                SourceLine {
+                    start_offset: 13,
+                    line_slice: "",
+                    line_len: 0
+                },
             ]
         );
     }
@@ -327,8 +361,16 @@ mod tests {
         assert_eq!(
             source.lines,
             vec![
-                SourceLine { start_offset: 0, line_slice: "Hello\n", line_len: 5 },
-                SourceLine { start_offset: 6, line_slice: "世界", line_len: 6 },
+                SourceLine {
+                    start_offset: 0,
+                    line_slice: "Hello\n",
+                    line_len: 5
+                },
+                SourceLine {
+                    start_offset: 6,
+                    line_slice: "世界",
+                    line_len: 6
+                },
             ]
         );
     }
@@ -339,7 +381,14 @@ mod tests {
         let source = SourceLines::from_text(&text);
 
         assert_eq!(source.text_len, 0);
-        assert_eq!(source.lines, vec![SourceLine { start_offset: 0, line_slice: "", line_len: 0 }]);
+        assert_eq!(
+            source.lines,
+            vec![SourceLine {
+                start_offset: 0,
+                line_slice: "",
+                line_len: 0
+            }]
+        );
     }
 
     /// The characters are 1 byte each in UTF-8, 1 code-unit in UTF-16, and 1 code-unit in UTF-32
@@ -349,7 +398,12 @@ mod tests {
     /// The emoji characters are 4 bytes each in UTF-8, 2 code-units in UTF-16, and 1 code-unit in UTF-32
     static SURROGATE_PAIR_STRING: &str = "😀\n🍔\n";
 
-    fn assert_location_converter(converter: &dyn SourceLocationConverter, successful_pairs: &[(u32, Position)], fail_offsets: &[u32], fail_positions: &[Position]) {
+    fn assert_location_converter(
+        converter: &dyn SourceLocationConverter,
+        successful_pairs: &[(u32, Position)],
+        fail_offsets: &[u32],
+        fail_positions: &[Position],
+    ) {
         for (byte_offset, expected_position) in successful_pairs {
             let position = converter.byte_offset_to_position(*byte_offset);
             assert_eq!(position, Some(*expected_position));
@@ -384,8 +438,8 @@ mod tests {
             &[13],
             &[
                 Position { line: 2, column: 1 },
-                Position { line: 3, column: 0 },   // The input has only 3 lines
-                Position { line: 0, column: 6 },   // The first line has only 5 characters
+                Position { line: 3, column: 0 }, // The input has only 3 lines
+                Position { line: 0, column: 6 }, // The first line has only 5 characters
             ],
         );
 
@@ -400,9 +454,7 @@ mod tests {
                 (23, Position { line: 2, column: 0 }),
             ],
             &[24],
-            &[
-                Position { line: 2, column: 1 }
-            ],
+            &[Position { line: 2, column: 1 }],
         );
 
         assert_location_converter(
@@ -415,9 +467,7 @@ mod tests {
                 (10, Position { line: 2, column: 0 }),
             ],
             &[11],
-            &[
-                Position { line: 2, column: 1 },
-            ],
+            &[Position { line: 2, column: 1 }],
         );
     }
 
@@ -436,8 +486,8 @@ mod tests {
             &[13],
             &[
                 Position { line: 2, column: 1 },
-                Position { line: 3, column: 0 },   // The input has only 3 lines
-                Position { line: 0, column: 6 },   // The first line has only 5 characters
+                Position { line: 3, column: 0 }, // The input has only 3 lines
+                Position { line: 0, column: 6 }, // The first line has only 5 characters
             ],
         );
 
@@ -452,9 +502,7 @@ mod tests {
                 (23, Position { line: 2, column: 0 }),
             ],
             &[24],
-            &[
-                Position { line: 2, column: 1 }
-            ],
+            &[Position { line: 2, column: 1 }],
         );
 
         assert_location_converter(
@@ -467,9 +515,7 @@ mod tests {
                 (10, Position { line: 2, column: 0 }),
             ],
             &[11],
-            &[
-                Position { line: 2, column: 1 }
-            ],
+            &[Position { line: 2, column: 1 }],
         );
     }
 
@@ -488,8 +534,8 @@ mod tests {
             &[13],
             &[
                 Position { line: 2, column: 1 },
-                Position { line: 3, column: 0 },   // The input has only 3 lines
-                Position { line: 0, column: 6 },   // The first line has only 5 characters
+                Position { line: 3, column: 0 }, // The input has only 3 lines
+                Position { line: 0, column: 6 }, // The first line has only 5 characters
             ],
         );
 
@@ -504,9 +550,7 @@ mod tests {
                 (23, Position { line: 2, column: 0 }),
             ],
             &[24],
-            &[
-                Position { line: 2, column: 1 }
-            ],
+            &[Position { line: 2, column: 1 }],
         );
 
         assert_location_converter(
@@ -519,9 +563,7 @@ mod tests {
                 (10, Position { line: 2, column: 0 }),
             ],
             &[11],
-            &[
-                Position { line: 2, column: 1 }
-            ],
+            &[Position { line: 2, column: 1 }],
         );
     }
 }
