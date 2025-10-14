@@ -24,6 +24,6 @@ if [ -f "$CORPUS_PATH/graph.db" ]; then
     echo "Removed an existing graph.db in the corpus path"
 fi
 
-cd "$PROJECT_ROOT/rust" && cargo build --release --bin bench
+cd "$PROJECT_ROOT/rust" && cargo build --release
 cd $PROJECT_ROOT
-utils/mem-use "$PROJECT_ROOT/rust/target/release/bench" "$CORPUS_PATH"
+utils/mem-use "$PROJECT_ROOT/rust/target/release/index_cli" "$CORPUS_PATH" --stats

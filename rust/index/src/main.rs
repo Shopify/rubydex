@@ -5,6 +5,7 @@ use clap::Parser;
 use index::{
     indexing::{self, errors::MultipleErrors},
     model::graph::Graph,
+    timer::{Timer, time_it},
     visualization::dot,
 };
 
@@ -22,34 +23,59 @@ struct Args {
 
     #[arg(long = "visualize")]
     visualize: bool,
+
+    #[arg(long = "stats", help = "Show detailed performance statistics")]
+    stats: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let mut graph = Graph::new();
-    graph.set_configuration(format!("{}/graph.db", &args.dir))?;
-    let (documents, errors) = indexing::collect_documents(vec![args.dir]);
-    let document_count = documents.len();
+
+    if args.stats {
+        Timer::set_global_timer(Timer::new());
+    }
+
+    let (mut graph, documents, document_count, errors) = time_it!(setup, {
+        let mut graph = Graph::new();
+        graph.set_configuration(format!("{}/graph.db", &args.dir))?;
+        let (documents, errors) = indexing::collect_documents(vec![args.dir.clone()]);
+        let document_count = documents.len();
+        Ok::<_, Box<dyn Error>>((graph, documents, document_count, errors))
+    })?;
 
     if !errors.is_empty() {
         return Err(Box::new(MultipleErrors(errors)));
     }
 
-    indexing::index_in_parallel(&mut graph, documents)?;
+    time_it!(indexing, { indexing::index_in_parallel(&mut graph, documents) })?;
 
     // Run integrity checks if requested
     if args.check_integrity {
-        let errors = Graph::integrity_checker().apply(&graph);
+        time_it!(integrity_check, {
+            let errors = Graph::integrity_checker().apply(&graph);
 
-        if errors.is_empty() {
-            println!("✓ Index integrity check passed");
-        } else {
-            eprintln!("✗ Index integrity check failed with {} errors:", errors.len());
-            for error in &errors {
-                eprintln!("  - {error}");
+            if errors.is_empty() {
+                println!("✓ Index integrity check passed");
+            } else {
+                eprintln!("✗ Index integrity check failed with {} errors:", errors.len());
+                for error in &errors {
+                    eprintln!("  - {error}");
+                }
+                std::process::exit(1);
             }
-            std::process::exit(1);
-        }
+        });
+    }
+
+    time_it!(database, { graph.save_to_database() })?;
+
+    if args.stats {
+        time_it!(querying, {
+            graph.print_query_statistics();
+        });
+    }
+
+    if args.stats {
+        Timer::print_breakdown();
     }
 
     // Generate visualization or print statistics
