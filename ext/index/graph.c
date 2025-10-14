@@ -109,6 +109,14 @@ static VALUE rb_graph_declarations(VALUE self) {
   return declarations_array;
 }
 
+static VALUE rb_graph_definitions_for(VALUE self, VALUE declaration) {
+  void *graph;
+  TypedData_Get_Struct(self, void *, &graph_type, graph);
+  const char **definitions =
+      idx_graph_definitions_for(graph, StringValueCStr(declaration));
+  return rb_str_new_cstr(definitions);
+}
+
 void initialize_graph(VALUE mIndex) {
   cGraph = rb_define_class_under(mIndex, "Graph", rb_cObject);
 
@@ -116,4 +124,5 @@ void initialize_graph(VALUE mIndex) {
   rb_define_method(cGraph, "index_all", rb_graph_index_all, 1);
   rb_define_method(cGraph, "set_configuration", rb_graph_set_configuration, 1);
   rb_define_method(cGraph, "declarations", rb_graph_declarations, 0);
+  rb_define_method(cGraph, "definitions_for", rb_graph_definitions_for, 1);
 }
