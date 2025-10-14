@@ -171,26 +171,6 @@ static VALUE rb_graph_declarations(VALUE self) {
   return arr;
 }
 
-static VALUE rb_graph_definitions_for(VALUE self, VALUE declaration_id) {
-  void *graph;
-  TypedData_Get_Struct(self, void *, &graph_type, graph);
-
-  HandleData *decl_data;
-  TypedData_Get_Struct(declaration_id, HandleData, &handle_type, decl_data);
-
-  size_t len = 0;
-  const int64_t *def_ids =
-      idx_graph_definition_ids_for(graph, (int64_t)decl_data->id, &len);
-  VALUE arr = rb_ary_new_capa((long)len);
-  for (size_t i = 0; i < len; i++) {
-    VALUE handle =
-        rb_funcall(cDefinition, rb_intern("new"), 2, self, LL2NUM(def_ids[i]));
-    rb_ary_push(arr, handle);
-  }
-  free_i64_array(def_ids, len);
-  return arr;
-}
-
 // DeclarationHandle#name -> String
 static VALUE declaration_handle_name(VALUE self) {
   HandleData *data;
@@ -312,5 +292,4 @@ void initialize_graph(VALUE mIndex) {
   rb_define_method(cGraph, "index_all", rb_graph_index_all, 1);
   rb_define_method(cGraph, "set_configuration", rb_graph_set_configuration, 1);
   rb_define_method(cGraph, "declarations", rb_graph_declarations, 0);
-  rb_define_method(cGraph, "definitions_for", rb_graph_definitions_for, 1);
 }

@@ -255,38 +255,7 @@ pub unsafe extern "C" fn idx_graph_declaration_primary_location(
     })
 }
 
-/// Returns a NULL-terminated array of C strings describing each definition for the given declaration name.
-/// Each string has the format: "uri:start:end:kind".
-///
-/// # Safety
-/// This function assumes both pointers are valid and the declaration points to a valid, null-terminated C string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn idx_graph_definitions_for(
-    pointer: GraphPointer,
-    declaration: *const c_char,
-) -> *const *const c_char {
-    with_graph(pointer, |graph| {
-        let name = if let Ok(s) = unsafe { conversions::convert_char_ptr_to_string(declaration) } {
-            s
-        } else {
-            // Return an empty, NULL-terminated array
-            let ptrs: Vec<*const c_char> = vec![ptr::null()];
-            return Box::into_raw(ptrs.into_boxed_slice()) as *const *const c_char;
-        };
-
-        let defs = graph.get(&name).unwrap_or_default();
-
-        let mut ptrs: Vec<*const c_char> = Vec::with_capacity(defs.len() + 1);
-        for def in defs {
-            let uri = graph.documents().get(def.uri_id()).map_or("", |d| d.uri());
-            let s = format!("{}:{}:{}:{}", uri, def.start(), def.end(), def.kind());
-            ptrs.push(CString::new(s).unwrap().into_raw().cast_const());
-        }
-
-        ptrs.push(ptr::null());
-        Box::into_raw(ptrs.into_boxed_slice()) as *const *const c_char
-    })
-}
+// Removed: idx_graph_definitions_for (string array variant)
 
 /// # Safety
 /// # Panics
