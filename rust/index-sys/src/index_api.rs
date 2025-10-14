@@ -3,6 +3,7 @@
 use crate::conversions;
 use index::indexing;
 use index::model::graph::Graph;
+use index::model::ids::{DefinitionId, NameId};
 use libc::{c_char, c_void};
 use std::ffi::CString;
 use std::{mem, ptr};
@@ -110,6 +111,150 @@ pub unsafe extern "C" fn idx_graph_declarations(pointer: GraphPointer) -> *const
     })
 }
 
+/// Returns the list of declaration IDs as a heap-allocated i64 array and writes its length to `out_len`.
+/// Caller must free with `free_i64_array`.
+///
+/// # Safety
+/// Assumes pointer and out_len are valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_declaration_ids(pointer: GraphPointer, out_len: *mut usize) -> *const i64 {
+    with_graph(pointer, |graph| {
+        let mut ids: Vec<i64> = graph.declarations().keys().map(|name_id| **name_id).collect();
+        if let Some(ptr) = out_len.as_mut() {
+            *ptr = ids.len();
+        }
+        Box::into_raw(ids.into_boxed_slice()) as *const i64
+    })
+}
+
+/// Returns the UTF-8 name string for a declaration id.
+/// Caller must free with `free_c_string`.
+///
+/// # Safety
+/// Assumes pointer is valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_name_for(pointer: GraphPointer, name_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let name_id = NameId::new(name_id);
+        if let Some(decl) = graph.declarations().get(&name_id) {
+            CString::new(decl.name()).unwrap().into_raw().cast_const()
+        } else {
+            ptr::null()
+        }
+    })
+}
+
+/// Returns the list of definition IDs for a declaration id.
+/// Caller must free with `free_i64_array`.
+///
+/// # Safety
+/// Assumes pointer and out_len are valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_definition_ids_for(
+    pointer: GraphPointer,
+    name_id: i64,
+    out_len: *mut usize,
+) -> *const i64 {
+    with_graph(pointer, |graph| {
+        let name_id = NameId::new(name_id);
+        let mut ids: Vec<i64> = if let Some(decl) = graph.declarations().get(&name_id) {
+            decl.definitions().iter().map(|def_id| **def_id).collect()
+        } else {
+            Vec::new()
+        };
+
+        if let Some(ptr) = out_len.as_mut() {
+            *ptr = ids.len();
+        }
+        Box::into_raw(ids.into_boxed_slice()) as *const i64
+    })
+}
+
+/// Returns the kind string for a definition id. Caller must free with `free_c_string`.
+///
+/// # Safety
+/// Assumes pointer is valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_definition_kind(pointer: GraphPointer, def_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(def_id);
+        if let Some(def) = graph.definitions().get(&def_id) {
+            CString::new(def.kind()).unwrap().into_raw().cast_const()
+        } else {
+            ptr::null()
+        }
+    })
+}
+
+/// Returns the (uri, start, end) triple for a definition id as allocated strings/values.
+/// The uri is returned as a C string (must be freed with `free_c_string`), and start/end
+/// are written into the provided out pointers. If not found, returns NULL and leaves outs untouched.
+///
+/// # Safety
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate
+/// - `out_start` and `out_end` may be NULL; if non-NULL they must be valid for writes
+/// - The returned pointer, if non-NULL, must be freed with `free_c_string`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_definition_location(
+    pointer: GraphPointer,
+    def_id: i64,
+    out_start: *mut u32,
+    out_end: *mut u32,
+) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(def_id);
+        if let Some(def) = graph.definitions().get(&def_id) {
+            let uri = graph.documents().get(def.uri_id()).map_or("", |d| d.uri());
+            if let Some(s_ptr) = out_start.as_mut() {
+                *s_ptr = def.start();
+            }
+            if let Some(e_ptr) = out_end.as_mut() {
+                *e_ptr = def.end();
+            }
+            CString::new(uri).unwrap().into_raw().cast_const()
+        } else {
+            ptr::null()
+        }
+    })
+}
+
+/// Returns the (uri, start, end) for the first definition of a declaration id.
+/// If the declaration has multiple definitions, this returns the first one by insertion order.
+/// Returns NULL if not found. `out_start`/`out_end` are populated like above.
+///
+/// # Safety
+/// - `pointer` must be a valid `GraphPointer`
+/// - `out_start` and `out_end` may be NULL; if non-NULL they must be valid for writes
+/// - The returned pointer, if non-NULL, must be freed with `free_c_string`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_declaration_primary_location(
+    pointer: GraphPointer,
+    name_id: i64,
+    out_start: *mut u32,
+    out_end: *mut u32,
+) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let name_id = NameId::new(name_id);
+        if let Some(def) = graph
+            .declarations()
+            .get(&name_id)
+            .and_then(|d| d.definitions().first())
+            .and_then(|id| graph.definitions().get(id))
+        {
+            let uri = graph.documents().get(def.uri_id()).map_or("", |d| d.uri());
+            if let Some(s_ptr) = out_start.as_mut() {
+                *s_ptr = def.start();
+            }
+            if let Some(e_ptr) = out_end.as_mut() {
+                *e_ptr = def.end();
+            }
+            CString::new(uri).unwrap().into_raw().cast_const()
+        } else {
+            ptr::null()
+        }
+    })
+}
+
 /// Returns a NULL-terminated array of C strings describing each definition for the given declaration name.
 /// Each string has the format: "uri:start:end:kind".
 ///
@@ -169,4 +314,19 @@ pub unsafe extern "C" fn free_c_string_array(ptr: *const *const c_char) {
     }
     // Now free the pointers array itself
     let _ = Box::from_raw(slice.as_ptr() as *mut *const c_char);
+}
+
+/// Frees a heap-allocated i64 array created on the Rust side.
+///
+/// # Safety
+/// The `ptr` must be a pointer returned by this crate (e.g., `idx_graph_declaration_ids` or
+/// `idx_graph_definition_ids_for`) and `len` must be the exact length that was written to the
+/// corresponding out parameter. Passing an incorrect pointer or length is undefined behavior.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_i64_array(ptr: *const i64, len: usize) {
+    if ptr.is_null() {
+        return;
+    }
+    let slice = std::slice::from_raw_parts_mut(ptr as *mut i64, len);
+    let _ = Box::from_raw(slice as *mut [i64]);
 }

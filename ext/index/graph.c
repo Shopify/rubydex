@@ -1,7 +1,9 @@
 #include "graph.h"
 #include "ruby/internal/value_type.h"
 
-static VALUE cGraph;
+VALUE cGraph;
+VALUE cDeclarationHandle;
+VALUE cDefinitionHandle;
 
 // Free function for the custom Graph allocator. We always have to call into
 // Rust to free data allocated by it
@@ -13,6 +15,64 @@ static void graph_free(void *ptr) {
 
 static const rb_data_type_t graph_type = {
     "Graph", {0, graph_free, 0}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
+
+typedef struct {
+  VALUE graph_obj; // Ruby Graph object to keep it alive
+  long long id;    // NameId or DefinitionId (i64)
+} HandleData;
+
+static void handle_mark(void *ptr) {
+  if (ptr) {
+    HandleData *data = (HandleData *)ptr;
+    rb_gc_mark(data->graph_obj);
+  }
+}
+
+static void handle_free(void *ptr) {
+  if (ptr) {
+    xfree(ptr);
+  }
+}
+
+static const rb_data_type_t handle_type = {"IndexHandle",
+                                           {handle_mark, handle_free, 0},
+                                           0,
+                                           0,
+                                           RUBY_TYPED_FREE_IMMEDIATELY};
+
+static VALUE declaration_handle_alloc(VALUE klass) {
+  HandleData *data = ALLOC(HandleData);
+  data->graph_obj = Qnil;
+  data->id = 0;
+  return TypedData_Wrap_Struct(klass, &handle_type, data);
+}
+
+static VALUE definition_handle_alloc(VALUE klass) {
+  HandleData *data = ALLOC(HandleData);
+  data->graph_obj = Qnil;
+  data->id = 0;
+  return TypedData_Wrap_Struct(klass, &handle_type, data);
+}
+
+static VALUE declaration_handle_initialize(VALUE self, VALUE graph_obj,
+                                           VALUE id_val) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+  data->graph_obj = graph_obj;
+  data->id = NUM2LL(id_val);
+  return self;
+}
+
+static VALUE definition_handle_initialize(VALUE self, VALUE graph_obj,
+                                          VALUE id_val) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+  data->graph_obj = graph_obj;
+  data->id = NUM2LL(id_val);
+  return self;
+}
 
 // Custom allocator for the Graph class. Calls into Rust to create a new
 // `Arc<Mutex<Graph>>` that gets stored internally as a void pointer
@@ -99,26 +159,159 @@ static VALUE rb_graph_declarations(VALUE self) {
   void *graph;
   TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-  const char **declarations = idx_graph_declarations(graph);
-
-  VALUE declarations_array = rb_ary_new();
-  for (size_t i = 0; declarations[i] != NULL; i++) {
-    rb_ary_push(declarations_array, rb_str_new_cstr(declarations[i]));
+  size_t len = 0;
+  const int64_t *ids = idx_graph_declaration_ids(graph, &len);
+  VALUE arr = rb_ary_new_capa((long)len);
+  for (size_t i = 0; i < len; i++) {
+    VALUE handle = rb_funcall(cDeclarationHandle, rb_intern("new"), 2, self,
+                              LL2NUM(ids[i]));
+    rb_ary_push(arr, handle);
   }
-
-  return declarations_array;
+  free_i64_array(ids, len);
+  return arr;
 }
 
-static VALUE rb_graph_definitions_for(VALUE self, VALUE declaration) {
+static VALUE rb_graph_definitions_for(VALUE self, VALUE declaration_id) {
   void *graph;
   TypedData_Get_Struct(self, void *, &graph_type, graph);
-  const char **definitions =
-      idx_graph_definitions_for(graph, StringValueCStr(declaration));
-  return rb_str_new_cstr(definitions);
+
+  HandleData *decl_data;
+  TypedData_Get_Struct(declaration_id, HandleData, &handle_type, decl_data);
+
+  size_t len = 0;
+  const int64_t *def_ids =
+      idx_graph_definition_ids_for(graph, (int64_t)decl_data->id, &len);
+  VALUE arr = rb_ary_new_capa((long)len);
+  for (size_t i = 0; i < len; i++) {
+    VALUE handle = rb_funcall(cDefinitionHandle, rb_intern("new"), 2, self,
+                              LL2NUM(def_ids[i]));
+    rb_ary_push(arr, handle);
+  }
+  free_i64_array(def_ids, len);
+  return arr;
+}
+
+// DeclarationHandle#name -> String
+static VALUE declaration_handle_name(VALUE self) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+  void *graph;
+  TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+  const char *name = idx_graph_name_for(graph, (int64_t)data->id);
+  if (name == NULL)
+    return Qnil;
+  VALUE str = rb_utf8_str_new_cstr(name);
+  free_c_string(name);
+  return str;
+}
+
+// DefinitionHandle#kind -> String
+static VALUE definition_handle_kind(VALUE self) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+  void *graph;
+  TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+  const char *kind = idx_graph_definition_kind(graph, (int64_t)data->id);
+  if (kind == NULL)
+    return Qnil;
+  VALUE str = rb_utf8_str_new_cstr(kind);
+  free_c_string(kind);
+  return str;
+}
+
+// DefinitionHandle#uri -> String?
+static VALUE definition_handle_uri(VALUE self) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+  void *graph;
+  TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+  uint32_t start = 0, end = 0;
+  const char *uri =
+      idx_graph_definition_location(graph, (int64_t)data->id, &start, &end);
+  if (uri == NULL)
+    return Qnil;
+  VALUE str = rb_utf8_str_new_cstr(uri);
+  free_c_string(uri);
+  return str;
+}
+
+// DefinitionHandle#location -> [Integer, Integer]?
+static VALUE definition_handle_location(VALUE self) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+  void *graph;
+  TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+  uint32_t start = 0, end = 0;
+  const char *uri =
+      idx_graph_definition_location(graph, (int64_t)data->id, &start, &end);
+  if (uri == NULL)
+    return Qnil;
+  free_c_string(uri);
+  VALUE arr = rb_ary_new_capa(2);
+  rb_ary_push(arr, UINT2NUM(start));
+  rb_ary_push(arr, UINT2NUM(end));
+  return arr;
+}
+
+// DeclarationHandle#definitions -> [DefinitionHandle]
+static VALUE declaration_handle_definitions(VALUE self) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+  void *graph;
+  TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+  size_t len = 0;
+  const int64_t *def_ids =
+      idx_graph_definition_ids_for(graph, (int64_t)data->id, &len);
+  VALUE arr = rb_ary_new_capa((long)len);
+  for (size_t i = 0; i < len; i++) {
+    VALUE handle = rb_funcall(cDefinitionHandle, rb_intern("new"), 2,
+                              data->graph_obj, LL2NUM(def_ids[i]));
+    rb_ary_push(arr, handle);
+  }
+  free_i64_array(def_ids, len);
+  return arr;
+}
+
+// Pretty inspect for handles
+static VALUE declaration_handle_inspect(VALUE self) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+  return rb_sprintf("#<NameId:%lld>", data->id);
+}
+
+static VALUE definition_handle_inspect(VALUE self) {
+  HandleData *data;
+  TypedData_Get_Struct(self, HandleData, &handle_type, data);
+  return rb_sprintf("#<DefinitionId:%lld>", data->id);
 }
 
 void initialize_graph(VALUE mIndex) {
   cGraph = rb_define_class_under(mIndex, "Graph", rb_cObject);
+
+  // Lightweight handle classes that only store ids
+  cDeclarationHandle =
+      rb_define_class_under(mIndex, "DeclarationHandle", rb_cObject);
+  rb_define_alloc_func(cDeclarationHandle, declaration_handle_alloc);
+  rb_define_method(cDeclarationHandle, "initialize",
+                   declaration_handle_initialize, 2);
+  rb_define_method(cDeclarationHandle, "name", declaration_handle_name, 0);
+  rb_define_method(cDeclarationHandle, "definitions",
+                   declaration_handle_definitions, 0);
+  rb_define_method(cDeclarationHandle, "inspect", declaration_handle_inspect,
+                   0);
+
+  cDefinitionHandle =
+      rb_define_class_under(mIndex, "DefinitionHandle", rb_cObject);
+  rb_define_alloc_func(cDefinitionHandle, definition_handle_alloc);
+  rb_define_method(cDefinitionHandle, "initialize",
+                   definition_handle_initialize, 2);
+  rb_define_method(cDefinitionHandle, "kind", definition_handle_kind, 0);
+  rb_define_method(cDefinitionHandle, "uri", definition_handle_uri, 0);
+  rb_define_method(cDefinitionHandle, "location", definition_handle_location,
+                   0);
+  rb_define_method(cDefinitionHandle, "inspect", definition_handle_inspect, 0);
 
   rb_define_alloc_func(cGraph, rb_graph_alloc);
   rb_define_method(cGraph, "index_all", rb_graph_index_all, 1);
