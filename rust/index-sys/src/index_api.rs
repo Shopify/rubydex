@@ -91,3 +91,49 @@ pub unsafe extern "C" fn idx_graph_set_configuration(pointer: GraphPointer, db_p
         }
     })
 }
+
+// TODO
+
+/// # Safety
+/// # Panics
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_declarations(pointer: GraphPointer) -> *const *const c_char {
+    with_graph(pointer, |graph| {
+        // Convert to raw C string pointers and leak them; pair with free function
+        let mut ptrs: Vec<*const c_char> = graph
+            .declarations()
+            .values()
+            .map(|declaration| CString::new(declaration.name()).unwrap().into_raw().cast_const())
+            .collect();
+        ptrs.push(ptr::null());
+        Box::into_raw(ptrs.into_boxed_slice()) as *const *const c_char
+    })
+}
+
+/// # Safety
+/// # Panics
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_c_string_array(ptr: *const *const c_char) {
+    if ptr.is_null() {
+        return;
+    }
+
+    // Reconstruct the boxed slice length by walking until NULL terminator
+    let mut len = 0usize;
+    loop {
+        let p = *ptr.add(len);
+        if p.is_null() {
+            break;
+        }
+        len += 1;
+    }
+
+    // Reconstruct the boxed slice of pointers to drop it
+    let slice = std::slice::from_raw_parts(ptr, len + 1); // include NULL
+    // Free each string
+    for &s_ptr in &slice[..len] {
+        let _ = CString::from_raw(s_ptr.cast_mut());
+    }
+    // Now free the pointers array itself
+    let _ = Box::from_raw(slice.as_ptr() as *mut *const c_char);
+}
