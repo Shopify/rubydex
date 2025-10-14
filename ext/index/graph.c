@@ -2,8 +2,8 @@
 #include "ruby/internal/value_type.h"
 
 VALUE cGraph;
-VALUE cDeclarationHandle;
-VALUE cDefinitionHandle;
+VALUE cDeclaration;
+VALUE cDefinition;
 
 // Free function for the custom Graph allocator. We always have to call into
 // Rust to free data allocated by it
@@ -163,8 +163,8 @@ static VALUE rb_graph_declarations(VALUE self) {
   const int64_t *ids = idx_graph_declaration_ids(graph, &len);
   VALUE arr = rb_ary_new_capa((long)len);
   for (size_t i = 0; i < len; i++) {
-    VALUE handle = rb_funcall(cDeclarationHandle, rb_intern("new"), 2, self,
-                              LL2NUM(ids[i]));
+    VALUE handle =
+        rb_funcall(cDeclaration, rb_intern("new"), 2, self, LL2NUM(ids[i]));
     rb_ary_push(arr, handle);
   }
   free_i64_array(ids, len);
@@ -183,8 +183,8 @@ static VALUE rb_graph_definitions_for(VALUE self, VALUE declaration_id) {
       idx_graph_definition_ids_for(graph, (int64_t)decl_data->id, &len);
   VALUE arr = rb_ary_new_capa((long)len);
   for (size_t i = 0; i < len; i++) {
-    VALUE handle = rb_funcall(cDefinitionHandle, rb_intern("new"), 2, self,
-                              LL2NUM(def_ids[i]));
+    VALUE handle =
+        rb_funcall(cDefinition, rb_intern("new"), 2, self, LL2NUM(def_ids[i]));
     rb_ary_push(arr, handle);
   }
   free_i64_array(def_ids, len);
@@ -266,8 +266,8 @@ static VALUE declaration_handle_definitions(VALUE self) {
       idx_graph_definition_ids_for(graph, (int64_t)data->id, &len);
   VALUE arr = rb_ary_new_capa((long)len);
   for (size_t i = 0; i < len; i++) {
-    VALUE handle = rb_funcall(cDefinitionHandle, rb_intern("new"), 2,
-                              data->graph_obj, LL2NUM(def_ids[i]));
+    VALUE handle = rb_funcall(cDefinition, rb_intern("new"), 2, data->graph_obj,
+                              LL2NUM(def_ids[i]));
     rb_ary_push(arr, handle);
   }
   free_i64_array(def_ids, len);
@@ -291,27 +291,22 @@ void initialize_graph(VALUE mIndex) {
   cGraph = rb_define_class_under(mIndex, "Graph", rb_cObject);
 
   // Lightweight handle classes that only store ids
-  cDeclarationHandle =
-      rb_define_class_under(mIndex, "DeclarationHandle", rb_cObject);
-  rb_define_alloc_func(cDeclarationHandle, declaration_handle_alloc);
-  rb_define_method(cDeclarationHandle, "initialize",
-                   declaration_handle_initialize, 2);
-  rb_define_method(cDeclarationHandle, "name", declaration_handle_name, 0);
-  rb_define_method(cDeclarationHandle, "definitions",
-                   declaration_handle_definitions, 0);
-  rb_define_method(cDeclarationHandle, "inspect", declaration_handle_inspect,
+  cDeclaration = rb_define_class_under(mIndex, "Declaration", rb_cObject);
+  rb_define_alloc_func(cDeclaration, declaration_handle_alloc);
+  rb_define_method(cDeclaration, "initialize", declaration_handle_initialize,
+                   2);
+  rb_define_method(cDeclaration, "name", declaration_handle_name, 0);
+  rb_define_method(cDeclaration, "definitions", declaration_handle_definitions,
                    0);
+  rb_define_method(cDeclaration, "inspect", declaration_handle_inspect, 0);
 
-  cDefinitionHandle =
-      rb_define_class_under(mIndex, "DefinitionHandle", rb_cObject);
-  rb_define_alloc_func(cDefinitionHandle, definition_handle_alloc);
-  rb_define_method(cDefinitionHandle, "initialize",
-                   definition_handle_initialize, 2);
-  rb_define_method(cDefinitionHandle, "kind", definition_handle_kind, 0);
-  rb_define_method(cDefinitionHandle, "uri", definition_handle_uri, 0);
-  rb_define_method(cDefinitionHandle, "location", definition_handle_location,
-                   0);
-  rb_define_method(cDefinitionHandle, "inspect", definition_handle_inspect, 0);
+  cDefinition = rb_define_class_under(mIndex, "Definition", rb_cObject);
+  rb_define_alloc_func(cDefinition, definition_handle_alloc);
+  rb_define_method(cDefinition, "initialize", definition_handle_initialize, 2);
+  rb_define_method(cDefinition, "kind", definition_handle_kind, 0);
+  rb_define_method(cDefinition, "uri", definition_handle_uri, 0);
+  rb_define_method(cDefinition, "location", definition_handle_location, 0);
+  rb_define_method(cDefinition, "inspect", definition_handle_inspect, 0);
 
   rb_define_alloc_func(cGraph, rb_graph_alloc);
   rb_define_method(cGraph, "index_all", rb_graph_index_all, 1);

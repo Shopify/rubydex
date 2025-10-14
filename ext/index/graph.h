@@ -10,7 +10,7 @@ void initialize_graph(VALUE mIndex);
 
 // Ruby handle classes for zero-copy graph access
 extern VALUE cGraph;
-extern VALUE cDeclarationHandle;
-extern VALUE cDefinitionHandle;
+extern VALUE cDeclaration;
+extern VALUE cDefinition;
 
 #endif
