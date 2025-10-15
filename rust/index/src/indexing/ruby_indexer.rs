@@ -8,7 +8,7 @@ use crate::model::definitions::{
 };
 use crate::model::graph::Graph;
 use crate::model::ids::{NameId, UriId};
-use crate::model::references::{UnresolvedConstantRef, UnresolvedReference};
+use crate::model::references::{ResolvedConstantRef, ResolvedReference, UnresolvedConstantRef, UnresolvedReference};
 use crate::offset::Offset;
 use crate::source_location::SourceLocationConverter;
 
@@ -321,13 +321,24 @@ impl<'a> RubyIndexer<'a> {
             .clone();
         let name_id_nesting: Vec<NameId> = nesting.iter().map(NameId::from).collect();
 
-        let reference = UnresolvedReference::Constant(Box::new(UnresolvedConstantRef::new(
-            name,
-            name_id_nesting,
-            self.uri_id,
-            offset,
-        )));
-        self.local_index.add_unresolved_reference(reference);
+        // Check if this is a top-level (absolute) constant reference starting with ::
+        if name.starts_with("::") {
+            let reference = ResolvedReference::Constant(Box::new(ResolvedConstantRef::new(
+                name,
+                name_id_nesting,
+                self.uri_id,
+                offset,
+            )));
+            self.local_index.add_resolved_reference(reference);
+        } else {
+            let reference = UnresolvedReference::Constant(Box::new(UnresolvedConstantRef::new(
+                name,
+                name_id_nesting,
+                self.uri_id,
+                offset,
+            )));
+            self.local_index.add_unresolved_reference(reference);
+        }
     }
 }
 
