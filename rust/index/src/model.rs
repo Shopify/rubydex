@@ -7,3 +7,4 @@ pub mod id;
 pub mod identity_maps;
 pub mod ids;
 pub mod integrity;
+pub mod references;

@@ -8,6 +8,7 @@ use crate::model::definitions::{
 };
 use crate::model::graph::Graph;
 use crate::model::ids::{NameId, UriId};
+use crate::model::references::{UnresolvedConstantRef, UnresolvedReference};
 use crate::offset::Offset;
 use crate::source_location::SourceLocationConverter;
 
@@ -309,6 +310,25 @@ impl<'a> RubyIndexer<'a> {
             current_stack.pop();
         }
     }
+
+    fn index_constant_reference(&mut self, location: &ruby_prism::Location) {
+        let offset = Offset::from_prism_location(location);
+        let name = Self::location_to_string(location);
+        let nesting = self
+            .nesting_stacks
+            .last()
+            .expect("There should always be at least one stack. This is a bug")
+            .clone();
+        let name_id_nesting: Vec<NameId> = nesting.iter().map(NameId::from).collect();
+
+        let reference = UnresolvedReference::Constant(Box::new(UnresolvedConstantRef::new(
+            name,
+            name_id_nesting,
+            self.uri_id,
+            offset,
+        )));
+        self.local_index.add_unresolved_reference(reference);
+    }
 }
 
 struct CommentGroup {
@@ -451,6 +471,14 @@ impl Visit<'_> for RubyIndexer<'_> {
         });
 
         self.visit(&node.value());
+    }
+
+    fn visit_constant_read_node(&mut self, node: &ruby_prism::ConstantReadNode<'_>) {
+        self.index_constant_reference(&node.location());
+    }
+
+    fn visit_constant_path_node(&mut self, node: &ruby_prism::ConstantPathNode<'_>) {
+        self.index_constant_reference(&node.location());
     }
 
     fn visit_multi_write_node(&mut self, node: &ruby_prism::MultiWriteNode) {
