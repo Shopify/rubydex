@@ -6,7 +6,8 @@ use crate::{
     model::graph::Graph,
     source_location::UTF8SourceLocationConverter,
 };
-use glob::glob;
+use ignore::types::TypesBuilder;
+use ignore::{WalkBuilder, WalkState};
 use std::sync::{
     Arc, Mutex,
     mpsc::{Receiver, Sender},
@@ -135,46 +136,68 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
 ///
 /// Panics if there's a bug in how we're handling the arc mutex, like trying to acquire locks twice
 #[must_use]
-pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingError>) {
-    let mut errors = Vec::new();
-    let mut documents = Vec::new();
+pub fn collect_documents(paths: &[String]) -> (Vec<Document>, Vec<IndexingError>) {
+    let errors = Mutex::new(Vec::new());
+    let documents = Mutex::new(Vec::new());
+
+    let mut walker_builder: Option<WalkBuilder> = None;
 
     for path in paths {
-        let path_obj = Path::new(&path);
+        let path_obj = Path::new(path);
 
         if path_obj.is_dir() {
-            match glob(&format!("{path}/**/*.rb")) {
-                Ok(entries) => {
-                    for entry in entries {
-                        match entry {
-                            Ok(path) => match Document::from_file_path(&path.to_string_lossy()) {
-                                Ok(document) => documents.push(document),
-                                Err(e) => errors.push(e),
-                            },
-                            Err(e) => errors.push(IndexingError::FileReadError(format!(
-                                "Failed to read glob entry in '{path}': {e}"
-                            ))),
-                        }
-                    }
-                }
-                Err(e) => {
-                    errors.push(IndexingError::FileReadError(format!(
-                        "Failed to read glob pattern '{path}/**/*.rb': {e}"
-                    )));
-                }
-            }
+            walker_builder.get_or_insert_with(|| WalkBuilder::new(path));
+
             continue;
         }
 
         if path_obj.exists() {
-            match Document::from_file_path(&path) {
-                Ok(document) => documents.push(document),
-                Err(e) => errors.push(e),
+            match Document::from_file_path(path) {
+                Ok(document) => documents.lock().unwrap().push(document),
+                Err(e) => errors.lock().unwrap().push(e),
             }
         }
     }
 
-    (documents, errors)
+    if let Some(mut builder) = walker_builder {
+        let mut types = TypesBuilder::new();
+        types.add("ruby", "*.rb").unwrap();
+        types.select("ruby");
+        let types = types.build().unwrap();
+
+        builder
+            .threads(thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4)) // use all available threads
+            .types(types) // only index ruby files
+            .hidden(true) // ignore hidden files
+            .git_ignore(true) // ignore gitignore files
+            .git_global(true) // ignore git global files
+            .sort_by_file_name(|_a, _b| std::cmp::Ordering::Equal); // disable sorting cost
+
+        builder.build_parallel().run(|| {
+            let docs = &documents;
+            let errs = &errors;
+            Box::new(move |res| {
+                match res {
+                    Ok(dirent) => {
+                        if let (true, Some(p)) =
+                            (dirent.file_type().is_some_and(|t| t.is_file()), dirent.path().to_str())
+                        {
+                            match Document::from_file_path(p) {
+                                Ok(d) => docs.lock().unwrap().push(d),
+                                Err(e) => errs.lock().unwrap().push(e),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        errs.lock().unwrap().push(IndexingError::FileReadError(e.to_string()));
+                    }
+                }
+                WalkState::Continue
+            })
+        });
+    }
+
+    (documents.into_inner().unwrap(), errors.into_inner().unwrap())
 }
 
 #[cfg(test)]
@@ -194,7 +217,7 @@ mod tests {
             root.join("lib/index").to_str().unwrap().to_string(),
         ];
 
-        let (documents, errors) = collect_documents(paths);
+        let (documents, errors) = collect_documents(&paths);
         assert!(errors.is_empty(), "Errors: {errors:#?}");
         assert!(documents.len() > 2);
     }
@@ -203,7 +226,7 @@ mod tests {
     fn collecting_a_non_existing_path() {
         let paths = vec!["/non_existing_file.rb".to_string(), "/non_existing_dir".to_string()];
 
-        let (documents, errors) = collect_documents(paths);
+        let (documents, errors) = collect_documents(&paths);
         assert!(documents.is_empty());
         assert!(errors.is_empty());
     }
