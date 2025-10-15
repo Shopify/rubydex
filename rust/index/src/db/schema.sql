@@ -4,7 +4,8 @@
 -- Table for storing documents
 CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY,  -- Blake3 hash converted to hex
-    uri TEXT NOT NULL UNIQUE
+    uri TEXT NOT NULL UNIQUE,
+    content_hash INTEGER NOT NULL
 );
 
 -- Table for storing code declarations (classes, modules, methods, etc.)

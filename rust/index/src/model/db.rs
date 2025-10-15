@@ -219,10 +219,12 @@ impl Db {
 
     /// Performs batch insert of documents (URIs) to the database
     fn batch_insert_documents(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt = conn.prepare_cached(&format!("INSERT INTO {TABLE_DOCUMENTS} (id, uri) VALUES (?, ?)"))?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "INSERT INTO {TABLE_DOCUMENTS} (id, uri, content_hash) VALUES (?, ?, ?)"
+        ))?;
 
         for (uri_id, document) in graph.documents() {
-            stmt.execute(rusqlite::params![*uri_id, document.uri()])?;
+            stmt.execute(rusqlite::params![*uri_id, document.uri(), 123])?;
         }
 
         Ok(())
