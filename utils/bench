@@ -18,12 +18,5 @@ if [ ! -d "$CORPUS_PATH" ]; then
     $SCRIPT_DIR/generate-corpus "$CORPUS_PATH" -s 1000
 fi
 
-# Temporary measure until we have proper db sync capability
-if [ -f "$CORPUS_PATH/graph.db" ]; then
-    rm "$CORPUS_PATH/graph.db"
-    echo "Removed an existing graph.db in the corpus path"
-fi
-
-cd "$PROJECT_ROOT/rust" && cargo build --release
-cd $PROJECT_ROOT
-utils/mem-use "$PROJECT_ROOT/rust/target/release/index_cli" "$CORPUS_PATH" --stats
+cd "$PROJECT_ROOT/rust" || exit 1
+../utils/mem-use cargo run --release -- "$CORPUS_PATH" --stats --clear-db
