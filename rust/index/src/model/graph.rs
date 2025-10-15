@@ -341,6 +341,15 @@ impl Graph {
         self.db.save_full_graph(self)
     }
 
+    /// Clears all data from the database
+    ///
+    /// # Errors
+    ///
+    /// This method will return an error if clearing the database fails.
+    pub fn clear_database(&self) -> Result<(), Box<dyn Error>> {
+        self.db.clear_database()
+    }
+
     // Clear graph data from memory
     pub fn clear_graph_data(&mut self) {
         self.declarations = IdentityHashMap::default();

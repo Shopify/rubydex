@@ -11,6 +11,7 @@ use index::{
 
 #[derive(Parser, Debug)]
 #[command(name = "index_cli", about = "A Ruby code indexer", version)]
+#[allow(clippy::struct_excessive_bools)]
 struct Args {
     #[arg(value_name = "DIR", default_value = ".")]
     dir: String,
@@ -23,6 +24,9 @@ struct Args {
 
     #[arg(long = "visualize")]
     visualize: bool,
+
+    #[arg(long = "clear-db", help = "Clear the database before saving the graph")]
+    clear_db: bool,
 
     #[arg(long = "stats", help = "Show detailed performance statistics")]
     stats: bool,
@@ -64,6 +68,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 std::process::exit(1);
             }
         });
+    }
+
+    if args.clear_db {
+        graph.clear_database()?;
     }
 
     time_it!(database, { graph.save_to_database() })?;
