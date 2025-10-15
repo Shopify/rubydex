@@ -8,6 +8,12 @@ use std::{cell::RefCell, error::Error, fs, path::Path};
 
 const SCHEMA_VERSION: u16 = 1;
 
+const TABLE_DEFINITIONS: &str = "definitions";
+const TABLE_NAMES: &str = "names";
+const TABLE_DOCUMENTS: &str = "documents";
+
+const ALL_TABLES: &[&str] = &[TABLE_DEFINITIONS, TABLE_NAMES, TABLE_DOCUMENTS];
+
 pub struct LoadResult {
     pub name_id: NameId,
     pub name: String,
@@ -139,18 +145,40 @@ impl Db {
             let tx = connection.transaction()?;
 
             {
-                tx.prepare_cached("DELETE FROM documents WHERE id = ?")?
+                tx.prepare_cached(&format!("DELETE FROM {TABLE_DOCUMENTS} WHERE id = ?"))?
                     .execute([*uri_id])?;
 
-                let mut stmt = tx.prepare_cached("DELETE FROM definitions WHERE id = ?")?;
+                let mut stmt = tx.prepare_cached(&format!("DELETE FROM {TABLE_DEFINITIONS} WHERE id = ?"))?;
                 for id in &removed_ids.definition_ids {
                     stmt.execute([**id])?;
                 }
 
-                stmt = tx.prepare_cached("DELETE FROM names WHERE id = ?")?;
+                stmt = tx.prepare_cached(&format!("DELETE FROM {TABLE_NAMES} WHERE id = ?"))?;
                 for id in &removed_ids.name_ids {
                     stmt.execute([**id])?;
                 }
+            }
+
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// Clears all data from the database tables
+    ///
+    /// # Errors
+    ///
+    /// Errors on any type of database connection or operation failure
+    ///
+    /// # Panics
+    ///
+    /// Will panic if the database connection is not initialized before trying to interact with it
+    pub fn clear_database(&self) -> Result<(), Box<dyn Error>> {
+        self.with_connection(|connection| {
+            let tx = connection.transaction()?;
+
+            for table in ALL_TABLES {
+                tx.execute(&format!("DELETE FROM {table}"), [])?;
             }
 
             tx.commit()?;
@@ -191,7 +219,7 @@ impl Db {
 
     /// Performs batch insert of documents (URIs) to the database
     fn batch_insert_documents(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt = conn.prepare_cached("INSERT INTO documents (id, uri) VALUES (?, ?)")?;
+        let mut stmt = conn.prepare_cached(&format!("INSERT INTO {TABLE_DOCUMENTS} (id, uri) VALUES (?, ?)"))?;
 
         for (uri_id, document) in graph.documents() {
             stmt.execute(rusqlite::params![*uri_id, document.uri()])?;
@@ -202,7 +230,7 @@ impl Db {
 
     /// Performs batch insert of names to the database
     fn batch_insert_names(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt = conn.prepare_cached("INSERT INTO names (id, name) VALUES (?, ?)")?;
+        let mut stmt = conn.prepare_cached(&format!("INSERT INTO {TABLE_NAMES} (id, name) VALUES (?, ?)"))?;
 
         for (name_id, declaration) in graph.declarations() {
             stmt.execute(rusqlite::params![*name_id, declaration.name()])?;
@@ -213,8 +241,9 @@ impl Db {
 
     /// Performs batch insert of definitions to the database
     fn batch_insert_definitions(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt =
-            conn.prepare_cached("INSERT INTO definitions (id, name_id, document_id, data) VALUES (?, ?, ?, ?)")?;
+        let mut stmt = conn.prepare_cached(&format!(
+            "INSERT INTO {TABLE_DEFINITIONS} (id, name_id, document_id, data) VALUES (?, ?, ?, ?)"
+        ))?;
 
         for (definition_id, definition) in graph.definitions() {
             let data = rmp_serde::to_vec(definition).expect("Serializing definitions should always succeed");
