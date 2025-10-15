@@ -197,7 +197,7 @@ impl Graph {
         // For each URI that was indexed through `other`, check what was discovered and update our current global
         // representation
         for uri_id in other.documents.keys() {
-            let _ = self.remove_definitions_for_uri(*uri_id);
+            self.remove_definitions_for_uri(*uri_id);
         }
 
         self.extend(other);
