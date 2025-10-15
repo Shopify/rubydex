@@ -120,6 +120,7 @@ macro_rules! make_timer {
 
 make_timer! {
     setup, "Initialization";
+    listing, "Listing";
     indexing, "Indexing";
     querying, "Querying";
     integrity_check, "Integrity Check";

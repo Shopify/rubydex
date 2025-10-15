@@ -35,12 +35,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         Timer::set_global_timer(Timer::new());
     }
 
-    let (mut graph, documents, document_count, errors) = time_it!(setup, {
+    let mut graph = time_it!(setup, {
         let mut graph = Graph::new();
         graph.set_configuration(format!("{}/graph.db", &args.dir))?;
+        graph
+    });
+
+    let (documents, errors) = time_it!(listing, {
         let (documents, errors) = indexing::collect_documents(vec![args.dir.clone()]);
-        let document_count = documents.len();
-        Ok::<_, Box<dyn Error>>((graph, documents, document_count, errors))
+        Ok::<_, Box<dyn Error>>((documents, errors))
     })?;
 
     if !errors.is_empty() {
@@ -82,7 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.visualize {
         println!("{}", dot::generate(&graph));
     } else {
-        println!("Indexed {document_count} files");
+        println!("Indexed {} files", graph.documents().len());
         println!("Found {} names", graph.declarations().len());
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.documents().len());
