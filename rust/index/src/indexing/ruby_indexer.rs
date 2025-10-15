@@ -8,7 +8,7 @@ use crate::model::definitions::{
 };
 use crate::model::graph::Graph;
 use crate::model::ids::{NameId, UriId};
-use crate::model::references::{ResolvedConstantRef, ResolvedReference, UnresolvedConstantRef, UnresolvedReference};
+use crate::model::references::{ConstantRef, ResolvedReference, UnresolvedReference};
 use crate::offset::Offset;
 use crate::source_location::SourceLocationConverter;
 
@@ -323,7 +323,7 @@ impl<'a> RubyIndexer<'a> {
 
         // Check if this is a top-level (absolute) constant reference starting with ::
         if name.starts_with("::") {
-            let reference = ResolvedReference::Constant(Box::new(ResolvedConstantRef::new(
+            let reference = ResolvedReference::Constant(Box::new(ConstantRef::new(
                 name,
                 name_id_nesting,
                 self.uri_id,
@@ -331,7 +331,7 @@ impl<'a> RubyIndexer<'a> {
             )));
             self.local_index.add_resolved_reference(reference);
         } else {
-            let reference = UnresolvedReference::Constant(Box::new(UnresolvedConstantRef::new(
+            let reference = UnresolvedReference::Constant(Box::new(ConstantRef::new(
                 name,
                 name_id_nesting,
                 self.uri_id,
