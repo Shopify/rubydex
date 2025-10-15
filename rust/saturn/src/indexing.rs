@@ -17,6 +17,7 @@ use std::{
 };
 use std::{sync::mpsc, thread};
 use url::Url;
+use xxhash_rust::xxh3::xxh3_64;
 pub mod errors;
 pub mod ruby_indexer;
 
@@ -57,6 +58,13 @@ impl Document {
             .to_file_path()
             .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't convert URI '{}' to file path", self.uri)))
     }
+
+    #[must_use]
+    pub fn calculate_content_hash(source: &[u8]) -> u16 {
+        // Explicitly take only the lower 16 bits of the hash
+        // This is intentional as this is only used for document staleness check
+        (xxh3_64(source) & 0xFFFF) as u16
+    }
 }
 
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
@@ -73,7 +81,8 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
         let (source, errors) = read_document_source(document);
 
         let converter = UTF8SourceLocationConverter::new(&source);
-        let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source);
+        let content_hash = Document::calculate_content_hash(source.as_bytes());
+        let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source, content_hash);
 
         if errors.is_empty() {
             ruby_indexer.index();
