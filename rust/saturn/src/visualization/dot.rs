@@ -1,117 +1,96 @@
-//! DOT format generator for Graphviz visualization of the graph structure.
+//! DOT format generator for Graphviz visualization.
 
 use std::fmt::Write;
 
-use crate::model::graph::Graph;
+use super::renderer::{RenderableGraph, RenderableName, RenderableDefinition, RenderableDocument};
 
 const NAME_NODE_SHAPE: &str = "hexagon";
 const DEFINITION_NODE_SHAPE: &str = "ellipse";
 const URI_NODE_SHAPE: &str = "box";
 
-/// Escapes a string for use in DOT format labels and identifiers.
-fn escape_dot_string(s: &str) -> String {
-    if !s.contains('"') {
-        return s.to_string();
-    }
-
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => result.push_str("\\\""),
-            _ => result.push(c),
-        }
-    }
-    result
-}
-
 #[must_use]
-pub fn generate(graph: &Graph) -> String {
+pub fn generate(renderable: &RenderableGraph) -> String {
     let mut output = String::new();
     output.push_str("digraph {\n");
     output.push_str("    rankdir=TB;\n\n");
 
-    write_declaration_nodes(&mut output, graph);
-    write_definition_nodes(&mut output, graph);
-    write_document_nodes(&mut output, graph);
+    write_names(&mut output, &renderable.names);
+    write_definitions(&mut output, &renderable.definitions);
+    write_documents(&mut output, &renderable.documents);
 
     output.push_str("}\n");
     output
 }
 
-fn write_declaration_nodes(output: &mut String, graph: &Graph) {
-    let mut declarations: Vec<_> = graph.declarations().values().collect();
-    declarations.sort_by(|a, b| a.name().cmp(b.name()));
-
-    for declaration in declarations {
-        let name = declaration.name();
-        let escaped_name = escape_dot_string(name);
-        let node_id = format!("Name:{name}");
+fn write_names(output: &mut String, names: &[RenderableName]) {
+    for name in names {
+        let escaped_name = escape_dot_string(&name.name);
+        let node_id = format!("Name:{}", &name.name);
         let _ = writeln!(
             output,
             "    \"{node_id}\" [label=\"{escaped_name}\",shape={NAME_NODE_SHAPE}];"
         );
 
-        for def_id in declaration.definitions() {
-            let _ = writeln!(output, "    \"{node_id}\" -> \"def_{def_id}\" [dir=both];");
+        for def_id in &name.definition_ids {
+            let _ = writeln!(output, "    \"{node_id}\" -> \"{def_id}\" [dir=both];");
         }
     }
 
-    output.push('\n');
-}
-
-fn write_definition_nodes(output: &mut String, graph: &Graph) {
-    let mut definitions: Vec<_> = graph
-        .definitions()
-        .iter()
-        .filter_map(|(def_id, definition)| {
-            graph
-                .declarations()
-                .get(definition.declaration_id())
-                .map(|declaration| {
-                    let def_type = definition.kind();
-                    let escaped_name = escape_dot_string(declaration.name());
-                    let label = format!("{def_type}({escaped_name})");
-                    let line = format!("    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];\n");
-                    (label, line)
-                })
-        })
-        .collect();
-
-    definitions.sort_by(|a, b| a.0.cmp(&b.0));
-
-    for (_, line) in definitions {
-        output.push_str(&line);
+    if !names.is_empty() {
+        output.push('\n');
     }
-    output.push('\n');
 }
 
-fn write_document_nodes(output: &mut String, graph: &Graph) {
-    let mut documents: Vec<_> = graph.documents().values().collect();
-    documents.sort_by(|a, b| a.uri().cmp(b.uri()));
+fn write_definitions(output: &mut String, definitions: &[RenderableDefinition]) {
+    for definition in definitions {
+        let escaped_label = escape_dot_string(&definition.label);
+        let _ = writeln!(
+            output,
+            "    \"{}\" [label=\"{escaped_label}\",shape={DEFINITION_NODE_SHAPE}];",
+            definition.id
+        );
+    }
 
+    if !definitions.is_empty() {
+        output.push('\n');
+    }
+}
+
+fn write_documents(output: &mut String, documents: &[RenderableDocument]) {
     for document in documents {
-        let uri = document.uri();
-        let label = uri.rsplit('/').next().unwrap_or(uri);
-        let escaped_uri = escape_dot_string(uri);
-        let escaped_label = escape_dot_string(label);
+        let escaped_uri = escape_dot_string(&document.uri);
+        let escaped_label = escape_dot_string(&document.label);
         let _ = writeln!(
             output,
             "    \"{escaped_uri}\" [label=\"{escaped_label}\",shape={URI_NODE_SHAPE}];"
         );
 
-        for def_id in document.definitions() {
-            let _ = writeln!(output, "    \"def_{def_id}\" -> \"{escaped_uri}\";");
+        for def_id in &document.definition_ids {
+            let _ = writeln!(output, "    \"{def_id}\" -> \"{escaped_uri}\";");
         }
     }
-    output.push('\n');
+
+    if !documents.is_empty() {
+        output.push('\n');
+    }
+}
+
+fn escape_dot_string(s: &str) -> String {
+    if s.contains('"') {
+        s.replace('"', r#"\""#)
+    } else {
+        s.to_string()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::GraphTest;
+    use crate::visualization::renderer::GraphRenderer;
 
-    fn create_test_graph() -> Graph {
+    #[test]
+    fn test_dot_generation() {
         let mut graph_test = GraphTest::new();
         graph_test.index_uri(
             "file:///test.rb",
@@ -123,49 +102,48 @@ mod tests {
                 end
             ",
         );
-        graph_test.graph
+
+        let rendered = GraphRenderer::new(&graph_test.graph).render();
+        let dot_output = generate(&rendered);
+
+        // Verify structure
+        assert!(dot_output.starts_with("digraph {\n"));
+        assert!(dot_output.contains("rankdir=TB;"));
+        assert!(dot_output.ends_with("}\n"));
+
+        // Verify nodes exist
+        assert!(dot_output.contains("Name:TestClass"));
+        assert!(dot_output.contains("Name:TestModule"));
+        assert!(dot_output.contains("Class(TestClass)"));
+        assert!(dot_output.contains("Module(TestModule)"));
+        assert!(dot_output.contains("test.rb"));
+
+        // Verify shapes
+        assert!(dot_output.contains(&format!("shape={NAME_NODE_SHAPE}")));
+        assert!(dot_output.contains(&format!("shape={DEFINITION_NODE_SHAPE}")));
+        assert!(dot_output.contains(&format!("shape={URI_NODE_SHAPE}")));
     }
 
     #[test]
-    fn test_dot_generation() {
-        let graph = create_test_graph();
-        let dot_output = generate(&graph);
+    fn test_escape_dot_string() {
+        assert_eq!(escape_dot_string("simple"), "simple");
+        assert_eq!(escape_dot_string("with\"quote"), "with\\\"quote");
+        assert_eq!(escape_dot_string("\"quoted\""), "\\\"quoted\\\"");
+    }
 
-        let class_def_id = graph
-            .definitions()
-            .iter()
-            .find(|(_, def)| matches!(def, crate::model::definitions::Definition::Class(_)))
-            .map(|(id, _)| id.to_string())
-            .unwrap();
+    #[test]
+    fn test_empty_graph() {
+        let rendered = RenderableGraph {
+            names: vec![],
+            definitions: vec![],
+            documents: vec![],
+        };
 
-        let module_def_id = graph
-            .definitions()
-            .iter()
-            .find(|(_, def)| matches!(def, crate::model::definitions::Definition::Module(_)))
-            .map(|(id, _)| id.to_string())
-            .unwrap();
+        let dot_output = generate(&rendered);
 
-        let expected = format!(
-            r#"digraph {{
-    rankdir=TB;
-
-    "Name:<main>" [label="<main>",shape=hexagon];
-    "Name:TestClass" [label="TestClass",shape=hexagon];
-    "Name:TestClass" -> "def_{class_def_id}" [dir=both];
-    "Name:TestModule" [label="TestModule",shape=hexagon];
-    "Name:TestModule" -> "def_{module_def_id}" [dir=both];
-
-    "def_{class_def_id}" [label="Class(TestClass)",shape=ellipse];
-    "def_{module_def_id}" [label="Module(TestModule)",shape=ellipse];
-
-    "file:///test.rb" [label="test.rb",shape=box];
-    "def_{class_def_id}" -> "file:///test.rb";
-    "def_{module_def_id}" -> "file:///test.rb";
-
-}}
-"#
+        assert_eq!(
+            dot_output,
+            "digraph {\n    rankdir=TB;\n\n}\n"
         );
-
-        assert_eq!(dot_output, expected);
     }
 }

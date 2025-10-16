@@ -4,3 +4,4 @@
 //! internal graph structure, showing the relationships between Names, Definitions, and URIs.
 
 pub mod dot;
+pub mod renderer;

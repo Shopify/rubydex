@@ -28,6 +28,9 @@ struct Args {
     #[arg(long = "visualize")]
     visualize: bool,
 
+    #[arg(long = "name", help = "Filter visualization to show only the specified name")]
+    name: Option<String>,
+
     #[arg(long = "use-db", help = "Store the graph in a database", default_value = "false")]
     use_db: bool,
 
@@ -40,6 +43,8 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+
+    validate_args(&args);
 
     if args.stats {
         Timer::set_global_timer(Timer::new());
@@ -103,15 +108,40 @@ fn main() -> Result<(), Box<dyn Error>> {
         MemoryStats::print_memory_usage();
     }
 
-    // Generate visualization or print statistics
     if args.visualize {
-        println!("{}", dot::generate(&graph));
+        generate_visualization(&graph, args.name.as_deref())?;
     } else {
-        println!("Indexed {} files", graph.documents().len());
-        println!("Found {} names", graph.declarations().len());
-        println!("Found {} definitions", graph.definitions().len());
-        println!("Found {} URIs", graph.documents().len());
+        print_statistics(&graph);
     }
 
     Ok(())
+}
+
+fn validate_args(args: &Args) {
+    if args.name.is_some() && !args.visualize {
+        eprintln!("Error: --name can only be used with --visualize");
+        std::process::exit(1);
+    }
+}
+
+fn generate_visualization(graph: &Graph, name_filter: Option<&str>) -> Result<(), Box<dyn Error>> {
+    use saturn::visualization::renderer::GraphRenderer;
+
+    let mut renderer = GraphRenderer::new(graph);
+
+    if let Some(name) = name_filter {
+        renderer = renderer.with_name_filter(name)?;
+    }
+
+    let renderable = renderer.render();
+    let output = dot::generate(&renderable);
+    println!("{output}");
+    Ok(())
+}
+
+fn print_statistics(graph: &Graph) {
+    println!("Indexed {} files", graph.documents().len());
+    println!("Found {} names", graph.declarations().len());
+    println!("Found {} definitions", graph.definitions().len());
+    println!("Found {} URIs", graph.documents().len());
 }
