@@ -64,13 +64,16 @@ fn write_definition_nodes(output: &mut String, graph: &Graph) {
         .definitions()
         .iter()
         .filter_map(|(def_id, definition)| {
-            graph.declarations().get(definition.name_id()).map(|declaration| {
-                let def_type = definition.kind();
-                let escaped_name = escape_dot_string(declaration.name());
-                let label = format!("{def_type}({escaped_name})");
-                let line = format!("    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];\n");
-                (label, line)
-            })
+            graph
+                .declarations()
+                .get(definition.declaration_id())
+                .map(|declaration| {
+                    let def_type = definition.kind();
+                    let escaped_name = escape_dot_string(declaration.name());
+                    let label = format!("{def_type}({escaped_name})");
+                    let line = format!("    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];\n");
+                    (label, line)
+                })
         })
         .collect();
 

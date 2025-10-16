@@ -6,14 +6,14 @@ use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{DefinitionId, NameId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, UriId};
 use crate::model::integrity::IntegrityChecker;
 use crate::model::references::UnresolvedReference;
 
 /// Holds IDs of entities that were removed from the graph
 pub struct RemovedIds {
     pub definition_ids: Vec<DefinitionId>,
-    pub name_ids: Vec<NameId>,
+    pub declaration_ids: Vec<DeclarationId>,
 }
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
@@ -21,7 +21,7 @@ pub struct RemovedIds {
 #[derive(Default, Debug)]
 pub struct Graph {
     // Map of declaration nodes
-    declarations: IdentityHashMap<NameId, Declaration>,
+    declarations: IdentityHashMap<DeclarationId, Declaration>,
     // Map of document nodes
     documents: IdentityHashMap<UriId, Document>,
     // Map of definition nodes
@@ -45,7 +45,7 @@ impl Graph {
 
     // Returns an immutable reference to the declarations map
     #[must_use]
-    pub fn declarations(&self) -> &IdentityHashMap<NameId, Declaration> {
+    pub fn declarations(&self) -> &IdentityHashMap<DeclarationId, Declaration> {
         &self.declarations
     }
 
@@ -70,8 +70,8 @@ impl Graph {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
-        let name_id = NameId::from(name);
-        let declaration = self.declarations.get(&name_id)?;
+        let declaration_id = DeclarationId::from(name);
+        let declaration = self.declarations.get(&declaration_id)?;
 
         Some(
             declaration
@@ -107,10 +107,10 @@ impl Graph {
     pub fn add_definition(&mut self, name: String, definition: Definition) {
         let uri_id = *definition.uri_id();
         let definition_id = DefinitionId::from(&format!("{uri_id}{}{}", definition.start(), &name));
-        let name_id = *definition.name_id();
+        let declaration_id = *definition.declaration_id();
 
         self.declarations
-            .entry(name_id)
+            .entry(declaration_id)
             .or_insert_with(|| Declaration::new(name))
             .add_definition(definition_id);
         self.definitions.insert(definition_id, definition);
@@ -132,11 +132,11 @@ impl Graph {
         let loaded_data = self.db.load_uri(uri_id)?;
 
         for load_result in loaded_data {
-            let name_id = load_result.name_id;
+            let declaration_id = load_result.declaration_id;
             let definition_id = load_result.definition_id;
 
             self.declarations
-                .entry(name_id)
+                .entry(declaration_id)
                 .or_insert_with(|| Declaration::new(load_result.name))
                 .add_definition(definition_id);
 
@@ -165,8 +165,8 @@ impl Graph {
         self.unresolved_references
             .extend(incomplete_index.unresolved_references);
 
-        for (name_id, declaration) in incomplete_index.declarations {
-            match self.declarations.entry(name_id) {
+        for (declaration_id, declaration) in incomplete_index.declarations {
+            match self.declarations.entry(declaration_id) {
                 Entry::Vacant(entry) => {
                     entry.insert(declaration);
                 }
@@ -208,19 +208,19 @@ impl Graph {
     fn remove_definitions_for_uri(&mut self, uri_id: UriId) -> RemovedIds {
         let mut removed = RemovedIds {
             definition_ids: Vec::new(),
-            name_ids: Vec::new(),
+            declaration_ids: Vec::new(),
         };
 
         if let Some(document) = self.documents.remove(&uri_id) {
             for def_id in document.definitions() {
                 removed.definition_ids.push(*def_id);
                 if let Some(definition) = self.definitions.remove(def_id)
-                    && let Some(declaration) = self.declarations.get_mut(definition.name_id())
+                    && let Some(declaration) = self.declarations.get_mut(definition.declaration_id())
                     && declaration.remove_definition(def_id)
                     && declaration.is_empty()
                 {
-                    self.declarations.remove(definition.name_id());
-                    removed.name_ids.push(*definition.name_id());
+                    self.declarations.remove(definition.declaration_id());
+                    removed.declaration_ids.push(*definition.declaration_id());
                 }
             }
         }
@@ -251,13 +251,13 @@ impl Graph {
         });
 
         checker.add_rule(
-            "Each `definition` name_id is registered in `declarations`",
+            "Each `definition` declaration_id is registered in `declarations`",
             |index, errors| {
                 for definition in index.definitions().values() {
-                    let name_id = definition.name_id();
-                    if !index.declarations().contains_key(name_id) {
+                    let declaration_id = definition.declaration_id();
+                    if !index.declarations().contains_key(declaration_id) {
                         errors.push(format!(
-                            "Name '{name_id}' is referenced by a definition but not present in `declarations`"
+                            "Name '{declaration_id}' is referenced by a definition but not present in `declarations`"
                         ));
                     }
                 }
@@ -449,7 +449,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "module Foo; end");
 
         assert_eq!(context.graph.definitions.len(), 1);
-        let declaration = context.graph.declarations.get(&NameId::from("Foo")).unwrap();
+        let declaration = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         let document = context.graph.documents.get(&UriId::from("file:///foo.rb")).unwrap();
         assert_eq!(document.uri(), "file:///foo.rb");
@@ -468,7 +468,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "\n\n\n\n\n\nmodule Foo; end");
 
         assert_eq!(context.graph.definitions.len(), 1);
-        let declaration = context.graph.declarations.get(&NameId::from("Foo")).unwrap();
+        let declaration = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         assert_eq!(
             context
@@ -652,7 +652,7 @@ mod tests {
                 assert_eq!(unresolved.name(), "String");
                 assert_eq!(
                     unresolved.nesting(),
-                    vec![NameId::from("Foo"), NameId::from("Bar::Baz")]
+                    vec![DeclarationId::from("Foo"), DeclarationId::from("Bar::Baz")]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(32, 38));
@@ -682,7 +682,10 @@ mod tests {
         match reference {
             UnresolvedReference::Constant(unresolved) => {
                 assert_eq!(unresolved.name(), "String");
-                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
+                assert_eq!(
+                    unresolved.nesting(),
+                    vec![DeclarationId::from("Foo"), DeclarationId::from("Bar")]
+                );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
@@ -711,7 +714,10 @@ mod tests {
         match reference {
             UnresolvedReference::Constant(unresolved) => {
                 assert_eq!(unresolved.name(), "Object::String");
-                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
+                assert_eq!(
+                    unresolved.nesting(),
+                    vec![DeclarationId::from("Foo"), DeclarationId::from("Bar")]
+                );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 41));
             }
