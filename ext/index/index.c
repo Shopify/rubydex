@@ -1,6 +1,6 @@
+#include "graph.h"
 #include "ruby.h"
 #include "rustbindings.h"
-#include "graph.h"
 
 VALUE mIndex;
 void Init_index(void) {
