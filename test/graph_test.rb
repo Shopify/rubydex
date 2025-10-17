@@ -57,4 +57,18 @@ class GraphTest < Minitest::Test
       assert_equal(2, graph.declarations.size)
     end
   end
+
+  def test_resolving_a_declaration_by_name
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+      context.write!("file2.rb", "class B; end")
+
+      graph = Index::Graph.new
+      assert_nil(graph.index_all(context.glob("**/*.rb")))
+
+      refute_nil(graph["A"])
+      refute_nil(graph["B"])
+      assert_nil(graph["C"])
+    end
+  end
 end

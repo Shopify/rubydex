@@ -114,6 +114,22 @@ static VALUE rb_graph_declarations(VALUE self) {
     return arr;
 }
 
+// TODO: this should use name resolution instead of direct id lookup
+// Graph#[]: (String name) -> Declaration?
+// Returns the declaration resolved to the given name or `nil`
+static VALUE rb_graph_aref(VALUE self, VALUE name) {
+    Check_Type(name, T_STRING);
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+    int64_t id = idx_graph_resolve_name(graph, StringValueCStr(name));
+
+    if (id == 0) {
+        return Qnil;
+    }
+
+    return rb_funcall(cDeclaration, rb_intern("new"), 2, self, LL2NUM(id));
+}
+
 void initialize_graph(VALUE mIndex) {
     cGraph = rb_define_class_under(mIndex, "Graph", rb_cObject);
 
@@ -122,4 +138,5 @@ void initialize_graph(VALUE mIndex) {
     rb_define_method(cGraph, "set_configuration", rb_graph_set_configuration,
                      1);
     rb_define_method(cGraph, "declarations", rb_graph_declarations, 0);
+    rb_define_method(cGraph, "[]", rb_graph_aref, 1);
 }

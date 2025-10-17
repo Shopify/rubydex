@@ -3,6 +3,7 @@
 use crate::conversions;
 use index::indexing;
 use index::model::graph::Graph;
+use index::model::ids::NameId;
 use libc::{c_char, c_void};
 use std::ffi::CString;
 use std::{mem, ptr};
@@ -107,6 +108,26 @@ pub unsafe extern "C" fn idx_graph_declaration_ids(pointer: GraphPointer, out_le
     })
 }
 
+/// Looks up a declaration by its fully qualified name and returns its id as i64, or 0 if not found
+///
+/// # Safety
+///
+/// Assumes pointer and name are valid; name must be a valid C string
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_resolve_name(pointer: GraphPointer, name: *const c_char) -> i64 {
+    with_graph(pointer, |graph| {
+        let Ok(name_str) = (unsafe { conversions::convert_char_ptr_to_string(name) }) else {
+            return 0;
+        };
+
+        let name_id = NameId::from(name_str.as_str());
+        if graph.declarations().contains_key(&name_id) {
+            *name_id
+        } else {
+            0
+        }
+    })
+}
 /// Frees a heap-allocated i64 array created on the Rust side.
 ///
 /// # Safety
