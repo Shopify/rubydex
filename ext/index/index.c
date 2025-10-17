@@ -1,4 +1,5 @@
 #include "declaration.h"
+#include "definition.h"
 #include "graph.h"
 #include "ruby.h"
 #include "rustbindings.h"
@@ -10,4 +11,5 @@ void Init_index(void) {
     mIndex = rb_define_module("Index");
     initialize_graph(mIndex);
     initialize_declaration(mIndex);
+    initialize_definition(mIndex);
 }
