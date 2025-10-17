@@ -196,6 +196,117 @@ pub unsafe extern "C" fn idx_definition_kind(pointer: GraphPointer, def_id: i64)
     })
 }
 
+/// Returns the UTF-8 name string for a definition id. Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the name pointer is invalid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_definition_name(pointer: GraphPointer, def_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(def_id);
+        if let Some(def) = graph.definitions().get(&def_id) {
+            if let Some(decl) = graph.declarations().get(def.name_id()) {
+                CString::new(decl.name()).unwrap().into_raw().cast_const()
+            } else {
+                ptr::null()
+            }
+        } else {
+            ptr::null()
+        }
+    })
+}
+
+/// Returns the UTF-8 URI string for a definition id. Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the URI pointer is invalid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_definition_uri_path(pointer: GraphPointer, def_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(def_id);
+        if let Some(def) = graph.definitions().get(&def_id) {
+            if let Some(doc) = graph.documents().get(def.uri_id()) {
+                CString::new(doc.uri()).unwrap().into_raw().cast_const()
+            } else {
+                ptr::null()
+            }
+        } else {
+            ptr::null()
+        }
+    })
+}
+
+/// Returns the start byte offset for a definition id.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_definition_start_location(pointer: GraphPointer, def_id: i64) -> u32 {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(def_id);
+        if let Some(def) = graph.definitions().get(&def_id) {
+            def.start()
+        } else {
+            0
+        }
+    })
+}
+
+/// Returns the end byte offset for a definition id.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_definition_end_location(pointer: GraphPointer, def_id: i64) -> u32 {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(def_id);
+        if let Some(def) = graph.definitions().get(&def_id) {
+            def.end()
+        } else {
+            0
+        }
+    })
+}
+
+/// Returns the UTF-8 comments string for a definition id. Caller must free with `free_c_string`.
+/// Returns NULL if comments are empty.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the comments pointer is invalid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_definition_comments(pointer: GraphPointer, def_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(def_id);
+        if let Some(def) = graph.definitions().get(&def_id) {
+            let comments = def.comments();
+            if comments.is_empty() {
+                ptr::null()
+            } else {
+                CString::new(comments).unwrap().into_raw().cast_const()
+            }
+        } else {
+            ptr::null()
+        }
+    })
+}
+
 /// Frees a heap-allocated i64 array created on the Rust side.
 ///
 /// # Safety

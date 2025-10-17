@@ -99,6 +99,40 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_definition_name_uri_and_offsets
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+
+      graph = Index::Graph.new
+      assert_nil(graph.index_all(context.glob("**/*.rb")))
+
+      declaration = graph["A"]
+      refute_nil(declaration)
+
+      definition = declaration.definitions.first
+      assert_equal("A", definition.name)
+      assert_match(%r{^file://}, definition.uri_path)
+      assert(definition.uri_path.end_with?("/file1.rb"), "URI should end with /file1.rb")
+      assert_equal(0, definition.start_location)
+      assert_equal(12, definition.end_location)
+    end
+  end
+
+  def test_definition_comments
+    with_context do |context|
+      context.write!("file2.rb", "# Class doc\nclass B; end\n")
+
+      graph = Index::Graph.new
+      assert_nil(graph.index_all(context.glob("**/*.rb")))
+
+      declaration = graph["B"]
+      refute_nil(declaration)
+
+      definition = declaration.definitions.first
+      assert_equal("Class doc", definition.comments)
+    end
+  end
+
   def test_definition_kind
     with_context do |context|
       context.write!("file1.rb", "class A; end")
