@@ -141,7 +141,7 @@ impl Graph {
         let uri_id = self.add_uri(uri);
         let loaded_data = self.db.load_uri(uri_id)?;
 
-        for load_result in loaded_data {
+        for load_result in loaded_data.definitions {
             let declaration_id = load_result.declaration_id;
             let definition_id = load_result.definition_id;
 
