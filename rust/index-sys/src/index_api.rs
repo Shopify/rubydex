@@ -3,7 +3,7 @@
 use crate::conversions;
 use index::indexing;
 use index::model::graph::Graph;
-use index::model::ids::NameId;
+use index::model::ids::{DefinitionId, NameId};
 use libc::{c_char, c_void};
 use std::ffi::CString;
 use std::{mem, ptr};
@@ -172,6 +172,27 @@ pub unsafe extern "C" fn idx_declaration_definition_ids(
 
         unsafe { *out_len = ids.len() };
         Box::into_raw(ids.into_boxed_slice()) as *const i64
+    })
+}
+
+/// Returns the kind string for a definition id. Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the definition pointer is invalid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_definition_kind(pointer: GraphPointer, def_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(def_id);
+        if let Some(def) = graph.definitions().get(&def_id) {
+            CString::new(def.kind()).unwrap().into_raw().cast_const()
+        } else {
+            ptr::null()
+        }
     })
 }
 
