@@ -151,6 +151,30 @@ pub unsafe extern "C" fn idx_declaration_name(pointer: GraphPointer, name_id: i6
     })
 }
 
+/// Returns the list of definition IDs for a declaration id.
+/// Caller must free with `free_i64_array`.
+///
+/// # Safety
+/// Assumes pointer and `out_len` are valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_declaration_definition_ids(
+    pointer: GraphPointer,
+    name_id: i64,
+    out_len: *mut usize,
+) -> *const i64 {
+    with_graph(pointer, |graph| {
+        let name_id = NameId::new(name_id);
+        let ids: Vec<i64> = if let Some(decl) = graph.declarations().get(&name_id) {
+            decl.definitions().iter().map(|def_id| **def_id).collect()
+        } else {
+            Vec::new()
+        };
+
+        unsafe { *out_len = ids.len() };
+        Box::into_raw(ids.into_boxed_slice()) as *const i64
+    })
+}
+
 /// Frees a heap-allocated i64 array created on the Rust side.
 ///
 /// # Safety
