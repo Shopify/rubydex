@@ -1,7 +1,7 @@
 use crate::model::graph::{Graph, RemovedIds};
 use crate::model::{
     definitions::Definition,
-    ids::{DefinitionId, NameId, UriId},
+    ids::{DeclarationId, DefinitionId, UriId},
 };
 use rusqlite::{Connection, params};
 use std::{cell::RefCell, error::Error, fs, path::Path};
@@ -9,13 +9,13 @@ use std::{cell::RefCell, error::Error, fs, path::Path};
 const SCHEMA_VERSION: u16 = 1;
 
 const TABLE_DEFINITIONS: &str = "definitions";
-const TABLE_NAMES: &str = "names";
+const TABLE_DECLARATIONS: &str = "declarations";
 const TABLE_DOCUMENTS: &str = "documents";
 
-const ALL_TABLES: &[&str] = &[TABLE_DEFINITIONS, TABLE_NAMES, TABLE_DOCUMENTS];
+const ALL_TABLES: &[&str] = &[TABLE_DEFINITIONS, TABLE_DECLARATIONS, TABLE_DOCUMENTS];
 
 pub struct LoadResult {
-    pub name_id: NameId,
+    pub declaration_id: DeclarationId,
     pub name: String,
     pub definition_id: DefinitionId,
     pub definition: Definition,
@@ -93,7 +93,7 @@ impl Db {
 
             statement
                 .query_map([*uri_id], |row| {
-                    let name_id: NameId = row.get(0)?;
+                    let declaration_id: DeclarationId = row.get(0)?;
                     let name = row.get::<_, String>(1)?;
                     let definition_id: DefinitionId = row.get(2)?;
                     let data = row.get::<_, Vec<u8>>(3)?;
@@ -101,7 +101,7 @@ impl Db {
                         .expect("Deserializing the definition from the DB should always succeed");
 
                     Ok(LoadResult {
-                        name_id,
+                        declaration_id,
                         name,
                         definition_id,
                         definition,
@@ -153,8 +153,8 @@ impl Db {
                     stmt.execute([**id])?;
                 }
 
-                stmt = tx.prepare_cached(&format!("DELETE FROM {TABLE_NAMES} WHERE id = ?"))?;
-                for id in &removed_ids.name_ids {
+                stmt = tx.prepare_cached(&format!("DELETE FROM {TABLE_DECLARATIONS} WHERE id = ?"))?;
+                for id in &removed_ids.declaration_ids {
                     stmt.execute([**id])?;
                 }
             }
@@ -232,10 +232,10 @@ impl Db {
 
     /// Performs batch insert of names to the database
     fn batch_insert_names(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt = conn.prepare_cached(&format!("INSERT INTO {TABLE_NAMES} (id, name) VALUES (?, ?)"))?;
+        let mut stmt = conn.prepare_cached(&format!("INSERT INTO {TABLE_DECLARATIONS} (id, name) VALUES (?, ?)"))?;
 
-        for (name_id, declaration) in graph.declarations() {
-            stmt.execute(rusqlite::params![*name_id, declaration.name()])?;
+        for (declaration_id, declaration) in graph.declarations() {
+            stmt.execute(rusqlite::params![*declaration_id, declaration.name()])?;
         }
 
         Ok(())
@@ -244,15 +244,15 @@ impl Db {
     /// Performs batch insert of definitions to the database
     fn batch_insert_definitions(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
         let mut stmt = conn.prepare_cached(&format!(
-            "INSERT INTO {TABLE_DEFINITIONS} (id, name_id, document_id, data) VALUES (?, ?, ?, ?)"
+            "INSERT INTO {TABLE_DEFINITIONS} (id, declaration_id, document_id, data) VALUES (?, ?, ?, ?)"
         ))?;
 
         for (definition_id, definition) in graph.definitions() {
             let data = rmp_serde::to_vec(definition).expect("Serializing definitions should always succeed");
-            let name_id = *definition.name_id();
+            let declaration_id = *definition.declaration_id();
             let uri_id = *definition.uri_id();
 
-            stmt.execute(params![*definition_id, *name_id, *uri_id, data])?;
+            stmt.execute(params![*definition_id, *declaration_id, *uri_id, data])?;
         }
 
         Ok(())
@@ -364,7 +364,7 @@ mod tests {
         let removed_ids = context.graph.unload_uri("file:///sample.rb");
 
         assert_eq!(removed_ids.definition_ids.len(), 11);
-        assert_eq!(removed_ids.name_ids.len(), 11);
+        assert_eq!(removed_ids.declaration_ids.len(), 11);
 
         assert!(
             db.delete_data_for_uri(UriId::from("file:///sample.rb"), &removed_ids)
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(def_count, 0,);
 
         let name_count: i64 = connection
-            .prepare("SELECT COUNT(*) FROM names")
+            .prepare("SELECT COUNT(*) FROM declarations")
             .unwrap()
             .query_row((), |row| row.get(0))
             .unwrap();

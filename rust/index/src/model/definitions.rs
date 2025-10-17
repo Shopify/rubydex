@@ -26,7 +26,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    model::ids::{NameId, UriId},
+    model::ids::{DeclarationId, UriId},
     offset::Offset,
 };
 
@@ -89,8 +89,8 @@ impl Definition {
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        all_definitions!(self, it => &it.name_id)
+    pub fn declaration_id(&self) -> &DeclarationId {
+        all_definitions!(self, it => &it.declaration_id)
     }
 
     #[must_use]
@@ -113,7 +113,7 @@ impl Definition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClassDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     comments: String,
@@ -121,9 +121,9 @@ pub struct ClassDefinition {
 
 impl ClassDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,
@@ -140,7 +140,7 @@ impl ClassDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModuleDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     comments: String,
@@ -148,9 +148,9 @@ pub struct ModuleDefinition {
 
 impl ModuleDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,
@@ -166,7 +166,7 @@ impl ModuleDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConstantDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     comments: String,
@@ -174,9 +174,9 @@ pub struct ConstantDefinition {
 
 impl ConstantDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,
@@ -193,7 +193,7 @@ impl ConstantDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MethodDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     parameters: Vec<Parameter>,
@@ -204,7 +204,7 @@ pub struct MethodDefinition {
 impl MethodDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        declaration_id: DeclarationId,
         uri_id: UriId,
         offset: Offset,
         parameters: Vec<Parameter>,
@@ -212,7 +212,7 @@ impl MethodDefinition {
         comments: String,
     ) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             parameters,
@@ -276,7 +276,7 @@ impl ParameterStruct {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttrAccessorDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     comments: String,
@@ -284,9 +284,9 @@ pub struct AttrAccessorDefinition {
 
 impl AttrAccessorDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,
@@ -302,7 +302,7 @@ impl AttrAccessorDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttrReaderDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     comments: String,
@@ -310,9 +310,9 @@ pub struct AttrReaderDefinition {
 
 impl AttrReaderDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,
@@ -328,7 +328,7 @@ impl AttrReaderDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttrWriterDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     comments: String,
@@ -336,9 +336,9 @@ pub struct AttrWriterDefinition {
 
 impl AttrWriterDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,
@@ -354,7 +354,7 @@ impl AttrWriterDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GlobalVariableDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     pub offset: Offset,
     comments: String,
@@ -362,9 +362,9 @@ pub struct GlobalVariableDefinition {
 
 impl GlobalVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,
@@ -380,7 +380,7 @@ impl GlobalVariableDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstanceVariableDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     comments: String,
@@ -388,9 +388,9 @@ pub struct InstanceVariableDefinition {
 
 impl InstanceVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,
@@ -406,7 +406,7 @@ impl InstanceVariableDefinition {
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClassVariableDefinition {
-    name_id: NameId,
+    declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
     comments: String,
@@ -414,9 +414,9 @@ pub struct ClassVariableDefinition {
 
 impl ClassVariableDefinition {
     #[must_use]
-    pub const fn new(name_id: NameId, uri_id: UriId, offset: Offset, comments: String) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: String) -> Self {
         Self {
-            name_id,
+            declaration_id,
             uri_id,
             offset,
             comments,

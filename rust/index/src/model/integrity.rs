@@ -95,7 +95,7 @@ mod tests {
     use crate::model::definitions::{Definition, ModuleDefinition};
     use crate::model::graph::Graph;
 
-    use crate::model::ids::NameId;
+    use crate::model::ids::DeclarationId;
     use crate::offset::Offset;
 
     #[test]
@@ -122,9 +122,9 @@ mod tests {
         checker.assert_integrity(&graph);
 
         let uri_id = graph.add_uri("file:///foo.rb".to_string());
-        let name_id = NameId::from("Foo");
+        let declaration_id = DeclarationId::from("Foo");
         let definition = Definition::Module(Box::new(ModuleDefinition::new(
-            name_id,
+            declaration_id,
             uri_id,
             Offset::new(0, 15),
             String::new(),

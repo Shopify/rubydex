@@ -1,5 +1,5 @@
 use crate::{
-    model::ids::{NameId, UriId},
+    model::ids::{DeclarationId, UriId},
     offset::Offset,
 };
 
@@ -22,14 +22,14 @@ pub enum UnresolvedReference {
 #[derive(Debug)]
 pub struct UnresolvedConstantRef {
     name: String,
-    nesting: Vec<NameId>,
+    nesting: Vec<DeclarationId>,
     uri_id: UriId,
     offset: Offset,
 }
 
 impl UnresolvedConstantRef {
     #[must_use]
-    pub fn new(name: String, nesting: Vec<NameId>, uri_id: UriId, offset: Offset) -> Self {
+    pub fn new(name: String, nesting: Vec<DeclarationId>, uri_id: UriId, offset: Offset) -> Self {
         Self {
             name,
             nesting,
@@ -44,7 +44,7 @@ impl UnresolvedConstantRef {
     }
 
     #[must_use]
-    pub fn nesting(&self) -> &[NameId] {
+    pub fn nesting(&self) -> &[DeclarationId] {
         &self.nesting
     }
 
