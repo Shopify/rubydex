@@ -1,11 +1,27 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "helpers/context"
 
 class GraphTest < Minitest::Test
-  def test_indexing_a_list_of_file_paths
-    graph = Saturn::Graph.new
-    assert_nil(graph.index_all([__FILE__]))
+  include Test::Helpers::WithContext
+
+  def test_indexing_empty_context
+    with_context do |context|
+      graph = Saturn::Graph.new
+      assert_nil(graph.index_all(context.glob("**/*.rb")))
+    end
+  end
+
+  def test_indexing_context_files
+    with_context do |context|
+      graph = Saturn::Graph.new
+
+      context.write!("foo.rb", "class Foo; end")
+      context.write!("bar.rb", "class Bar; end")
+
+      assert_nil(graph.index_all(context.glob("**/*.rb")))
+    end
   end
 
   def test_passing_invalid_arguments_to_index_all
