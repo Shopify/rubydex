@@ -227,7 +227,7 @@ impl Graph {
                 if let Some(definition) = self.definitions.remove(def_id)
                     && let Some(declaration) = self.declarations.get_mut(definition.declaration_id())
                     && declaration.remove_definition(def_id)
-                    && declaration.is_empty()
+                    && declaration.has_no_definitions()
                 {
                     self.declarations.remove(definition.declaration_id());
                     removed.declaration_ids.push(*definition.declaration_id());
