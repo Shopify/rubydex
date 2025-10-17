@@ -1,8 +1,11 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "helpers/context"
 
 class GraphTest < Minitest::Test
+  include Test::Helpers::WithContext
+
   def test_indexing_a_list_of_file_paths
     graph = Index::Graph.new
     assert_nil(graph.index_all([__FILE__]))
@@ -35,5 +38,23 @@ class GraphTest < Minitest::Test
     pass
   ensure
     Dir.glob("graph.db*").each { |f| File.delete(f) }
+  end
+
+  def test_indexing_an_empty_context_returns_no_errors
+    with_context do |context|
+      graph = Index::Graph.new
+      assert_nil(graph.index_all(context.glob("**/*.rb")))
+    end
+  end
+
+  def test_list_all_declarations
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+      context.write!("file2.rb", "class B; end")
+
+      graph = Index::Graph.new
+      assert_nil(graph.index_all(context.glob("**/*.rb")))
+      assert_equal(2, graph.declarations.size)
+    end
   end
 end

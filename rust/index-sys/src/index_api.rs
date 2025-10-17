@@ -91,3 +91,34 @@ pub unsafe extern "C" fn idx_graph_set_configuration(pointer: GraphPointer, db_p
         }
     })
 }
+
+/// Returns the list of declaration IDs as a heap-allocated i64 array and writes its length to `out_len`.
+/// Caller must free with `free_i64_array`.
+///
+/// # Safety
+///
+/// Assumes pointer and `out_len` are valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn idx_graph_declaration_ids(pointer: GraphPointer, out_len: *mut usize) -> *const i64 {
+    with_graph(pointer, |graph| {
+        let ids: Vec<i64> = graph.declarations().keys().map(|name_id| **name_id).collect();
+        unsafe { *out_len = ids.len() };
+        Box::into_raw(ids.into_boxed_slice()) as *const i64
+    })
+}
+
+/// Frees a heap-allocated i64 array created on the Rust side.
+///
+/// # Safety
+///
+/// The `ptr` must be a pointer returned by this crate (e.g., `idx_graph_declaration_ids` or
+/// `idx_graph_definition_ids_for`) and `len` must be the exact length that was written to the
+/// corresponding out parameter. Passing an incorrect pointer or length is undefined behavior.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_i64_array(ptr: *const i64, len: usize) {
+    if ptr.is_null() {
+        return;
+    }
+    let slice = unsafe { std::slice::from_raw_parts_mut(ptr.cast_mut(), len) };
+    let _ = unsafe { Box::from_raw(std::ptr::from_mut::<[i64]>(slice)) };
+}
