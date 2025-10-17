@@ -2,9 +2,8 @@
 #define GRAPH_H
 
 #include "ruby.h"
-#include "rustbindings.h"
-#include "stdlib.h"
-#include "string.h"
+
+extern const rb_data_type_t graph_type;
 
 void initialize_graph(VALUE mIndex);
 

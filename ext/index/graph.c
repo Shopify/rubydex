@@ -1,6 +1,9 @@
 #include "graph.h"
 #include "declaration.h"
 #include "ruby/internal/value_type.h"
+#include "rustbindings.h"
+#include "stdlib.h"
+#include "string.h"
 
 static VALUE cGraph;
 
@@ -12,7 +15,8 @@ static void graph_free(void *ptr) {
     }
 }
 
-static const rb_data_type_t graph_type = {
+// Single storage for the Graph data type shared across translation units
+const rb_data_type_t graph_type = {
     "Graph", {0, graph_free, 0}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
 
 // Custom allocator for the Graph class. Calls into Rust to create a new
