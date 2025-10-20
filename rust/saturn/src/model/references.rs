@@ -18,7 +18,8 @@ pub enum UnresolvedReference {
 /// ```
 ///
 /// Here, we don't immediately know if `BAR` refers to `Foo::BAR` or top level `BAR`. Until we resolve it, it is
-/// considered an unresolved constant
+/// considered an unresolved constant. For this example, `name_id` would be `NameId::from("BAR")` and `nesting` would be
+/// `[NameId::from("Foo")]`.
 #[derive(Debug)]
 pub struct UnresolvedConstantRef {
     /// The unqualified name of the constant
