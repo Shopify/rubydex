@@ -69,68 +69,10 @@ impl Document {
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<(), MultipleErrors> {
-    let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
-    let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
-    let mut threads = Vec::with_capacity(num_threads);
-    let document_queue = Arc::new(Mutex::new(documents));
+    let results = with_parallel_workers(documents, index_document);
 
-    for _ in 0..num_threads {
-        let thread_tx = tx.clone();
-        let queue = Arc::clone(&document_queue);
-
-        let handle = thread::spawn(move || {
-            while let Some(document) = { queue.lock().unwrap().pop() } {
-                let (source, errors) = {
-                    let mut errors = Vec::new();
-
-                    let source: String = if let Some(source) = &document.source {
-                        source.clone()
-                    } else {
-                        match document.path() {
-                            Ok(path) => fs::read_to_string(&path).unwrap_or_else(|e| {
-                                errors.push(IndexingError::FileReadError(format!(
-                                    "Failed to read {}: {}",
-                                    path.display(),
-                                    e
-                                )));
-                                String::new()
-                            }),
-                            Err(e) => {
-                                errors.push(e);
-                                String::new()
-                            }
-                        }
-                    };
-
-                    (source, errors)
-                };
-
-                let converter = UTF8SourceLocationConverter::new(&source);
-                let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source);
-
-                if errors.is_empty() {
-                    ruby_indexer.index();
-                } else {
-                    for error in errors {
-                        ruby_indexer.add_error(error);
-                    }
-                }
-
-                thread_tx
-                    .send(ruby_indexer.into_parts())
-                    .expect("Receiver end should not be closed until all threads are done");
-            }
-        });
-
-        threads.push(handle);
-    }
-
-    drop(tx);
-
-    // Insert all discovered definitions into the global graph
     let mut all_errors = Vec::new();
-
-    for (local_graph, errors) in rx {
+    for (local_graph, errors) in results {
         graph.update(local_graph);
         all_errors.extend(errors);
     }
@@ -140,6 +82,86 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
     } else {
         Err(MultipleErrors(all_errors))
     }
+}
+
+/// Indexes a single document and returns the indexer parts
+fn index_document(document: &Document) -> IndexerParts {
+    let (source, errors) = read_document_source(document);
+
+    let converter = UTF8SourceLocationConverter::new(&source);
+    let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source);
+
+    if errors.is_empty() {
+        ruby_indexer.index();
+    } else {
+        for error in errors {
+            ruby_indexer.add_error(error);
+        }
+    }
+
+    ruby_indexer.into_parts()
+}
+
+/// Reads the source content from a document, either from memory or disk
+fn read_document_source(document: &Document) -> (String, Vec<IndexingError>) {
+    let mut errors = Vec::new();
+
+    let source = if let Some(source) = &document.source {
+        source.clone()
+    } else {
+        match document.path() {
+            Ok(path) => fs::read_to_string(&path).unwrap_or_else(|e| {
+                errors.push(IndexingError::FileReadError(format!(
+                    "Failed to read {}: {}",
+                    path.display(),
+                    e
+                )));
+                String::new()
+            }),
+            Err(e) => {
+                errors.push(e);
+                String::new()
+            }
+        }
+    };
+
+    (source, errors)
+}
+
+fn with_parallel_workers<F>(documents: Vec<Document>, worker_fn: F) -> Vec<IndexerParts>
+where
+    F: Fn(&Document) -> IndexerParts + Send + Clone + 'static,
+{
+    let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
+    let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
+    let mut threads = Vec::with_capacity(num_threads);
+    let document_queue = Arc::new(Mutex::new(documents));
+
+    for _ in 0..num_threads {
+        let thread_tx = tx.clone();
+        let queue = Arc::clone(&document_queue);
+        let thread_fn = worker_fn.clone();
+
+        let handle = thread::spawn(move || {
+            while let Some(document) = { queue.lock().unwrap().pop() } {
+                let result = thread_fn(&document);
+                thread_tx
+                    .send(result)
+                    .expect("Receiver end should not be closed until all threads are done");
+            }
+        });
+
+        threads.push(handle);
+    }
+
+    drop(tx);
+
+    let mut results = Vec::new();
+    for result in rx {
+        results.push(result);
+    }
+
+    results
 }
 
 /// Recursively collects all Ruby files for the given workspace and dependencies, returning a vector of document instances
