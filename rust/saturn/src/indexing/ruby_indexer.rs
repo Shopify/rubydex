@@ -38,7 +38,7 @@ const MAGIC_AND_RBS_COMMENT_PREFIX: &[&str] = &[
 /// merged into the global state later.
 pub struct RubyIndexer<'a> {
     uri_id: UriId,
-    local_index: Graph,
+    local_graph: Graph,
     nesting_stacks: Vec<Vec<String>>,
     errors: Vec<IndexingError>,
     location_converter: &'a dyn SourceLocationConverter,
@@ -55,7 +55,7 @@ impl<'a> RubyIndexer<'a> {
         Self {
             uri_id,
             nesting_stacks: vec![Vec::new()],
-            local_index,
+            local_graph: local_index,
             errors: Vec::new(),
             location_converter,
             comments: Vec::new(),
@@ -65,7 +65,7 @@ impl<'a> RubyIndexer<'a> {
 
     #[must_use]
     pub fn into_parts(self) -> IndexerParts {
-        (self.local_index, self.errors)
+        (self.local_graph, self.errors)
     }
 
     pub fn add_error(&mut self, error: IndexingError) {
@@ -314,7 +314,7 @@ impl<'a> RubyIndexer<'a> {
     fn index_constant_reference(&mut self, location: &ruby_prism::Location) {
         let offset = Offset::from_prism_location(location);
         let name = Self::location_to_string(location);
-        let name_id = self.local_index.add_name(name);
+        let name_id = self.local_graph.add_name(name);
         let nesting = self
             .nesting_stacks
             .last()
@@ -328,7 +328,7 @@ impl<'a> RubyIndexer<'a> {
             self.uri_id,
             offset,
         )));
-        self.local_index.add_unresolved_reference(reference);
+        self.local_graph.add_unresolved_reference(reference);
     }
 }
 
@@ -397,7 +397,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
             )));
 
-            indexer.local_index.add_definition(fully_qualified_name, definition);
+            indexer.local_graph.add_definition(fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
                 indexer.visit(&body);
@@ -420,7 +420,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 offset,
                 comments,
             )));
-            indexer.local_index.add_definition(fully_qualified_name, definition);
+            indexer.local_graph.add_definition(fully_qualified_name, definition);
 
             if let Some(body) = node.body() {
                 indexer.visit(&body);
@@ -445,7 +445,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
             )));
 
-            indexer.local_index.add_definition(fully_qualified_name, definition);
+            indexer.local_graph.add_definition(fully_qualified_name, definition);
         });
 
         self.visit(&node.value());
@@ -468,7 +468,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
             )));
 
-            indexer.local_index.add_definition(fully_qualified_name, definition);
+            indexer.local_graph.add_definition(fully_qualified_name, definition);
         });
 
         self.visit(&node.value());
@@ -503,7 +503,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                             comments,
                         )));
 
-                        indexer.local_index.add_definition(fully_qualified_name, definition);
+                        indexer.local_graph.add_definition(fully_qualified_name, definition);
                     });
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
@@ -522,7 +522,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         comments,
                     )));
 
-                    self.local_index.add_definition(name, definition);
+                    self.local_graph.add_definition(name, definition);
                 }
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
                     let location = left.location();
@@ -542,7 +542,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                             comments,
                         )));
 
-                        indexer.local_index.add_definition(fully_qualified_name, definition);
+                        indexer.local_graph.add_definition(fully_qualified_name, definition);
                     });
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
@@ -563,7 +563,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                             comments,
                         )));
 
-                        indexer.local_index.add_definition(fully_qualified_name, definition);
+                        indexer.local_graph.add_definition(fully_qualified_name, definition);
                     });
                 }
                 _ => {}
@@ -594,7 +594,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             );
 
             indexer
-                .local_index
+                .local_graph
                 .add_definition(fully_qualified_name, Definition::Method(Box::new(method)));
         });
 
@@ -615,7 +615,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
                     // Uses `location_converter` to evaluate the performance impact of the conversion
                     indexer.location_converter.offset_to_position(&offset).unwrap();
-                    indexer.local_index.add_definition(
+                    indexer.local_graph.add_definition(
                         fully_qualified_name,
                         Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
                             declaration_id,
@@ -625,7 +625,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         ))),
                     );
 
-                    indexer.local_index.add_definition(
+                    indexer.local_graph.add_definition(
                         writer_name,
                         Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
                             writer_declaration_id,
@@ -647,7 +647,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     // Uses `location_converter` to evaluate the performance impact of the conversion
                     indexer.location_converter.offset_to_position(&offset).unwrap();
 
-                    indexer.local_index.add_definition(
+                    indexer.local_graph.add_definition(
                         fully_qualified_name,
                         Definition::AttrReader(Box::new(AttrReaderDefinition::new(
                             declaration_id,
@@ -670,7 +670,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     // Uses `location_converter` to evaluate the performance impact of the conversion
                     indexer.location_converter.offset_to_position(&offset).unwrap();
 
-                    indexer.local_index.add_definition(
+                    indexer.local_graph.add_definition(
                         writer_name,
                         Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
                             declaration_id,
@@ -761,7 +761,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
         )));
 
-        self.local_index.add_definition(name, definition);
+        self.local_graph.add_definition(name, definition);
 
         self.visit(&node.value());
     }
@@ -784,7 +784,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
             )));
 
-            indexer.local_index.add_definition(fully_qualified_name, definition);
+            indexer.local_graph.add_definition(fully_qualified_name, definition);
         });
 
         self.visit(&node.value());
@@ -808,7 +808,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
             )));
 
-            indexer.local_index.add_definition(fully_qualified_name, definition);
+            indexer.local_graph.add_definition(fully_qualified_name, definition);
         });
 
         self.visit(&node.value());
