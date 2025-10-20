@@ -69,37 +69,26 @@ impl Document {
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<(), MultipleErrors> {
-    let results = with_parallel_workers(documents, index_document);
+    let index_document = |document: &Document| -> IndexerParts {
+        let (source, errors) = read_document_source(document);
 
-    let mut all_errors = Vec::new();
-    for (local_graph, errors) in results {
-        graph.update(local_graph);
-        all_errors.extend(errors);
-    }
+        let converter = UTF8SourceLocationConverter::new(&source);
+        let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source);
 
-    if all_errors.is_empty() {
-        Ok(())
-    } else {
-        Err(MultipleErrors(all_errors))
-    }
-}
-
-/// Indexes a single document and returns the indexer parts
-fn index_document(document: &Document) -> IndexerParts {
-    let (source, errors) = read_document_source(document);
-
-    let converter = UTF8SourceLocationConverter::new(&source);
-    let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source);
-
-    if errors.is_empty() {
-        ruby_indexer.index();
-    } else {
-        for error in errors {
-            ruby_indexer.add_error(error);
+        if errors.is_empty() {
+            ruby_indexer.index();
+        } else {
+            for error in errors {
+                ruby_indexer.add_error(error);
+            }
         }
-    }
 
-    ruby_indexer.into_parts()
+        ruby_indexer.into_parts()
+    };
+
+    let merge_result = |local_graph| graph.update(local_graph);
+
+    with_parallel_workers(documents, index_document, merge_result)
 }
 
 /// Reads the source content from a document, either from memory or disk
@@ -128,9 +117,10 @@ fn read_document_source(document: &Document) -> (String, Vec<IndexingError>) {
     (source, errors)
 }
 
-fn with_parallel_workers<F>(documents: Vec<Document>, worker_fn: F) -> Vec<IndexerParts>
+fn with_parallel_workers<F, G>(documents: Vec<Document>, worker_fn: F, mut result_fn: G) -> Result<(), MultipleErrors>
 where
     F: Fn(&Document) -> IndexerParts + Send + Clone + 'static,
+    G: FnMut(Graph),
 {
     let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
@@ -156,12 +146,17 @@ where
 
     drop(tx);
 
-    let mut results = Vec::new();
-    for result in rx {
-        results.push(result);
+    let mut all_errors = Vec::new();
+    for (local_graph, errors) in rx {
+        result_fn(local_graph);
+        all_errors.extend(errors);
     }
 
-    results
+    if all_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(MultipleErrors(all_errors))
+    }
 }
 
 /// Recursively collects all Ruby files for the given workspace and dependencies, returning a vector of document instances
