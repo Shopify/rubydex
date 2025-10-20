@@ -14,7 +14,12 @@ const TABLE_DOCUMENTS: &str = "documents";
 
 const ALL_TABLES: &[&str] = &[TABLE_DEFINITIONS, TABLE_DECLARATIONS, TABLE_DOCUMENTS];
 
-pub struct LoadResult {
+pub struct DocumentData {
+    pub content_hash: u16,
+    pub definitions: Vec<DefinitionData>,
+}
+
+pub struct DefinitionData {
     pub declaration_id: DeclarationId,
     pub name: String,
     pub definition_id: DefinitionId,
@@ -87,28 +92,45 @@ impl Db {
     /// # Panics
     ///
     /// Will panic if the database connection is not initialized before trying to interact with it
-    pub fn load_uri(&self, uri_id: UriId) -> Result<Vec<LoadResult>, Box<dyn Error>> {
+    pub fn load_uri(&self, uri_id: UriId) -> Result<DocumentData, Box<dyn Error>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(Self::LOAD_DOCUMENT)?;
+            let mut content_hash: Option<u16> = None;
 
-            statement
-                .query_map([*uri_id], |row| {
-                    let declaration_id: DeclarationId = row.get(0)?;
-                    let name = row.get::<_, String>(1)?;
-                    let definition_id: DefinitionId = row.get(2)?;
-                    let data = row.get::<_, Vec<u8>>(3)?;
+            let rows = statement.query_map([*uri_id], |row| {
+                // Content hash is the same for all rows, so we only need to read it once
+                if content_hash.is_none() {
+                    content_hash = Some(row.get(0)?);
+                }
+
+                if let Some(declaration_id) = row.get::<_, Option<DeclarationId>>(1)? {
+                    // If we have a declaration_id, then we have definition data
+                    let name = row.get::<_, String>(2)?;
+                    let definition_id: DefinitionId = row.get(3)?;
+                    let data = row.get::<_, Vec<u8>>(4)?;
                     let definition = rmp_serde::from_slice::<Definition>(&data)
                         .expect("Deserializing the definition from the DB should always succeed");
 
-                    Ok(LoadResult {
+                    Ok(Some(DefinitionData {
                         declaration_id,
                         name,
                         definition_id,
                         definition,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(std::convert::Into::into)
+                    }))
+                } else {
+                    // No definition data for this document
+                    Ok(None)
+                }
+            })?;
+
+            // Collect the rows, filtering out None values
+            let definitions = rows.collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect();
+            let content_hash = content_hash.ok_or("Document not found or content_hash is missing")?;
+
+            Ok(DocumentData {
+                content_hash,
+                definitions,
+            })
         })
     }
 
@@ -288,19 +310,25 @@ mod tests {
 
         // Test loading the saved data using load_uri
         let uri_id = UriId::from("file:///complex.rb");
-        let load_results = db.load_uri(uri_id).unwrap();
+        let document_data = db.load_uri(uri_id).unwrap();
 
         // Should have multiple definitions: Outer, Inner, method_name, CONSTANT
-        assert!(load_results.len() == 4);
+        assert!(document_data.definitions.len() == 4);
 
         // Verify we can find expected definitions
-        let module_def = load_results.iter().find(|r| r.name == "Outer").unwrap();
-        let class_def = load_results.iter().find(|r| r.name == "Outer::Inner").unwrap();
-        let method_def = load_results
+        let module_def = document_data.definitions.iter().find(|r| r.name == "Outer").unwrap();
+        let class_def = document_data
+            .definitions
+            .iter()
+            .find(|r| r.name == "Outer::Inner")
+            .unwrap();
+        let method_def = document_data
+            .definitions
             .iter()
             .find(|r| r.name == "Outer::Inner::method_name")
             .unwrap();
-        let constant_def = load_results
+        let constant_def = document_data
+            .definitions
             .iter()
             .find(|r| r.name == "Outer::Inner::CONSTANT")
             .unwrap();
