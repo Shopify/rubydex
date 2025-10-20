@@ -6,7 +6,7 @@ use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{DeclarationId, DefinitionId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
 use crate::model::references::UnresolvedReference;
 
@@ -26,6 +26,8 @@ pub struct Graph {
     documents: IdentityHashMap<UriId, Document>,
     // Map of definition nodes
     definitions: IdentityHashMap<DefinitionId, Definition>,
+    // Map of unqualified names
+    names: IdentityHashMap<NameId, String>,
     // List of references that still need to be resolved
     unresolved_references: Vec<UnresolvedReference>,
     db: Db,
@@ -38,6 +40,7 @@ impl Graph {
             declarations: IdentityHashMap::default(),
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
+            names: IdentityHashMap::default(),
             unresolved_references: Vec::new(),
             db: Db::new(),
         }
@@ -88,6 +91,13 @@ impl Graph {
         let uri_id = UriId::from(&uri);
         self.documents.entry(uri_id).or_insert_with(|| Document::new(uri));
         uri_id
+    }
+
+    /// Register an unqualified name into the graph
+    pub fn add_name(&mut self, name: String) -> NameId {
+        let name_id = NameId::from(&name);
+        self.names.entry(name_id).or_insert(name);
+        name_id
     }
 
     /// Handles when a document (identified by `uri`) is deleted. This removes the URI from the graph along with all
@@ -339,6 +349,7 @@ impl Graph {
         self.declarations = IdentityHashMap::default();
         self.definitions = IdentityHashMap::default();
         self.documents = IdentityHashMap::default();
+        self.names = IdentityHashMap::default();
         self.unresolved_references = Vec::new();
     }
 
@@ -649,10 +660,10 @@ mod tests {
 
         match reference {
             UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name(), "String");
+                assert_eq!(unresolved.name_id(), &NameId::from("String"));
                 assert_eq!(
                     unresolved.nesting(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Bar::Baz")]
+                    vec![NameId::from("Foo"), NameId::from("Bar::Baz")]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(32, 38));
@@ -681,11 +692,8 @@ mod tests {
 
         match reference {
             UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name(), "String");
-                assert_eq!(
-                    unresolved.nesting(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Bar")]
-                );
+                assert_eq!(unresolved.name_id(), &NameId::from("String"));
+                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
@@ -713,11 +721,8 @@ mod tests {
 
         match reference {
             UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name(), "Object::String");
-                assert_eq!(
-                    unresolved.nesting(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Bar")]
-                );
+                assert_eq!(unresolved.name_id(), &NameId::from("Object::String"));
+                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 41));
             }
