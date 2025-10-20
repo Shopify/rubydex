@@ -820,6 +820,28 @@ mod tests {
     use super::*;
     use crate::test_utils::GraphTest;
 
+    /// Asserts that a definition exists, matches the expected type, and passes a custom assertion
+    macro_rules! assert_definition {
+        ($context:expr, $variant:ident, $name:expr, $assertion:expr) => {
+            let defs = $context.graph.get($name).unwrap();
+            match &defs[0] {
+                Definition::$variant(_) => {
+                    $assertion(&defs[0]);
+                }
+                _ => panic!("Expected {} definition for '{}'", stringify!($variant), $name),
+            }
+        };
+    }
+
+    /// Asserts that a definition has specific comments
+    macro_rules! assert_definition_comments {
+        ($context:expr, $variant:ident, $name:expr, $expected_comments:expr) => {
+            assert_definition!($context, $variant, $name, |def: &Definition| {
+                assert_eq!(def.comments(), $expected_comments);
+            });
+        };
+    }
+
     #[test]
     fn index_class_node() {
         let mut context = GraphTest::new();
@@ -1263,48 +1285,16 @@ mod tests {
             "
         });
 
-        let single = context.graph.get("Single").unwrap();
-        match &single[0] {
-            Definition::Class(_) => {
-                assert_eq!(single[0].comments(), "Single comment");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let multi = context.graph.get("Multi").unwrap();
-        match &multi[0] {
-            Definition::Class(_) => {
-                assert_eq!(
-                    multi[0].comments(),
-                    "Multi-line comment 1\nMulti-line comment 2\nMulti-line comment 3"
-                );
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let no_gap = context.graph.get("NoGap").unwrap();
-        match &no_gap[0] {
-            Definition::Class(_) => {
-                assert_eq!(no_gap[0].comments(), "Comment directly above (no gap)");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let blank = context.graph.get("BlankLine").unwrap();
-        match &blank[0] {
-            Definition::Class(_) => {
-                assert_eq!(blank[0].comments(), "Comment with blank line");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let no_comment = context.graph.get("NoComment").unwrap();
-        match &no_comment[0] {
-            Definition::Class(_) => {
-                assert!(no_comment[0].comments().is_empty());
-            }
-            _ => panic!("Expected class"),
-        }
+        assert_definition_comments!(context, Class, "Single", "Single comment");
+        assert_definition_comments!(
+            context,
+            Class,
+            "Multi",
+            "Multi-line comment 1\nMulti-line comment 2\nMulti-line comment 3"
+        );
+        assert_definition_comments!(context, Class, "NoGap", "Comment directly above (no gap)");
+        assert_definition_comments!(context, Class, "BlankLine", "Comment with blank line");
+        assert_definition_comments!(context, Class, "NoComment", "");
     }
 
     #[test]
@@ -1327,32 +1317,9 @@ mod tests {
             "
         });
 
-        let too_far = context.graph.get("TooFar").unwrap();
-        match &too_far[0] {
-            Definition::Class(_) => {
-                assert!(too_far[0].comments().is_empty(), "Comment too far should not attach");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let code_between = context.graph.get("CodeBetween").unwrap();
-        match &code_between[0] {
-            Definition::Class(_) => {
-                assert!(
-                    code_between[0].comments().is_empty(),
-                    "Comment with code between should not attach"
-                );
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let foo = context.graph.get("Foo").unwrap();
-        match &foo[0] {
-            Definition::Class(_) => {
-                assert_eq!(foo[0].comments(), "Comment for Foo");
-            }
-            _ => panic!("Expected class"),
-        }
+        assert_definition_comments!(context, Class, "TooFar", "");
+        assert_definition_comments!(context, Class, "CodeBetween", "");
+        assert_definition_comments!(context, Class, "Foo", "Comment for Foo");
     }
 
     #[test]
@@ -1376,37 +1343,15 @@ mod tests {
             "
         });
 
-        let outer = context.graph.get("Outer").unwrap();
-        match &outer[0] {
-            Definition::Class(_) => {
-                assert_eq!(outer[0].comments(), "Outer class");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let inner = context.graph.get("Outer::Inner").unwrap();
-        match &inner[0] {
-            Definition::Class(_) => {
-                assert_eq!(inner[0].comments(), "Inner class at 2 spaces");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let deep = context.graph.get("Outer::Inner::Deep").unwrap();
-        match &deep[0] {
-            Definition::Class(_) => {
-                assert_eq!(deep[0].comments(), "Deep class at 4 spaces");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let another = context.graph.get("Outer::AnotherInner").unwrap();
-        match &another[0] {
-            Definition::Class(_) => {
-                assert_eq!(another[0].comments(), "Another inner class\nwith multiple lines");
-            }
-            _ => panic!("Expected class"),
-        }
+        assert_definition_comments!(context, Class, "Outer", "Outer class");
+        assert_definition_comments!(context, Class, "Outer::Inner", "Inner class at 2 spaces");
+        assert_definition_comments!(context, Class, "Outer::Inner::Deep", "Deep class at 4 spaces");
+        assert_definition_comments!(
+            context,
+            Class,
+            "Outer::AnotherInner",
+            "Another inner class\nwith multiple lines"
+        );
     }
 
     #[test]
@@ -1429,37 +1374,10 @@ mod tests {
             "
         });
 
-        let module = context.graph.get("TestModule").unwrap();
-        match &module[0] {
-            Definition::Module(_) => {
-                assert_eq!(module[0].comments(), "Module comment");
-            }
-            _ => panic!("Expected module"),
-        }
-
-        let constant = context.graph.get("TestModule::FOO").unwrap();
-        match &constant[0] {
-            Definition::Constant(_) => {
-                assert_eq!(constant[0].comments(), "Constant comment");
-            }
-            _ => panic!("Expected constant"),
-        }
-
-        let nested = context.graph.get("TestModule::Nested").unwrap();
-        match &nested[0] {
-            Definition::Module(_) => {
-                assert_eq!(nested[0].comments(), "Nested module");
-            }
-            _ => panic!("Expected module"),
-        }
-
-        let multi_a = context.graph.get("A").unwrap();
-        match &multi_a[0] {
-            Definition::Constant(_) => {
-                assert_eq!(multi_a[0].comments(), "Multi-write constant");
-            }
-            _ => panic!("Expected constant"),
-        }
+        assert_definition_comments!(context, Module, "TestModule", "Module comment");
+        assert_definition_comments!(context, Constant, "TestModule::FOO", "Constant comment");
+        assert_definition_comments!(context, Module, "TestModule::Nested", "Nested module");
+        assert_definition_comments!(context, Constant, "A", "Multi-write constant");
     }
 
     #[test]
