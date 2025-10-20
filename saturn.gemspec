@@ -1,16 +1,16 @@
 # frozen_string_literal: true
 
-require_relative "lib/index/version"
+require_relative "lib/saturn/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "index"
-  spec.version = Index::VERSION
+  spec.name = "saturn"
+  spec.version = Saturn::VERSION
   spec.authors = ["Shopify"]
   spec.email = ["ruby@shopify.com"]
 
   spec.summary = "A high performance static analysis suite for Ruby"
   spec.description = "A high performance static analysis suite for Ruby, built in Rust with Ruby APIs"
-  spec.homepage = "https://github.com/Shopify/index"
+  spec.homepage = "https://github.com/Shopify/saturn"
   spec.required_ruby_version = ">= 3.1.0"
   spec.required_rubygems_version = ">= 3.3.11"
 
@@ -23,5 +23,5 @@ Gem::Specification.new do |spec|
   spec.bindir = "exe"
   spec.executables = Dir.glob("exe/*").map { |f| File.basename(f) }
   spec.require_paths = ["lib"]
-  spec.extensions = ["ext/index/extconf.rb"]
+  spec.extensions = ["ext/saturn/extconf.rb"]
 end

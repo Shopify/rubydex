@@ -203,8 +203,8 @@ mod tests {
 
         // Paths including a specific file and a directory
         let paths = vec![
-            root.join("lib/index.rb").to_str().unwrap().to_string(),
-            root.join("lib/index").to_str().unwrap().to_string(),
+            root.join("lib/saturn.rb").to_str().unwrap().to_string(),
+            root.join("lib/saturn").to_str().unwrap().to_string(),
         ];
 
         let (documents, errors) = collect_documents(paths);

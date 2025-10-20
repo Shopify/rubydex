@@ -6,6 +6,6 @@
 #include "stdlib.h"
 #include "string.h"
 
-void initialize_graph(VALUE mIndex);
+void initialize_graph(VALUE mSaturn);
 
 #endif

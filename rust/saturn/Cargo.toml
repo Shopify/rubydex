@@ -1,11 +1,11 @@
 [package]
-name = "index"
+name = "saturn"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89.0"
 
 [[bin]]
-name = "index_cli"
+name = "saturn_cli"
 path = "src/main.rs"
 
 [lib]

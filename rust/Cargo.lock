@@ -481,34 +481,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "index"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "bytecount",
- "clap",
- "glob",
- "predicates",
- "regex",
- "rmp-serde",
- "ruby-prism",
- "rusqlite",
- "serde",
- "tempfile",
- "url",
- "xxhash-rust",
-]
-
-[[package]]
-name = "index-sys"
-version = "0.1.0"
-dependencies = [
- "cbindgen",
- "index",
- "libc",
-]
-
-[[package]]
 name = "indexmap"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -862,6 +834,34 @@ name = "ryu"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
+
+[[package]]
+name = "saturn"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "bytecount",
+ "clap",
+ "glob",
+ "predicates",
+ "regex",
+ "rmp-serde",
+ "ruby-prism",
+ "rusqlite",
+ "serde",
+ "tempfile",
+ "url",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "saturn-sys"
+version = "0.1.0"
+dependencies = [
+ "cbindgen",
+ "libc",
+ "saturn",
+]
 
 [[package]]
 name = "serde"

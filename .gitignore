@@ -13,10 +13,10 @@
 *.dSYM
 *.db
 *.db-*
-/ext/index/Makefile
+/ext/saturn/Makefile
 mkmf.log
 target/
-rust/index-sys/rustbindings.h
-ext/index/rustbindings.h
-ext/index/compile_commands.json
-ext/index/.cache
+rust/saturn-sys/rustbindings.h
+ext/saturn/rustbindings.h
+ext/saturn/compile_commands.json
+ext/saturn/.cache
