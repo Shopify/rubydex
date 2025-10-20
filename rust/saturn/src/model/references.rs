@@ -1,5 +1,5 @@
 use crate::{
-    model::ids::{DeclarationId, UriId},
+    model::ids::{NameId, UriId},
     offset::Offset,
 };
 
@@ -8,30 +8,35 @@ pub enum UnresolvedReference {
     Constant(Box<UnresolvedConstantRef>),
 }
 
-// An unresolved constant reference is a usage of a constant in a context where we can't immediately determine what it
-// refers to. For example:
-//
-// ```ruby
-// module Foo
-//   BAR
-// end
-// ```
-//
-// Here, we don't immediately know if `BAR` refers to `Foo::BAR` or top level `BAR`. Until we resolve it, it is
-// considered an unresolved constant
+/// An unresolved constant reference is a usage of a constant in a context where we can't immediately determine what it
+/// refers to. For example:
+///
+/// ```ruby
+/// module Foo
+///   BAR
+/// end
+/// ```
+///
+/// Here, we don't immediately know if `BAR` refers to `Foo::BAR` or top level `BAR`. Until we resolve it, it is
+/// considered an unresolved constant
 #[derive(Debug)]
 pub struct UnresolvedConstantRef {
-    name: String,
-    nesting: Vec<DeclarationId>,
+    /// The unqualified name of the constant
+    name_id: NameId,
+    /// The nesting where we found the constant reference. This is a list of unqualified name IDs, so that we can
+    /// traverse the graph through the member relationships
+    nesting: Vec<NameId>,
+    /// The document where we found the reference
     uri_id: UriId,
+    /// The offsets inside of the document where we found the reference
     offset: Offset,
 }
 
 impl UnresolvedConstantRef {
     #[must_use]
-    pub fn new(name: String, nesting: Vec<DeclarationId>, uri_id: UriId, offset: Offset) -> Self {
+    pub fn new(name_id: NameId, nesting: Vec<NameId>, uri_id: UriId, offset: Offset) -> Self {
         Self {
-            name,
+            name_id,
             nesting,
             uri_id,
             offset,
@@ -39,12 +44,12 @@ impl UnresolvedConstantRef {
     }
 
     #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name_id(&self) -> &NameId {
+        &self.name_id
     }
 
     #[must_use]
-    pub fn nesting(&self) -> &[DeclarationId] {
+    pub fn nesting(&self) -> &[NameId] {
         &self.nesting
     }
 

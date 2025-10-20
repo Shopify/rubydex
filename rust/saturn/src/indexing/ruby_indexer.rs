@@ -7,7 +7,7 @@ use crate::model::definitions::{
     ModuleDefinition, Parameter, ParameterStruct,
 };
 use crate::model::graph::Graph;
-use crate::model::ids::{DeclarationId, UriId};
+use crate::model::ids::{DeclarationId, NameId, UriId};
 use crate::model::references::{UnresolvedConstantRef, UnresolvedReference};
 use crate::offset::Offset;
 use crate::source_location::SourceLocationConverter;
@@ -314,15 +314,16 @@ impl<'a> RubyIndexer<'a> {
     fn index_constant_reference(&mut self, location: &ruby_prism::Location) {
         let offset = Offset::from_prism_location(location);
         let name = Self::location_to_string(location);
+        let name_id = self.local_index.add_name(name);
         let nesting = self
             .nesting_stacks
             .last()
             .expect("There should always be at least one stack. This is a bug")
             .clone();
-        let name_id_nesting: Vec<DeclarationId> = nesting.iter().map(DeclarationId::from).collect();
+        let name_id_nesting: Vec<NameId> = nesting.iter().map(NameId::from).collect();
 
         let reference = UnresolvedReference::Constant(Box::new(UnresolvedConstantRef::new(
-            name,
+            name_id,
             name_id_nesting,
             self.uri_id,
             offset,
