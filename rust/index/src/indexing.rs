@@ -11,7 +11,10 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{Receiver, Sender},
 };
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use std::{sync::mpsc, thread};
 use url::Url;
 pub mod errors;
@@ -46,9 +49,13 @@ impl Document {
         })
     }
 
-    #[must_use]
-    pub fn path(&self) -> &str {
-        self.uri.path()
+    /// # Errors
+    ///
+    /// Errors if the URI is not a valid file:// URI
+    pub fn path(&self) -> Result<PathBuf, IndexingError> {
+        self.uri
+            .to_file_path()
+            .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't convert URI '{}' to file path", self.uri)))
     }
 }
 
@@ -79,14 +86,20 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
                     let source: String = if let Some(source) = &document.source {
                         source.clone()
                     } else {
-                        fs::read_to_string(document.path()).unwrap_or_else(|e| {
-                            errors.push(IndexingError::FileReadError(format!(
-                                "Failed to read {}: {}",
-                                document.path(),
-                                e
-                            )));
-                            String::new()
-                        })
+                        match document.path() {
+                            Ok(path) => fs::read_to_string(&path).unwrap_or_else(|e| {
+                                errors.push(IndexingError::FileReadError(format!(
+                                    "Failed to read {}: {}",
+                                    path.display(),
+                                    e
+                                )));
+                                String::new()
+                            }),
+                            Err(e) => {
+                                errors.push(e);
+                                String::new()
+                            }
+                        }
                     };
 
                     (source, errors)
