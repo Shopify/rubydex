@@ -214,31 +214,76 @@ pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingErro
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
+    use crate::test_utils::Context;
 
-    #[test]
-    fn collecting_documents_in_parallel() {
-        let cargo_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let root = cargo_path.parent().unwrap().parent().unwrap();
+    fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<IndexingError>) {
+        let (documents, errors) = collect_documents(
+            paths
+                .iter()
+                .map(|p| context.absolute_path_to(p).to_string_lossy().into_owned())
+                .collect(),
+        );
 
-        // Paths including a specific file and a directory
-        let paths = vec![
-            root.join("lib/saturn.rb").to_str().unwrap().to_string(),
-            root.join("lib/saturn").to_str().unwrap().to_string(),
-        ];
+        let mut paths: Vec<String> = documents
+            .iter()
+            .map(|d| {
+                context
+                    .relative_path_to(d.path().ok().unwrap())
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
 
-        let (documents, errors) = collect_documents(paths);
-        assert!(errors.is_empty(), "Errors: {errors:#?}");
-        assert!(documents.len() > 2);
+        paths.sort();
+
+        (paths, errors)
     }
 
     #[test]
-    fn collecting_a_non_existing_path() {
-        let paths = vec!["/non_existing_file.rb".to_string(), "/non_existing_dir".to_string()];
+    fn collect_all_documents() {
+        let context = Context::new();
+        context.touch("bar/baz.rb");
+        context.touch("bar/qux.rb");
+        context.touch("foo/bar.rb");
 
-        let (documents, errors) = collect_documents(paths);
+        let (paths, errors) = collect_document_paths(&context, &["foo", "bar"]);
+
+        assert_eq!(
+            paths,
+            vec![
+                "bar/baz.rb".to_string(),
+                "bar/qux.rb".to_string(),
+                "foo/bar.rb".to_string()
+            ]
+        );
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn collect_some_documents_based_on_paths() {
+        let context = Context::new();
+        context.touch("bar/baz.rb");
+        context.touch("bar/qux.rb");
+        context.touch("foo/bar.rb");
+
+        let (paths, errors) = collect_document_paths(&context, &["bar"]);
+
+        assert_eq!(paths, vec!["bar/baz.rb".to_string(), "bar/qux.rb".to_string()]);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn collect_non_existing_paths() {
+        let context = Context::new();
+
+        let (documents, errors) = collect_documents(vec![
+            context
+                .absolute_path_to("non_existing_path")
+                .to_string_lossy()
+                .into_owned(),
+        ]);
+
         assert!(documents.is_empty());
         assert!(errors.is_empty());
     }
