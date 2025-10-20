@@ -14,7 +14,7 @@ use crate::source_location::SourceLocationConverter;
 
 use ruby_prism::{ParseResult, Visit};
 
-pub type IndexerParts = (Graph, Vec<IndexingError>);
+pub type IndexerParts = (Option<Graph>, Vec<IndexingError>);
 
 const MAGIC_AND_RBS_COMMENT_PREFIX: &[&str] = &[
     "frozen_string_literal:",
@@ -70,7 +70,7 @@ impl<'a> RubyIndexer<'a> {
 
     #[must_use]
     pub fn into_parts(self) -> IndexerParts {
-        (self.local_graph, self.errors)
+        (Some(self.local_graph), self.errors)
     }
 
     pub fn add_error(&mut self, error: IndexingError) {

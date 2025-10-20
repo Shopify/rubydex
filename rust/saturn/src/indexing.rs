@@ -79,19 +79,14 @@ impl Document {
 pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<(), MultipleErrors> {
     let index_document = |document: &Document| -> IndexerParts {
         let (source, errors) = read_document_source(document);
+        if !errors.is_empty() {
+            return (None, errors);
+        }
 
         let converter = UTF8SourceLocationConverter::new(&source);
         let content_hash = Document::calculate_content_hash(source.as_bytes());
         let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source, content_hash);
-
-        if errors.is_empty() {
-            ruby_indexer.index();
-        } else {
-            for error in errors {
-                ruby_indexer.add_error(error);
-            }
-        }
-
+        ruby_indexer.index();
         ruby_indexer.into_parts()
     };
 
@@ -143,10 +138,12 @@ where
 
         let handle = thread::spawn(move || {
             while let Some(document) = { queue.lock().unwrap().pop() } {
-                let result = thread_fn(&document);
-                thread_tx
-                    .send(result)
-                    .expect("Receiver end should not be closed until all threads are done");
+                let (result, errors) = thread_fn(&document);
+                if result.is_some() || !errors.is_empty() {
+                    thread_tx
+                        .send((result, errors))
+                        .expect("Receiver end should not be closed until all threads are done");
+                }
             }
         });
 
@@ -156,8 +153,10 @@ where
     drop(tx);
 
     let mut all_errors = Vec::new();
-    for (local_graph, errors) in rx {
-        result_fn(local_graph);
+    for (result, errors) in rx {
+        if let Some(local_graph) = result {
+            result_fn(local_graph);
+        }
         all_errors.extend(errors);
     }
 
@@ -290,5 +289,25 @@ mod tests {
 
         assert!(documents.is_empty());
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn with_parallel_workers_skips_empty_results() {
+        let documents = vec![Document::new("file:///skipped.rb", Some("module Foo; end".to_string())).unwrap()];
+
+        let mut was_called = false;
+        let worker_fn = |_document: &Document| -> IndexerParts { (None, vec![]) };
+        let result_fn = |_graph: Graph| {
+            was_called = true;
+        };
+
+        let result = with_parallel_workers(documents, worker_fn, result_fn);
+
+        assert!(result.is_ok());
+
+        assert!(
+            !was_called,
+            "result_fn should not be called when worker_fn returns (None, vec![])"
+        );
     }
 }
