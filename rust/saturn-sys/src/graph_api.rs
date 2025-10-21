@@ -23,7 +23,7 @@ pub extern "C" fn sat_graph_free(pointer: GraphPointer) {
     }
 }
 
-fn with_graph<F, T>(pointer: GraphPointer, action: F) -> T
+pub fn with_graph<F, T>(pointer: GraphPointer, action: F) -> T
 where
     F: FnOnce(&mut Graph) -> T,
 {
