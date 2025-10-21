@@ -1,5 +1,5 @@
-#ifndef GRAPH_H
-#define GRAPH_H
+#ifndef SATURN_GRAPH_H
+#define SATURN_GRAPH_H
 
 #include "ruby.h"
 #include "rustbindings.h"
@@ -8,4 +8,4 @@
 
 void initialize_graph(VALUE mSaturn);
 
-#endif
+#endif // SATURN_GRAPH_H
