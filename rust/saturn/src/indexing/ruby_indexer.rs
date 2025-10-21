@@ -820,6 +820,36 @@ mod tests {
     use super::*;
     use crate::test_utils::GraphTest;
 
+    /// Asserts that a definition exists, matches the expected type, and passes a custom assertion
+    macro_rules! assert_definition {
+        ($context:expr, $variant:ident, $name:expr, $assertion:expr) => {
+            let defs = $context.graph.get($name).unwrap();
+            match &defs[0] {
+                Definition::$variant(_) => {
+                    $assertion(&defs[0]);
+                }
+                _ => panic!("Expected {} definition for '{}'", stringify!($variant), $name),
+            }
+        };
+    }
+
+    /// Asserts that a definition has specific comments
+    macro_rules! assert_definition_comments {
+        ($context:expr, $variant:ident, $name:expr, $expected_comments:expr) => {
+            assert_definition!($context, $variant, $name, |def: &Definition| {
+                assert_eq!(def.comments(), $expected_comments);
+            });
+        };
+    }
+
+    /// Asserts that a definition has specific start and end offsets
+    macro_rules! assert_definition_offset {
+        ($definition:expr, $start:expr, $end:expr) => {
+            assert_eq!($definition.start(), $start);
+            assert_eq!($definition.end(), $end);
+        };
+    }
+
     #[test]
     fn index_class_node() {
         let mut context = GraphTest::new();
@@ -836,18 +866,15 @@ mod tests {
 
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 50);
+        assert_definition_offset!(definitions[0], 0, 50);
 
         let definitions = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 12);
-        assert_eq!(definitions[0].end(), 46);
+        assert_definition_offset!(definitions[0], 12, 46);
 
         let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 26);
-        assert_eq!(definitions[0].end(), 40);
+        assert_definition_offset!(definitions[0], 26, 40);
 
         let not_found = context.graph.get("Foo::Bar::Baz::Qux");
         assert!(not_found.is_none());
@@ -888,18 +915,15 @@ mod tests {
 
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 53);
+        assert_definition_offset!(definitions[0], 0, 53);
 
         let definitions = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 13);
-        assert_eq!(definitions[0].end(), 49);
+        assert_definition_offset!(definitions[0], 13, 49);
 
         let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 28);
-        assert_eq!(definitions[0].end(), 43);
+        assert_definition_offset!(definitions[0], 28, 43);
 
         let not_found = context.graph.get("Foo::Bar::Baz::Qux");
         assert!(not_found.is_none());
@@ -940,13 +964,11 @@ mod tests {
 
         let definitions = context.graph.get("FOO").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 3);
+        assert_definition_offset!(definitions[0], 0, 3);
 
         let definitions = context.graph.get("Foo::FOO").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 21);
-        assert_eq!(definitions[0].end(), 24);
+        assert_definition_offset!(definitions[0], 21, 24);
     }
 
     #[test]
@@ -966,18 +988,15 @@ mod tests {
 
         let definitions = context.graph.get("FOO::BAR").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 8);
+        assert_definition_offset!(definitions[0], 0, 8);
 
         let definitions = context.graph.get("Foo::FOO::BAR").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 26);
-        assert_eq!(definitions[0].end(), 34);
+        assert_definition_offset!(definitions[0], 26, 34);
 
         let definitions = context.graph.get("BAZ").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 41);
-        assert_eq!(definitions[0].end(), 46);
+        assert_definition_offset!(definitions[0], 41, 46);
     }
 
     #[test]
@@ -996,28 +1015,23 @@ mod tests {
 
         let definitions = context.graph.get("FOO").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 3);
+        assert_definition_offset!(definitions[0], 0, 3);
 
         let definitions = context.graph.get("BAR::BAZ").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 5);
-        assert_eq!(definitions[0].end(), 13);
+        assert_definition_offset!(definitions[0], 5, 13);
 
         let definitions = context.graph.get("Foo::FOO").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 34);
-        assert_eq!(definitions[0].end(), 37);
+        assert_definition_offset!(definitions[0], 34, 37);
 
         let definitions = context.graph.get("Foo::BAR::BAZ").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 39);
-        assert_eq!(definitions[0].end(), 47);
+        assert_definition_offset!(definitions[0], 39, 47);
 
         let definitions = context.graph.get("BAZ").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 49);
-        assert_eq!(definitions[0].end(), 54);
+        assert_definition_offset!(definitions[0], 49, 54);
     }
 
     #[test]
@@ -1037,8 +1051,7 @@ mod tests {
 
         let definitions = context.graph.get("foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 12);
+        assert_definition_offset!(definitions[0], 0, 12);
 
         match definitions[0] {
             Definition::Method(it) => {
@@ -1050,8 +1063,7 @@ mod tests {
 
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 26);
-        assert_eq!(definitions[0].end(), 38);
+        assert_definition_offset!(definitions[0], 26, 38);
 
         match definitions[0] {
             Definition::Method(it) => {
@@ -1063,8 +1075,7 @@ mod tests {
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 41);
-        assert_eq!(definitions[0].end(), 58);
+        assert_definition_offset!(definitions[0], 41, 58);
 
         match definitions[0] {
             Definition::Method(it) => {
@@ -1196,43 +1207,35 @@ mod tests {
 
         let definitions = context.graph.get("foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 15);
-        assert_eq!(definitions[0].end(), 18);
+        assert_definition_offset!(definitions[0], 15, 18);
 
         let definitions = context.graph.get("foo=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 15);
-        assert_eq!(definitions[0].end(), 18);
+        assert_definition_offset!(definitions[0], 15, 18);
 
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 47);
-        assert_eq!(definitions[0].end(), 50);
+        assert_definition_offset!(definitions[0], 47, 50);
 
         let definitions = context.graph.get("Foo::bar=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 47);
-        assert_eq!(definitions[0].end(), 50);
+        assert_definition_offset!(definitions[0], 47, 50);
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 53);
-        assert_eq!(definitions[0].end(), 56);
+        assert_definition_offset!(definitions[0], 53, 56);
 
         let definitions = context.graph.get("Foo::baz=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 53);
-        assert_eq!(definitions[0].end(), 56);
+        assert_definition_offset!(definitions[0], 53, 56);
 
         let definitions = context.graph.get("qux").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 82);
-        assert_eq!(definitions[0].end(), 85);
+        assert_definition_offset!(definitions[0], 82, 85);
 
         let definitions = context.graph.get("qux=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 82);
-        assert_eq!(definitions[0].end(), 85);
+        assert_definition_offset!(definitions[0], 82, 85);
 
         assert!(context.graph.get("not_indexed").is_none());
         assert!(context.graph.get("not_indexed=").is_none());
@@ -1263,48 +1266,16 @@ mod tests {
             "
         });
 
-        let single = context.graph.get("Single").unwrap();
-        match &single[0] {
-            Definition::Class(_) => {
-                assert_eq!(single[0].comments(), "Single comment");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let multi = context.graph.get("Multi").unwrap();
-        match &multi[0] {
-            Definition::Class(_) => {
-                assert_eq!(
-                    multi[0].comments(),
-                    "Multi-line comment 1\nMulti-line comment 2\nMulti-line comment 3"
-                );
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let no_gap = context.graph.get("NoGap").unwrap();
-        match &no_gap[0] {
-            Definition::Class(_) => {
-                assert_eq!(no_gap[0].comments(), "Comment directly above (no gap)");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let blank = context.graph.get("BlankLine").unwrap();
-        match &blank[0] {
-            Definition::Class(_) => {
-                assert_eq!(blank[0].comments(), "Comment with blank line");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let no_comment = context.graph.get("NoComment").unwrap();
-        match &no_comment[0] {
-            Definition::Class(_) => {
-                assert!(no_comment[0].comments().is_empty());
-            }
-            _ => panic!("Expected class"),
-        }
+        assert_definition_comments!(context, Class, "Single", "Single comment");
+        assert_definition_comments!(
+            context,
+            Class,
+            "Multi",
+            "Multi-line comment 1\nMulti-line comment 2\nMulti-line comment 3"
+        );
+        assert_definition_comments!(context, Class, "NoGap", "Comment directly above (no gap)");
+        assert_definition_comments!(context, Class, "BlankLine", "Comment with blank line");
+        assert_definition_comments!(context, Class, "NoComment", "");
     }
 
     #[test]
@@ -1327,32 +1298,9 @@ mod tests {
             "
         });
 
-        let too_far = context.graph.get("TooFar").unwrap();
-        match &too_far[0] {
-            Definition::Class(_) => {
-                assert!(too_far[0].comments().is_empty(), "Comment too far should not attach");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let code_between = context.graph.get("CodeBetween").unwrap();
-        match &code_between[0] {
-            Definition::Class(_) => {
-                assert!(
-                    code_between[0].comments().is_empty(),
-                    "Comment with code between should not attach"
-                );
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let foo = context.graph.get("Foo").unwrap();
-        match &foo[0] {
-            Definition::Class(_) => {
-                assert_eq!(foo[0].comments(), "Comment for Foo");
-            }
-            _ => panic!("Expected class"),
-        }
+        assert_definition_comments!(context, Class, "TooFar", "");
+        assert_definition_comments!(context, Class, "CodeBetween", "");
+        assert_definition_comments!(context, Class, "Foo", "Comment for Foo");
     }
 
     #[test]
@@ -1376,37 +1324,15 @@ mod tests {
             "
         });
 
-        let outer = context.graph.get("Outer").unwrap();
-        match &outer[0] {
-            Definition::Class(_) => {
-                assert_eq!(outer[0].comments(), "Outer class");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let inner = context.graph.get("Outer::Inner").unwrap();
-        match &inner[0] {
-            Definition::Class(_) => {
-                assert_eq!(inner[0].comments(), "Inner class at 2 spaces");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let deep = context.graph.get("Outer::Inner::Deep").unwrap();
-        match &deep[0] {
-            Definition::Class(_) => {
-                assert_eq!(deep[0].comments(), "Deep class at 4 spaces");
-            }
-            _ => panic!("Expected class"),
-        }
-
-        let another = context.graph.get("Outer::AnotherInner").unwrap();
-        match &another[0] {
-            Definition::Class(_) => {
-                assert_eq!(another[0].comments(), "Another inner class\nwith multiple lines");
-            }
-            _ => panic!("Expected class"),
-        }
+        assert_definition_comments!(context, Class, "Outer", "Outer class");
+        assert_definition_comments!(context, Class, "Outer::Inner", "Inner class at 2 spaces");
+        assert_definition_comments!(context, Class, "Outer::Inner::Deep", "Deep class at 4 spaces");
+        assert_definition_comments!(
+            context,
+            Class,
+            "Outer::AnotherInner",
+            "Another inner class\nwith multiple lines"
+        );
     }
 
     #[test]
@@ -1429,37 +1355,10 @@ mod tests {
             "
         });
 
-        let module = context.graph.get("TestModule").unwrap();
-        match &module[0] {
-            Definition::Module(_) => {
-                assert_eq!(module[0].comments(), "Module comment");
-            }
-            _ => panic!("Expected module"),
-        }
-
-        let constant = context.graph.get("TestModule::FOO").unwrap();
-        match &constant[0] {
-            Definition::Constant(_) => {
-                assert_eq!(constant[0].comments(), "Constant comment");
-            }
-            _ => panic!("Expected constant"),
-        }
-
-        let nested = context.graph.get("TestModule::Nested").unwrap();
-        match &nested[0] {
-            Definition::Module(_) => {
-                assert_eq!(nested[0].comments(), "Nested module");
-            }
-            _ => panic!("Expected module"),
-        }
-
-        let multi_a = context.graph.get("A").unwrap();
-        match &multi_a[0] {
-            Definition::Constant(_) => {
-                assert_eq!(multi_a[0].comments(), "Multi-write constant");
-            }
-            _ => panic!("Expected constant"),
-        }
+        assert_definition_comments!(context, Module, "TestModule", "Module comment");
+        assert_definition_comments!(context, Constant, "TestModule::FOO", "Constant comment");
+        assert_definition_comments!(context, Module, "TestModule::Nested", "Nested module");
+        assert_definition_comments!(context, Constant, "A", "Multi-write constant");
     }
 
     #[test]
@@ -1478,22 +1377,19 @@ mod tests {
 
         let definitions = context.graph.get("foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 13);
-        assert_eq!(definitions[0].end(), 16);
+        assert_definition_offset!(definitions[0], 13, 16);
 
         assert!(context.graph.get("foo=").is_none());
 
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 43);
-        assert_eq!(definitions[0].end(), 46);
+        assert_definition_offset!(definitions[0], 43, 46);
 
         assert!(context.graph.get("Foo::bar=").is_none());
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 49);
-        assert_eq!(definitions[0].end(), 52);
+        assert_definition_offset!(definitions[0], 49, 52);
 
         assert!(context.graph.get("Foo::baz=").is_none());
     }
@@ -1514,22 +1410,19 @@ mod tests {
 
         let definitions = context.graph.get("foo=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 13);
-        assert_eq!(definitions[0].end(), 16);
+        assert_definition_offset!(definitions[0], 13, 16);
 
         assert!(context.graph.get("foo").is_none());
 
         let definitions = context.graph.get("Foo::bar=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 43);
-        assert_eq!(definitions[0].end(), 46);
+        assert_definition_offset!(definitions[0], 43, 46);
 
         assert!(context.graph.get("Foo::bar").is_none());
 
         let definitions = context.graph.get("Foo::baz=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 49);
-        assert_eq!(definitions[0].end(), 52);
+        assert_definition_offset!(definitions[0], 49, 52);
 
         assert!(context.graph.get("Foo::baz").is_none());
     }
@@ -1551,23 +1444,19 @@ mod tests {
 
         let definitions = context.graph.get("$foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 4);
+        assert_definition_offset!(definitions[0], 0, 4);
 
         let definitions = context.graph.get("$bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 9);
-        assert_eq!(definitions[0].end(), 13);
+        assert_definition_offset!(definitions[0], 9, 13);
 
         let definitions = context.graph.get("$baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 15);
-        assert_eq!(definitions[0].end(), 19);
+        assert_definition_offset!(definitions[0], 15, 19);
 
         let definitions = context.graph.get("$qux").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 40);
-        assert_eq!(definitions[0].end(), 44);
+        assert_definition_offset!(definitions[0], 40, 44);
     }
 
     #[test]
@@ -1588,23 +1477,19 @@ mod tests {
 
         let definitions = context.graph.get("@foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 4);
+        assert_definition_offset!(definitions[0], 0, 4);
 
         let definitions = context.graph.get("Foo::@bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 22);
-        assert_eq!(definitions[0].end(), 26);
+        assert_definition_offset!(definitions[0], 22, 26);
 
         let definitions = context.graph.get("Foo::@baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 34);
-        assert_eq!(definitions[0].end(), 38);
+        assert_definition_offset!(definitions[0], 34, 38);
 
         let definitions = context.graph.get("Foo::@qux").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 40);
-        assert_eq!(definitions[0].end(), 44);
+        assert_definition_offset!(definitions[0], 40, 44);
     }
 
     #[test]
@@ -1625,23 +1510,19 @@ mod tests {
 
         let definitions = context.graph.get("@@foo").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 0);
-        assert_eq!(definitions[0].end(), 5);
+        assert_definition_offset!(definitions[0], 0, 5);
 
         let definitions = context.graph.get("Foo::@@bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 23);
-        assert_eq!(definitions[0].end(), 28);
+        assert_definition_offset!(definitions[0], 23, 28);
 
         let definitions = context.graph.get("Foo::@@baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 36);
-        assert_eq!(definitions[0].end(), 41);
+        assert_definition_offset!(definitions[0], 36, 41);
 
         let definitions = context.graph.get("Foo::@@qux").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].start(), 43);
-        assert_eq!(definitions[0].end(), 48);
+        assert_definition_offset!(definitions[0], 43, 48);
     }
 
     #[test]
