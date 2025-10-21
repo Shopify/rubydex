@@ -4,12 +4,16 @@ use crate::{
         ruby_indexer::{IndexerParts, RubyIndexer},
     },
     model::graph::Graph,
+    model::ids::UriId,
     source_location::UTF8SourceLocationConverter,
 };
 use glob::glob;
-use std::sync::{
-    Arc, Mutex,
-    mpsc::{Receiver, Sender},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, Sender},
+    },
 };
 use std::{
     fs,
@@ -28,6 +32,7 @@ pub mod scope;
 pub struct Document {
     uri: Url,
     source: Option<String>,
+    cached_content_hash: Option<u16>,
 }
 
 impl Document {
@@ -38,6 +43,7 @@ impl Document {
         Ok(Self {
             uri: Url::parse(uri).map_err(|e| IndexingError::InvalidUri(format!("Failed to parse URI '{uri}': {e}")))?,
             source,
+            cached_content_hash: None,
         })
     }
 
@@ -49,6 +55,7 @@ impl Document {
             uri: Url::from_file_path(path)
                 .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't build URI from path '{path}'")))?,
             source: None,
+            cached_content_hash: None,
         })
     }
 
@@ -95,6 +102,62 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
     let merge_result = |local_graph| graph.update(local_graph);
 
     with_parallel_workers(documents, index_document, merge_result)
+}
+
+/// Reindexing a set of documents and sync with the db cache layer.
+/// The difference between this function and `index_in_parallel` is that this function expects an
+/// initialized db where we fetch and compare data with. We will skip indexing the files that
+/// already exist and are unchanged.
+///
+/// # Errors
+///
+/// Returns Ok if indexing succeeded for all given documents or a vector of errors for all failures
+///
+/// # Panics
+/// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
+/// should not be any code that tries to lock the same mutex multiple times in the same thread
+pub fn index_and_sync_in_parallel(
+    global_graph: &mut Graph,
+    mut documents: Vec<Document>,
+) -> Result<(), MultipleErrors> {
+    add_cached_content_hashes_to_documents(global_graph, &mut documents);
+
+    let index_document = |document: &Document| -> IndexerParts {
+        let (source, errors) = read_document_source(document);
+        if !errors.is_empty() {
+            return (None, errors);
+        }
+
+        let content_hash = Document::calculate_content_hash(source.as_bytes());
+        if let Some(cached_content_hash) = document.cached_content_hash
+            && cached_content_hash == content_hash
+        {
+            return (None, errors);
+        }
+
+        let converter = UTF8SourceLocationConverter::new(&source);
+        let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source, content_hash);
+        ruby_indexer.index();
+        ruby_indexer.into_parts()
+    };
+
+    let merge_result = |local_graph| global_graph.update(local_graph);
+
+    with_parallel_workers(documents, index_document, merge_result)
+}
+
+fn add_cached_content_hashes_to_documents(graph: &Graph, documents: &mut [Document]) {
+    let mut docs_lookup: HashMap<UriId, &mut Document> = documents
+        .iter_mut()
+        .map(|doc| (UriId::from(doc.uri.as_str()), doc))
+        .collect();
+    let db_hashes = graph.get_all_cached_content_hashes().unwrap_or_default();
+
+    for (uri_id, db_hash) in db_hashes {
+        if let Some(document) = docs_lookup.get_mut(&uri_id) {
+            document.cached_content_hash = Some(db_hash);
+        }
+    }
 }
 
 /// Reads the source content from a document, either from memory or disk
