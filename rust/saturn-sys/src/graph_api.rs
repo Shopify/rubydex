@@ -1,6 +1,6 @@
 //! This file provides the C API for the Graph object
 
-use crate::conversions;
+use crate::utils;
 use libc::{c_char, c_void};
 use saturn::indexing;
 use saturn::model::graph::Graph;
@@ -49,7 +49,7 @@ pub unsafe extern "C" fn sat_index_all_c(
     file_paths: *const *const c_char,
     count: usize,
 ) -> *const c_char {
-    let file_paths: Vec<String> = unsafe { conversions::convert_double_pointer_to_vec(file_paths, count).unwrap() };
+    let file_paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(file_paths, count).unwrap() };
     let mut all_errors = Vec::new();
 
     let (documents, document_errors) = indexing::collect_documents(file_paths);
@@ -82,7 +82,7 @@ pub unsafe extern "C" fn sat_index_all_c(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sat_graph_set_configuration(pointer: GraphPointer, db_path: *const c_char) -> bool {
     with_graph(pointer, |graph| {
-        match unsafe { conversions::convert_char_ptr_to_string(db_path) } {
+        match unsafe { utils::convert_char_ptr_to_string(db_path) } {
             Ok(path) => graph.set_configuration(path).is_ok(),
             Err(e) => {
                 eprintln!("Failed to convert db_path to String: {e}");
