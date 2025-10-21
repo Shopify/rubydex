@@ -1,4 +1,5 @@
 #include "graph.h"
+#include "rustbindings.h"
 #include "utils.h"
 
 static VALUE cGraph;
