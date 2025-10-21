@@ -18,8 +18,10 @@ use std::{
 use std::{sync::mpsc, thread};
 use url::Url;
 use xxhash_rust::xxh3::xxh3_64;
+
 pub mod errors;
 pub mod ruby_indexer;
+pub mod scope;
 
 // Represents a document to be indexed. If `source` is `Some(String)`, we're indexing a file state that's not committed
 // to disk yet and should then use the given `source` instead of reading from disk

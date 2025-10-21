@@ -8,7 +8,7 @@ use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
-use crate::model::references::{ResolvedReference, UnresolvedReference};
+use crate::model::references::UnresolvedReference;
 
 /// Holds IDs of entities that were removed from the graph
 pub struct RemovedIds {
@@ -136,34 +136,22 @@ impl Graph {
         self.unresolved_references.push(reference);
     }
 
-    pub fn resolve_references(&mut self) {
-        // Drain all unresolved references and resolve what we can
-        let unresolved = std::mem::take(&mut self.unresolved_references);
+    /// Attempts to resolve a reference against the graph. Returns the fully qualified declaration ID that the reference
+    /// is related to or `None`
+    pub fn resolve_reference(&self, reference: &UnresolvedReference) -> Option<&Declaration> {
+        match reference {
+            UnresolvedReference::Constant(constant) => {
+                if let Some(_nesting) = constant.nesting() {
+                    // Not implemented yet
+                    None
+                } else {
+                    // Top level reference
 
-        for reference in unresolved {
-            match reference {
-                UnresolvedReference::Constant(constant) => {
-                    let constant_id = constant.name_id();
-
-                    // Skip non-top-level constants (they need more complex resolution logic)
-                    if !constant.nesting().is_empty() {
-                        self.unresolved_references.push(UnresolvedReference::Constant(constant));
-                        continue;
-                    }
-
-                    // Try to resolve top-level constant
-                    if let Some(name) = self.names.get(constant_id) {
-                        let declaration_id = DeclarationId::from(name.as_str());
-                        if let Some(declaration) = self.declarations.get_mut(&declaration_id) {
-                            // Successfully resolved - add to declaration
-                            let resolved = ResolvedReference::Constant(constant);
-                            declaration.add_reference(resolved);
-                            continue;
-                        }
-                    }
-
-                    // Could not resolve - put back in unresolved list
-                    self.unresolved_references.push(UnresolvedReference::Constant(constant));
+                    // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
+                    // up `Object` and then we search its members for the top level constant
+                    let name = self.names.get(constant.name_id())?;
+                    let declaration_id = DeclarationId::from(name);
+                    self.declarations.get(&declaration_id)
                 }
             }
         }
@@ -248,7 +236,6 @@ impl Graph {
         }
 
         self.extend(other);
-        self.resolve_references();
     }
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
@@ -700,8 +687,8 @@ mod tests {
             UnresolvedReference::Constant(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("String"));
                 assert_eq!(
-                    unresolved.nesting(),
-                    vec![NameId::from("Foo"), NameId::from("Bar::Baz")]
+                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
+                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar::Baz")]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(32, 38));
@@ -731,7 +718,10 @@ mod tests {
         match reference {
             UnresolvedReference::Constant(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("String"));
-                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
+                assert_eq!(
+                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
+                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
+                );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
@@ -760,7 +750,10 @@ mod tests {
         match reference {
             UnresolvedReference::Constant(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("Object::String"));
-                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
+                assert_eq!(
+                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
+                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
+                );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 41));
             }
@@ -793,50 +786,29 @@ mod tests {
         });
 
         // ::Bar should be resolved to the Bar declaration
-        let bar_declaration = context.graph.declarations.get(&DeclarationId::from("Bar")).unwrap();
-        let bar_refs = bar_declaration.references();
-        assert_eq!(bar_refs.len(), 1);
-        match &bar_refs[0] {
-            ResolvedReference::Constant(resolved) => {
-                assert_eq!(resolved.name_id(), &NameId::from("Bar"));
-                assert_eq!(resolved.nesting(), vec![]);
-                assert_eq!(resolved.uri_id(), UriId::from("file:///foo.rb"));
-                assert_eq!(resolved.offset(), &Offset::new(27, 32));
-            }
-        }
+        let const_ref = context.graph.unresolved_references.remove(0);
+        assert_eq!(
+            context.graph.resolve_reference(&const_ref).unwrap().name(),
+            String::from("Bar")
+        );
+
+        // ::Baz doesn't exist
+        let const_ref = context.graph.unresolved_references.remove(0);
+        assert!(context.graph.resolve_reference(&const_ref).is_none());
+
+        // String is unresolved until we implement following lexical scopes
+        let const_ref = context.graph.unresolved_references.remove(0);
+        assert!(context.graph.resolve_reference(&const_ref).is_none());
+
+        // Object is unresolved until we implement RBS indexing
+        let const_ref = context.graph.unresolved_references.remove(0);
+        assert!(context.graph.resolve_reference(&const_ref).is_none());
 
         // ::Foo::Bar should be resolved to the Foo::Bar declaration
-        let foo_bar_declaration = context.graph.declarations.get(&DeclarationId::from("Foo::Bar")).unwrap();
-        let foo_bar_refs = foo_bar_declaration.references();
-        assert_eq!(foo_bar_refs.len(), 1);
-        match &foo_bar_refs[0] {
-            ResolvedReference::Constant(resolved) => {
-                assert_eq!(resolved.name_id(), &NameId::from("Foo::Bar"));
-                assert_eq!(resolved.nesting(), vec![]);
-                assert_eq!(resolved.uri_id(), UriId::from("file:///bar.rb"));
-                assert_eq!(resolved.offset(), &Offset::new(12, 22));
-            }
-        }
-
-        let unresolved_refs = context.graph.unresolved_references;
-        assert_eq!(unresolved_refs.len(), 3);
-        match &unresolved_refs[0] {
-            UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name_id(), &NameId::from("Baz"));
-                assert_eq!(unresolved.nesting(), vec![]);
-            }
-        }
-        match &unresolved_refs[1] {
-            UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name_id(), &NameId::from("String"));
-                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
-            }
-        }
-        match &unresolved_refs[2] {
-            UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name_id(), &NameId::from("Object"));
-                assert_eq!(unresolved.nesting(), vec![]);
-            }
-        }
+        let const_ref = context.graph.unresolved_references.remove(0);
+        assert_eq!(
+            context.graph.resolve_reference(&const_ref).unwrap().name(),
+            String::from("Foo::Bar")
+        );
     }
 }

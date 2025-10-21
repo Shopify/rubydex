@@ -89,6 +89,11 @@ impl Declaration {
     pub fn remove_member(&mut self, name_id: &NameId) -> Option<DeclarationId> {
         self.members.remove(name_id)
     }
+
+    #[must_use]
+    pub fn get_member(&self, name_id: &NameId) -> Option<&DeclarationId> {
+        self.members.get(name_id)
+    }
 }
 
 #[cfg(test)]
