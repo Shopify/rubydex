@@ -246,7 +246,7 @@ impl Db {
         ))?;
 
         for (uri_id, document) in graph.documents() {
-            stmt.execute(rusqlite::params![*uri_id, document.uri(), 123])?;
+            stmt.execute(rusqlite::params![*uri_id, document.uri(), document.content_hash()])?;
         }
 
         Ok(())

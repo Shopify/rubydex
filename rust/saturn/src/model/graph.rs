@@ -87,9 +87,11 @@ impl Graph {
 
     // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
     // then all definitions discovered in it get associated to the ID
-    pub fn add_uri(&mut self, uri: String) -> UriId {
+    pub fn add_uri(&mut self, uri: String, content_hash: u16) -> UriId {
         let uri_id = UriId::from(&uri);
-        self.documents.entry(uri_id).or_insert_with(|| Document::new(uri));
+        self.documents
+            .entry(uri_id)
+            .or_insert_with(|| Document::new(uri, content_hash));
         uri_id
     }
 
@@ -138,8 +140,9 @@ impl Graph {
     ///
     /// Any database errors will prevent the data from being loaded
     pub fn load_uri(&mut self, uri: String) -> Result<(), Box<dyn Error>> {
-        let uri_id = self.add_uri(uri);
+        let uri_id = UriId::from(&uri);
         let loaded_data = self.db.load_uri(uri_id)?;
+        self.add_uri(uri, loaded_data.content_hash);
 
         for load_result in loaded_data.definitions {
             let declaration_id = load_result.declaration_id;
