@@ -6,6 +6,8 @@ use crate::model::{
 use rusqlite::{Connection, params};
 use std::{cell::RefCell, error::Error, fs, path::Path};
 
+use super::identity_maps::IdentityHashMap;
+
 const SCHEMA_VERSION: u16 = 1;
 
 const TABLE_DEFINITIONS: &str = "definitions";
@@ -183,6 +185,19 @@ impl Db {
 
             tx.commit()?;
             Ok(())
+        })
+    }
+
+    /// # Errors
+    ///
+    /// Errors on any type of database connection or operation failure
+    pub fn get_all_content_hashes(&self) -> Result<IdentityHashMap<UriId, u16>, Box<dyn Error>> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare("SELECT id, content_hash FROM documents")?;
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<IdentityHashMap<UriId, u16>, _>>()
+                .map_err(Into::into)
         })
     }
 
@@ -427,5 +442,25 @@ mod tests {
             .query_row((), |row| row.get(0))
             .unwrap();
         assert_eq!(name_count, 0,);
+    }
+
+    #[test]
+    fn querying_content_hashes_by_uri() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///first.rb", "module FirstModule; end");
+        context.index_uri("file:///second.rb", "class SecondClass; end");
+
+        let mut db = Db::new();
+        db.initialize_connection(None).unwrap();
+        assert!(db.save_full_graph(&context.graph).is_ok());
+
+        let result = db.get_all_content_hashes().unwrap();
+
+        assert_eq!(result.len(), 2);
+        let first_uri = UriId::from("file:///first.rb");
+        let second_uri = UriId::from("file:///second.rb");
+        assert!(result.contains_key(&first_uri));
+        assert!(result.contains_key(&second_uri));
     }
 }
