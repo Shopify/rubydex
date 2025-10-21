@@ -8,7 +8,7 @@ use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
-use crate::model::references::UnresolvedReference;
+use crate::model::references::{ResolvedReference, UnresolvedReference};
 
 /// Holds IDs of entities that were removed from the graph
 pub struct RemovedIds {
@@ -134,6 +134,39 @@ impl Graph {
         self.unresolved_references.push(reference);
     }
 
+    pub fn resolve_references(&mut self) {
+        // Drain all unresolved references and resolve what we can
+        let unresolved = std::mem::take(&mut self.unresolved_references);
+
+        for reference in unresolved {
+            match reference {
+                UnresolvedReference::Constant(constant) => {
+                    let constant_id = constant.name_id();
+
+                    // Skip non-top-level constants (they need more complex resolution logic)
+                    if !constant.nesting().is_empty() {
+                        self.unresolved_references.push(UnresolvedReference::Constant(constant));
+                        continue;
+                    }
+
+                    // Try to resolve top-level constant
+                    if let Some(name) = self.names.get(constant_id) {
+                        let declaration_id = DeclarationId::from(name.as_str());
+                        if let Some(declaration) = self.declarations.get_mut(&declaration_id) {
+                            // Successfully resolved - add to declaration
+                            let resolved = ResolvedReference::Constant(constant);
+                            declaration.add_reference(resolved);
+                            continue;
+                        }
+                    }
+
+                    // Could not resolve - put back in unresolved list
+                    self.unresolved_references.push(UnresolvedReference::Constant(constant));
+                }
+            }
+        }
+    }
+
     /// # Errors
     ///
     /// Any database errors will prevent the data from being loaded
@@ -172,6 +205,7 @@ impl Graph {
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, incomplete_index: Graph) {
         self.definitions.extend(incomplete_index.definitions);
+        self.names.extend(incomplete_index.names);
         self.unresolved_references
             .extend(incomplete_index.unresolved_references);
 
@@ -211,6 +245,7 @@ impl Graph {
         }
 
         self.extend(other);
+        self.resolve_references();
     }
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
@@ -725,6 +760,79 @@ mod tests {
                 assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 41));
+            }
+        }
+    }
+
+    #[test]
+    fn resolving_top_level_constants() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar
+                ::Bar # should be resolved to Bar from file:///bar.rb
+                ::Baz # should not be resolved because it doesn't exist
+                String # should not be resolved because it's not top-level
+                ::Object # should not be resolved because ::Object does not exist in the graph yet
+              end
+            end
+            "
+        });
+
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Bar
+              ::Foo::Bar # should be resolved to Foo::Bar from file:///foo.rb
+            end
+            "
+        });
+
+        // ::Bar should be resolved to the Bar declaration
+        let bar_declaration = context.graph.declarations.get(&DeclarationId::from("Bar")).unwrap();
+        let bar_refs = bar_declaration.references();
+        assert_eq!(bar_refs.len(), 1);
+        match &bar_refs[0] {
+            ResolvedReference::Constant(resolved) => {
+                assert_eq!(resolved.name_id(), &NameId::from("Bar"));
+                assert_eq!(resolved.nesting(), vec![]);
+                assert_eq!(resolved.uri_id(), UriId::from("file:///foo.rb"));
+                assert_eq!(resolved.offset(), &Offset::new(27, 32));
+            }
+        }
+
+        // ::Foo::Bar should be resolved to the Foo::Bar declaration
+        let foo_bar_declaration = context.graph.declarations.get(&DeclarationId::from("Foo::Bar")).unwrap();
+        let foo_bar_refs = foo_bar_declaration.references();
+        assert_eq!(foo_bar_refs.len(), 1);
+        match &foo_bar_refs[0] {
+            ResolvedReference::Constant(resolved) => {
+                assert_eq!(resolved.name_id(), &NameId::from("Foo::Bar"));
+                assert_eq!(resolved.nesting(), vec![]);
+                assert_eq!(resolved.uri_id(), UriId::from("file:///bar.rb"));
+                assert_eq!(resolved.offset(), &Offset::new(12, 22));
+            }
+        }
+
+        let unresolved_refs = context.graph.unresolved_references;
+        assert_eq!(unresolved_refs.len(), 3);
+        match &unresolved_refs[0] {
+            UnresolvedReference::Constant(unresolved) => {
+                assert_eq!(unresolved.name_id(), &NameId::from("Baz"));
+                assert_eq!(unresolved.nesting(), vec![]);
+            }
+        }
+        match &unresolved_refs[1] {
+            UnresolvedReference::Constant(unresolved) => {
+                assert_eq!(unresolved.name_id(), &NameId::from("String"));
+                assert_eq!(unresolved.nesting(), vec![NameId::from("Foo"), NameId::from("Bar")]);
+            }
+        }
+        match &unresolved_refs[2] {
+            UnresolvedReference::Constant(unresolved) => {
+                assert_eq!(unresolved.name_id(), &NameId::from("Object"));
+                assert_eq!(unresolved.nesting(), vec![]);
             }
         }
     }

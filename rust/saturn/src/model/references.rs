@@ -33,6 +33,11 @@ pub enum UnresolvedReference {
     Constant(Box<ConstantRef>),
 }
 
+#[derive(Debug)]
+pub enum ResolvedReference {
+    Constant(Box<ConstantRef>),
+}
+
 impl ConstantRef {
     #[must_use]
     pub fn new(name_id: NameId, nesting: Vec<NameId>, uri_id: UriId, offset: Offset) -> Self {

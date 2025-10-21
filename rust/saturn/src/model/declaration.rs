@@ -1,6 +1,7 @@
 use crate::model::{
     identity_maps::IdentityHashMap,
     ids::{DeclarationId, DefinitionId, NameId},
+    references::ResolvedReference,
 };
 
 /// A `Declaration` represents the global concept of an entity in Ruby. For example, the class `Foo` may be defined 3
@@ -17,6 +18,8 @@ pub struct Declaration {
     /// traversal of the graph when trying to resolve constant references or trying to discover which methods exist in a
     /// class
     members: IdentityHashMap<NameId, DeclarationId>,
+    /// The list of references that are made to this declaration
+    references: Vec<ResolvedReference>,
 }
 
 impl Declaration {
@@ -26,6 +29,7 @@ impl Declaration {
             name,
             definition_ids: Vec::new(),
             members: IdentityHashMap::default(),
+            references: Vec::new(),
         }
     }
 
@@ -37,6 +41,11 @@ impl Declaration {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    #[must_use]
+    pub fn references(&self) -> &[ResolvedReference] {
+        &self.references
     }
 
     #[must_use]
@@ -56,6 +65,10 @@ impl Declaration {
         );
 
         self.definition_ids.push(definition_id);
+    }
+
+    pub fn add_reference(&mut self, reference: ResolvedReference) {
+        self.references.push(reference);
     }
 
     // Deletes a definition from this declaration

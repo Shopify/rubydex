@@ -313,14 +313,25 @@ impl<'a> RubyIndexer<'a> {
 
     fn index_constant_reference(&mut self, location: &ruby_prism::Location) {
         let offset = Offset::from_prism_location(location);
-        let name = Self::location_to_string(location);
-        let name_id = self.local_graph.add_name(name);
-        let nesting = self
-            .nesting_stacks
-            .last()
-            .expect("There should always be at least one stack. This is a bug")
-            .clone();
-        let name_id_nesting: Vec<NameId> = nesting.iter().map(NameId::from).collect();
+        let mut name = Self::location_to_string(location);
+        let mut is_top_level = false;
+
+        if name.starts_with("::") {
+            name = name.strip_prefix("::").unwrap().to_string();
+            is_top_level = true;
+        }
+
+        let name_id = self.local_graph.add_name(name.clone());
+        let name_id_nesting = if is_top_level {
+            vec![]
+        } else {
+            let nesting = self
+                .nesting_stacks
+                .last()
+                .expect("There should always be at least one stack. This is a bug")
+                .clone();
+            nesting.iter().map(NameId::from).collect()
+        };
 
         let reference = UnresolvedReference::Constant(Box::new(ConstantRef::new(
             name_id,
