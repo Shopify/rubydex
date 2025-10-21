@@ -1,4 +1,5 @@
 #include "graph.h"
+#include "declaration.h"
 #include "rustbindings.h"
 #include "utils.h"
 
@@ -64,10 +65,63 @@ static VALUE sr_graph_set_configuration(VALUE self, VALUE db_path) {
     return Qnil;
 }
 
+// Body function for rb_ensure in Graph#declarations
+static VALUE graph_declarations_yield(VALUE args) {
+    VALUE self = rb_ary_entry(args, 0);
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+
+    int64_t id = 0;
+    while (sat_graph_declarations_iter_next(iter, &id)) {
+        VALUE argv[] = {self, LL2NUM(id)};
+        VALUE handle = rb_class_new_instance(2, argv, cDeclaration);
+        rb_yield(handle);
+    }
+
+    return Qnil;
+}
+
+// Ensure function for rb_ensure in Graph#declarations to always free the iterator
+static VALUE graph_declarations_ensure(VALUE args) {
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    sat_graph_declarations_iter_free(iter);
+
+    return Qnil;
+}
+
+// Size function for the declarations enumerator
+static VALUE graph_declarations_size(VALUE self, VALUE _args, VALUE _eobj) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    DeclarationsIter *iter = sat_graph_declarations_iter_new(graph);
+    size_t len = sat_graph_declarations_iter_len(iter);
+    sat_graph_declarations_iter_free(iter);
+
+    return SIZET2NUM(len);
+}
+
+// Graph#declarations: () -> Enumerator[Declaration]
+// Returns an enumerator that yields all declarations lazily
+static VALUE sr_graph_declarations(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize_with_size(self, rb_str_new2("declarations"), 0, NULL, graph_declarations_size);
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    void *iter = sat_graph_declarations_iter_new(graph);
+    VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
+    rb_ensure(graph_declarations_yield, args, graph_declarations_ensure, args);
+
+    return self;
+}
+
 void initialize_graph(VALUE mSaturn) {
     cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
 
     rb_define_alloc_func(cGraph, sr_graph_alloc);
     rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
     rb_define_method(cGraph, "set_configuration", sr_graph_set_configuration, 1);
+    rb_define_method(cGraph, "declarations", sr_graph_declarations, 0);
 }

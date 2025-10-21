@@ -91,3 +91,91 @@ pub unsafe extern "C" fn sat_graph_set_configuration(pointer: GraphPointer, db_p
         }
     })
 }
+
+/// An iterator over declaration IDs
+///
+/// We snapshot the IDs at iterator creation so if the graph is modified, the iterator will not see the changes
+#[derive(Debug)]
+pub struct DeclarationsIter {
+    /// The snapshot of declaration IDs
+    ids: Box<[i64]>,
+    /// The current index of the iterator
+    index: usize,
+}
+
+/// Creates a new iterator over declaration IDs by snapshotting the current set of IDs.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - The returned pointer must be freed with `sat_graph_declarations_iter_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_graph_declarations_iter_new(pointer: GraphPointer) -> *mut DeclarationsIter {
+    // Snapshot the IDs at iterator creation to avoid borrowing across FFI calls
+    let ids = with_graph(pointer, |graph| {
+        graph
+            .declarations()
+            .keys()
+            .map(|name_id| **name_id)
+            .collect::<Vec<i64>>()
+            .into_boxed_slice()
+    });
+
+    Box::into_raw(Box::new(DeclarationsIter { ids, index: 0 }))
+}
+
+/// Returns the total number of IDs in the iterator snapshot.
+///
+/// # Safety
+///
+/// - `iter` must be a valid pointer previously returned by `sat_graph_declarations_iter_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_graph_declarations_iter_len(iter: *const DeclarationsIter) -> usize {
+    if iter.is_null() {
+        return 0;
+    }
+
+    unsafe { (&*iter).ids.len() }
+}
+
+/// Advances the iterator and writes the next ID into `out_id`.
+/// Returns `true` if an ID was written, or `false` if the iterator is exhausted or inputs are invalid.
+///
+/// # Safety
+///
+/// - `iter` must be a valid pointer previously returned by `sat_graph_declarations_iter_new`.
+/// - `out_id` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_graph_declarations_iter_next(iter: *mut DeclarationsIter, out_id: *mut i64) -> bool {
+    if iter.is_null() || out_id.is_null() {
+        return false;
+    }
+
+    let it = unsafe { &mut *iter };
+    if it.index >= it.ids.len() {
+        return false;
+    }
+
+    let id = it.ids[it.index];
+    it.index += 1;
+    unsafe { *out_id = id };
+
+    true
+}
+
+/// Frees an iterator created by `sat_graph_declarations_iter_new`.
+///
+/// # Safety
+///
+/// - `iter` must be a pointer previously returned by `sat_graph_declarations_iter_new`.
+/// - `iter` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_graph_declarations_iter_free(iter: *mut DeclarationsIter) {
+    if iter.is_null() {
+        return;
+    }
+
+    unsafe {
+        let _ = Box::from_raw(iter);
+    }
+}
