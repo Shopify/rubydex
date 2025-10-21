@@ -23,6 +23,7 @@ class DeclarationTest < Minitest::Test
 
       declaration = graph.declarations.first
       assert_instance_of(Saturn::Declaration, declaration)
+      assert_equal("A", declaration.name)
     end
   end
 end
