@@ -12,7 +12,7 @@ static void graph_free(void *ptr) {
     }
 }
 
-static const rb_data_type_t graph_type = {"Graph", {0, graph_free, 0}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
+const rb_data_type_t graph_type = {"Graph", {0, graph_free, 0}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
 
 // Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
 // as a void pointer
