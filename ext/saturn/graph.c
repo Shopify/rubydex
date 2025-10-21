@@ -63,7 +63,7 @@ static VALUE rb_graph_index_all(VALUE self, VALUE file_paths) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
     const char *error_messages =
-        sat_index_all_c(graph, (const char **)converted_file_paths, length);
+        sat_index_all(graph, (const char **)converted_file_paths, length);
 
     // Free the converted file paths and allow the GC to collect them
     for (size_t i = 0; i < length; i++) {
