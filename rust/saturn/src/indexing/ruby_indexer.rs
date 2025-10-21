@@ -8,7 +8,7 @@ use crate::model::definitions::{
 };
 use crate::model::graph::Graph;
 use crate::model::ids::{DeclarationId, NameId, UriId};
-use crate::model::references::{UnresolvedConstantRef, UnresolvedReference};
+use crate::model::references::{ConstantRef, UnresolvedReference};
 use crate::offset::Offset;
 use crate::source_location::SourceLocationConverter;
 
@@ -322,7 +322,7 @@ impl<'a> RubyIndexer<'a> {
             .clone();
         let name_id_nesting: Vec<NameId> = nesting.iter().map(NameId::from).collect();
 
-        let reference = UnresolvedReference::Constant(Box::new(UnresolvedConstantRef::new(
+        let reference = UnresolvedReference::Constant(Box::new(ConstantRef::new(
             name_id,
             name_id_nesting,
             self.uri_id,
