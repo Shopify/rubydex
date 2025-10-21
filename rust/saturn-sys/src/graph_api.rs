@@ -44,7 +44,7 @@ where
 /// This function is unsafe because it dereferences raw pointers coming from C. The caller has to ensure that the Ruby
 /// VM will not free the pointers related to the string array while they are in use by Rust
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_index_all_c(
+pub unsafe extern "C" fn sat_index_all(
     pointer: GraphPointer,
     file_paths: *const *const c_char,
     count: usize,
