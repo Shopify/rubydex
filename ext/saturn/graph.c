@@ -1,5 +1,4 @@
 #include "graph.h"
-#include "ruby/internal/value_type.h"
 #include "utils.h"
 
 static VALUE cGraph;
