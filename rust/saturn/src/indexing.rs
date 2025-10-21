@@ -193,6 +193,7 @@ pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingErro
                     )));
                 }
             }
+
             continue;
         }
 
@@ -201,7 +202,11 @@ pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingErro
                 Ok(document) => documents.push(document),
                 Err(e) => errors.push(e),
             }
+
+            continue;
         }
+
+        errors.push(IndexingError::FileReadError(format!("Path '{path}' does not exist")));
     }
 
     (documents, errors)
@@ -280,6 +285,16 @@ mod tests {
         ]);
 
         assert!(documents.is_empty());
-        assert!(errors.is_empty());
+
+        assert_eq!(
+            errors
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<String>>(),
+            vec![format!(
+                "File read error: Path '{}/non_existing_path' does not exist",
+                context.absolute_path().display()
+            )]
+        );
     }
 }
