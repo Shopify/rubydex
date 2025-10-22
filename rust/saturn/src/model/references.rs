@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use crate::{
+    indexing::scope::Nesting,
     model::ids::{NameId, UriId},
     offset::Offset,
 };
@@ -7,9 +10,9 @@ use crate::{
 pub struct ConstantReference {
     /// The unqualified name of the constant
     name_id: NameId,
-    /// The nesting where we found the constant reference. This is a list of unqualified name IDs, so that we can
-    /// traverse the graph through the member relationships
-    nesting: Vec<NameId>,
+    /// The nesting where we found the constant reference. This is a chain of nesting objects representing the lexical
+    /// scopes surrounding the reference
+    nesting: Option<Arc<Nesting>>,
     /// The document where we found the reference
     uri_id: UriId,
     /// The offsets inside of the document where we found the reference
@@ -40,7 +43,7 @@ pub enum ResolvedReference {
 
 impl ConstantReference {
     #[must_use]
-    pub fn new(name_id: NameId, nesting: Vec<NameId>, uri_id: UriId, offset: Offset) -> Self {
+    pub fn new(name_id: NameId, nesting: Option<Arc<Nesting>>, uri_id: UriId, offset: Offset) -> Self {
         Self {
             name_id,
             nesting,
@@ -55,7 +58,7 @@ impl ConstantReference {
     }
 
     #[must_use]
-    pub fn nesting(&self) -> &[NameId] {
+    pub fn nesting(&self) -> &Option<Arc<Nesting>> {
         &self.nesting
     }
 

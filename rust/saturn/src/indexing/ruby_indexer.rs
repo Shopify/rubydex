@@ -1,13 +1,16 @@
 //! Visit the Ruby AST and create the definitions.
 
+use std::sync::Arc;
+
 use crate::indexing::errors::IndexingError;
+use crate::indexing::scope::Scope;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodDefinition,
     ModuleDefinition, Parameter, ParameterStruct,
 };
 use crate::model::graph::Graph;
-use crate::model::ids::{DeclarationId, NameId, UriId};
+use crate::model::ids::{DeclarationId, UriId};
 use crate::model::references::{ConstantReference, UnresolvedReference};
 use crate::offset::Offset;
 use crate::source_location::SourceLocationConverter;
@@ -39,11 +42,11 @@ const MAGIC_AND_RBS_COMMENT_PREFIX: &[&str] = &[
 pub struct RubyIndexer<'a> {
     uri_id: UriId,
     local_graph: Graph,
-    nesting_stacks: Vec<Vec<String>>,
     errors: Vec<IndexingError>,
     location_converter: &'a dyn SourceLocationConverter,
     comments: Vec<CommentGroup>,
     source: &'a str,
+    scope: Scope,
 }
 
 impl<'a> RubyIndexer<'a> {
@@ -59,12 +62,12 @@ impl<'a> RubyIndexer<'a> {
 
         Self {
             uri_id,
-            nesting_stacks: vec![Vec::new()],
             local_graph: local_index,
             errors: Vec::new(),
             location_converter,
             comments: Vec::new(),
             source,
+            scope: Scope::new(),
         }
     }
 
@@ -281,80 +284,19 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
-    fn with_updated_nesting<F>(&mut self, name: &str, perform_visit: F)
-    where
-        F: FnOnce(&mut Self, String),
-    {
-        if let Some(trimmed) = name.strip_prefix("::") {
-            let trimmed_name = trimmed.to_string();
-            self.nesting_stacks.push(vec![trimmed_name.clone()]);
-            perform_visit(self, trimmed_name);
-            self.nesting_stacks.pop();
-        } else {
-            let current_stack: &mut Vec<String> = self
-                .nesting_stacks
-                .last_mut()
-                .expect("There should always be at least one stack. This is a bug");
-
-            current_stack.push(name.to_string());
-            let fully_qualified_name = current_stack.join("::");
-            perform_visit(self, fully_qualified_name);
-
-            let current_stack: &mut Vec<String> = self
-                .nesting_stacks
-                .last_mut()
-                .expect("There should always be at least one stack. This is a bug");
-
-            current_stack.pop();
-        }
-    }
-
-    fn fully_qualify(&self, name: &str) -> String {
-        if let Some(trimmed) = name.strip_prefix("::") {
-            trimmed.to_string()
-        } else {
-            let current_stack: &Vec<String> = self
-                .nesting_stacks
-                .last()
-                .expect("There should always be at least one stack. This is a bug");
-
-            let mut fully_qualified_name = current_stack.join("::");
-            if !fully_qualified_name.is_empty() {
-                fully_qualified_name.push_str("::");
-            }
-            fully_qualified_name.push_str(name);
-            fully_qualified_name
-        }
-    }
-
     fn index_constant_reference(&mut self, location: &ruby_prism::Location) {
         let offset = Offset::from_prism_location(location);
-        let mut name = Self::location_to_string(location);
-        let mut is_top_level = false;
+        let name = Self::location_to_string(location);
 
-        if name.starts_with("::") {
-            name = name.strip_prefix("::").unwrap().to_string();
-            is_top_level = true;
-        }
-
-        let name_id = self.local_graph.add_name(name);
-        let name_id_nesting = if is_top_level {
-            vec![]
+        let (name, scope) = if let Some(trimmed) = name.strip_prefix("::") {
+            (trimmed.to_string(), None)
         } else {
-            let nesting = self
-                .nesting_stacks
-                .last()
-                .expect("There should always be at least one stack. This is a bug")
-                .clone();
-            nesting.iter().map(NameId::from).collect()
+            (name, self.scope.nesting().as_ref().map(Arc::clone))
         };
 
-        let reference = UnresolvedReference::Constant(Box::new(ConstantReference::new(
-            name_id,
-            name_id_nesting,
-            self.uri_id,
-            offset,
-        )));
+        let name_id = self.local_graph.add_name(name);
+        let reference =
+            UnresolvedReference::Constant(Box::new(ConstantReference::new(name_id, scope, self.uri_id, offset)));
         self.local_graph.add_unresolved_reference(reference);
     }
 }
@@ -409,56 +351,56 @@ impl CommentGroup {
 impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         let name = Self::location_to_string(&node.constant_path().location());
+        let (fully_qualified_name, declaration_id) = self.scope.enter(&name);
+        let offset = Offset::from_prism_location(&node.location());
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
-        self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let declaration_id = DeclarationId::from(&fully_qualified_name);
-            let offset = Offset::from_prism_location(&node.location());
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-            // Uses `location_converter` to evaluate the performance impact of the conversion
-            self.location_converter.offset_to_position(&offset).unwrap();
+        // Uses `location_converter` to evaluate the performance impact of the conversion
+        self.location_converter.offset_to_position(&offset).unwrap();
 
-            let definition = Definition::Class(Box::new(ClassDefinition::new(
-                declaration_id,
-                indexer.uri_id,
-                offset,
-                comments,
-            )));
+        let definition = Definition::Class(Box::new(ClassDefinition::new(
+            declaration_id,
+            self.uri_id,
+            offset,
+            comments,
+        )));
 
-            indexer.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph.add_definition(fully_qualified_name, definition);
 
-            if let Some(body) = node.body() {
-                indexer.visit(&body);
-            }
-        });
+        if let Some(body) = node.body() {
+            self.visit(&body);
+        }
+
+        self.scope.leave();
     }
 
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
         let name = Self::location_to_string(&node.constant_path().location());
+        let (fully_qualified_name, declaration_id) = self.scope.enter(&name);
+        let offset = Offset::from_prism_location(&node.location());
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
-        self.with_updated_nesting(&name, |indexer, fully_qualified_name| {
-            let declaration_id = DeclarationId::from(&fully_qualified_name);
-            let offset = Offset::from_prism_location(&node.location());
-            let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-            // Uses `location_converter` to evaluate the performance impact of the conversion
-            self.location_converter.offset_to_position(&offset).unwrap();
-            let definition = Definition::Module(Box::new(ModuleDefinition::new(
-                declaration_id,
-                indexer.uri_id,
-                offset,
-                comments,
-            )));
-            indexer.local_graph.add_definition(fully_qualified_name, definition);
+        // Uses `location_converter` to evaluate the performance impact of the conversion
+        self.location_converter.offset_to_position(&offset).unwrap();
+        let definition = Definition::Module(Box::new(ModuleDefinition::new(
+            declaration_id,
+            self.uri_id,
+            offset,
+            comments,
+        )));
+        self.local_graph.add_definition(fully_qualified_name, definition);
 
-            if let Some(body) = node.body() {
-                indexer.visit(&body);
-            }
-        });
+        if let Some(body) = node.body() {
+            self.visit(&body);
+        }
+
+        self.scope.leave();
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let fully_qualified_name = self.fully_qualify(&name);
+        let fully_qualified_name = self.scope.fully_qualify(&name);
 
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&name_loc);
@@ -479,7 +421,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
         let location = node.target().location();
         let name = Self::location_to_string(&location);
-        let fully_qualified_name = self.fully_qualify(&name);
+        let fully_qualified_name = self.scope.fully_qualify(&name);
 
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&location);
@@ -511,7 +453,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let fully_qualified_name = self.fully_qualify(&name);
+                    let fully_qualified_name = self.scope.fully_qualify(&name);
 
                     let declaration_id = DeclarationId::from(&fully_qualified_name);
                     let offset = Offset::from_prism_location(&location);
@@ -549,7 +491,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let fully_qualified_name = self.fully_qualify(&name);
+                    let fully_qualified_name = self.scope.fully_qualify(&name);
 
                     let declaration_id = DeclarationId::from(&fully_qualified_name);
                     let offset = Offset::from_prism_location(&location);
@@ -569,7 +511,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let fully_qualified_name = self.fully_qualify(&name);
+                    let fully_qualified_name = self.scope.fully_qualify(&name);
 
                     let declaration_id = DeclarationId::from(&fully_qualified_name);
                     let offset = Offset::from_prism_location(&location);
@@ -595,7 +537,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode) {
         let name = Self::location_to_string(&node.name_loc());
-        let fully_qualified_name = self.fully_qualify(&name);
+        let fully_qualified_name = self.scope.fully_qualify(&name);
 
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&node.location());
@@ -625,7 +567,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode) {
         fn create_attr_accessor(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let fully_qualified_name = indexer.fully_qualify(&name);
+                let fully_qualified_name = indexer.scope.fully_qualify(&name);
                 let declaration_id = DeclarationId::from(&fully_qualified_name);
                 let writer_name = format!("{fully_qualified_name}=");
                 let writer_declaration_id = DeclarationId::from(&writer_name);
@@ -657,7 +599,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         fn create_attr_reader(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let fully_qualified_name = indexer.fully_qualify(&name);
+                let fully_qualified_name = indexer.scope.fully_qualify(&name);
                 let declaration_id = DeclarationId::from(&fully_qualified_name);
                 let offset = Offset::from_prism_location(&location);
                 let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
@@ -678,7 +620,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         fn create_attr_writer(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let fully_qualified_name = indexer.fully_qualify(&name);
+                let fully_qualified_name = indexer.scope.fully_qualify(&name);
                 let writer_name = format!("{fully_qualified_name}=");
                 let declaration_id = DeclarationId::from(&writer_name);
                 let offset = Offset::from_prism_location(&location);
@@ -784,7 +726,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let fully_qualified_name = self.fully_qualify(&name);
+        let fully_qualified_name = self.scope.fully_qualify(&name);
 
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&name_loc);
@@ -806,7 +748,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode) {
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let fully_qualified_name = self.fully_qualify(&name);
+        let fully_qualified_name = self.scope.fully_qualify(&name);
 
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&name_loc);
