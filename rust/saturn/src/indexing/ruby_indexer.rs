@@ -1186,6 +1186,11 @@ mod tests {
             # Multi-line comment 3
             class Multi; end
 
+            # Comment 1
+            #
+            # Comment 2
+            class EmptyCommentLine; end
+
             # Comment directly above (no gap)
             class NoGap; end
 
@@ -1207,6 +1212,12 @@ mod tests {
                 "# Multi-line comment 2",
                 "# Multi-line comment 3"
             ]
+        );
+        assert_definition_comments!(
+            context,
+            Class,
+            "EmptyCommentLine",
+            vec!["# Comment 1", "#", "# Comment 2"]
         );
         assert_definition_comments!(context, Class, "NoGap", vec!["# Comment directly above (no gap)"]);
         assert_definition_comments!(context, Class, "BlankLine", vec!["# Comment with blank line"]);
