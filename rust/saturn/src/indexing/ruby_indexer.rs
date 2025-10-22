@@ -903,8 +903,9 @@ mod tests {
         graph
             .unresolved_references()
             .iter()
-            .map(|r| match r {
-                UnresolvedReference::Constant(constant) => graph.names().get(constant.name_id()).unwrap(),
+            .filter_map(|r| match r {
+                UnresolvedReference::Constant(constant) => Some(graph.names().get(constant.name_id()).unwrap()),
+                UnresolvedReference::Method(_method) => None,
             })
             .collect::<Vec<_>>()
     }
@@ -1959,6 +1960,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(19, 22));
             }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            }
         }
 
         let reference = &refs[1];
@@ -1972,6 +1976,9 @@ mod tests {
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(32, 38));
+            }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
             }
         }
     }
@@ -2005,6 +2012,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            }
         }
     }
 
@@ -2037,6 +2047,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            }
         }
 
         let reference = &refs[1];
@@ -2050,6 +2063,9 @@ mod tests {
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 41));
+            }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
             }
         }
     }

@@ -200,6 +200,9 @@ impl Graph {
                     self.declarations.get(&declaration_id)
                 }
             }
+            UnresolvedReference::Method(_unresolved) => {
+                unreachable!();
+            }
         }
     }
 
