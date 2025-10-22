@@ -36,8 +36,13 @@ pub struct Graph {
 impl Graph {
     #[must_use]
     pub fn new() -> Self {
+        let mut declarations = IdentityHashMap::default();
+        // Insert the magic top level self <main> object into the graph, so that we can associate global variables or
+        // definitions made at the top level with it
+        declarations.insert(DeclarationId::from("<main>"), Declaration::new(String::from("<main>")));
+
         Self {
-            declarations: IdentityHashMap::default(),
+            declarations,
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
@@ -100,6 +105,34 @@ impl Graph {
         let name_id = NameId::from(&name);
         self.names.entry(name_id).or_insert(name);
         name_id
+    }
+
+    /// Register a member relationship from a declaration to another declaration through its unqualified name id. For example, in
+    ///
+    /// ```ruby
+    /// module Foo
+    ///   class Bar; end
+    ///   def baz; end
+    /// end
+    /// ```
+    ///
+    /// `Foo` has two members:
+    /// ```ruby
+    /// {
+    ///   NameId(Bar) => DeclarationId(Bar)
+    ///   NameId(baz) => DeclarationId(baz)
+    /// }
+    /// ```
+    pub fn add_member(
+        &mut self,
+        declaration_id: &DeclarationId,
+        member_declaration_id: DeclarationId,
+        member_name: &str,
+    ) {
+        if let Some(declaration) = self.declarations.get_mut(declaration_id) {
+            let name_id = NameId::from(member_name);
+            declaration.add_member(name_id, member_declaration_id);
+        }
     }
 
     /// Handles when a document (identified by `uri`) is deleted. This removes the URI from the graph along with all
@@ -276,7 +309,7 @@ impl Graph {
 
         checker.add_rule("Each `declaration` has at least one definition", |index, errors| {
             for declaration in index.declarations().values() {
-                if declaration.definitions().is_empty() {
+                if declaration.name() != "<main>" && declaration.definitions().is_empty() {
                     errors.push(format!(
                         "Declaration '{}' exists in `declarations`, but is not associated to any definitions",
                         declaration.name()
@@ -456,7 +489,8 @@ mod tests {
         context.delete_uri("file:///foo.rb");
 
         assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
+        // Only <main> remains
+        assert!(context.graph.declarations.len() == 1);
         assert!(context.graph.documents.is_empty());
 
         context.graph.assert_integrity();
@@ -471,7 +505,8 @@ mod tests {
         context.index_uri("file:///foo.rb", "");
 
         assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
+        // Only <main> remains
+        assert!(context.graph.declarations.len() == 1);
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(context.graph.documents.len(), 1);
 

@@ -1,6 +1,6 @@
 //! Visit the Ruby AST and create the definitions.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::indexing::errors::IndexingError;
 use crate::indexing::scope::Scope;
@@ -19,6 +19,8 @@ use crate::source_location::SourceLocationConverter;
 use ruby_prism::{ParseResult, Visit};
 
 pub type IndexerParts = (Option<Graph>, Vec<IndexingError>);
+static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
+static MAIN_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("<main>"));
 
 /// The indexer for the definitions found in the Ruby source code.
 ///
@@ -330,6 +332,7 @@ impl CommentGroup {
 
 impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
+        let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let name = Self::location_to_string(&node.constant_path().location());
         let (fully_qualified_name, declaration_id) = self.scope.enter(&name);
         let offset = Offset::from_prism_location(&node.location());
@@ -346,6 +349,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         )));
 
         self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
 
         if let Some(body) = node.body() {
             self.visit(&body);
@@ -355,6 +359,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
+        let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let name = Self::location_to_string(&node.constant_path().location());
         let (fully_qualified_name, declaration_id) = self.scope.enter(&name);
         let offset = Offset::from_prism_location(&node.location());
@@ -369,6 +374,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
         )));
         self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
 
         if let Some(body) = node.body() {
             self.visit(&body);
@@ -378,6 +384,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
+        let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
         let fully_qualified_name = self.scope.fully_qualify(&name);
@@ -395,10 +402,12 @@ impl Visit<'_> for RubyIndexer<'_> {
         )));
 
         self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
         self.visit(&node.value());
     }
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
+        let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let location = node.target().location();
         let name = Self::location_to_string(&location);
         let fully_qualified_name = self.scope.fully_qualify(&name);
@@ -416,6 +425,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         )));
 
         self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
         self.visit(&node.value());
     }
 
@@ -431,6 +441,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         for left in node.lefts().iter() {
             match left {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
+                    let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
                     let location = left.location();
                     let name = Self::location_to_string(&location);
                     let fully_qualified_name = self.scope.fully_qualify(&name);
@@ -449,6 +460,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     )));
 
                     self.local_graph.add_definition(fully_qualified_name, definition);
+                    self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     let location = left.location();
@@ -466,9 +478,11 @@ impl Visit<'_> for RubyIndexer<'_> {
                         comments,
                     )));
 
+                    self.local_graph.add_member(&MAIN_ID, declaration_id, &name);
                     self.local_graph.add_definition(name, definition);
                 }
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
+                    let nesting_id = self.scope.current_nesting_id().unwrap_or(*MAIN_ID);
                     let location = left.location();
                     let name = Self::location_to_string(&location);
                     let fully_qualified_name = self.scope.fully_qualify(&name);
@@ -487,26 +501,30 @@ impl Visit<'_> for RubyIndexer<'_> {
                     )));
 
                     self.local_graph.add_definition(fully_qualified_name, definition);
+                    self.local_graph.add_member(&nesting_id, declaration_id, &name);
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
-                    let location = left.location();
-                    let name = Self::location_to_string(&location);
-                    let fully_qualified_name = self.scope.fully_qualify(&name);
+                    if let Some(nesting_id) = self.scope.current_nesting_id() {
+                        let location = left.location();
+                        let name = Self::location_to_string(&location);
+                        let fully_qualified_name = self.scope.fully_qualify(&name);
 
-                    let declaration_id = DeclarationId::from(&fully_qualified_name);
-                    let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-                    // Uses `location_converter` to evaluate the performance impact of the conversion
-                    self.location_converter.offset_to_position(&offset).unwrap();
+                        let declaration_id = DeclarationId::from(&fully_qualified_name);
+                        let offset = Offset::from_prism_location(&location);
+                        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                        // Uses `location_converter` to evaluate the performance impact of the conversion
+                        self.location_converter.offset_to_position(&offset).unwrap();
 
-                    let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                        declaration_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                    )));
+                        let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                            declaration_id,
+                            self.uri_id,
+                            offset,
+                            comments,
+                        )));
 
-                    self.local_graph.add_definition(fully_qualified_name, definition);
+                        self.local_graph.add_member(&nesting_id, declaration_id, &name);
+                        self.local_graph.add_definition(fully_qualified_name, definition);
+                    }
                 }
                 _ => {}
             }
@@ -516,6 +534,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode) {
+        let nesting_id = self.scope.current_nesting_id().unwrap_or(*MAIN_ID);
         let name = Self::location_to_string(&node.name_loc());
         let fully_qualified_name = self.scope.fully_qualify(&name);
 
@@ -537,6 +556,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         self.local_graph
             .add_definition(fully_qualified_name, Definition::Method(Box::new(method)));
+        self.local_graph.add_member(&nesting_id, declaration_id, &name);
 
         if let Some(body) = node.body() {
             self.visit(&body);
@@ -547,76 +567,90 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode) {
         fn create_attr_accessor(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let fully_qualified_name = indexer.scope.fully_qualify(&name);
-                let declaration_id = DeclarationId::from(&fully_qualified_name);
-                let writer_name = format!("{fully_qualified_name}=");
-                let writer_declaration_id = DeclarationId::from(&writer_name);
-                let offset = Offset::from_prism_location(&location);
-                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                // Uses `location_converter` to evaluate the performance impact of the conversion
-                indexer.location_converter.offset_to_position(&offset).unwrap();
-                indexer.local_graph.add_definition(
-                    fully_qualified_name,
-                    Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                        declaration_id,
-                        indexer.uri_id,
-                        offset,
-                        comments.clone(),
-                    ))),
-                );
+                if let Some(nesting_id) = indexer.scope.current_nesting_id() {
+                    let fully_qualified_name = indexer.scope.fully_qualify(&name);
+                    let declaration_id = DeclarationId::from(&fully_qualified_name);
+                    let writer_name = format!("{fully_qualified_name}=");
+                    let writer_declaration_id = DeclarationId::from(&writer_name);
+                    let offset = Offset::from_prism_location(&location);
+                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    // Uses `location_converter` to evaluate the performance impact of the conversion
+                    indexer.location_converter.offset_to_position(&offset).unwrap();
+                    indexer.local_graph.add_member(&nesting_id, declaration_id, &name);
+                    indexer.local_graph.add_definition(
+                        fully_qualified_name,
+                        Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                            declaration_id,
+                            indexer.uri_id,
+                            offset,
+                            comments.clone(),
+                        ))),
+                    );
 
-                indexer.local_graph.add_definition(
-                    writer_name,
-                    Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                        writer_declaration_id,
-                        indexer.uri_id,
-                        Offset::from_prism_location(&location),
-                        comments.clone(),
-                    ))),
-                );
+                    indexer
+                        .local_graph
+                        .add_member(&nesting_id, writer_declaration_id, &format!("{name}="));
+                    indexer.local_graph.add_definition(
+                        writer_name,
+                        Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                            writer_declaration_id,
+                            indexer.uri_id,
+                            Offset::from_prism_location(&location),
+                            comments.clone(),
+                        ))),
+                    );
+                }
             });
         }
 
         fn create_attr_reader(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let fully_qualified_name = indexer.scope.fully_qualify(&name);
-                let declaration_id = DeclarationId::from(&fully_qualified_name);
-                let offset = Offset::from_prism_location(&location);
-                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                // Uses `location_converter` to evaluate the performance impact of the conversion
-                indexer.location_converter.offset_to_position(&offset).unwrap();
+                if let Some(nesting_id) = indexer.scope.current_nesting_id() {
+                    let fully_qualified_name = indexer.scope.fully_qualify(&name);
+                    let declaration_id = DeclarationId::from(&fully_qualified_name);
+                    let offset = Offset::from_prism_location(&location);
+                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    // Uses `location_converter` to evaluate the performance impact of the conversion
+                    indexer.location_converter.offset_to_position(&offset).unwrap();
 
-                indexer.local_graph.add_definition(
-                    fully_qualified_name,
-                    Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                        declaration_id,
-                        indexer.uri_id,
-                        offset,
-                        comments,
-                    ))),
-                );
+                    indexer.local_graph.add_definition(
+                        fully_qualified_name,
+                        Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                            declaration_id,
+                            indexer.uri_id,
+                            offset,
+                            comments,
+                        ))),
+                    );
+                    indexer.local_graph.add_member(&nesting_id, declaration_id, &name);
+                }
             });
         }
 
         fn create_attr_writer(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let fully_qualified_name = indexer.scope.fully_qualify(&name);
-                let writer_name = format!("{fully_qualified_name}=");
-                let declaration_id = DeclarationId::from(&writer_name);
-                let offset = Offset::from_prism_location(&location);
-                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                // Uses `location_converter` to evaluate the performance impact of the conversion
-                indexer.location_converter.offset_to_position(&offset).unwrap();
+                if let Some(nesting_id) = indexer.scope.current_nesting_id() {
+                    let fully_qualified_name = indexer.scope.fully_qualify(&name);
+                    let writer_name = format!("{fully_qualified_name}=");
+                    let declaration_id = DeclarationId::from(&writer_name);
+                    let offset = Offset::from_prism_location(&location);
+                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                    // Uses `location_converter` to evaluate the performance impact of the conversion
+                    indexer.location_converter.offset_to_position(&offset).unwrap();
 
-                indexer.local_graph.add_definition(
-                    writer_name,
-                    Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                        declaration_id,
-                        indexer.uri_id,
-                        offset,
-                        comments,
-                    ))),
-                );
+                    indexer.local_graph.add_definition(
+                        writer_name,
+                        Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                            declaration_id,
+                            indexer.uri_id,
+                            offset,
+                            comments,
+                        ))),
+                    );
+                    indexer
+                        .local_graph
+                        .add_member(&nesting_id, declaration_id, &format!("{name}="));
+                }
             });
         }
 
@@ -698,12 +732,13 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
         )));
 
+        self.local_graph.add_member(&MAIN_ID, declaration_id, &name);
         self.local_graph.add_definition(name, definition);
-
         self.visit(&node.value());
     }
 
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
+        let nesting_id = self.scope.current_nesting_id().unwrap_or(*MAIN_ID);
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
         let fully_qualified_name = self.scope.fully_qualify(&name);
@@ -722,36 +757,41 @@ impl Visit<'_> for RubyIndexer<'_> {
         )));
 
         self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph.add_member(&nesting_id, declaration_id, &name);
         self.visit(&node.value());
     }
 
     fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode) {
-        let name_loc = node.name_loc();
-        let name = Self::location_to_string(&name_loc);
-        let fully_qualified_name = self.scope.fully_qualify(&name);
+        // Ruby immediately crashes when defining class variables on <main>
+        if let Some(nesting_id) = self.scope.current_nesting_id() {
+            let name_loc = node.name_loc();
+            let name = Self::location_to_string(&name_loc);
+            let fully_qualified_name = self.scope.fully_qualify(&name);
 
-        let declaration_id = DeclarationId::from(&fully_qualified_name);
-        let offset = Offset::from_prism_location(&name_loc);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        // Uses `location_converter` to evaluate the performance impact of the conversion
-        self.location_converter.offset_to_position(&offset).unwrap();
+            let declaration_id = DeclarationId::from(&fully_qualified_name);
+            let offset = Offset::from_prism_location(&name_loc);
+            let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+            // Uses `location_converter` to evaluate the performance impact of the conversion
+            self.location_converter.offset_to_position(&offset).unwrap();
 
-        let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-            declaration_id,
-            self.uri_id,
-            offset,
-            comments,
-        )));
+            let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                declaration_id,
+                self.uri_id,
+                offset,
+                comments,
+            )));
 
-        self.local_graph.add_definition(fully_qualified_name, definition);
-        self.visit(&node.value());
+            self.local_graph.add_member(&nesting_id, declaration_id, &name);
+            self.local_graph.add_definition(fully_qualified_name, definition);
+            self.visit(&node.value());
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::GraphTest;
+    use crate::{model::ids::NameId, test_utils::GraphTest};
 
     /// Asserts that a definition exists, matches the expected type, and passes a custom assertion
     macro_rules! assert_definition {
@@ -1135,48 +1175,29 @@ mod tests {
 
         context.index_uri("file:///foo.rb", {
             "
-            attr_accessor :foo
-
             class Foo
               attr_accessor :bar, :baz
             end
 
-            self.attr_accessor :qux
             foo.attr_accessor :not_indexed
             "
         });
 
-        let definitions = context.graph.get("foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 15, 18);
-
-        let definitions = context.graph.get("foo=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 15, 18);
-
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 47, 50);
+        assert_definition_offset!(definitions[0], 27, 30);
 
         let definitions = context.graph.get("Foo::bar=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 47, 50);
+        assert_definition_offset!(definitions[0], 27, 30);
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 53, 56);
+        assert_definition_offset!(definitions[0], 33, 36);
 
         let definitions = context.graph.get("Foo::baz=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 53, 56);
-
-        let definitions = context.graph.get("qux").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 82, 85);
-
-        let definitions = context.graph.get("qux=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 82, 85);
+        assert_definition_offset!(definitions[0], 33, 36);
 
         assert!(context.graph.get("not_indexed").is_none());
         assert!(context.graph.get("not_indexed=").is_none());
@@ -1328,29 +1349,21 @@ mod tests {
 
         context.index_uri("file:///foo.rb", {
             "
-            attr_reader :foo
-
             class Foo
               attr_reader :bar, :baz
             end
             "
         });
 
-        let definitions = context.graph.get("foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 13, 16);
-
-        assert!(context.graph.get("foo=").is_none());
-
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 43, 46);
+        assert_definition_offset!(definitions[0], 25, 28);
 
         assert!(context.graph.get("Foo::bar=").is_none());
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 49, 52);
+        assert_definition_offset!(definitions[0], 31, 34);
 
         assert!(context.graph.get("Foo::baz=").is_none());
     }
@@ -1369,12 +1382,6 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("foo=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 13, 16);
-
-        assert!(context.graph.get("foo").is_none());
-
         let definitions = context.graph.get("Foo::bar=").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 43, 46);
@@ -1386,6 +1393,25 @@ mod tests {
         assert_definition_offset!(definitions[0], 49, 52);
 
         assert!(context.graph.get("Foo::baz").is_none());
+    }
+
+    #[test]
+    fn ignores_attributes_defined_on_main() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            attr_writer :foo
+            attr_reader :bar
+            attr_accessor :baz
+            attr :qux, true
+            "
+        });
+        assert!(context.graph.get("foo=").is_none());
+        assert!(context.graph.get("bar").is_none());
+        assert!(context.graph.get("baz").is_none());
+        assert!(context.graph.get("baz=").is_none());
+        assert!(context.graph.get("qux").is_none());
+        assert!(context.graph.get("qux=").is_none());
     }
 
     #[test]
@@ -1469,9 +1495,7 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("@@foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 5);
+        assert!(context.graph.get("@@foo").is_none());
 
         let definitions = context.graph.get("Foo::@@bar").unwrap();
         assert_eq!(definitions.len(), 1);
@@ -1607,5 +1631,250 @@ mod tests {
 
         assert!(context.graph.get("Foo::foo=").is_none());
         assert!(context.graph.get("Foo::123").is_none());
+    }
+
+    #[test]
+    fn constant_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+              class Baz; end
+
+              A = 1
+              B::C = 2
+              D, E::F = 3, 4
+            end
+            "
+        });
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let members = foo.members();
+
+        // FIX ME: missing assert that `Foo` is owned by `Object`. Depends on the RBS crate!
+        // let object = context.graph.declarations().get(&DeclarationId::from("Object")).unwrap();
+        // let object_members = object.members();
+        // assert!(object_members.contains_key(&NameId::from("Foo")));
+
+        assert_eq!(members.len(), 6);
+        assert_eq!(
+            members.get(&NameId::from("Bar")).unwrap(),
+            &DeclarationId::from("Foo::Bar")
+        );
+        assert_eq!(
+            members.get(&NameId::from("Baz")).unwrap(),
+            &DeclarationId::from("Foo::Baz")
+        );
+        assert_eq!(members.get(&NameId::from("A")).unwrap(), &DeclarationId::from("Foo::A"));
+        assert_eq!(members.get(&NameId::from("D")).unwrap(), &DeclarationId::from("Foo::D"));
+        assert_eq!(
+            members.get(&NameId::from("B::C")).unwrap(),
+            &DeclarationId::from("Foo::B::C")
+        );
+        assert_eq!(
+            members.get(&NameId::from("E::F")).unwrap(),
+            &DeclarationId::from("Foo::E::F")
+        );
+    }
+
+    #[test]
+    fn constant_path_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+              class Bar::Baz; end
+            end
+            "
+        });
+
+        // FIXME: We are currently not handling constant paths correctly. `Bar::Baz` defines `Baz` under `Bar`, but we
+        // right now define `Bar::Baz` under `Foo`
+        let bar = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::Bar"))
+            .unwrap();
+        let members = bar.members();
+
+        assert_eq!(members.len(), 0);
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let members = foo.members();
+
+        assert_eq!(members.len(), 2);
+        assert_eq!(
+            members.get(&NameId::from("Bar::Baz")).unwrap(),
+            &DeclarationId::from("Foo::Bar::Baz")
+        );
+    }
+
+    #[test]
+    fn instance_variable_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              @bar = 1
+              @baz, @qux = 2, 3
+            end
+            "
+        });
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let members = foo.members();
+        assert_eq!(members.len(), 3);
+        assert_eq!(
+            members.get(&NameId::from("@bar")).unwrap(),
+            &DeclarationId::from("Foo::@bar")
+        );
+        assert_eq!(
+            members.get(&NameId::from("@baz")).unwrap(),
+            &DeclarationId::from("Foo::@baz")
+        );
+        assert_eq!(
+            members.get(&NameId::from("@qux")).unwrap(),
+            &DeclarationId::from("Foo::@qux")
+        );
+    }
+
+    #[test]
+    fn method_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+            end
+            "
+        });
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let members = foo.members();
+        assert_eq!(members.len(), 1);
+        assert_eq!(
+            members.get(&NameId::from("bar")).unwrap(),
+            &DeclarationId::from("Foo::bar")
+        );
+    }
+
+    #[test]
+    fn global_variable_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            $var = 1
+            class Foo
+              $var2, $var3 = 2
+            end
+            "
+        });
+
+        let declarations = context.graph.declarations();
+        let main = declarations.get(&DeclarationId::from("<main>")).unwrap();
+        let members = main.members();
+        assert_eq!(members.len(), 3);
+        assert_eq!(
+            members.get(&NameId::from("$var")).unwrap(),
+            &DeclarationId::from("$var")
+        );
+        assert_eq!(
+            members.get(&NameId::from("$var2")).unwrap(),
+            &DeclarationId::from("$var2")
+        );
+        assert_eq!(
+            members.get(&NameId::from("$var3")).unwrap(),
+            &DeclarationId::from("$var3")
+        );
+    }
+
+    #[test]
+    fn class_variable_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            @@ignored = 1
+            class Foo
+              @@var1 = 1
+              @@var2, @@var3 = 2
+
+              class << self
+                @@var4 = 2
+              end
+            end
+            "
+        });
+
+        let declarations = context.graph.declarations();
+        // Foo + 5 class variables + <main>, but not @@ignored
+        assert_eq!(declarations.len(), 6);
+        let main = declarations.get(&DeclarationId::from("Foo")).unwrap();
+        let members = main.members();
+        assert_eq!(members.len(), 4);
+        assert_eq!(
+            members.get(&NameId::from("@@var1")).unwrap(),
+            &DeclarationId::from("Foo::@@var1")
+        );
+        assert_eq!(
+            members.get(&NameId::from("@@var2")).unwrap(),
+            &DeclarationId::from("Foo::@@var2")
+        );
+        assert_eq!(
+            members.get(&NameId::from("@@var3")).unwrap(),
+            &DeclarationId::from("Foo::@@var3")
+        );
+        assert_eq!(
+            members.get(&NameId::from("@@var4")).unwrap(),
+            &DeclarationId::from("Foo::@@var4")
+        );
+    }
+
+    #[test]
+    fn attribute_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              attr_reader :a
+              attr_accessor :b
+              attr_writer :c
+              attr :d
+              attr :e, true
+              attr :f, :g
+            end
+            "
+        });
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let members = foo.members();
+        assert_eq!(members.len(), 11);
+        assert_eq!(members.get(&NameId::from("a")).unwrap(), &DeclarationId::from("Foo::a"));
+        assert_eq!(members.get(&NameId::from("b")).unwrap(), &DeclarationId::from("Foo::b"));
+        assert_eq!(
+            members.get(&NameId::from("b=")).unwrap(),
+            &DeclarationId::from("Foo::b=")
+        );
+        assert_eq!(
+            members.get(&NameId::from("c=")).unwrap(),
+            &DeclarationId::from("Foo::c=")
+        );
+        assert_eq!(members.get(&NameId::from("d")).unwrap(), &DeclarationId::from("Foo::d"));
+        assert_eq!(members.get(&NameId::from("e")).unwrap(), &DeclarationId::from("Foo::e"));
+        assert_eq!(
+            members.get(&NameId::from("e=")).unwrap(),
+            &DeclarationId::from("Foo::e=")
+        );
+        assert_eq!(members.get(&NameId::from("f")).unwrap(), &DeclarationId::from("Foo::f"));
+        assert_eq!(
+            members.get(&NameId::from("f=")).unwrap(),
+            &DeclarationId::from("Foo::f=")
+        );
+        assert_eq!(members.get(&NameId::from("g")).unwrap(), &DeclarationId::from("Foo::g"));
+        assert_eq!(
+            members.get(&NameId::from("g=")).unwrap(),
+            &DeclarationId::from("Foo::g=")
+        );
     }
 }

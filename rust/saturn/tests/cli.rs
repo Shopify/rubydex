@@ -4,6 +4,17 @@ use regex::Regex;
 use std::fs;
 use std::process::Command;
 
+fn with_db_cleanup<F, T>(f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    let result = f();
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let db_path = std::path::Path::new(&manifest_dir).join("graph.db");
+    let _ = fs::remove_file(db_path);
+    result
+}
+
 #[test]
 fn prints_help() {
     let mut cmd = Command::cargo_bin("saturn_cli").unwrap();
@@ -17,18 +28,24 @@ fn prints_help() {
 
 #[test]
 fn dir_argument_variants() {
-    let mut zero = Command::cargo_bin("saturn_cli").unwrap();
-    zero.assert().success().stderr(predicate::str::is_empty());
+    with_db_cleanup(|| {
+        let mut zero = Command::cargo_bin("saturn_cli").unwrap();
+        zero.assert().success().stderr(predicate::str::is_empty());
+    });
 
-    let mut one = Command::cargo_bin("saturn_cli").unwrap();
-    one.arg(".");
-    one.assert().success().stderr(predicate::str::is_empty());
+    with_db_cleanup(|| {
+        let mut one = Command::cargo_bin("saturn_cli").unwrap();
+        one.arg(".");
+        one.assert().success().stderr(predicate::str::is_empty());
+    });
 
-    let mut two = Command::cargo_bin("saturn_cli").unwrap();
-    two.args(["foo", "bar"]);
-    two.assert()
-        .failure()
-        .stderr(predicate::str::contains("unexpected argument").or(predicate::str::contains("error:")));
+    with_db_cleanup(|| {
+        let mut two = Command::cargo_bin("saturn_cli").unwrap();
+        two.args(["foo", "bar"]);
+        two.assert()
+            .failure()
+            .stderr(predicate::str::contains("unexpected argument").or(predicate::str::contains("error:")));
+    });
 }
 
 #[test]
@@ -38,14 +55,15 @@ fn prints_index_metrics() {
     fs::write(temp_dir.path().join("file1.rb"), "class FirstClass\nend\n").unwrap();
     fs::write(temp_dir.path().join("file2.rb"), "module SecondModule\nend\n").unwrap();
 
-    let mut cmd = Command::cargo_bin("saturn_cli").unwrap();
-    cmd.arg(temp_dir.path());
-
-    let output = cmd.output().unwrap();
+    let output = with_db_cleanup(|| {
+        let mut cmd = Command::cargo_bin("saturn_cli").unwrap();
+        cmd.arg(temp_dir.path());
+        cmd.output().unwrap()
+    });
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Indexed 2 files"));
-    assert!(stdout.contains("Found 2 names"));
+    assert!(stdout.contains("Found 3 names"));
     assert!(stdout.contains("Found 2 definitions"));
 }
 
@@ -74,6 +92,7 @@ fn visualize_simple_class() {
     let expected = r#"digraph {
     rankdir=TB;
 
+    "Name:<main>" [label="<main>",shape=hexagon];
     "Name:SimpleClass" [label="SimpleClass",shape=hexagon];
     "Name:SimpleClass" -> "def_<ID>" [dir=both];
 

@@ -36,6 +36,7 @@ impl Declaration {
     // Extend this declaration with more definitions by moving `other.definition_ids` inside
     pub fn extend(&mut self, other: Declaration) {
         self.definition_ids.extend(other.definition_ids);
+        self.members.extend(other.members);
     }
 
     #[must_use]
@@ -80,6 +81,11 @@ impl Declaration {
         } else {
             false
         }
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &IdentityHashMap<NameId, DeclarationId> {
+        &self.members
     }
 
     pub fn add_member(&mut self, name_id: NameId, declaration_id: DeclarationId) {
