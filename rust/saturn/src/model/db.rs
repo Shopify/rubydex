@@ -338,7 +338,12 @@ mod tests {
         assert!(matches!(method_def.definition, Definition::Method(_)));
         assert!(matches!(constant_def.definition, Definition::Constant(_)));
 
-        let comments = class_def.definition.comments();
+        let comments = class_def
+            .definition
+            .comments()
+            .iter()
+            .map(|c| c.string().to_string())
+            .collect::<Vec<String>>();
         assert_eq!(*comments, vec!["# Class comment", "# Another class comment"]);
     }
 

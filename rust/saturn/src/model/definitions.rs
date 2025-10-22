@@ -26,7 +26,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    model::ids::{DeclarationId, UriId},
+    model::{
+        comment::Comment,
+        ids::{DeclarationId, UriId},
+    },
     offset::Offset,
 };
 
@@ -99,7 +102,7 @@ impl Definition {
     }
 
     #[must_use]
-    pub fn comments(&self) -> &Vec<String> {
+    pub fn comments(&self) -> &Vec<Comment> {
         all_definitions!(self, it => &it.comments)
     }
 }
@@ -116,12 +119,12 @@ pub struct ClassDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl ClassDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,
@@ -143,12 +146,12 @@ pub struct ModuleDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl ModuleDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,
@@ -169,12 +172,12 @@ pub struct ConstantDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl ConstantDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,
@@ -198,7 +201,7 @@ pub struct MethodDefinition {
     offset: Offset,
     parameters: Vec<Parameter>,
     is_singleton: bool,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl MethodDefinition {
@@ -209,7 +212,7 @@ impl MethodDefinition {
         offset: Offset,
         parameters: Vec<Parameter>,
         is_singleton: bool,
-        comments: Vec<String>,
+        comments: Vec<Comment>,
     ) -> Self {
         Self {
             declaration_id,
@@ -279,12 +282,12 @@ pub struct AttrAccessorDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl AttrAccessorDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,
@@ -305,12 +308,12 @@ pub struct AttrReaderDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl AttrReaderDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,
@@ -331,12 +334,12 @@ pub struct AttrWriterDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl AttrWriterDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,
@@ -357,12 +360,12 @@ pub struct GlobalVariableDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     pub offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl GlobalVariableDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,
@@ -383,12 +386,12 @@ pub struct InstanceVariableDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl InstanceVariableDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,
@@ -409,12 +412,12 @@ pub struct ClassVariableDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
     offset: Offset,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl ClassVariableDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<String>) -> Self {
+    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
         Self {
             declaration_id,
             uri_id,

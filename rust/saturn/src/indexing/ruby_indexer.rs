@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::indexing::errors::IndexingError;
 use crate::indexing::scope::Scope;
+use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodDefinition,
@@ -94,7 +95,7 @@ impl<'a> RubyIndexer<'a> {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
-    fn find_comments_for(&self, offset: u32) -> Option<Vec<String>> {
+    fn find_comments_for(&self, offset: u32) -> Option<Vec<Comment>> {
         let offset_usize = offset as usize;
         if self.comments.is_empty() {
             return None;
@@ -287,7 +288,7 @@ impl<'a> RubyIndexer<'a> {
 
 struct CommentGroup {
     end_offset: usize,
-    comments: Vec<String>,
+    comments: Vec<Comment>,
 }
 
 impl CommentGroup {
@@ -320,7 +321,10 @@ impl CommentGroup {
     fn add_comment(&mut self, comment: &ruby_prism::Comment) {
         self.end_offset = comment.location().end_offset();
         let text = String::from_utf8_lossy(comment.location().as_slice()).to_string();
-        self.comments.push(text.trim().to_string());
+        self.comments.push(Comment::new(
+            Offset::from_prism_location(&comment.location()),
+            text.trim().to_string(),
+        ));
     }
 }
 
@@ -768,7 +772,13 @@ mod tests {
             let expected_vec: Vec<&str> = $expected_comments;
 
             assert_definition!($context, $variant, $name, |def: &Definition| {
-                assert_eq!(*def.comments(), expected_vec);
+                assert_eq!(
+                    def.comments()
+                        .iter()
+                        .map(|c| c.string().to_string())
+                        .collect::<Vec<String>>(),
+                    expected_vec
+                );
             });
         };
     }
