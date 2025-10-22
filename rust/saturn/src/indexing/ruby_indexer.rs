@@ -1194,6 +1194,10 @@ mod tests {
             # Comment directly above (no gap)
             class NoGap; end
 
+            #: ()
+            #| -> void
+            def foo; end
+
             # Comment with blank line
 
             class BlankLine; end
@@ -1220,6 +1224,7 @@ mod tests {
             vec!["# Comment 1", "#", "# Comment 2"]
         );
         assert_definition_comments!(context, Class, "NoGap", vec!["# Comment directly above (no gap)"]);
+        assert_definition_comments!(context, Method, "foo", vec!["#: ()", "#| -> void"]);
         assert_definition_comments!(context, Class, "BlankLine", vec!["# Comment with blank line"]);
         assert_definition_comments!(context, Class, "NoComment", vec![]);
     }
