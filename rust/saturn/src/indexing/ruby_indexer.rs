@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::indexing::errors::IndexingError;
 use crate::indexing::scope::Scope;
+use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodDefinition,
@@ -18,22 +19,6 @@ use crate::source_location::SourceLocationConverter;
 use ruby_prism::{ParseResult, Visit};
 
 pub type IndexerParts = (Option<Graph>, Vec<IndexingError>);
-
-const MAGIC_AND_RBS_COMMENT_PREFIX: &[&str] = &[
-    "frozen_string_literal:",
-    "typed:",
-    "compiled:",
-    "encoding:",
-    "shareable_constant_value:",
-    "warn_indent:",
-    "rubocop:",
-    "nodoc:",
-    "doc:",
-    "coding:",
-    "warn_past_scope:",
-    "#:",
-    "#|",
-];
 
 /// The indexer for the definitions found in the Ruby source code.
 ///
@@ -110,7 +95,7 @@ impl<'a> RubyIndexer<'a> {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
-    fn find_comments_for(&self, offset: u32) -> Option<String> {
+    fn find_comments_for(&self, offset: u32) -> Option<Vec<Comment>> {
         let offset_usize = offset as usize;
         if self.comments.is_empty() {
             return None;
@@ -303,7 +288,7 @@ impl<'a> RubyIndexer<'a> {
 
 struct CommentGroup {
     end_offset: usize,
-    comments: String,
+    comments: Vec<Comment>,
 }
 
 impl CommentGroup {
@@ -311,7 +296,7 @@ impl CommentGroup {
     pub fn new() -> Self {
         Self {
             end_offset: 0,
-            comments: String::new(),
+            comments: Vec::new(),
         }
     }
 
@@ -336,15 +321,10 @@ impl CommentGroup {
     fn add_comment(&mut self, comment: &ruby_prism::Comment) {
         self.end_offset = comment.location().end_offset();
         let text = String::from_utf8_lossy(comment.location().as_slice()).to_string();
-        if MAGIC_AND_RBS_COMMENT_PREFIX.iter().any(|&prefix| text.contains(prefix)) {
-            return;
-        }
-
-        let parsed_comment = text.trim().strip_prefix("# ").unwrap_or(text.trim());
-        if !self.comments.is_empty() {
-            self.comments.push('\n');
-        }
-        self.comments.push_str(parsed_comment);
+        self.comments.push(Comment::new(
+            Offset::from_prism_location(&comment.location()),
+            text.trim().to_string(),
+        ));
     }
 }
 
@@ -789,8 +769,16 @@ mod tests {
     /// Asserts that a definition has specific comments
     macro_rules! assert_definition_comments {
         ($context:expr, $variant:ident, $name:expr, $expected_comments:expr) => {
+            let expected_vec: Vec<&str> = $expected_comments;
+
             assert_definition!($context, $variant, $name, |def: &Definition| {
-                assert_eq!(def.comments(), $expected_comments);
+                assert_eq!(
+                    def.comments()
+                        .iter()
+                        .map(|c| c.string().to_string())
+                        .collect::<Vec<String>>(),
+                    expected_vec
+                );
             });
         };
     }
@@ -1208,8 +1196,17 @@ mod tests {
             # Multi-line comment 3
             class Multi; end
 
+            # Comment 1
+            #
+            # Comment 2
+            class EmptyCommentLine; end
+
             # Comment directly above (no gap)
             class NoGap; end
+
+            #: ()
+            #| -> void
+            def foo; end
 
             # Comment with blank line
 
@@ -1219,16 +1216,27 @@ mod tests {
             "
         });
 
-        assert_definition_comments!(context, Class, "Single", "Single comment");
+        assert_definition_comments!(context, Class, "Single", vec!["# Single comment"]);
         assert_definition_comments!(
             context,
             Class,
             "Multi",
-            "Multi-line comment 1\nMulti-line comment 2\nMulti-line comment 3"
+            vec![
+                "# Multi-line comment 1",
+                "# Multi-line comment 2",
+                "# Multi-line comment 3"
+            ]
         );
-        assert_definition_comments!(context, Class, "NoGap", "Comment directly above (no gap)");
-        assert_definition_comments!(context, Class, "BlankLine", "Comment with blank line");
-        assert_definition_comments!(context, Class, "NoComment", "");
+        assert_definition_comments!(
+            context,
+            Class,
+            "EmptyCommentLine",
+            vec!["# Comment 1", "#", "# Comment 2"]
+        );
+        assert_definition_comments!(context, Class, "NoGap", vec!["# Comment directly above (no gap)"]);
+        assert_definition_comments!(context, Method, "foo", vec!["#: ()", "#| -> void"]);
+        assert_definition_comments!(context, Class, "BlankLine", vec!["# Comment with blank line"]);
+        assert_definition_comments!(context, Class, "NoComment", vec![]);
     }
 
     #[test]
@@ -1251,9 +1259,9 @@ mod tests {
             "
         });
 
-        assert_definition_comments!(context, Class, "TooFar", "");
-        assert_definition_comments!(context, Class, "CodeBetween", "");
-        assert_definition_comments!(context, Class, "Foo", "Comment for Foo");
+        assert_definition_comments!(context, Class, "TooFar", vec![]);
+        assert_definition_comments!(context, Class, "CodeBetween", vec![]);
+        assert_definition_comments!(context, Class, "Foo", vec!["# Comment for Foo"]);
     }
 
     #[test]
@@ -1277,14 +1285,14 @@ mod tests {
             "
         });
 
-        assert_definition_comments!(context, Class, "Outer", "Outer class");
-        assert_definition_comments!(context, Class, "Outer::Inner", "Inner class at 2 spaces");
-        assert_definition_comments!(context, Class, "Outer::Inner::Deep", "Deep class at 4 spaces");
+        assert_definition_comments!(context, Class, "Outer", vec!["# Outer class"]);
+        assert_definition_comments!(context, Class, "Outer::Inner", vec!["# Inner class at 2 spaces"]);
+        assert_definition_comments!(context, Class, "Outer::Inner::Deep", vec!["# Deep class at 4 spaces"]);
         assert_definition_comments!(
             context,
             Class,
             "Outer::AnotherInner",
-            "Another inner class\nwith multiple lines"
+            vec!["# Another inner class", "# with multiple lines"]
         );
     }
 
@@ -1308,10 +1316,10 @@ mod tests {
             "
         });
 
-        assert_definition_comments!(context, Module, "TestModule", "Module comment");
-        assert_definition_comments!(context, Constant, "TestModule::FOO", "Constant comment");
-        assert_definition_comments!(context, Module, "TestModule::Nested", "Nested module");
-        assert_definition_comments!(context, Constant, "A", "Multi-write constant");
+        assert_definition_comments!(context, Module, "TestModule", vec!["# Module comment"]);
+        assert_definition_comments!(context, Constant, "TestModule::FOO", vec!["# Constant comment"]);
+        assert_definition_comments!(context, Module, "TestModule::Nested", vec!["# Nested module"]);
+        assert_definition_comments!(context, Constant, "A", vec!["# Multi-write constant"]);
     }
 
     #[test]
