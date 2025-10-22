@@ -58,4 +58,37 @@ class GraphTest < Minitest::Test
   ensure
     Dir.glob("graph.db*").each { |f| File.delete(f) }
   end
+
+  def test_list_all_declarations_enumerator
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+      context.write!("file2.rb", "class B; end")
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      enumerator = graph.declarations
+
+      assert_equal(2, enumerator.size)
+      assert_equal(2, enumerator.count)
+      assert_equal(2, enumerator.to_a.size)
+    end
+  end
+
+  def test_list_all_declarations_with_block
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+      context.write!("file2.rb", "class B; end")
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      declarations = []
+      graph.declarations do |declaration|
+        declarations << declaration
+      end
+
+      assert_equal(2, declarations.size)
+    end
+  end
 end
