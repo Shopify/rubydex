@@ -1,7 +1,7 @@
 #include "utils.h"
 
-// Convert a Ruby array of strings into a double char pointer so that we can
-// pass that to Rust. This copies the data so it must be freed
+// Convert a Ruby array of strings into a double char pointer so that we can pass that to Rust.
+// This copies the data so it must be freed
 char **str_array_to_char(VALUE array, size_t length) {
     char **converted_array = malloc(length * sizeof(char *));
 
