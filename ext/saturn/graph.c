@@ -15,14 +15,14 @@ static const rb_data_type_t graph_type = {"Graph", {0, graph_free, 0}, 0, 0, RUB
 
 // Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
 // as a void pointer
-static VALUE rb_graph_alloc(VALUE klass) {
+static VALUE sr_graph_alloc(VALUE klass) {
     void *graph = sat_graph_new();
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
 }
 
 // Graph#index_all: (Array[String] file_paths) -> String?
 // Returns the error messages concatenated as a single string if anything failed during indexing or `nil`
-static VALUE rb_graph_index_all(VALUE self, VALUE file_paths) {
+static VALUE sr_graph_index_all(VALUE self, VALUE file_paths) {
     check_array_of_strings(file_paths);
 
     // Convert the given file paths into a char** array, so that we can pass to Rust
@@ -51,7 +51,7 @@ static VALUE rb_graph_index_all(VALUE self, VALUE file_paths) {
     return Qnil;
 }
 
-static VALUE rb_graph_set_configuration(VALUE self, VALUE db_path) {
+static VALUE sr_graph_set_configuration(VALUE self, VALUE db_path) {
     Check_Type(db_path, T_STRING);
 
     void *graph;
@@ -67,7 +67,7 @@ static VALUE rb_graph_set_configuration(VALUE self, VALUE db_path) {
 void initialize_graph(VALUE mSaturn) {
     cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
 
-    rb_define_alloc_func(cGraph, rb_graph_alloc);
-    rb_define_method(cGraph, "index_all", rb_graph_index_all, 1);
-    rb_define_method(cGraph, "set_configuration", rb_graph_set_configuration, 1);
+    rb_define_alloc_func(cGraph, sr_graph_alloc);
+    rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
+    rb_define_method(cGraph, "set_configuration", sr_graph_set_configuration, 1);
 }
