@@ -4,7 +4,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct ConstantRef {
+pub struct ConstantReference {
     /// The unqualified name of the constant
     name_id: NameId,
     /// The nesting where we found the constant reference. This is a list of unqualified name IDs, so that we can
@@ -30,15 +30,15 @@ pub enum UnresolvedReference {
     /// Here, we don't immediately know if `BAR` refers to `Foo::BAR` or top level `BAR`. Until we resolve it, it is
     /// considered an unresolved constant. For this example, `name_id` would be `NameId::from("BAR")` and `nesting` would be
     /// `[NameId::from("Foo")]`.
-    Constant(Box<ConstantRef>),
+    Constant(Box<ConstantReference>),
 }
 
 #[derive(Debug)]
 pub enum ResolvedReference {
-    Constant(Box<ConstantRef>),
+    Constant(Box<ConstantReference>),
 }
 
-impl ConstantRef {
+impl ConstantReference {
     #[must_use]
     pub fn new(name_id: NameId, nesting: Vec<NameId>, uri_id: UriId, offset: Offset) -> Self {
         Self {

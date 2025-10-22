@@ -8,7 +8,7 @@ use crate::model::definitions::{
 };
 use crate::model::graph::Graph;
 use crate::model::ids::{DeclarationId, NameId, UriId};
-use crate::model::references::{ConstantRef, UnresolvedReference};
+use crate::model::references::{ConstantReference, UnresolvedReference};
 use crate::offset::Offset;
 use crate::source_location::SourceLocationConverter;
 
@@ -321,7 +321,7 @@ impl<'a> RubyIndexer<'a> {
             is_top_level = true;
         }
 
-        let name_id = self.local_graph.add_name(name.clone());
+        let name_id = self.local_graph.add_name(name);
         let name_id_nesting = if is_top_level {
             vec![]
         } else {
@@ -333,7 +333,7 @@ impl<'a> RubyIndexer<'a> {
             nesting.iter().map(NameId::from).collect()
         };
 
-        let reference = UnresolvedReference::Constant(Box::new(ConstantRef::new(
+        let reference = UnresolvedReference::Constant(Box::new(ConstantReference::new(
             name_id,
             name_id_nesting,
             self.uri_id,
