@@ -72,16 +72,15 @@ macro_rules! make_timer {
 
                     println!();
                     println!("Timing breakdown");
-                    println!();
 
                     $(
                         if timer.$phase != Duration::ZERO {
-                            println!("{}", format_breakdown!($label, timer.$phase, total_duration));
+                            println!("  {}", format_breakdown!($label, timer.$phase, total_duration));
                         }
                     )*
 
-                    println!("{}", format_breakdown!("Cleanup", cleanup, total_duration));
-                    println!("Total:           {:8.3}s", total_duration.as_secs_f64());
+                    println!("  {}", format_breakdown!("Cleanup", cleanup, total_duration));
+                    println!("  Total:           {:8.3}s", total_duration.as_secs_f64());
                     println!();
                 }
             }
@@ -93,7 +92,7 @@ macro_rules! make_timer {
                 ($phase, $body:block) => {
                     {
                         let timer_enabled = {
-                            let guard = $crate::timer::TIMER.lock().unwrap();
+                            let guard = $crate::stats::timer::TIMER.lock().unwrap();
                             guard.is_some()
                         };
 
@@ -102,7 +101,7 @@ macro_rules! make_timer {
                             let result = $body;
                             let elapsed = start.elapsed();
 
-                            if let Some(ref mut timer) = *$crate::timer::TIMER.lock().unwrap() {
+                            if let Some(ref mut timer) = *$crate::stats::timer::TIMER.lock().unwrap() {
                                 timer.$phase = elapsed;
                             }
                             result

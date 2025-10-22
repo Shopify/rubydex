@@ -1,7 +1,7 @@
 pub mod indexing;
 pub mod model;
 pub mod offset;
-pub mod timer;
+pub mod stats;
 pub mod visualization;
 pub mod source_location;
 

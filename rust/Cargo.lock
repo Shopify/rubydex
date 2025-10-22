@@ -843,6 +843,7 @@ dependencies = [
  "bytecount",
  "clap",
  "glob",
+ "libc",
  "predicates",
  "regex",
  "rmp-serde",
