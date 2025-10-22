@@ -23,6 +23,7 @@ class DocumentTest < Minitest::Test
 
       document = graph.documents.first
       assert_instance_of(Saturn::Document, document)
+      assert_equal("file://#{context.absolute_path}/file1.rb", document.uri)
     end
   end
 end
