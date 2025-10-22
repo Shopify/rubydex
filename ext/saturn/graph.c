@@ -170,6 +170,28 @@ static VALUE sr_graph_documents(VALUE self) {
     return self;
 }
 
+// Graph#[]: (String fully_qualified_name) -> Declaration
+// Returns a declaration handle for the given ID
+static VALUE sr_graph_aref(VALUE self, VALUE key) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    if (TYPE(key) != T_STRING) {
+        rb_raise(rb_eTypeError, "expected String");
+    }
+
+    const int64_t *id_ptr = sat_graph_get_declaration(graph, StringValueCStr(key));
+    if (id_ptr == NULL) {
+        return Qnil;
+    }
+
+    int64_t id = *id_ptr;
+    free_i64(id_ptr);
+    VALUE argv[] = {self, LL2NUM(id)};
+
+    return rb_class_new_instance(2, argv, cDeclaration);
+}
+
 void initialize_graph(VALUE mSaturn) {
     cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
 
@@ -178,4 +200,5 @@ void initialize_graph(VALUE mSaturn) {
     rb_define_method(cGraph, "set_configuration", sr_graph_set_configuration, 1);
     rb_define_method(cGraph, "declarations", sr_graph_declarations, 0);
     rb_define_method(cGraph, "documents", sr_graph_documents, 0);
+    rb_define_method(cGraph, "[]", sr_graph_aref, 1);
 }

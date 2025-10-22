@@ -21,7 +21,7 @@ class DeclarationTest < Minitest::Test
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      declaration = graph.declarations.first
+      declaration = graph["A"]
       assert_instance_of(Saturn::Declaration, declaration)
       assert_equal("A", declaration.name)
     end

@@ -4,6 +4,7 @@ use crate::utils;
 use libc::{c_char, c_void};
 use saturn::indexing;
 use saturn::model::graph::Graph;
+use saturn::model::ids::DeclarationId;
 use std::ffi::CString;
 use std::{mem, ptr};
 
@@ -266,4 +267,28 @@ pub unsafe extern "C" fn sat_graph_documents_iter_free(iter: *mut DocumentsIter)
     unsafe {
         let _ = Box::from_raw(iter);
     }
+}
+
+/// Attempts to resolve a declaration from a fully-qualified name string.
+/// Returns a pointer to the internal ID if it exists, or NULL if it does not.
+///
+/// # Safety
+/// - `pointer` must be a valid `GraphPointer`
+/// - `name` must be a valid, null-terminated UTF-8 string
+/// - `out_id` must be a valid, writable pointer
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const i64 {
+    let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
+        return ptr::null();
+    };
+
+    with_graph(pointer, |graph| {
+        // TODO: We should perform name resolution instead of accessing the graph with the canonical ID
+        let decl_id = DeclarationId::from(name_str.as_str());
+        if graph.declarations().contains_key(&decl_id) {
+            Box::into_raw(Box::new(*decl_id)).cast_const()
+        } else {
+            ptr::null()
+        }
+    })
 }
