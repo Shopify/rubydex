@@ -5,7 +5,7 @@ use clap::Parser;
 use saturn::{
     indexing::{self, errors::MultipleErrors},
     model::graph::Graph,
-    timer::{Timer, time_it},
+    stats::{memory::MemoryStats, timer::{Timer, time_it}},
     visualization::dot,
 };
 
@@ -87,6 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     if args.stats {
         Timer::print_breakdown();
+        MemoryStats::print_memory_usage();
     }
 
     // Generate visualization or print statistics
