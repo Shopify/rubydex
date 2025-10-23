@@ -59,6 +59,25 @@ class GraphTest < Minitest::Test
     Dir.glob("graph.db*").each { |f| File.delete(f) }
   end
 
+  def test_graph_get_declaration
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+      context.write!("file2.rb", "class B; end")
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      declaration = graph["A"]
+      refute_nil(declaration)
+
+      declaration = graph["B"]
+      refute_nil(declaration)
+
+      declaration = graph["C"]
+      assert_nil(declaration)
+    end
+  end
+
   def test_list_all_declarations_enumerator
     with_context do |context|
       context.write!("file1.rb", "class A; end")

@@ -40,3 +40,11 @@ pub extern "C" fn free_c_string(ptr: *const c_char) {
         let _ = CString::from_raw(ptr.cast_mut());
     }
 }
+
+/// Frees a boxed i64 allocated on the Rust side
+#[unsafe(no_mangle)]
+pub extern "C" fn free_i64(ptr: *const i64) {
+    unsafe {
+        let _ = Box::from_raw(ptr.cast_mut());
+    }
+}
