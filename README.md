@@ -2,6 +2,10 @@
 
 TODO
 
+## Documentation
+
+- [Ruby Language Behaviors](docs/ruby-behaviors.md) - Comprehensive documentation of Ruby language behaviors that the indexer handles, including lexical scoping, constant resolution, method parameters, attribute methods, and more. This document is useful for understanding the nuances of Ruby that affect indexing.
+
 ## Usage
 
 TODO
