@@ -60,4 +60,39 @@ class DefinitionTest < Minitest::Test
       assert(defs.any? { |d| d.is_a?(Saturn::ClassVariableDefinition) })
     end
   end
+
+  def test_definition_location
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A
+          def foo; end
+        end
+      RUBY
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      def_a = graph["A"]&.definitions&.first
+      refute_nil(def_a)
+      location = def_a.location
+      refute_nil(location)
+      assert_equal("file://#{context.absolute_path_to("file1.rb")}", location.uri)
+      assert_equal(context.absolute_path_to("file1.rb"), location.path)
+      assert_equal(1, location.start_line)
+      assert_equal(1, location.start_column)
+      assert_equal(3, location.end_line)
+      assert_equal(4, location.end_column)
+
+      def_foo = graph["A::foo"]&.definitions&.first
+      refute_nil(def_foo)
+      location = def_foo.location
+      refute_nil(location)
+      assert_equal("file://#{context.absolute_path_to("file1.rb")}", location.uri)
+      assert_equal(context.absolute_path_to("file1.rb"), location.path)
+      assert_equal(2, location.start_line)
+      assert_equal(3, location.start_column)
+      assert_equal(2, location.end_line)
+      assert_equal(15, location.end_column)
+    end
+  end
 end

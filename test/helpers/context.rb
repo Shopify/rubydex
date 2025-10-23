@@ -21,6 +21,11 @@ module Test
         @absolute_path = ::File.expand_path(absolute_path) #: String
       end
 
+      #: (String relative_path) -> String
+      def absolute_path_to(relative_path)
+        ::File.join(@absolute_path, relative_path)
+      end
+
       #: (String relative_path, ?String contents, ?append: bool) -> void
       def write!(relative_path, contents = "", append: false)
         absolute_path = absolute_path_to(relative_path)
@@ -42,13 +47,6 @@ module Test
       #: -> void
       def destroy!
         FileUtils.rm_rf(absolute_path)
-      end
-
-      private
-
-      #: (String relative_path) -> String
-      def absolute_path_to(relative_path)
-        ::File.join(@absolute_path, relative_path)
       end
     end
 
