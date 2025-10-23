@@ -9,6 +9,7 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 saturn = { path = "../saturn" }
 libc = "0.2.174"
+url = "2.5.4"
 
 [build-dependencies]
 cbindgen = "0.29"
