@@ -51,7 +51,7 @@ pub unsafe extern "C" fn sat_definition_kind(pointer: GraphPointer, definition_i
         if let Some(defn) = graph.definitions().get(&definition_id) {
             map_definition_to_kind(defn)
         } else {
-            panic!("Definition not found: {}", definition_id);
+            panic!("Definition not found: {definition_id:?}");
         }
     })
 }
