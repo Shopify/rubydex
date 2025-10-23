@@ -26,4 +26,42 @@ class DeclarationTest < Minitest::Test
       assert_equal("A", declaration.name)
     end
   end
+
+  def test_definitions_enumerator
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+      context.write!("file2.rb", "class A; end")
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      declaration = graph.declarations.first
+      refute_nil(declaration)
+
+      enumerator = declaration.definitions
+      assert_equal(2, enumerator.size)
+      assert_equal(2, enumerator.count)
+      assert_equal(2, enumerator.to_a.size)
+    end
+  end
+
+  def test_definitions_with_block
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+      context.write!("file2.rb", "class A; end")
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      declaration = graph.declarations.first
+      refute_nil(declaration)
+
+      definitions = []
+      declaration.definitions do |definition|
+        definitions << definition
+      end
+
+      assert_equal(2, definitions.size)
+    end
+  end
 end

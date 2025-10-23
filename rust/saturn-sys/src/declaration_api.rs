@@ -4,6 +4,7 @@ use libc::c_char;
 use std::ffi::CString;
 use std::ptr;
 
+use crate::definition_api::{DefinitionKind, DefinitionsIter, sat_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use saturn::model::ids::DeclarationId;
 
@@ -25,6 +26,32 @@ pub unsafe extern "C" fn sat_declaration_name(pointer: GraphPointer, name_id: i6
             CString::new(decl.name()).unwrap().into_raw().cast_const()
         } else {
             ptr::null()
+        }
+    })
+}
+
+/// An iterator over definition IDs and kinds for a given declaration
+///
+/// We snapshot the IDs at iterator creation so if the graph is modified, the iterator will not see the changes
+// Use shared DefinitionsIter directly in signatures
+/// Creates a new iterator over definition IDs for a given declaration by snapshotting the current set of IDs.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - The returned pointer must be freed with `sat_declaration_definitions_iter_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_declaration_definitions_iter_new(
+    pointer: GraphPointer,
+    decl_id: i64,
+) -> *mut DefinitionsIter {
+    // Snapshot the IDs and kinds at iterator creation to avoid borrowing across FFI calls
+    with_graph(pointer, |graph| {
+        let decl_id = DeclarationId::new(decl_id);
+        if let Some(decl) = graph.declarations().get(&decl_id) {
+            sat_definitions_iter_new_from_ids(graph, decl.definitions())
+        } else {
+            DefinitionsIter::new(Vec::<(i64, DefinitionKind)>::new().into_boxed_slice())
         }
     })
 }
