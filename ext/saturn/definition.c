@@ -7,6 +7,7 @@
 static VALUE mSaturn;
 
 VALUE cLocation;
+VALUE cComment;
 VALUE cDefinition;
 VALUE cClassDefinition;
 VALUE cModuleDefinition;
@@ -81,16 +82,56 @@ static VALUE sr_definition_location(VALUE self) {
     return location;
 }
 
+// Definition#comments -> [Saturn::Comment]
+static VALUE sr_definition_comments(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    CommentArray *arr = sat_definition_comments(graph, data->id);
+    if (arr == NULL || arr->len == 0) {
+        if (arr != NULL) {
+            sat_definition_comments_free(arr);
+        }
+        return rb_ary_new();
+    }
+
+    VALUE ary = rb_ary_new_capa((long)arr->len);
+    for (size_t i = 0; i < arr->len; i++) {
+        CommentEntry entry = arr->items[i];
+
+        VALUE string = rb_utf8_str_new_cstr(entry.string);
+
+        Location *loc = entry.location;
+        VALUE location = build_location_value(loc);
+
+        VALUE comment_kwargs = rb_hash_new();
+        rb_hash_aset(comment_kwargs, ID2SYM(rb_intern("string")), string);
+        rb_hash_aset(comment_kwargs, ID2SYM(rb_intern("location")), location);
+        VALUE comment = rb_class_new_instance_kw(1, &comment_kwargs, cComment, RB_PASS_KEYWORDS);
+
+        rb_ary_push(ary, comment);
+    }
+
+    // Free the array and all inner allocations on the Rust side
+    sat_definition_comments_free(arr);
+    return ary;
+}
+
 void initialize_definition(VALUE mod) {
     mSaturn = mod;
 
     cLocation = rb_define_class_under(mSaturn, "Location", rb_cObject);
+    cComment = rb_define_class_under(mSaturn, "Comment", rb_cObject);
 
     cDefinition = rb_define_class_under(mSaturn, "Definition", rb_cObject);
     rb_define_alloc_func(cDefinition, sr_handle_alloc);
     rb_define_method(cDefinition, "initialize", sr_handle_initialize, 2);
     rb_funcall(rb_singleton_class(cDefinition), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
     rb_define_method(cDefinition, "location", sr_definition_location, 0);
+    rb_define_method(cDefinition, "comments", sr_definition_comments, 0);
 
     cClassDefinition = rb_define_class_under(mSaturn, "ClassDefinition", cDefinition);
     rb_define_alloc_func(cClassDefinition, sr_handle_alloc);
