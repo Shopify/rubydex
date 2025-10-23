@@ -26,4 +26,46 @@ class DocumentTest < Minitest::Test
       assert_equal("file://#{context.absolute_path}/file1.rb", document.uri)
     end
   end
+
+  def test_definitions_enumerator
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A; end
+        class B; end
+      RUBY
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.first
+      refute_nil(document)
+
+      enumerator = document.definitions
+      assert_equal(2, enumerator.size)
+      assert_equal(2, enumerator.count)
+      assert_equal(2, enumerator.to_a.size)
+    end
+  end
+
+  def test_definitions_with_block
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A; end
+        class B; end
+      RUBY
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.first
+      refute_nil(document)
+
+      definitions = []
+      document.definitions do |definition|
+        definitions << definition
+      end
+
+      assert_equal(2, definitions.size)
+    end
+  end
 end

@@ -1,4 +1,5 @@
 #include "declaration.h"
+#include "definition.h"
 #include "document.h"
 #include "graph.h"
 
@@ -11,4 +12,5 @@ void Init_saturn(void) {
     initialize_graph(mSaturn);
     initialize_declaration(mSaturn);
     initialize_document(mSaturn);
+    initialize_definition(mSaturn);
 }

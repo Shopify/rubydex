@@ -1,4 +1,5 @@
 #include "document.h"
+#include "definition.h"
 #include "graph.h"
 #include "handle.h"
 #include "rustbindings.h"
@@ -24,12 +25,77 @@ static VALUE sr_document_uri(VALUE self) {
     return str;
 }
 
+// Body function for rb_ensure in Document#definitions
+static VALUE document_definitions_yield(VALUE args) {
+    VALUE self = rb_ary_entry(args, 0);
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    int64_t id = 0;
+    DefinitionKind kind;
+    while (sat_definitions_iter_next(iter, &id, &kind)) {
+        VALUE argv[] = {data->graph_obj, LL2NUM(id)};
+        VALUE defn_class = definition_class_for_kind(kind);
+        VALUE handle = rb_class_new_instance(2, argv, defn_class);
+        rb_yield(handle);
+    }
+
+    return Qnil;
+}
+
+// Ensure function for rb_ensure in Document#definitions to always free the iterator
+static VALUE document_definitions_ensure(VALUE args) {
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    sat_definitions_iter_free(iter);
+
+    return Qnil;
+}
+
+// Size function for the Document#definitions enumerator
+static VALUE document_definitions_size(VALUE self, VALUE _args, VALUE _eobj) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    struct DefinitionsIter *iter = sat_document_definitions_iter_new(graph, data->id);
+    size_t len = sat_definitions_iter_len(iter);
+    sat_definitions_iter_free(iter);
+
+    return SIZET2NUM(len);
+}
+
+// Document#definitions: () -> Enumerator[Definition]
+// Returns an enumerator that yields all definitions for this document lazily
+static VALUE sr_document_definitions(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize_with_size(self, rb_str_new2("definitions"), 0, NULL, document_definitions_size);
+    }
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *iter = sat_document_definitions_iter_new(graph, data->id);
+    VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
+    rb_ensure(document_definitions_yield, args, document_definitions_ensure, args);
+
+    return self;
+}
+
 void initialize_document(VALUE mSaturn) {
     cDocument = rb_define_class_under(mSaturn, "Document", rb_cObject);
 
     rb_define_alloc_func(cDocument, sr_handle_alloc);
     rb_define_private_method(cDocument, "initialize", sr_handle_initialize, 2);
     rb_define_method(cDocument, "uri", sr_document_uri, 0);
+    rb_define_method(cDocument, "definitions", sr_document_definitions, 0);
 
     rb_undef_method(CLASS_OF(cDocument), "new");
 }
