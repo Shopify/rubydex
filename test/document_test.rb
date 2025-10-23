@@ -11,7 +11,7 @@ class DocumentTest < Minitest::Test
       Saturn::Document.new
     end
 
-    assert_equal("undefined method 'new' for class Saturn::Document", e.message)
+    assert_equal("private method 'new' called for class Saturn::Document", e.message)
   end
 
   def test_document_initialize_from_graph

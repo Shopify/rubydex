@@ -95,9 +95,9 @@ void initialize_declaration(VALUE mSaturn) {
     cDeclaration = rb_define_class_under(mSaturn, "Declaration", rb_cObject);
 
     rb_define_alloc_func(cDeclaration, sr_handle_alloc);
-    rb_define_private_method(cDeclaration, "initialize", sr_handle_initialize, 2);
+    rb_define_method(cDeclaration, "initialize", sr_handle_initialize, 2);
     rb_define_method(cDeclaration, "name", sr_declaration_name, 0);
     rb_define_method(cDeclaration, "definitions", sr_declaration_definitions, 0);
 
-    rb_undef_method(CLASS_OF(cDeclaration), "new");
+    rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }

@@ -11,7 +11,7 @@ class DeclarationTest < Minitest::Test
       Saturn::Declaration.new
     end
 
-    assert_equal("undefined method 'new' for class Saturn::Declaration", e.message)
+    assert_equal("private method 'new' called for class Saturn::Declaration", e.message)
   end
 
   def test_declaration_initialize_from_graph
