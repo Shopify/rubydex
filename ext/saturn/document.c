@@ -28,8 +28,8 @@ void initialize_document(VALUE mSaturn) {
     cDocument = rb_define_class_under(mSaturn, "Document", rb_cObject);
 
     rb_define_alloc_func(cDocument, sr_handle_alloc);
-    rb_define_private_method(cDocument, "initialize", sr_handle_initialize, 2);
+    rb_define_method(cDocument, "initialize", sr_handle_initialize, 2);
     rb_define_method(cDocument, "uri", sr_document_uri, 0);
 
-    rb_undef_method(CLASS_OF(cDocument), "new");
+    rb_funcall(rb_singleton_class(cDocument), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }
