@@ -225,6 +225,17 @@ impl Graph {
         removed
     }
 
+    /// Get a list of uris and their content hashes from db.
+    /// This is used for synchronization where we will compare the content hashes
+    /// with the current documents to determine if a document needs updating.
+    ///
+    /// # Errors
+    ///
+    /// Any database errors will prevent the data from being loaded
+    pub fn get_all_cached_content_hashes(&self) -> Result<IdentityHashMap<UriId, u16>, Box<dyn Error>> {
+        self.db.get_all_content_hashes()
+    }
+
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, incomplete_index: Graph) {
