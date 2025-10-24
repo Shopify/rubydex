@@ -69,6 +69,12 @@ impl Graph {
         &self.documents
     }
 
+    // Returns an immutable reference to the list of unresolved references
+    #[must_use]
+    pub fn unresolved_references(&self) -> &Vec<UnresolvedReference> {
+        &self.unresolved_references
+    }
+
     /// # Errors
     ///
     /// May error if we fail to initialize the database connection at the specified path
