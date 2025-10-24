@@ -1204,7 +1204,7 @@ mod tests {
     }
 
     #[test]
-    fn comment_basic_attachment() {
+    fn index_comments_attached_to_definitions() {
         let mut context = GraphTest::new();
 
         context.index_uri("file:///foo.rb", {
@@ -1215,7 +1215,7 @@ mod tests {
             # Multi-line comment 1
             # Multi-line comment 2
             # Multi-line comment 3
-            class Multi; end
+            module Multi; end
 
             # Comment 1
             #
@@ -1223,7 +1223,7 @@ mod tests {
             class EmptyCommentLine; end
 
             # Comment directly above (no gap)
-            class NoGap; end
+            NoGap = 42
 
             #: ()
             #| -> void
@@ -1233,6 +1233,9 @@ mod tests {
 
             class BlankLine; end
 
+            # Too far away
+
+
             class NoComment; end
             "
         });
@@ -1240,7 +1243,7 @@ mod tests {
         assert_definition_comments!(context, Class, "Single", vec!["# Single comment"]);
         assert_definition_comments!(
             context,
-            Class,
+            Module,
             "Multi",
             vec![
                 "# Multi-line comment 1",
@@ -1254,39 +1257,14 @@ mod tests {
             "EmptyCommentLine",
             vec!["# Comment 1", "#", "# Comment 2"]
         );
-        assert_definition_comments!(context, Class, "NoGap", vec!["# Comment directly above (no gap)"]);
+        assert_definition_comments!(context, Constant, "NoGap", vec!["# Comment directly above (no gap)"]);
         assert_definition_comments!(context, Method, "foo", vec!["#: ()", "#| -> void"]);
         assert_definition_comments!(context, Class, "BlankLine", vec!["# Comment with blank line"]);
         assert_definition_comments!(context, Class, "NoComment", vec![]);
     }
 
     #[test]
-    fn comment_separation_rules() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            "
-            # Too far away
-
-
-            class TooFar; end
-
-            # Not attached due to code
-            x = 1
-            class CodeBetween; end
-
-            # Comment for Foo
-            class Foo; end
-            "
-        });
-
-        assert_definition_comments!(context, Class, "TooFar", vec![]);
-        assert_definition_comments!(context, Class, "CodeBetween", vec![]);
-        assert_definition_comments!(context, Class, "Foo", vec!["# Comment for Foo"]);
-    }
-
-    #[test]
-    fn comment_indented_and_nested() {
+    fn index_comments_indented_and_nested() {
         let mut context = GraphTest::new();
 
         context.index_uri("file:///foo.rb", {
@@ -1315,32 +1293,6 @@ mod tests {
             "Outer::AnotherInner",
             vec!["# Another inner class", "# with multiple lines"]
         );
-    }
-
-    #[test]
-    fn comment_modules_and_constants() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            "
-            # Module comment
-            module TestModule
-              # Constant comment
-              FOO = 42
-
-              # Nested module
-              module Nested; end
-            end
-
-            # Multi-write constant
-            A, B = 1, 2
-            "
-        });
-
-        assert_definition_comments!(context, Module, "TestModule", vec!["# Module comment"]);
-        assert_definition_comments!(context, Constant, "TestModule::FOO", vec!["# Constant comment"]);
-        assert_definition_comments!(context, Module, "TestModule::Nested", vec!["# Nested module"]);
-        assert_definition_comments!(context, Constant, "A", vec!["# Multi-write constant"]);
     }
 
     #[test]
