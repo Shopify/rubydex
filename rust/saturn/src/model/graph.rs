@@ -69,6 +69,12 @@ impl Graph {
         &self.documents
     }
 
+    // Returns an immutable reference to the list of unresolved references
+    #[must_use]
+    pub fn unresolved_references(&self) -> &Vec<UnresolvedReference> {
+        &self.unresolved_references
+    }
+
     /// # Errors
     ///
     /// May error if we fail to initialize the database connection at the specified path
@@ -490,7 +496,7 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{offset::Offset, test_utils::GraphTest};
+    use crate::test_utils::GraphTest;
 
     #[test]
     fn deleting_a_uri() {
@@ -718,102 +724,6 @@ mod tests {
         let definitions = context.graph.get("NoCommentClass").unwrap();
         let def = definitions.first().unwrap();
         assert!(def.comments().is_empty());
-    }
-
-    #[test]
-    fn tracking_unresolved_constant_references_inside_compact_namespace() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r"
-            module Foo
-              class Bar::Baz
-                String
-              end
-            end
-            "
-        });
-
-        let refs = context.graph.unresolved_references;
-        assert_eq!(refs.len(), 1);
-
-        let reference = &refs[0];
-
-        match reference {
-            UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name_id(), &NameId::from("String"));
-                assert_eq!(
-                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar::Baz")]
-                );
-                assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
-                assert_eq!(unresolved.offset(), &Offset::new(32, 38));
-            }
-        }
-    }
-
-    #[test]
-    fn tracking_unresolved_constant_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r"
-            module Foo
-              class Bar
-                String
-              end
-            end
-            "
-        });
-
-        let refs = context.graph.unresolved_references;
-        assert_eq!(refs.len(), 1);
-
-        let reference = &refs[0];
-
-        match reference {
-            UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name_id(), &NameId::from("String"));
-                assert_eq!(
-                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
-                );
-                assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
-                assert_eq!(unresolved.offset(), &Offset::new(27, 33));
-            }
-        }
-    }
-
-    #[test]
-    fn tracking_unresolved_constant_path_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r"
-            module Foo
-              class Bar
-                Object::String
-              end
-            end
-            "
-        });
-
-        let refs = context.graph.unresolved_references;
-        assert_eq!(refs.len(), 1);
-
-        let reference = &refs[0];
-
-        match reference {
-            UnresolvedReference::Constant(unresolved) => {
-                assert_eq!(unresolved.name_id(), &NameId::from("Object::String"));
-                assert_eq!(
-                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
-                );
-                assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
-                assert_eq!(unresolved.offset(), &Offset::new(27, 41));
-            }
-        }
     }
 
     #[test]
