@@ -20,7 +20,7 @@ end
 
 desc "Lint Rust code"
 task :lint_rust do
-  sh "cargo clippy --all-targets --all-features", chdir: "rust"
+  sh "cargo clippy --all-targets --all-features -- -D warnings", chdir: "rust"
   sh "rustfmt --check **/*.rs", chdir: "rust"
 end
 
