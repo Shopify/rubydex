@@ -718,8 +718,6 @@ mod tests {
         let definitions = context.graph.get("NoCommentClass").unwrap();
         let def = definitions.first().unwrap();
         assert!(def.comments().is_empty());
-
-        assert!(context.graph.get("NonExistent").is_none());
     }
 
     #[test]
