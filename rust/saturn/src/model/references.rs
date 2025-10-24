@@ -1,12 +1,12 @@
-use std::sync::Arc;
-
 use crate::{
     indexing::scope::Nesting,
     model::ids::{NameId, UriId},
     offset::Offset,
 };
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ConstantReference {
     /// The unqualified name of the constant
     name_id: NameId,
@@ -19,7 +19,7 @@ pub struct ConstantReference {
     offset: Offset,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum UnresolvedReference {
     /// An unresolved constant reference is a usage of a constant in a context where we can't immediately determine what it
     /// refers to. For example:
@@ -36,7 +36,7 @@ pub enum UnresolvedReference {
     Constant(Box<ConstantReference>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ResolvedReference {
     Constant(Box<ConstantReference>),
 }

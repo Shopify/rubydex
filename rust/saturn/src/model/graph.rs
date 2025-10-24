@@ -211,15 +211,17 @@ impl Graph {
         self.documents.entry(uri_id).or_insert_with(|| loaded_data.document);
 
         for load_result in loaded_data.definitions {
-            let declaration_id = load_result.declaration_id;
-            let definition_id = load_result.definition_id;
+            match self.declarations.entry(load_result.declaration_id) {
+                Entry::Vacant(entry) => {
+                    entry.insert(load_result.declaration);
+                }
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().extend(load_result.declaration);
+                }
+            }
 
-            self.declarations
-                .entry(declaration_id)
-                .or_insert_with(|| Declaration::new(load_result.name))
-                .add_definition(definition_id);
-
-            self.definitions.insert(definition_id, load_result.definition);
+            self.definitions
+                .insert(load_result.definition_id, load_result.definition);
         }
 
         Ok(())

@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS declarations (
     -- Queryable fields
     id INTEGER PRIMARY KEY,  -- Hashed declaration ID
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    -- Serialized struct
+    data BLOB NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS definitions (

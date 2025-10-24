@@ -1,4 +1,4 @@
-use crate::model::ids::DefinitionId;
+use crate::model::{ids::DefinitionId, serializable::Serializable};
 use serde::{Deserialize, Serialize};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
@@ -43,26 +43,9 @@ impl Document {
 
         self.definition_ids.push(definition_id);
     }
-
-    /// Serializes the document into the byte vector we store in the database
-    ///
-    /// # Panics
-    ///
-    /// This method will only panic if serialization fails, which should never happen
-    #[must_use]
-    pub fn serialize(&self) -> Vec<u8> {
-        rmp_serde::to_vec(self).expect("Serializing document should always succeed")
-    }
-
-    /// # Panics
-    ///
-    /// This method will only panic if serialization fails, which should never happen unless there's corrupt data stored
-    /// in the database
-    #[must_use]
-    pub fn deserialize(data: &[u8]) -> Self {
-        rmp_serde::from_slice(data).expect("Deserializing document should always succeed")
-    }
 }
+
+impl Serializable for Document {}
 
 #[cfg(test)]
 mod tests {

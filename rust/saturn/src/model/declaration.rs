@@ -2,12 +2,14 @@ use crate::model::{
     identity_maps::IdentityHashMap,
     ids::{DeclarationId, DefinitionId, NameId},
     references::ResolvedReference,
+    serializable::Serializable,
 };
+use serde::{Deserialize, Serialize};
 
 /// A `Declaration` represents the global concept of an entity in Ruby. For example, the class `Foo` may be defined 3
 /// times in different files and the `Foo` declaration is the combination of all of those definitions that contribute to
 /// the same fully qualified name
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Declaration {
     /// The fully qualified name of this declaration
     name: String,
@@ -37,6 +39,7 @@ impl Declaration {
     pub fn extend(&mut self, other: Declaration) {
         self.definition_ids.extend(other.definition_ids);
         self.members.extend(other.members);
+        self.references.extend(other.references);
     }
 
     #[must_use]
@@ -101,6 +104,8 @@ impl Declaration {
         self.members.get(name_id)
     }
 }
+
+impl Serializable for Declaration {}
 
 #[cfg(test)]
 mod tests {
