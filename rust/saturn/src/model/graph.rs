@@ -63,6 +63,12 @@ impl Graph {
         &self.definitions
     }
 
+    // Returns an immutable reference to the names map
+    #[must_use]
+    pub fn names(&self) -> &IdentityHashMap<NameId, String> {
+        &self.names
+    }
+
     // Returns an immutable reference to the URI pool map
     #[must_use]
     pub fn documents(&self) -> &IdentityHashMap<UriId, Document> {
