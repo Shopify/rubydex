@@ -778,6 +778,13 @@ mod tests {
         let const_ref = context.graph.unresolved_references.remove(0);
         assert!(context.graph.resolve_reference(&const_ref).is_none());
 
+        // ::Foo should be resolved to the Foo declaration
+        let const_ref = context.graph.unresolved_references.remove(0);
+        assert_eq!(
+            context.graph.resolve_reference(&const_ref).unwrap().name(),
+            String::from("Foo")
+        );
+
         // ::Foo::Bar should be resolved to the Foo::Bar declaration
         let const_ref = context.graph.unresolved_references.remove(0);
         assert_eq!(
