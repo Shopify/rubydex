@@ -56,8 +56,8 @@ type checkers, linting and other code analysis features.
 
 ### Key files
 
-- `rust/saturn/src/model/graph.rs`: the Graph representation of the codebase, which is composed of nodes
-representing fully qualified names, definitions, URIs and the relationships between them (edges)
+- `rust/saturn/src/model/graph.rs`: the Graph representation of the codebase. Read more about the architecture of the graph
+in `docs/architecture.md`
 - `rust/saturn/src/indexing/ruby_indexer.rs`: the visitor that extracts declaration information from the
 AST to save in the global graph
 - `rust/saturn/src/indexing.rs`: the parallel implementation of indexing a list of documents
