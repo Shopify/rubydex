@@ -44,20 +44,57 @@ class DefinitionTest < Minitest::Test
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      defs = graph.declarations.map { |d| d.definitions.to_a }.flatten
-      refute_empty(defs)
+      defs = graph.declarations
+        .map { |d| d.definitions.to_a }
+        .flatten
+        .sort_by(&:location)
 
-      # Ensure at least one of each subtype is present
-      assert(defs.any? { |d| d.is_a?(Saturn::ClassDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::ModuleDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::ConstantDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::MethodDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::AttrAccessorDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::AttrReaderDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::AttrWriterDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::GlobalVariableDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::InstanceVariableDefinition) })
-      assert(defs.any? { |d| d.is_a?(Saturn::ClassVariableDefinition) })
+      assert_instance_of(Saturn::ClassDefinition, defs[0])
+      assert_instance_of(Saturn::ClassVariableDefinition, defs[1])
+      assert_instance_of(Saturn::AttrAccessorDefinition, defs[2]) # for the writer
+      assert_instance_of(Saturn::AttrAccessorDefinition, defs[3]) # for the reader
+      assert_instance_of(Saturn::AttrReaderDefinition, defs[4])
+      assert_instance_of(Saturn::AttrWriterDefinition, defs[5])
+      assert_instance_of(Saturn::ModuleDefinition, defs[6])
+      assert_instance_of(Saturn::ConstantDefinition, defs[7])
+      assert_instance_of(Saturn::MethodDefinition, defs[8])
+      assert_instance_of(Saturn::GlobalVariableDefinition, defs[9])
+      assert_instance_of(Saturn::InstanceVariableDefinition, defs[10])
+    end
+  end
+
+  def test_definition_location
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A
+          def foo; end
+        end
+      RUBY
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      def_a = graph["A"]&.definitions&.first
+      refute_nil(def_a)
+      location = def_a.location
+      refute_nil(location)
+      assert_equal("file://#{context.absolute_path_to("file1.rb")}", location.uri)
+      assert_equal(context.absolute_path_to("file1.rb"), location.path)
+      assert_equal(1, location.start_line)
+      assert_equal(1, location.start_column)
+      assert_equal(3, location.end_line)
+      assert_equal(4, location.end_column)
+
+      def_foo = graph["A::foo"]&.definitions&.first
+      refute_nil(def_foo)
+      location = def_foo.location
+      refute_nil(location)
+      assert_equal("file://#{context.absolute_path_to("file1.rb")}", location.uri)
+      assert_equal(context.absolute_path_to("file1.rb"), location.path)
+      assert_equal(2, location.start_line)
+      assert_equal(3, location.start_column)
+      assert_equal(2, location.end_line)
+      assert_equal(15, location.end_column)
     end
   end
 end

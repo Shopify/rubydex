@@ -4,6 +4,18 @@ pub struct Position {
     column: u32,
 }
 
+impl Position {
+    #[must_use]
+    pub const fn line(&self) -> u32 {
+        self.line
+    }
+
+    #[must_use]
+    pub const fn column(&self) -> u32 {
+        self.column
+    }
+}
+
 pub trait SourceLocationConverter {
     /// Converts a byte offset to a Position (line and column).
     ///

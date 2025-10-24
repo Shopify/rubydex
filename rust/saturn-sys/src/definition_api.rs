@@ -1,6 +1,7 @@
 //! This file provides the C API for Definition accessors
 
 use crate::graph_api::{GraphPointer, with_graph};
+use crate::location_api::{Location, create_location_for_uri_and_offset};
 use saturn::model::definitions::Definition;
 use saturn::model::ids::DefinitionId;
 
@@ -125,6 +126,35 @@ pub unsafe extern "C" fn sat_definitions_iter_free(iter: *mut DefinitionsIter) {
     unsafe {
         let _ = Box::from_raw(iter);
     }
+}
+
+/// Returns a newly allocated `Location` for the given definition id.
+/// Caller must free the returned pointer with `sat_definition_location_free`.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `sat_graph_new`.
+/// - `definition_id` must be a valid definition id.
+///
+/// # Panics
+///
+/// This function will panic if a definition or document cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_definition_location(pointer: GraphPointer, definition_id: i64) -> *mut Location {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let Some(defn) = graph.definitions().get(&def_id) else {
+            panic!("Definition not found: {definition_id:?}");
+        };
+
+        let uri_id = *defn.uri_id();
+        let uri = if let Some(doc) = graph.documents().get(&uri_id) {
+            doc.uri().to_string()
+        } else {
+            panic!("Document not found: {uri_id:?}");
+        };
+
+        create_location_for_uri_and_offset(&uri, defn.start(), defn.end())
+    })
 }
 
 /// Creates a new iterator over definition IDs for a given declaration by snapshotting the current set of IDs.
