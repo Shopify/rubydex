@@ -28,16 +28,17 @@ class DefinitionTest < Minitest::Test
   def test_definition_subclass_mapping
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
-        class A; end
+        class A
+          @@c = 1
+          attr_accessor :x
+          attr_reader :y
+          attr_writer :z
+        end
         module M; end
         FOO = 1
         def bar; end
-        attr_accessor :x
-        attr_reader :y
-        attr_writer :z
         $g = 1
         @i = 1
-        @@c = 1
       RUBY
 
       graph = Saturn::Graph.new
