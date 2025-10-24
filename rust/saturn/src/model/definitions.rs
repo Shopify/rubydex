@@ -105,6 +105,25 @@ impl Definition {
     pub fn comments(&self) -> &Vec<Comment> {
         all_definitions!(self, it => &it.comments)
     }
+
+    /// Serializes the definition into the byte vector we store in the database
+    ///
+    /// # Panics
+    ///
+    /// This method will only panic if serialization fails, which should never happen
+    #[must_use]
+    pub fn serialize(&self) -> Vec<u8> {
+        rmp_serde::to_vec(self).expect("Serializing document should always succeed")
+    }
+
+    /// # Panics
+    ///
+    /// This method will only panic if serialization fails, which should never happen unless there's corrupt data stored
+    /// in the database
+    #[must_use]
+    pub fn deserialize(data: &[u8]) -> Self {
+        rmp_serde::from_slice(data).expect("Deserializing document should always succeed")
+    }
 }
 
 /// A class definition
