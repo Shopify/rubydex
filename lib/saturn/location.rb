@@ -2,6 +2,8 @@
 
 module Saturn
   class Location
+    include Comparable
+
     #: String
     attr_reader :uri
 
@@ -23,6 +25,15 @@ module Saturn
       raise Saturn::Error, "URI is not a file:// URI: #{@uri}" unless uri.scheme == "file"
 
       uri.path
+    end
+
+    #: (other: BasicObject) -> Integer
+    def <=>(other)
+      return -1 unless other.is_a?(Location)
+
+      a = [@uri, @start_line, @start_column, @end_line, @end_column]
+      b = [other.uri, other.start_line, other.start_column, other.end_line, other.end_column]
+      a <=> b
     end
 
     #: -> String
