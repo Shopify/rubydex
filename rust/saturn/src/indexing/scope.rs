@@ -92,6 +92,15 @@ impl Scope {
         }
     }
 
+    /// Returns the declaration ID for the current nesting or `None` if we're not inside any namespace. It's important
+    /// to let the client of this method handle `None` because different concepts handle it differently. For example,
+    /// constants defined at the top level are members of `Object`, but methods defined at the top level are members of
+    /// the special <main> object
+    #[must_use]
+    pub fn current_nesting_id(&self) -> Option<DeclarationId> {
+        self.nesting.as_ref().map(|n| *n.declaration_id())
+    }
+
     #[must_use]
     pub fn nesting(&self) -> &Option<Arc<Nesting>> {
         &self.nesting

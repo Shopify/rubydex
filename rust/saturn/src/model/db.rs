@@ -426,6 +426,8 @@ mod tests {
             .unwrap()
             .query_row((), |row| row.get(0))
             .unwrap();
-        assert_eq!(name_count, 0,);
+
+        // Only the declaration for <main> should remain
+        assert_eq!(name_count, 1);
     }
 }

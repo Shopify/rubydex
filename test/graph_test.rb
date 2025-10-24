@@ -88,9 +88,9 @@ class GraphTest < Minitest::Test
 
       enumerator = graph.declarations
 
-      assert_equal(2, enumerator.size)
-      assert_equal(2, enumerator.count)
-      assert_equal(2, enumerator.to_a.size)
+      assert_equal(3, enumerator.size)
+      assert_equal(3, enumerator.count)
+      assert_equal(3, enumerator.to_a.size)
     end
   end
 
@@ -107,7 +107,7 @@ class GraphTest < Minitest::Test
         declarations << declaration
       end
 
-      assert_equal(2, declarations.size)
+      assert_equal(3, declarations.size)
     end
   end
 

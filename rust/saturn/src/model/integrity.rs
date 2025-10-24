@@ -110,8 +110,8 @@ mod tests {
     fn test_integrity_check_with_custom_rule() {
         let mut checker = IntegrityChecker::new();
 
-        checker.add_rule("Index must be empty", |index, errors| {
-            if !index.declarations().is_empty() {
+        checker.add_rule("Index must be empty except for <main>", |index, errors| {
+            if index.declarations().len() != 1 || index.declarations().get(&DeclarationId::from("<main>")).is_none() {
                 errors.push("Index is not empty".to_string());
             }
         });
