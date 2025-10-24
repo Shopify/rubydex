@@ -677,19 +677,10 @@ impl Visit<'_> for RubyIndexer<'_> {
                 // attr :foo, true        => both reader and writer
                 // attr :foo, false       => only reader
                 // attr :foo              => only reader
-                // attr :foo, "bar", :baz => both reader and writer for foo, bar, and baz
+                // attr :foo, "bar", :baz => only readers for foo, bar, and baz
                 let create_writer = if let Some(arguments) = node.arguments() {
                     let args_vec: Vec<_> = arguments.arguments().iter().collect();
-
-                    matches!(
-                        args_vec.as_slice(),
-                        [_, ruby_prism::Node::TrueNode { .. }]
-                            | [
-                                _,
-                                ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. },
-                                ..,
-                            ]
-                    )
+                    matches!(args_vec.as_slice(), [_, ruby_prism::Node::TrueNode { .. }])
                 } else {
                     false
                 };
@@ -1592,24 +1583,23 @@ mod tests {
         });
 
         for name in [
-            "Foo::foo",
-            "Foo::foo=",
-            "Foo::bar",
-            "Foo::bar=",
-            "Foo::baz",
-            "Foo::baz=",
-            "Foo::a",
-            "Foo::a=",
-            "Foo::b",
-            "Foo::b=",
-            "Foo::c",
-            "Foo::c=",
-            "Foo::d",
-            "Foo::d=",
+            "Foo::foo", "Foo::bar", "Foo::baz", "Foo::a", "Foo::b", "Foo::c", "Foo::d",
         ] {
             let definitions = context.graph.get(name).unwrap();
             assert_eq!(definitions.len(), 1);
-            assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
+            assert!(matches!(definitions[0], Definition::AttrReader(_)));
+        }
+
+        for writer_name in [
+            "Foo::foo=",
+            "Foo::bar=",
+            "Foo::baz=",
+            "Foo::a=",
+            "Foo::b=",
+            "Foo::c=",
+            "Foo::d=",
+        ] {
+            assert!(context.graph.get(writer_name).is_none());
         }
     }
 
@@ -1849,7 +1839,7 @@ mod tests {
 
         let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
         let members = foo.members();
-        assert_eq!(members.len(), 11);
+        assert_eq!(members.len(), 9);
         assert_eq!(members.get(&NameId::from("a")).unwrap(), &DeclarationId::from("Foo::a"));
         assert_eq!(members.get(&NameId::from("b")).unwrap(), &DeclarationId::from("Foo::b"));
         assert_eq!(
@@ -1867,14 +1857,6 @@ mod tests {
             &DeclarationId::from("Foo::e=")
         );
         assert_eq!(members.get(&NameId::from("f")).unwrap(), &DeclarationId::from("Foo::f"));
-        assert_eq!(
-            members.get(&NameId::from("f=")).unwrap(),
-            &DeclarationId::from("Foo::f=")
-        );
         assert_eq!(members.get(&NameId::from("g")).unwrap(), &DeclarationId::from("Foo::g"));
-        assert_eq!(
-            members.get(&NameId::from("g=")).unwrap(),
-            &DeclarationId::from("Foo::g=")
-        );
     }
 }
