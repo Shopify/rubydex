@@ -97,4 +97,35 @@ class DefinitionTest < Minitest::Test
       assert_equal(15, location.end_column)
     end
   end
+
+  def test_definition_comments
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        # This is a class comment
+        # Multi-line comment
+        class Foo
+          # Method comment
+          def foo; end
+        end
+      RUBY
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      comments = graph["Foo"]&.definitions&.first&.comments
+      assert_equal(
+        [
+          "# This is a class comment (#{context.absolute_path_to("file1.rb")}:1:1-1:26)",
+          "# Multi-line comment (#{context.absolute_path_to("file1.rb")}:2:1-2:21)",
+        ],
+        comments.map { |c| "#{c.string} (#{c.location})" },
+      )
+
+      comments = graph["Foo::foo"]&.definitions&.first&.comments
+      assert_equal(
+        ["# Method comment (#{context.absolute_path_to("file1.rb")}:4:3-4:19)"],
+        comments.map { |c| "#{c.string} (#{c.location})" },
+      )
+    end
+  end
 end

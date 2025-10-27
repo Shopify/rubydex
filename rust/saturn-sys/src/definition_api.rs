@@ -2,8 +2,11 @@
 
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
+use libc::c_char;
 use saturn::model::definitions::Definition;
 use saturn::model::ids::DefinitionId;
+use std::ffi::CString;
+use std::ptr;
 
 /// C-compatible enum representing the kind of a definition.
 #[repr(C)]
@@ -126,6 +129,97 @@ pub unsafe extern "C" fn sat_definitions_iter_free(iter: *mut DefinitionsIter) {
     unsafe {
         let _ = Box::from_raw(iter);
     }
+}
+
+/// C-compatible struct representing a single comment with its string and location
+#[repr(C)]
+pub struct CommentEntry {
+    pub string: *const c_char,
+    pub location: *mut Location,
+}
+
+/// C-compatible array of comments
+#[repr(C)]
+pub struct CommentArray {
+    pub items: *mut CommentEntry,
+    pub len: usize,
+}
+
+/// Returns a newly allocated array of comments (string and location) for the given definition id.
+/// Caller must free the returned pointer with `sat_definition_comments_free` and each inner string with `free_c_string` if needed.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `sat_graph_new`.
+/// - `definition_id` must be a valid definition id.
+///
+/// # Panics
+/// This function will panic if a definition or document cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_definition_comments(pointer: GraphPointer, definition_id: i64) -> *mut CommentArray {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let Some(defn) = graph.definitions().get(&def_id) else {
+            panic!("Definition not found: {definition_id:?}");
+        };
+
+        let uri_id = *defn.uri_id();
+        let uri = if let Some(doc) = graph.documents().get(&uri_id) {
+            doc.uri().to_string()
+        } else {
+            panic!("Document not found: {uri_id:?}");
+        };
+
+        let mut entries = defn
+            .comments()
+            .iter()
+            .map(|c| CommentEntry {
+                string: CString::new(c.string().as_str()).unwrap().into_raw().cast_const(),
+                location: create_location_for_uri_and_offset(&uri, c.offset().start(), c.offset().end()),
+            })
+            .collect::<Vec<CommentEntry>>()
+            .into_boxed_slice();
+
+        let len = entries.len();
+        let items_ptr = entries.as_mut_ptr();
+        std::mem::forget(entries);
+
+        Box::into_raw(Box::new(CommentArray { items: items_ptr, len }))
+    })
+}
+
+/// Frees a `CommentArray` previously returned by `sat_definition_comments`.
+///
+/// # Safety
+/// - `ptr` must be a valid pointer previously returned by `sat_definition_comments`.
+/// - `ptr` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_definition_comments_free(ptr: *mut CommentArray) {
+    if ptr.is_null() {
+        return;
+    }
+
+    // Take ownership of the CommentArray
+    let arr = unsafe { Box::from_raw(ptr) };
+
+    if !arr.items.is_null() && arr.len > 0 {
+        // Reconstruct the boxed slice so we can drop it after freeing inner allocations
+        let slice_ptr = ptr::slice_from_raw_parts_mut(arr.items, arr.len);
+        let mut boxed_slice: Box<[CommentEntry]> = unsafe { Box::from_raw(slice_ptr) };
+
+        for item in &mut boxed_slice {
+            if !item.string.is_null() {
+                // Free the CString allocated for the comment string
+                let _ = unsafe { CString::from_raw(item.string.cast_mut()) };
+            }
+            if !item.location.is_null() {
+                unsafe { crate::location_api::sat_definition_location_free(item.location) };
+                item.location = ptr::null_mut();
+            }
+        }
+
+        // boxed_slice is dropped here, freeing the items buffer
+    }
+    // arr is dropped here
 }
 
 /// Returns a newly allocated `Location` for the given definition id.
