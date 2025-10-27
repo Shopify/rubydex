@@ -90,6 +90,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if args.stats {
+        time_it!(resolving, {
+            graph.print_resolution_statistics();
+        });
         time_it!(querying, {
             graph.print_query_statistics();
         });
@@ -108,7 +111,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Found {} names", graph.declarations().len());
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.documents().len());
-        println!("Found {} references", graph.unresolved_references().len());
     }
 
     Ok(())
