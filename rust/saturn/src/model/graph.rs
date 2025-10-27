@@ -63,6 +63,12 @@ impl Graph {
         &self.definitions
     }
 
+    // Returns an immutable reference to the names map
+    #[must_use]
+    pub fn names(&self) -> &IdentityHashMap<NameId, String> {
+        &self.names
+    }
+
     // Returns an immutable reference to the URI pool map
     #[must_use]
     pub fn documents(&self) -> &IdentityHashMap<UriId, Document> {
@@ -769,6 +775,13 @@ mod tests {
         // Object is unresolved until we implement RBS indexing
         let const_ref = context.graph.unresolved_references.remove(0);
         assert!(context.graph.resolve_reference(&const_ref).is_none());
+
+        // ::Foo should be resolved to the Foo declaration
+        let const_ref = context.graph.unresolved_references.remove(0);
+        assert_eq!(
+            context.graph.resolve_reference(&const_ref).unwrap().name(),
+            String::from("Foo")
+        );
 
         // ::Foo::Bar should be resolved to the Foo::Bar declaration
         let const_ref = context.graph.unresolved_references.remove(0);

@@ -351,6 +351,17 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.local_graph.add_definition(fully_qualified_name, definition);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
 
+        if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
+            let constant_path = node.constant_path().as_constant_path_node().unwrap();
+            if let Some(parent) = constant_path.parent() {
+                self.visit(&parent);
+            }
+        }
+
+        if let Some(superclass) = node.superclass() {
+            self.visit(&superclass);
+        }
+
         if let Some(body) = node.body() {
             self.visit(&body);
         }
@@ -376,11 +387,33 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.local_graph.add_definition(fully_qualified_name, definition);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
 
+        if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
+            let constant_path = node.constant_path().as_constant_path_node().unwrap();
+            if let Some(parent) = constant_path.parent() {
+                self.visit(&parent);
+            }
+        }
+
         if let Some(body) = node.body() {
             self.visit(&body);
         }
 
         self.scope.leave();
+    }
+
+    fn visit_constant_and_write_node(&mut self, node: &ruby_prism::ConstantAndWriteNode) {
+        self.index_constant_reference(&node.name_loc());
+        self.visit(&node.value());
+    }
+
+    fn visit_constant_operator_write_node(&mut self, node: &ruby_prism::ConstantOperatorWriteNode) {
+        self.index_constant_reference(&node.name_loc());
+        self.visit(&node.value());
+    }
+
+    fn visit_constant_or_write_node(&mut self, node: &ruby_prism::ConstantOrWriteNode) {
+        self.index_constant_reference(&node.name_loc());
+        self.visit(&node.value());
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
@@ -406,6 +439,18 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.visit(&node.value());
     }
 
+    fn visit_constant_path_and_write_node(&mut self, node: &ruby_prism::ConstantPathAndWriteNode) {
+        self.visit_constant_path_node(&node.target());
+    }
+
+    fn visit_constant_path_operator_write_node(&mut self, node: &ruby_prism::ConstantPathOperatorWriteNode) {
+        self.visit_constant_path_node(&node.target());
+    }
+
+    fn visit_constant_path_or_write_node(&mut self, node: &ruby_prism::ConstantPathOrWriteNode) {
+        self.visit_constant_path_node(&node.target());
+    }
+
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
         let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let location = node.target().location();
@@ -426,6 +471,10 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         self.local_graph.add_definition(fully_qualified_name, definition);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
+
+        if let Some(parent) = node.target().parent() {
+            self.visit(&parent);
+        }
         self.visit(&node.value());
     }
 
@@ -434,6 +483,10 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_path_node(&mut self, node: &ruby_prism::ConstantPathNode<'_>) {
+        if let Some(parent) = node.parent() {
+            self.visit(&parent);
+        }
+
         self.index_constant_reference(&node.location());
     }
 
@@ -820,6 +873,16 @@ mod tests {
             assert_eq!($definition.start(), $start);
             assert_eq!($definition.end(), $end);
         };
+    }
+
+    fn collect_constant_reference_names(graph: &Graph) -> Vec<&String> {
+        graph
+            .unresolved_references()
+            .iter()
+            .map(|r| match r {
+                UnresolvedReference::Constant(constant) => graph.names().get(constant.name_id()).unwrap(),
+            })
+            .collect::<Vec<_>>()
     }
 
     #[test]
@@ -1827,9 +1890,23 @@ mod tests {
         });
 
         let refs = context.graph.unresolved_references();
-        assert_eq!(refs.len(), 1);
+        assert_eq!(refs.len(), 2);
 
         let reference = &refs[0];
+
+        match reference {
+            UnresolvedReference::Constant(unresolved) => {
+                assert_eq!(unresolved.name_id(), &NameId::from("Bar"));
+                assert_eq!(
+                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
+                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar::Baz")]
+                );
+                assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
+                assert_eq!(unresolved.offset(), &Offset::new(19, 22));
+            }
+        }
+
+        let reference = &refs[1];
 
         match reference {
             UnresolvedReference::Constant(unresolved) => {
@@ -1845,7 +1922,7 @@ mod tests {
     }
 
     #[test]
-    fn index_unresolved_constant_references() {
+    fn index_unresolved_constant_reference_context() {
         let mut context = GraphTest::new();
 
         context.index_uri("file:///foo.rb", {
@@ -1891,9 +1968,23 @@ mod tests {
         });
 
         let refs = context.graph.unresolved_references();
-        assert_eq!(refs.len(), 1);
+        assert_eq!(refs.len(), 2);
 
         let reference = &refs[0];
+
+        match reference {
+            UnresolvedReference::Constant(unresolved) => {
+                assert_eq!(unresolved.name_id(), &NameId::from("Object"));
+                assert_eq!(
+                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
+                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
+                );
+                assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
+                assert_eq!(unresolved.offset(), &Offset::new(27, 33));
+            }
+        }
+
+        let reference = &refs[1];
 
         match reference {
             UnresolvedReference::Constant(unresolved) => {
@@ -1906,5 +1997,149 @@ mod tests {
                 assert_eq!(unresolved.offset(), &Offset::new(27, 41));
             }
         }
+    }
+
+    #[test]
+    fn index_unresolved_constant_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            puts C1
+            puts C2::C3::C4
+            puts foo::C5
+            puts C6.foo
+            foo = C7
+            C8 << 42
+            C9 += 42
+            C10 ||= 42
+            C11 &&= 42
+            C12[C13]
+            C14::IGNORED1 = 42 # IGNORED1 is an assignment
+            C15::C16 << 42
+            C17::C18 += 42
+            C19::C20 ||= 42
+            C21::C22 &&= 42
+            puts \"#{C23}\"
+
+            ::IGNORED2 = 42 # IGNORED2 is an assignment
+            puts \"IGNORED3\"
+            puts :IGNORED4
+            "
+        });
+
+        assert_eq!(
+            collect_constant_reference_names(&context.graph),
+            vec![
+                "C1",
+                "C2",
+                "C2::C3",
+                "C2::C3::C4",
+                "foo::C5",
+                "C6",
+                "C7",
+                "C8",
+                "C9",
+                "C10",
+                "C11",
+                "C12",
+                "C13",
+                "C14",
+                "C15",
+                "C15::C16",
+                "C17",
+                "C17::C18",
+                "C19",
+                "C19::C20",
+                "C21",
+                "C21::C22",
+                "C23"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_from_values() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            IGNORED1 = C1
+            IGNORED2 = [C2::C3]
+            C4 << C5
+            C6 += C7
+            C8 ||= C9
+            C10 &&= C11
+            C12[C13] = C14
+            "
+        });
+
+        assert_eq!(
+            collect_constant_reference_names(&context.graph),
+            vec![
+                "C1", "C2", "C2::C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14",
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_for_classes() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            C1.new
+
+            class IGNORED < ::C2; end
+            class IGNORED < C3; end
+            class IGNORED < C4::C5; end
+            class IGNORED < ::C6::C7; end
+
+            class C8::IGNORED; end
+            class ::C9::IGNORED; end
+            class C10::C11::IGNORED; end
+            "
+        });
+
+        assert_eq!(
+            collect_constant_reference_names(&context.graph),
+            vec![
+                "C1", "C2", "C3", "C4", "C4::C5", "C6", "C6::C7", "C8", "C9", "C10", "C10::C11",
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_for_modules() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            module X
+              include M1
+              include M2::M3
+              extend M4
+              extend M5::M6
+              prepend M7
+              prepend M8::M9
+            end
+
+            M10.include M11
+            M12.extend M13
+            M14.prepend M15
+
+            module M16::IGNORED; end
+            module ::M17::IGNORED; end
+            module M18::M19::IGNORED; end
+            "
+        });
+
+        assert_eq!(
+            collect_constant_reference_names(&context.graph),
+            vec![
+                "M1", "M2", "M2::M3", "M4", "M5", "M5::M6", "M7", "M8", "M8::M9", "M10", "M11", "M12", "M13", "M14",
+                "M15", "M16", "M17", "M18", "M18::M19",
+            ]
+        );
     }
 }
