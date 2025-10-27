@@ -649,7 +649,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                             writer_declaration_id,
                             indexer.uri_id,
                             Offset::from_prism_location(&location),
-                            comments.clone(),
+                            comments,
                         ))),
                     );
                 }

@@ -79,7 +79,8 @@ impl Document {
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<(), MultipleErrors> {
-    let index_document = |document: &Document| -> IndexerParts {
+    let index_document = |document: Document| -> IndexerParts {
+        let uri = document.uri.to_string();
         let (source, errors) = read_document_source(document);
         if !errors.is_empty() {
             return (None, errors);
@@ -87,7 +88,7 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
 
         let converter = UTF8SourceLocationConverter::new(&source);
         let content_hash = Document::calculate_content_hash(source.as_bytes());
-        let mut ruby_indexer = RubyIndexer::new(document.uri.to_string(), &converter, &source, content_hash);
+        let mut ruby_indexer = RubyIndexer::new(uri, &converter, &source, content_hash);
         ruby_indexer.index();
         ruby_indexer.into_parts()
     };
@@ -98,11 +99,11 @@ pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<
 }
 
 /// Reads the source content from a document, either from memory or disk
-fn read_document_source(document: &Document) -> (String, Vec<IndexingError>) {
+fn read_document_source(document: Document) -> (String, Vec<IndexingError>) {
     let mut errors = Vec::new();
 
-    let source = if let Some(source) = &document.source {
-        source.clone()
+    let source = if let Some(source) = document.source {
+        source
     } else {
         match document.path() {
             Ok(path) => fs::read_to_string(&path).unwrap_or_else(|e| {
@@ -125,7 +126,7 @@ fn read_document_source(document: &Document) -> (String, Vec<IndexingError>) {
 
 fn with_parallel_workers<F, G>(documents: Vec<Document>, worker_fn: F, mut result_fn: G) -> Result<(), MultipleErrors>
 where
-    F: Fn(&Document) -> IndexerParts + Send + Clone + 'static,
+    F: Fn(Document) -> IndexerParts + Send + Clone + 'static,
     G: FnMut(Graph),
 {
     let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
@@ -140,7 +141,7 @@ where
 
         let handle = thread::spawn(move || {
             while let Some(document) = { queue.lock().unwrap().pop() } {
-                let (result, errors) = thread_fn(&document);
+                let (result, errors) = thread_fn(document);
                 if result.is_some() || !errors.is_empty() {
                     thread_tx
                         .send((result, errors))
@@ -313,7 +314,7 @@ mod tests {
         let documents = vec![Document::new("file:///skipped.rb", Some("module Foo; end".to_string())).unwrap()];
 
         let mut was_called = false;
-        let worker_fn = |_document: &Document| -> IndexerParts { (None, vec![]) };
+        let worker_fn = |_document: Document| -> IndexerParts { (None, vec![]) };
         let result_fn = |_graph: Graph| {
             was_called = true;
         };

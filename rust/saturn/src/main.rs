@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     let (documents, errors) = time_it!(listing, {
-        let (documents, errors) = indexing::collect_documents(vec![args.dir.clone()]);
+        let (documents, errors) = indexing::collect_documents(vec![args.dir]);
         Ok::<_, Box<dyn Error>>((documents, errors))
     })?;
 
