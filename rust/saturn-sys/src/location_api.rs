@@ -9,6 +9,7 @@ use url::Url;
 
 /// C-compatible struct representing a definition location with offsets and line/column positions.
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct Location {
     pub uri: *const c_char,
     pub start_line: u32,

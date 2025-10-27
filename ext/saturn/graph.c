@@ -1,6 +1,8 @@
 #include "graph.h"
 #include "declaration.h"
 #include "document.h"
+#include "location.h"
+#include "reference.h"
 #include "rustbindings.h"
 #include "utils.h"
 
@@ -192,6 +194,61 @@ static VALUE sr_graph_aref(VALUE self, VALUE key) {
     return rb_class_new_instance(2, argv, cDeclaration);
 }
 
+// Body function for rb_ensure in Graph#unresolved_references
+static VALUE graph_unresolved_references_yield(VALUE args) {
+    VALUE self = rb_ary_entry(args, 0);
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+
+    int64_t id = 0;
+    UnresolvedReferenceKind kind;
+    while (sat_unresolved_references_iter_next(iter, &id, &kind)) {
+        VALUE ref_class = reference_class_for_kind(kind);
+        VALUE argv[] = {self, LL2NUM(id)};
+        VALUE obj = rb_class_new_instance(2, argv, ref_class);
+        rb_yield(obj);
+    }
+
+    return Qnil;
+}
+
+// Ensure function for rb_ensure in Graph#unresolved_references to always free the iterator
+static VALUE graph_unresolved_references_ensure(VALUE args) {
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    sat_unresolved_references_iter_free(iter);
+
+    return Qnil;
+}
+
+// Size function for the unresolved_references enumerator
+static VALUE graph_unresolved_references_size(VALUE self, VALUE _args, VALUE _eobj) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    UnresolvedReferencesIter *iter = sat_graph_unresolved_references_iter_new(graph);
+    size_t len = sat_unresolved_references_iter_len(iter);
+    sat_unresolved_references_iter_free(iter);
+
+    return SIZET2NUM(len);
+}
+
+// Graph#unresolved_references: () -> Enumerator[UnresolvedReference]
+// Returns an enumerator that yields unresolved references lazily
+static VALUE sr_graph_unresolved_references(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize_with_size(self, rb_str_new2("unresolved_references"), 0, NULL,
+                                          graph_unresolved_references_size);
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    void *iter = sat_graph_unresolved_references_iter_new(graph);
+    VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
+    rb_ensure(graph_unresolved_references_yield, args, graph_unresolved_references_ensure, args);
+
+    return self;
+}
+
 void initialize_graph(VALUE mSaturn) {
     cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
 
@@ -200,5 +257,6 @@ void initialize_graph(VALUE mSaturn) {
     rb_define_method(cGraph, "set_configuration", sr_graph_set_configuration, 1);
     rb_define_method(cGraph, "declarations", sr_graph_declarations, 0);
     rb_define_method(cGraph, "documents", sr_graph_documents, 0);
+    rb_define_method(cGraph, "unresolved_references", sr_graph_unresolved_references, 0);
     rb_define_method(cGraph, "[]", sr_graph_aref, 1);
 }
