@@ -2,6 +2,7 @@
 #include "definition.h"
 #include "document.h"
 #include "graph.h"
+#include "location.h"
 
 VALUE mSaturn;
 
@@ -13,4 +14,5 @@ void Init_saturn(void) {
     initialize_declaration(mSaturn);
     initialize_document(mSaturn);
     initialize_definition(mSaturn);
+    initialize_location(mSaturn);
 }

@@ -212,7 +212,7 @@ pub unsafe extern "C" fn sat_definition_comments_free(ptr: *mut CommentArray) {
                 let _ = unsafe { CString::from_raw(item.string.cast_mut()) };
             }
             if !item.location.is_null() {
-                unsafe { crate::location_api::sat_definition_location_free(item.location) };
+                unsafe { crate::location_api::sat_location_free(item.location) };
                 item.location = ptr::null_mut();
             }
         }
@@ -223,7 +223,7 @@ pub unsafe extern "C" fn sat_definition_comments_free(ptr: *mut CommentArray) {
 }
 
 /// Returns a newly allocated `Location` for the given definition id.
-/// Caller must free the returned pointer with `sat_definition_location_free`.
+/// Caller must free the returned pointer with `sat_location_free`.
 ///
 /// # Safety
 /// - `pointer` must be a valid pointer previously returned by `sat_graph_new`.

@@ -1,12 +1,11 @@
 #include "definition.h"
 #include "graph.h"
 #include "handle.h"
+#include "location.h"
 #include "ruby/internal/scan_args.h"
 #include "rustbindings.h"
 
 static VALUE mSaturn;
-
-VALUE cLocation;
 VALUE cComment;
 VALUE cDefinition;
 VALUE cClassDefinition;
@@ -48,25 +47,6 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
     }
 }
 
-// Helper to build a Ruby Saturn::Location from a C Location pointer.
-// Does not take ownership; caller must free the C Location via sat_definition_location_free.
-static VALUE build_location_value(Location *loc) {
-    if (loc == NULL) {
-        return Qnil;
-    }
-
-    VALUE uri = rb_utf8_str_new_cstr(loc->uri);
-
-    VALUE kwargs = rb_hash_new();
-    rb_hash_aset(kwargs, ID2SYM(rb_intern("uri")), uri);
-    rb_hash_aset(kwargs, ID2SYM(rb_intern("start_line")), UINT2NUM(loc->start_line));
-    rb_hash_aset(kwargs, ID2SYM(rb_intern("end_line")), UINT2NUM(loc->end_line));
-    rb_hash_aset(kwargs, ID2SYM(rb_intern("start_column")), UINT2NUM(loc->start_column));
-    rb_hash_aset(kwargs, ID2SYM(rb_intern("end_column")), UINT2NUM(loc->end_column));
-
-    return rb_class_new_instance_kw(1, &kwargs, cLocation, RB_PASS_KEYWORDS);
-}
-
 // Definition#location -> Saturn::Location
 static VALUE sr_definition_location(VALUE self) {
     HandleData *data;
@@ -77,7 +57,7 @@ static VALUE sr_definition_location(VALUE self) {
 
     Location *loc = sat_definition_location(graph, data->id);
     VALUE location = build_location_value(loc);
-    sat_definition_location_free(loc);
+    sat_location_free(loc);
 
     return location;
 }
@@ -123,7 +103,6 @@ static VALUE sr_definition_comments(VALUE self) {
 void initialize_definition(VALUE mod) {
     mSaturn = mod;
 
-    cLocation = rb_define_class_under(mSaturn, "Location", rb_cObject);
     cComment = rb_define_class_under(mSaturn, "Comment", rb_cObject);
 
     cDefinition = rb_define_class_under(mSaturn, "Definition", rb_cObject);
