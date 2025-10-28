@@ -1,11 +1,14 @@
-use std::error::Error;
+use std::{error::Error, fs};
 
 use clap::Parser;
 
 use saturn::{
     indexing::{self, errors::MultipleErrors},
     model::graph::Graph,
-    stats::{memory::MemoryStats, timer::{Timer, time_it}},
+    stats::{
+        memory::MemoryStats,
+        timer::{Timer, time_it},
+    },
     visualization::dot,
 };
 
@@ -39,9 +42,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         Timer::set_global_timer(Timer::new());
     }
 
+    let db_path = format!("{}/graph.db", &args.dir);
+    if args.clear_db {
+        let _ = fs::remove_file(&db_path);
+    }
+
     let mut graph = time_it!(setup, {
         let mut graph = Graph::new();
-        graph.set_configuration(format!("{}/graph.db", &args.dir))?;
+        graph.set_configuration(db_path)?;
         graph
     });
 
@@ -71,10 +79,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 std::process::exit(1);
             }
         });
-    }
-
-    if args.clear_db {
-        graph.clear_database()?;
     }
 
     time_it!(database, { graph.save_to_database() })?;
