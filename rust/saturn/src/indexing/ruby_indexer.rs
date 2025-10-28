@@ -348,7 +348,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
         )));
 
-        self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph
+            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
 
         if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
@@ -384,7 +385,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             offset,
             comments,
         )));
-        self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph
+            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
 
         if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
@@ -434,7 +436,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
         )));
 
-        self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph
+            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
         self.visit(&node.value());
     }
@@ -469,7 +472,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
         )));
 
-        self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph
+            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
 
         if let Some(parent) = node.target().parent() {
@@ -512,7 +516,8 @@ impl Visit<'_> for RubyIndexer<'_> {
                         comments,
                     )));
 
-                    self.local_graph.add_definition(fully_qualified_name, definition);
+                    self.local_graph
+                        .add_definition(fully_qualified_name, definition, &previous_nesting_id);
                     self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
@@ -532,7 +537,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     )));
 
                     self.local_graph.add_member(&MAIN_ID, declaration_id, &name);
-                    self.local_graph.add_definition(name, definition);
+                    self.local_graph.add_definition(name, definition, &MAIN_ID);
                 }
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
                     let nesting_id = self.scope.current_nesting_id().unwrap_or(*MAIN_ID);
@@ -553,7 +558,8 @@ impl Visit<'_> for RubyIndexer<'_> {
                         comments,
                     )));
 
-                    self.local_graph.add_definition(fully_qualified_name, definition);
+                    self.local_graph
+                        .add_definition(fully_qualified_name, definition, &nesting_id);
                     self.local_graph.add_member(&nesting_id, declaration_id, &name);
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
@@ -576,7 +582,8 @@ impl Visit<'_> for RubyIndexer<'_> {
                         )));
 
                         self.local_graph.add_member(&nesting_id, declaration_id, &name);
-                        self.local_graph.add_definition(fully_qualified_name, definition);
+                        self.local_graph
+                            .add_definition(fully_qualified_name, definition, &nesting_id);
                     }
                 }
                 _ => {}
@@ -608,7 +615,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         );
 
         self.local_graph
-            .add_definition(fully_qualified_name, Definition::Method(Box::new(method)));
+            .add_definition(fully_qualified_name, Definition::Method(Box::new(method)), &nesting_id);
         self.local_graph.add_member(&nesting_id, declaration_id, &name);
 
         if let Some(body) = node.body() {
@@ -638,6 +645,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                             offset,
                             comments.clone(),
                         ))),
+                        &nesting_id,
                     );
 
                     indexer
@@ -651,6 +659,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                             Offset::from_prism_location(&location),
                             comments.clone(),
                         ))),
+                        &nesting_id,
                     );
                 }
             });
@@ -674,6 +683,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                             offset,
                             comments,
                         ))),
+                        &nesting_id,
                     );
                     indexer.local_graph.add_member(&nesting_id, declaration_id, &name);
                 }
@@ -699,6 +709,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                             offset,
                             comments,
                         ))),
+                        &nesting_id,
                     );
                     indexer
                         .local_graph
@@ -777,7 +788,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         )));
 
         self.local_graph.add_member(&MAIN_ID, declaration_id, &name);
-        self.local_graph.add_definition(name, definition);
+        self.local_graph.add_definition(name, definition, &MAIN_ID);
         self.visit(&node.value());
     }
 
@@ -800,7 +811,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
         )));
 
-        self.local_graph.add_definition(fully_qualified_name, definition);
+        self.local_graph
+            .add_definition(fully_qualified_name, definition, &nesting_id);
         self.local_graph.add_member(&nesting_id, declaration_id, &name);
         self.visit(&node.value());
     }
@@ -826,7 +838,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             )));
 
             self.local_graph.add_member(&nesting_id, declaration_id, &name);
-            self.local_graph.add_definition(fully_qualified_name, definition);
+            self.local_graph
+                .add_definition(fully_qualified_name, definition, &nesting_id);
             self.visit(&node.value());
         }
     }
@@ -875,6 +888,17 @@ mod tests {
         };
     }
 
+    /// Asserts that the given fully qualified name is owned by the second fully qualified name
+    macro_rules! assert_owner {
+        ($graph:expr, $declaration_name:expr, $owner_name:expr) => {
+            let declaration = $graph
+                .declarations()
+                .get(&DeclarationId::from($declaration_name))
+                .unwrap();
+            assert_eq!(declaration.owner_id(), &DeclarationId::from($owner_name));
+        };
+    }
+
     fn collect_constant_reference_names(graph: &Graph) -> Vec<&String> {
         graph
             .unresolved_references()
@@ -902,14 +926,17 @@ mod tests {
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 0, 50);
+        assert_owner!(context.graph, "Foo", "Object");
 
         let definitions = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 12, 46);
+        assert_owner!(context.graph, "Foo::Bar", "Foo");
 
         let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 26, 40);
+        assert_owner!(context.graph, "Foo::Bar::Baz", "Foo::Bar");
 
         let not_found = context.graph.get("Foo::Bar::Baz::Qux");
         assert!(not_found.is_none());
@@ -951,14 +978,17 @@ mod tests {
         let definitions = context.graph.get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 0, 53);
+        assert_owner!(context.graph, "Foo", "Object");
 
         let definitions = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 13, 49);
+        assert_owner!(context.graph, "Foo::Bar", "Foo");
 
         let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 28, 43);
+        assert_owner!(context.graph, "Foo::Bar::Baz", "Foo::Bar");
 
         let not_found = context.graph.get("Foo::Bar::Baz::Qux");
         assert!(not_found.is_none());
@@ -1000,10 +1030,12 @@ mod tests {
         let definitions = context.graph.get("FOO").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 0, 3);
+        assert_owner!(context.graph, "FOO", "Object");
 
         let definitions = context.graph.get("Foo::FOO").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 21, 24);
+        assert_owner!(context.graph, "Foo::FOO", "Foo");
     }
 
     #[test]
@@ -1087,6 +1119,7 @@ mod tests {
         let definitions = context.graph.get("foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 0, 12);
+        assert_owner!(context.graph, "foo", "<main>");
 
         match definitions[0] {
             Definition::Method(it) => {
@@ -1099,6 +1132,7 @@ mod tests {
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 26, 38);
+        assert_owner!(context.graph, "Foo::bar", "Foo");
 
         match definitions[0] {
             Definition::Method(it) => {
@@ -1111,6 +1145,9 @@ mod tests {
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 41, 58);
+
+        // FIXME: The owner is wrong until we implement singletons
+        assert_owner!(context.graph, "Foo::baz", "Foo");
 
         match definitions[0] {
             Definition::Method(it) => {
@@ -1240,18 +1277,22 @@ mod tests {
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 27, 30);
+        assert_owner!(context.graph, "Foo::bar", "Foo");
 
         let definitions = context.graph.get("Foo::bar=").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 27, 30);
+        assert_owner!(context.graph, "Foo::bar=", "Foo");
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 33, 36);
+        assert_owner!(context.graph, "Foo::baz", "Foo");
 
         let definitions = context.graph.get("Foo::baz=").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 33, 36);
+        assert_owner!(context.graph, "Foo::baz=", "Foo");
 
         assert!(context.graph.get("not_indexed").is_none());
         assert!(context.graph.get("not_indexed=").is_none());
@@ -1364,12 +1405,14 @@ mod tests {
         let definitions = context.graph.get("Foo::bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 25, 28);
+        assert_owner!(context.graph, "Foo::bar", "Foo");
 
         assert!(context.graph.get("Foo::bar=").is_none());
 
         let definitions = context.graph.get("Foo::baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 31, 34);
+        assert_owner!(context.graph, "Foo::baz", "Foo");
 
         assert!(context.graph.get("Foo::baz=").is_none());
     }
@@ -1380,8 +1423,6 @@ mod tests {
 
         context.index_uri("file:///foo.rb", {
             "
-            attr_writer :foo
-
             class Foo
               attr_writer :bar, :baz
             end
@@ -1390,13 +1431,15 @@ mod tests {
 
         let definitions = context.graph.get("Foo::bar=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 43, 46);
+        assert_definition_offset!(definitions[0], 25, 28);
+        assert_owner!(context.graph, "Foo::bar=", "Foo");
 
         assert!(context.graph.get("Foo::bar").is_none());
 
         let definitions = context.graph.get("Foo::baz=").unwrap();
         assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 49, 52);
+        assert_definition_offset!(definitions[0], 31, 34);
+        assert_owner!(context.graph, "Foo::baz=", "Foo");
 
         assert!(context.graph.get("Foo::baz").is_none());
     }
@@ -1438,18 +1481,22 @@ mod tests {
         let definitions = context.graph.get("$foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 0, 4);
+        assert_owner!(context.graph, "$foo", "<main>");
 
         let definitions = context.graph.get("$bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 9, 13);
+        assert_owner!(context.graph, "$bar", "<main>");
 
         let definitions = context.graph.get("$baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 15, 19);
+        assert_owner!(context.graph, "$baz", "<main>");
 
         let definitions = context.graph.get("$qux").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 40, 44);
+        assert_owner!(context.graph, "$qux", "<main>");
     }
 
     #[test]
@@ -1471,18 +1518,22 @@ mod tests {
         let definitions = context.graph.get("@foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 0, 4);
+        assert_owner!(context.graph, "@foo", "<main>");
 
         let definitions = context.graph.get("Foo::@bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 22, 26);
+        assert_owner!(context.graph, "Foo::@bar", "Foo");
 
         let definitions = context.graph.get("Foo::@baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 34, 38);
+        assert_owner!(context.graph, "Foo::@baz", "Foo");
 
         let definitions = context.graph.get("Foo::@qux").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 40, 44);
+        assert_owner!(context.graph, "Foo::@qux", "Foo");
     }
 
     #[test]
@@ -1506,14 +1557,17 @@ mod tests {
         let definitions = context.graph.get("Foo::@@bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 23, 28);
+        assert_owner!(context.graph, "Foo::@@bar", "Foo");
 
         let definitions = context.graph.get("Foo::@@baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 36, 41);
+        assert_owner!(context.graph, "Foo::@@baz", "Foo");
 
         let definitions = context.graph.get("Foo::@@qux").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 43, 48);
+        assert_owner!(context.graph, "Foo::@@qux", "Foo");
     }
 
     #[test]
@@ -1533,6 +1587,7 @@ mod tests {
             let definitions = context.graph.get(reader_name).unwrap();
             assert_eq!(definitions.len(), 1);
             assert!(matches!(definitions[0], Definition::AttrReader(_)));
+            assert_owner!(context.graph, reader_name, "Foo");
         }
 
         for writer_name in ["Foo::foo=", "Foo::bar="] {

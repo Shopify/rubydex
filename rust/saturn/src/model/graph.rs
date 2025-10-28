@@ -39,7 +39,8 @@ impl Graph {
         let mut declarations = IdentityHashMap::default();
         // Insert the magic top level self <main> object into the graph, so that we can associate global variables or
         // definitions made at the top level with it
-        declarations.insert(DeclarationId::from("<main>"), Declaration::new(String::from("<main>")));
+        let main_id = DeclarationId::from("<main>");
+        declarations.insert(main_id, Declaration::new(String::from("<main>"), main_id));
 
         Self {
             declarations,
@@ -161,14 +162,14 @@ impl Graph {
     }
 
     // Registers a definition into the `Graph`, automatically creating all relationships
-    pub fn add_definition(&mut self, name: String, definition: Definition) {
+    pub fn add_definition(&mut self, name: String, definition: Definition, owner_id: &DeclarationId) {
         let uri_id = *definition.uri_id();
         let definition_id = DefinitionId::from(&format!("{uri_id}{}{}", definition.start(), &name));
         let declaration_id = *definition.declaration_id();
 
         self.declarations
             .entry(declaration_id)
-            .or_insert_with(|| Declaration::new(name))
+            .or_insert_with(|| Declaration::new(name, *owner_id))
             .add_definition(definition_id);
         self.definitions.insert(definition_id, definition);
         self.documents

@@ -22,16 +22,19 @@ pub struct Declaration {
     members: IdentityHashMap<NameId, DeclarationId>,
     /// The list of references that are made to this declaration
     references: Vec<ResolvedReference>,
+    /// The ID of the owner of this declaration
+    owner_id: DeclarationId,
 }
 
 impl Declaration {
     #[must_use]
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, owner_id: DeclarationId) -> Self {
         Self {
             name,
             definition_ids: Vec::new(),
             members: IdentityHashMap::default(),
             references: Vec::new(),
+            owner_id,
         }
     }
 
@@ -103,6 +106,11 @@ impl Declaration {
     pub fn get_member(&self, name_id: &NameId) -> Option<&DeclarationId> {
         self.members.get(name_id)
     }
+
+    #[must_use]
+    pub fn owner_id(&self) -> &DeclarationId {
+        &self.owner_id
+    }
 }
 
 impl Serializable for Declaration {}
@@ -114,7 +122,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cannot add the same exact definition to a declaration twice. Duplicate definition IDs")]
     fn inserting_duplicate_definitions() {
-        let mut decl = Declaration::new("MyDecl".to_string());
+        let mut decl = Declaration::new("MyDecl".to_string(), DeclarationId::from("Object"));
         let def_id = DefinitionId::new(123);
 
         decl.add_definition(def_id);
@@ -125,7 +133,7 @@ mod tests {
 
     #[test]
     fn adding_and_removing_members() {
-        let mut decl = Declaration::new("Foo".to_string());
+        let mut decl = Declaration::new("Foo".to_string(), DeclarationId::from("Object"));
         let member_name_id = NameId::from("Bar");
         let member_decl_id = DeclarationId::from("Foo::Bar");
 

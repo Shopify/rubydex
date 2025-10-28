@@ -129,7 +129,7 @@ mod tests {
             Offset::new(0, 15),
             Vec::new(),
         )));
-        graph.add_definition("Foo".to_string(), definition);
+        graph.add_definition("Foo".to_string(), definition, &DeclarationId::from("Object"));
 
         // Should fail since the index is not empty
         let errors = checker.apply(&graph);
