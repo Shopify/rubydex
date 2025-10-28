@@ -8,7 +8,7 @@ pub trait Serializable: Serialize + for<'a> Deserialize<'a> {
     /// This method will only panic if serialization fails, which should never happen
     #[must_use]
     fn serialize(&self) -> Vec<u8> {
-        rmp_serde::to_vec(self).expect("Serializing document should always succeed")
+        rmp_serde::to_vec(self).expect("Serializing database entities should always succeed")
     }
 
     /// # Panics
@@ -17,6 +17,6 @@ pub trait Serializable: Serialize + for<'a> Deserialize<'a> {
     /// in the database
     #[must_use]
     fn deserialize(data: &[u8]) -> Self {
-        rmp_serde::from_slice(data).expect("Deserializing document should always succeed")
+        rmp_serde::from_slice(data).expect("Deserializing database entities should always succeed")
     }
 }
