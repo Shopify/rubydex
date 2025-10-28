@@ -301,6 +301,8 @@ impl Graph {
             definition_ids: Vec::new(),
             declaration_ids: Vec::new(),
         };
+        // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
+        let mut members_to_delete: Vec<(DeclarationId, NameId)> = Vec::new();
 
         if let Some(document) = self.documents.remove(&uri_id) {
             for def_id in document.definitions() {
@@ -310,9 +312,18 @@ impl Graph {
                     && declaration.remove_definition(def_id)
                     && declaration.has_no_definitions()
                 {
+                    members_to_delete.push((*declaration.owner_id(), declaration.unqualified_name_id()));
                     self.declarations.remove(definition.declaration_id());
                     removed.declaration_ids.push(*definition.declaration_id());
                 }
+            }
+        }
+
+        // Clean up any members that pointed to declarations that were removed
+        for (owner_id, member_name_id) in members_to_delete {
+            // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
+            if let Some(owner) = self.declarations.get_mut(&owner_id) {
+                owner.remove_member(&member_name_id);
             }
         }
 
@@ -789,5 +800,37 @@ mod tests {
             context.graph.resolve_reference(&const_ref).unwrap().name(),
             String::from("Foo::Bar")
         );
+    }
+
+    #[test]
+    fn members_are_updated_when_definitions_get_deleted() {
+        let mut context = GraphTest::new();
+        // Initially, have `Foo` defined twice with a member called `Bar`
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+            end
+            "
+        });
+        context.index_uri("file:///foo2.rb", {
+            r"
+            module Foo
+              class Bar; end
+            end
+            "
+        });
+        let foo = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
+        assert!(foo.members().contains_key(&NameId::from("Bar")));
+
+        // Delete `Bar`
+        context.index_uri("file:///foo2.rb", {
+            r"
+            module Foo
+            end
+            "
+        });
+
+        let foo = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
+        assert!(!foo.members().contains_key(&NameId::from("Bar")));
     }
 }

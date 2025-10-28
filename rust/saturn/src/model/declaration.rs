@@ -111,6 +111,15 @@ impl Declaration {
     pub fn owner_id(&self) -> &DeclarationId {
         &self.owner_id
     }
+
+    // This will change once we fix fully qualified names to not use `::` as separators for everything. Also, we may
+    // want to actually store this in the struct. Currently, it is only used to cleanup a member that got deleted from
+    // the graph, so we're avoiding the extra memory cost by computing it on demand.
+    #[must_use]
+    pub fn unqualified_name_id(&self) -> NameId {
+        let parts: Vec<&str> = self.name.rsplitn(2, "::").collect();
+        NameId::from(parts[0])
+    }
 }
 
 impl Serializable for Declaration {}
@@ -143,5 +152,17 @@ mod tests {
         let removed = decl.remove_member(&member_name_id);
         assert_eq!(removed, Some(member_decl_id));
         assert_eq!(decl.members.len(), 0);
+    }
+
+    #[test]
+    fn unqualified_name_id() {
+        let decl = Declaration::new("Foo".to_string(), DeclarationId::from("Foo"));
+        assert_eq!(decl.unqualified_name_id(), NameId::from("Foo"));
+
+        let decl = Declaration::new("Foo::Bar".to_string(), DeclarationId::from("Foo"));
+        assert_eq!(decl.unqualified_name_id(), NameId::from("Bar"));
+
+        let decl = Declaration::new("Foo::Bar::baz".to_string(), DeclarationId::from("Foo::Bar"));
+        assert_eq!(decl.unqualified_name_id(), NameId::from("baz"));
     }
 }
