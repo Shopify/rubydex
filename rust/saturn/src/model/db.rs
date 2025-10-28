@@ -1,3 +1,4 @@
+use crate::model::document::Document;
 use crate::model::graph::{Graph, RemovedIds};
 use crate::model::{
     definitions::Definition,
@@ -17,7 +18,7 @@ const TABLE_DOCUMENTS: &str = "documents";
 const ALL_TABLES: &[&str] = &[TABLE_DEFINITIONS, TABLE_DECLARATIONS, TABLE_DOCUMENTS];
 
 pub struct DocumentData {
-    pub content_hash: u16,
+    pub document: Document,
     pub definitions: Vec<DefinitionData>,
 }
 
@@ -97,12 +98,13 @@ impl Db {
     pub fn load_uri(&self, uri_id: UriId) -> Result<DocumentData, Box<dyn Error>> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(Self::LOAD_DOCUMENT)?;
-            let mut content_hash: Option<u16> = None;
+            let mut document: Option<Document> = None;
 
             let rows = statement.query_map([*uri_id], |row| {
                 // Content hash is the same for all rows, so we only need to read it once
-                if content_hash.is_none() {
-                    content_hash = Some(row.get(0)?);
+                if document.is_none() {
+                    let document_data = row.get::<_, Vec<u8>>(0)?;
+                    document = Some(Document::deserialize(&document_data));
                 }
 
                 if let Some(declaration_id) = row.get::<_, Option<DeclarationId>>(1)? {
@@ -110,14 +112,12 @@ impl Db {
                     let name = row.get::<_, String>(2)?;
                     let definition_id: DefinitionId = row.get(3)?;
                     let data = row.get::<_, Vec<u8>>(4)?;
-                    let definition = rmp_serde::from_slice::<Definition>(&data)
-                        .expect("Deserializing the definition from the DB should always succeed");
 
                     Ok(Some(DefinitionData {
                         declaration_id,
                         name,
                         definition_id,
-                        definition,
+                        definition: Definition::deserialize(&data),
                     }))
                 } else {
                     // No definition data for this document
@@ -127,10 +127,9 @@ impl Db {
 
             // Collect the rows, filtering out None values
             let definitions = rows.collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect();
-            let content_hash = content_hash.ok_or("Document not found or content_hash is missing")?;
 
             Ok(DocumentData {
-                content_hash,
+                document: document.expect("Document must be present if loading data for a URI"),
                 definitions,
             })
         })
@@ -257,11 +256,15 @@ impl Db {
     /// Performs batch insert of documents (URIs) to the database
     fn batch_insert_documents(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
         let mut stmt = conn.prepare_cached(&format!(
-            "INSERT INTO {TABLE_DOCUMENTS} (id, uri, content_hash) VALUES (?, ?, ?)"
+            "INSERT INTO {TABLE_DOCUMENTS} (id, content_hash, data) VALUES (?, ?, ?)"
         ))?;
 
         for (uri_id, document) in graph.documents() {
-            stmt.execute(rusqlite::params![*uri_id, document.uri(), document.content_hash()])?;
+            stmt.execute(rusqlite::params![
+                *uri_id,
+                document.content_hash(),
+                document.serialize()
+            ])?;
         }
 
         Ok(())
@@ -285,11 +288,15 @@ impl Db {
         ))?;
 
         for (definition_id, definition) in graph.definitions() {
-            let data = rmp_serde::to_vec(definition).expect("Serializing definitions should always succeed");
             let declaration_id = *definition.declaration_id();
             let uri_id = *definition.uri_id();
 
-            stmt.execute(params![*definition_id, *declaration_id, *uri_id, data])?;
+            stmt.execute(params![
+                *definition_id,
+                *declaration_id,
+                *uri_id,
+                definition.serialize()
+            ])?;
         }
 
         Ok(())

@@ -205,10 +205,10 @@ impl Graph {
     /// # Errors
     ///
     /// Any database errors will prevent the data from being loaded
-    pub fn load_uri(&mut self, uri: String) -> Result<(), Box<dyn Error>> {
-        let uri_id = UriId::from(&uri);
+    pub fn load_uri(&mut self, uri: &str) -> Result<(), Box<dyn Error>> {
+        let uri_id = UriId::from(uri);
         let loaded_data = self.db.load_uri(uri_id)?;
-        self.add_uri(uri, loaded_data.content_hash);
+        self.documents.entry(uri_id).or_insert_with(|| loaded_data.document);
 
         for load_result in loaded_data.definitions {
             let declaration_id = load_result.declaration_id;
@@ -220,9 +220,6 @@ impl Graph {
                 .add_definition(definition_id);
 
             self.definitions.insert(definition_id, load_result.definition);
-            self.documents
-                .entry(uri_id)
-                .and_modify(|doc| doc.add_definition(definition_id));
         }
 
         Ok(())
@@ -657,7 +654,7 @@ mod tests {
 
         assert!(context.graph.get("Foo").is_none());
 
-        context.graph.load_uri("file:///foo.rb".to_string()).unwrap();
+        context.graph.load_uri("file:///foo.rb").unwrap();
         assert_eq!(context.graph.definitions.len(), 1);
         assert_eq!(context.graph.declarations.len(), 1);
         assert_eq!(context.graph.documents.len(), 1);
@@ -675,7 +672,7 @@ mod tests {
         context.graph.clear_graph_data();
         assert!(context.graph.get("Foo").is_none());
 
-        context.graph.load_uri("file:///foo.rb".to_string()).unwrap();
+        context.graph.load_uri("file:///foo.rb").unwrap();
         assert_eq!(context.graph.definitions.len(), 1);
         assert_eq!(context.graph.declarations.len(), 1);
         assert_eq!(context.graph.documents.len(), 1);

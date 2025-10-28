@@ -1,26 +1,26 @@
 -- SQLite schema for the index database
--- Contains tables and indexes for storing code declarations and their relationships
 
--- Table for storing documents
 CREATE TABLE IF NOT EXISTS documents (
+    -- Queryable fields
     id INTEGER PRIMARY KEY,  -- Hashed document ID
-    uri TEXT NOT NULL UNIQUE,
-    content_hash INTEGER NOT NULL
+    content_hash INTEGER NOT NULL,
+    -- Serialized struct
+    data BLOB NOT NULL
 );
 
--- Table for storing code declarations (classes, modules, methods, etc.)
 CREATE TABLE IF NOT EXISTS declarations (
+    -- Queryable fields
     id INTEGER PRIMARY KEY,  -- Hashed declaration ID
     name TEXT NOT NULL
 );
 
--- Table for storing definitions that make up declarations
 CREATE TABLE IF NOT EXISTS definitions (
+    -- Queryable fields
     id INTEGER PRIMARY KEY,  -- Hashed definition ID
     declaration_id INTEGER NOT NULL,
     document_id INTEGER NOT NULL,
-    data BLOB NOT NULL -- Serialized definition data
+    -- Serialized struct
+    data BLOB NOT NULL
 );
 
--- Indexes for fast lookups
 CREATE INDEX IF NOT EXISTS names_name_index ON declarations (name);

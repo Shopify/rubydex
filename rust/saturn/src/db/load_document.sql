@@ -1,5 +1,5 @@
 SELECT
-    documents.content_hash,
+    documents.data,
     declarations.id,
     declarations.name,
     definitions.id,
