@@ -169,6 +169,23 @@ impl Graph {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Any database errors will prevent the data from being synced to the database
+    pub fn sync_with_database(&mut self, mut deleted_uri_ids: Vec<UriId>) -> Result<(), Errors> {
+        for uri_id in &deleted_uri_ids {
+            self.remove_definitions_for_uri(*uri_id);
+        }
+
+        for uri_id in self.documents().keys() {
+            deleted_uri_ids.push(*uri_id);
+        }
+
+        self.db
+            .update_full_graph(self, &deleted_uri_ids)
+            .map_err(|err| Errors::DatabaseError(err.to_string()))
+    }
+
     // Registers a definition into the `Graph`, automatically creating all relationships
     pub fn add_definition(&mut self, name: String, definition: Definition, owner_id: &DeclarationId) {
         let uri_id = *definition.uri_id();
@@ -549,6 +566,101 @@ mod tests {
         assert!(context.graph.documents.is_empty());
 
         context.graph.assert_integrity();
+    }
+
+    #[test]
+    fn sync_with_database_updates_documents() {
+        let mut initial = GraphTest::new();
+
+        let deleted_source = "module Deleted; end";
+        let unchanged_source = "module Unchanged; def call; end; end";
+        let updated_initial_source = "module Updated; def original; end; end";
+
+        initial.index_uri("file://deleted.rb", deleted_source);
+        initial.index_uri("file://unchanged.rb", unchanged_source);
+        initial.index_uri("file://updated.rb", updated_initial_source);
+
+        let db_path = "file:sync_with_database_behaviour?mode=memory&cache=shared".to_string();
+
+        initial.graph.set_configuration(db_path.clone()).unwrap();
+        initial.graph.save_to_database().unwrap();
+
+        let unchanged_hash = crate::indexing::Document::calculate_content_hash(unchanged_source.as_bytes());
+        let new_source = "module NewFile; end";
+        let updated_source = "module Updated; def original; end; def extra; end; end";
+        let new_hash = crate::indexing::Document::calculate_content_hash(new_source.as_bytes());
+        let updated_hash = crate::indexing::Document::calculate_content_hash(updated_source.as_bytes());
+
+        let mut updated = GraphTest::new();
+        updated.graph.set_configuration(db_path.clone()).unwrap();
+
+        updated.index_uri("file://new.rb", new_source);
+        updated.index_uri("file://updated.rb", updated_source);
+
+        let deleted_uri = UriId::from("file://deleted.rb");
+        updated.graph.sync_with_database(vec![deleted_uri]).unwrap();
+
+        // The in-memory graph should only have data for the documents that were re-indexed.
+        assert!(updated.graph.documents.contains_key(&UriId::from("file://new.rb")));
+        assert!(updated.graph.documents.contains_key(&UriId::from("file://updated.rb")));
+        assert!(
+            !updated
+                .graph
+                .documents
+                .contains_key(&UriId::from("file://unchanged.rb"))
+        );
+
+        let new_definitions = updated.graph.get("NewFile").unwrap();
+        assert_eq!(new_definitions.len(), 1);
+
+        let updated_definitions = updated.graph.get("Updated").unwrap();
+        assert_eq!(updated_definitions.len(), 1);
+        assert_eq!(updated_definitions[0].start(), 0);
+
+        assert!(updated.graph.get("Unchanged").is_none());
+
+        let connection = rusqlite::Connection::open(&db_path).unwrap();
+
+        let doc_count: i64 = connection
+            .prepare("SELECT COUNT(*) FROM documents")
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
+        assert_eq!(doc_count, 3);
+
+        let deleted_id = UriId::from("file://deleted.rb");
+        let deleted_exists: i64 = connection
+            .prepare("SELECT COUNT(*) FROM documents WHERE id = ?")
+            .unwrap()
+            .query_row([*deleted_id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(deleted_exists, 0);
+
+        let unchanged_id = UriId::from("file://unchanged.rb");
+        let unchanged_hash_in_db: i64 = connection
+            .prepare("SELECT content_hash FROM documents WHERE id = ?")
+            .unwrap()
+            .query_row([*unchanged_id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(unchanged_hash_in_db, i64::from(unchanged_hash));
+
+        let new_id = UriId::from("file://new.rb");
+        let new_hash_in_db: i64 = connection
+            .prepare("SELECT content_hash FROM documents WHERE id = ?")
+            .unwrap()
+            .query_row([*new_id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(new_hash_in_db, i64::from(new_hash));
+
+        let updated_id = UriId::from("file://updated.rb");
+        let updated_hash_in_db: i64 = connection
+            .prepare("SELECT content_hash FROM documents WHERE id = ?")
+            .unwrap()
+            .query_row([*updated_id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(updated_hash_in_db, i64::from(updated_hash));
+
+        updated.graph.assert_integrity();
     }
 
     #[test]
