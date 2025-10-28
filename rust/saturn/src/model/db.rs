@@ -1,5 +1,7 @@
+use crate::model::declaration::Declaration;
 use crate::model::document::Document;
 use crate::model::graph::{Graph, RemovedIds};
+use crate::model::serializable::Serializable;
 use crate::model::{
     definitions::Definition,
     ids::{DeclarationId, DefinitionId, UriId},
@@ -24,7 +26,7 @@ pub struct DocumentData {
 
 pub struct DefinitionData {
     pub declaration_id: DeclarationId,
-    pub name: String,
+    pub declaration: Declaration,
     pub definition_id: DefinitionId,
     pub definition: Definition,
 }
@@ -109,13 +111,13 @@ impl Db {
 
                 if let Some(declaration_id) = row.get::<_, Option<DeclarationId>>(1)? {
                     // If we have a declaration_id, then we have definition data
-                    let name = row.get::<_, String>(2)?;
+                    let declaration_data = row.get::<_, Vec<u8>>(2)?;
                     let definition_id: DefinitionId = row.get(3)?;
                     let data = row.get::<_, Vec<u8>>(4)?;
 
                     Ok(Some(DefinitionData {
                         declaration_id,
-                        name,
+                        declaration: Declaration::deserialize(&declaration_data),
                         definition_id,
                         definition: Definition::deserialize(&data),
                     }))
@@ -150,7 +152,7 @@ impl Db {
             let tx = connection.transaction()?;
 
             Self::batch_insert_documents(&tx, graph)?;
-            Self::batch_insert_names(&tx, graph)?;
+            Self::batch_insert_declarations(&tx, graph)?;
             Self::batch_insert_definitions(&tx, graph)?;
 
             tx.commit()?;
@@ -271,11 +273,17 @@ impl Db {
     }
 
     /// Performs batch insert of names to the database
-    fn batch_insert_names(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
-        let mut stmt = conn.prepare_cached(&format!("INSERT INTO {TABLE_DECLARATIONS} (id, name) VALUES (?, ?)"))?;
+    fn batch_insert_declarations(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
+        let mut stmt = conn.prepare_cached(&format!(
+            "INSERT INTO {TABLE_DECLARATIONS} (id, name, data) VALUES (?, ?, ?)"
+        ))?;
 
         for (declaration_id, declaration) in graph.declarations() {
-            stmt.execute(rusqlite::params![*declaration_id, declaration.name()])?;
+            stmt.execute(rusqlite::params![
+                *declaration_id,
+                declaration.name(),
+                declaration.serialize()
+            ])?;
         }
 
         Ok(())
@@ -338,21 +346,25 @@ mod tests {
         assert!(document_data.definitions.len() == 4);
 
         // Verify we can find expected definitions
-        let module_def = document_data.definitions.iter().find(|r| r.name == "Outer").unwrap();
+        let module_def = document_data
+            .definitions
+            .iter()
+            .find(|r| r.declaration.name() == "Outer")
+            .unwrap();
         let class_def = document_data
             .definitions
             .iter()
-            .find(|r| r.name == "Outer::Inner")
+            .find(|r| r.declaration.name() == "Outer::Inner")
             .unwrap();
         let method_def = document_data
             .definitions
             .iter()
-            .find(|r| r.name == "Outer::Inner::method_name")
+            .find(|r| r.declaration.name() == "Outer::Inner::method_name")
             .unwrap();
         let constant_def = document_data
             .definitions
             .iter()
-            .find(|r| r.name == "Outer::Inner::CONSTANT")
+            .find(|r| r.declaration.name() == "Outer::Inner::CONSTANT")
             .unwrap();
 
         assert!(matches!(module_def.definition, Definition::Module(_)));

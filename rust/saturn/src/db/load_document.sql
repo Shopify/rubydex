@@ -1,7 +1,7 @@
 SELECT
     documents.data,
     declarations.id,
-    declarations.name,
+    declarations.data,
     definitions.id,
     definitions.data
 FROM documents
