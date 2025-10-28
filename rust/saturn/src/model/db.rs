@@ -6,7 +6,7 @@ use crate::model::{
     definitions::Definition,
     ids::{DeclarationId, DefinitionId, UriId},
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, params_from_iter};
 use std::{cell::RefCell, error::Error, fs, path::Path};
 
 use super::identity_maps::IdentityHashMap;
@@ -18,6 +18,7 @@ const TABLE_DECLARATIONS: &str = "declarations";
 const TABLE_DOCUMENTS: &str = "documents";
 
 const ALL_TABLES: &[&str] = &[TABLE_DEFINITIONS, TABLE_DECLARATIONS, TABLE_DOCUMENTS];
+const SQLITE_MAX_VARIABLE_NUMBER: usize = 999;
 
 pub struct DocumentData {
     pub document: Document,
@@ -166,6 +167,8 @@ impl Db {
     }
 
     /// Deletes all of the data related to the given URI ID along with the removed definitions and names.
+    /// This function will delete only the ids being passed in. It will not check if there are
+    /// orphaned records left in the database. It is upon the caller to ensure data integrity.
     ///
     /// # Errors
     ///
@@ -188,6 +191,24 @@ impl Db {
                     stmt.execute([**id])?;
                 }
             }
+
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if any database operation fails while synchronizing the graph state.
+    pub fn update_full_graph(&self, graph: &Graph, deleted_uri_ids: &[UriId]) -> Result<(), Box<dyn Error>> {
+        self.with_connection(|connection| {
+            let tx = connection.transaction()?;
+
+            Self::batch_delete_data_for_uris(&tx, deleted_uri_ids)?;
+
+            Self::batch_insert_documents(&tx, graph)?;
+            Self::batch_insert_declarations(&tx, graph)?;
+            Self::batch_insert_definitions(&tx, graph)?;
 
             tx.commit()?;
             Ok(())
@@ -257,6 +278,45 @@ impl Db {
         tx.execute_batch(Self::SCHEMA)?;
         tx.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), [])?;
         tx.commit()?;
+        Ok(())
+    }
+
+    fn batch_delete_data_for_uris(tx: &rusqlite::Transaction<'_>, uri_ids: &[UriId]) -> Result<(), Box<dyn Error>> {
+        if uri_ids.is_empty() {
+            return Ok(());
+        }
+
+        let document_ids: Vec<i64> = uri_ids.iter().map(|id| **id).collect();
+
+        Self::delete_in_chunks(tx, TABLE_DOCUMENTS, "id", &document_ids)?;
+        Self::delete_in_chunks(tx, TABLE_DEFINITIONS, "document_id", &document_ids)?;
+
+        tx.execute(
+            "DELETE FROM declarations WHERE NOT EXISTS (
+                SELECT 1 FROM definitions WHERE declarations.id = definitions.declaration_id
+            )",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn delete_in_chunks(
+        tx: &rusqlite::Transaction<'_>,
+        table: &str,
+        column: &str,
+        ids: &[i64],
+    ) -> Result<(), Box<dyn Error>> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        for chunk in ids.chunks(SQLITE_MAX_VARIABLE_NUMBER) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!("DELETE FROM {table} WHERE {column} IN ({placeholders})");
+            tx.prepare(&sql)?.execute(params_from_iter(chunk.iter()))?;
+        }
+
         Ok(())
     }
 
@@ -468,6 +528,77 @@ mod tests {
 
         // Only the declaration for <main> should remain
         assert_eq!(name_count, 1);
+    }
+
+    #[test]
+    fn update_full_graph_deletes_and_inserts_records() {
+        let mut initial = GraphTest::new();
+        initial.index_uri("file:///foo.rb", "module Foo; end");
+        initial.index_uri("file:///bar.rb", "module Bar; end");
+
+        let mut db = Db::new();
+        db.initialize_connection(None).unwrap();
+        db.save_full_graph(&initial.graph).unwrap();
+
+        let mut updated = GraphTest::new();
+        updated.index_uri("file:///bar.rb", "module Bar; end");
+        updated.index_uri("file:///baz.rb", "module Baz; end");
+
+        let deleted_ids = vec![
+            UriId::from("file:///foo.rb"),
+            UriId::from("file:///bar.rb"),
+            UriId::from("file:///baz.rb"),
+        ];
+
+        assert!(db.update_full_graph(&updated.graph, &deleted_ids).is_ok());
+
+        let borrow = db.connection.borrow();
+        let connection = borrow.as_ref().unwrap();
+
+        let document_ids = {
+            let mut stmt = connection.prepare("SELECT id FROM documents ORDER BY id").unwrap();
+            stmt.query_map([], |row| row.get::<_, i64>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let expected_document_ids = [*UriId::from("file:///bar.rb"), *UriId::from("file:///baz.rb")];
+        assert_eq!(document_ids.len(), expected_document_ids.len());
+        assert!(
+            expected_document_ids
+                .iter()
+                .all(|expected_id| document_ids.contains(expected_id))
+        );
+
+        let definition_documents = {
+            let mut stmt = connection
+                .prepare("SELECT DISTINCT document_id FROM definitions ORDER BY document_id")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, i64>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert_eq!(definition_documents.len(), 2);
+        assert!(
+            expected_document_ids
+                .iter()
+                .all(|expected_id| definition_documents.contains(expected_id))
+        );
+
+        let declaration_names = {
+            let mut stmt = connection
+                .prepare("SELECT name FROM declarations ORDER BY name")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert_eq!(declaration_names.len(), 3);
+        assert!(declaration_names.iter().any(|name| name == "Bar"));
+        assert!(declaration_names.iter().any(|name| name == "Baz"));
+        assert!(declaration_names.iter().any(|name| name == "<main>"));
     }
 
     #[test]
