@@ -92,6 +92,11 @@ impl Graph {
     }
 
     #[must_use]
+    pub fn is_db_initialized(&self) -> bool {
+        self.db.is_initialized()
+    }
+
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
         let declaration_id = DeclarationId::from(name);
         let declaration = self.declarations.get(&declaration_id)?;

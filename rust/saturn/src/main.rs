@@ -86,10 +86,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
-    if args.use_db {
-        time_it!(database, { graph.save_to_database() })?;
-    }
-
     if args.stats {
         time_it!(resolving, {
             graph.print_resolution_statistics();

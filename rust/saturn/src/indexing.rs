@@ -1,7 +1,7 @@
 use crate::{
     errors::{Errors, MultipleErrors},
     indexing::ruby_indexer::{IndexerParts, RubyIndexer},
-    model::graph::Graph,
+    model::{graph::Graph, ids::UriId},
     source_location::UTF8SourceLocationConverter,
 };
 use glob::glob;
@@ -33,20 +33,24 @@ pub enum IndexResult {
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
+    if graph.is_db_initialized() {
+        return index_and_sync(graph, file_paths);
+    }
+
     let index_document = |file_path: &String| -> IndexResult {
         let (source, errors) = read_document_source(file_path);
         if !errors.is_empty() {
             return IndexResult::Errored(errors);
         }
 
+        let uri = match uri_from_file_path(file_path) {
+            Ok(uri) => uri,
+            Err(error) => return IndexResult::Errored(vec![error]),
+        };
+
         let converter = UTF8SourceLocationConverter::new(&source);
         let content_hash = calculate_content_hash(source.as_bytes());
-        let mut ruby_indexer = RubyIndexer::new(
-            uri_from_file_path(file_path).unwrap(),
-            &converter,
-            &source,
-            content_hash,
-        );
+        let mut ruby_indexer = RubyIndexer::new(uri, &converter, &source, content_hash);
         ruby_indexer.index();
         IndexResult::Completed(Box::new(ruby_indexer.into_parts()))
     };
@@ -54,6 +58,56 @@ pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(
     let merge_result = |local_graph| graph.update(local_graph);
 
     with_parallel_workers(file_paths, index_document, merge_result)
+}
+
+/// Indexes the given items and update the db entries.
+///
+/// # Errors
+///
+/// Returns Ok if indexing succeeded for all given documents, and the db operations are successful.
+/// Or else a vector of errors for all failures will be returned.
+///
+/// # Panics
+/// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
+/// should not be any code that tries to lock the same mutex multiple times in the same thread
+fn index_and_sync(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
+    let cached_hashes = graph.get_all_cached_content_hashes().map_err(MultipleErrors::from)?;
+    let cached_hashes = Arc::new(cached_hashes);
+
+    let index_document = {
+        let cached_hashes = Arc::clone(&cached_hashes);
+        move |file_path: &String| -> IndexResult {
+            let (source, errors) = read_document_source(file_path);
+            if !errors.is_empty() {
+                return IndexResult::Errored(errors);
+            }
+
+            let content_hash = calculate_content_hash(source.as_bytes());
+            let uri = match uri_from_file_path(file_path) {
+                Ok(uri) => uri,
+                Err(error) => return IndexResult::Errored(vec![error]),
+            };
+            let uri_id = UriId::from(uri.as_str());
+            if cached_hashes
+                .get(&uri_id)
+                .is_some_and(|db_content_hash| db_content_hash == &content_hash)
+            {
+                return IndexResult::Skipped;
+            }
+
+            let converter = UTF8SourceLocationConverter::new(&source);
+            let mut ruby_indexer = RubyIndexer::new(uri, &converter, &source, content_hash);
+            ruby_indexer.index();
+            IndexResult::Completed(Box::new(ruby_indexer.into_parts()))
+        }
+    };
+
+    let merge_result = |local_graph: Graph| graph.update(local_graph);
+    with_parallel_workers(file_paths, index_document, merge_result)?;
+
+    graph.save_to_database().map_err(MultipleErrors::from)?;
+
+    Ok(())
 }
 
 /// Reads the source content from a document, either from memory or disk
@@ -138,7 +192,7 @@ where
     }
 }
 
-/// Recursively collects all Ruby files for the given workspace and dependencies, returning a vector of document instances
+/// Recursively collects all Ruby files for the given workspace and dependencies, returning a vector of file paths
 ///
 /// # Panics
 ///
@@ -189,6 +243,7 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
 mod tests {
     use super::*;
     use crate::test_utils::Context;
+    use std::fs;
 
     fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<Errors>) {
         let (file_paths, errors) = collect_file_paths(
@@ -267,22 +322,69 @@ mod tests {
     }
 
     #[test]
-    fn with_parallel_workers_skips_empty_results() {
-        let file_paths = vec![String::from("file:///skipped.rb")];
+    fn index_in_parallel_persists_and_skips_unchanged_documents() {
+        use rusqlite::Connection;
 
-        let mut was_called = false;
-        let worker_fn = |_file_path: &String| -> IndexResult { IndexResult::Skipped };
-        let result_fn = |_graph: Graph| {
-            was_called = true;
-        };
+        let db_path =
+            "file:index_in_parallel_persists_and_skips_unchanged_documents?mode=memory&cache=shared".to_string();
+        let source = "module Foo\n  def bar; end\nend";
 
-        let result = with_parallel_workers(file_paths, worker_fn, result_fn);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("persist_and_skip.rb");
+        fs::write(&file_path, source).unwrap();
+        let file_path = file_path.to_string_lossy().into_owned();
 
-        assert!(result.is_ok());
+        let mut first_graph = Graph::new();
+        first_graph.set_configuration(db_path.clone()).unwrap();
+        index_in_parallel(&mut first_graph, vec![file_path.clone()]).unwrap();
+
+        let conn = Connection::open(&db_path).unwrap();
+        let initial_document_count: i64 = conn
+            .prepare("SELECT COUNT(*) FROM documents")
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
+        assert_eq!(initial_document_count, 1,);
+
+        let initial_definition_count: i64 = conn
+            .prepare("SELECT COUNT(*) FROM definitions")
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
+        assert_eq!(initial_definition_count, 2,);
+        drop(conn);
+
+        let mut second_graph = Graph::new();
+        second_graph.set_configuration(db_path.clone()).unwrap();
+        index_in_parallel(&mut second_graph, vec![file_path.clone()]).unwrap();
 
         assert!(
-            !was_called,
-            "result_fn should not be called when worker_fn returns Skipped"
+            second_graph.documents().is_empty(),
+            "unchanged files should be skipped during indexing"
+        );
+        assert!(second_graph.definitions().is_empty());
+        assert_eq!(
+            second_graph.declarations().len(),
+            1,
+            "only the <main> declaration should remain after skipping"
+        );
+
+        let conn = Connection::open(&db_path).unwrap();
+        let final_document_count: i64 = conn
+            .prepare("SELECT COUNT(*) FROM documents")
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
+        assert_eq!(final_document_count, 1, "database should retain the original document");
+
+        let final_definition_count: i64 = conn
+            .prepare("SELECT COUNT(*) FROM definitions")
+            .unwrap()
+            .query_row([], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            final_definition_count, 2,
+            "definitions should remain available after skipping unchanged content"
         );
     }
 }

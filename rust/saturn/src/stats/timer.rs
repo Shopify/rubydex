@@ -124,5 +124,4 @@ make_timer! {
     resolving, "Resolving";
     querying, "Querying";
     integrity_check, "Integrity Check";
-    database, "Database";
 }
