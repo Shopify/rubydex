@@ -47,6 +47,11 @@ impl Db {
         }
     }
 
+    #[must_use]
+    pub fn is_initialized(&self) -> bool {
+        self.connection.borrow().is_some()
+    }
+
     /// Initialize the database connection. To use an in memory database, pass `None`
     ///
     /// # Errors
@@ -275,7 +280,7 @@ impl Db {
     /// Performs batch insert of names to the database
     fn batch_insert_declarations(conn: &rusqlite::Connection, graph: &Graph) -> Result<(), Box<dyn Error>> {
         let mut stmt = conn.prepare_cached(&format!(
-            "INSERT INTO {TABLE_DECLARATIONS} (id, name, data) VALUES (?, ?, ?)"
+            "INSERT OR IGNORE INTO {TABLE_DECLARATIONS} (id, name, data) VALUES (?, ?, ?)"
         ))?;
 
         for (declaration_id, declaration) in graph.declarations() {

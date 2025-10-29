@@ -123,5 +123,4 @@ make_timer! {
     indexing, "Indexing";
     querying, "Querying";
     integrity_check, "Integrity Check";
-    database, "Database";
 }
