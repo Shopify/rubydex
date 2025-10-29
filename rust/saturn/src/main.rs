@@ -28,6 +28,9 @@ struct Args {
     #[arg(long = "visualize")]
     visualize: bool,
 
+    #[arg(long = "use-db", help = "Store the graph in a database", default_value = "false")]
+    use_db: bool,
+
     #[arg(long = "clear-db", help = "Clear the database before saving the graph")]
     clear_db: bool,
 
@@ -49,7 +52,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut graph = time_it!(setup, {
         let mut graph = Graph::new();
-        graph.set_configuration(db_path)?;
+
+        if args.use_db {
+            graph.set_configuration(db_path)?;
+        }
+
         graph
     });
 
@@ -81,7 +88,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
-    time_it!(database, { graph.save_to_database() })?;
+    if args.use_db {
+        time_it!(database, { graph.save_to_database() })?;
+    }
 
     if args.stats {
         time_it!(querying, {
