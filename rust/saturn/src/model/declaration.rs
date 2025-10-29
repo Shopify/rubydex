@@ -116,9 +116,8 @@ impl Declaration {
     // want to actually store this in the struct. Currently, it is only used to cleanup a member that got deleted from
     // the graph, so we're avoiding the extra memory cost by computing it on demand.
     #[must_use]
-    pub fn unqualified_name_id(&self) -> NameId {
-        let parts: Vec<&str> = self.name.rsplitn(2, "::").collect();
-        NameId::from(parts[0])
+    pub fn unqualified_name(&self) -> String {
+        self.name.rsplit("::").next().unwrap_or(&self.name).to_string()
     }
 }
 
@@ -155,14 +154,14 @@ mod tests {
     }
 
     #[test]
-    fn unqualified_name_id() {
+    fn unqualified_name() {
         let decl = Declaration::new("Foo".to_string(), DeclarationId::from("Foo"));
-        assert_eq!(decl.unqualified_name_id(), NameId::from("Foo"));
+        assert_eq!(decl.unqualified_name(), "Foo");
 
         let decl = Declaration::new("Foo::Bar".to_string(), DeclarationId::from("Foo"));
-        assert_eq!(decl.unqualified_name_id(), NameId::from("Bar"));
+        assert_eq!(decl.unqualified_name(), "Bar");
 
         let decl = Declaration::new("Foo::Bar::baz".to_string(), DeclarationId::from("Foo::Bar"));
-        assert_eq!(decl.unqualified_name_id(), NameId::from("baz"));
+        assert_eq!(decl.unqualified_name(), "baz");
     }
 }
