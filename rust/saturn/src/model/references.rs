@@ -1,6 +1,6 @@
 use crate::{
     indexing::scope::Nesting,
-    model::ids::{NameId, UriId},
+    model::ids::{NameId, ReferenceId, UriId},
     offset::Offset,
 };
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,36 @@ pub enum UnresolvedReference {
 pub enum ResolvedReference {
     Constant(Box<ConstantReference>),
     Method(Box<MethodReference>),
+}
+
+impl UnresolvedReference {
+    #[must_use]
+    pub fn id(&self) -> ReferenceId {
+        match self {
+            UnresolvedReference::Constant(constant) => {
+                // C:<uri_id>:<start>-<end>
+                let key = format!(
+                    "C:{}:{}:{}-{}",
+                    constant.name_id(),
+                    constant.uri_id(),
+                    constant.offset().start(),
+                    constant.offset().end()
+                );
+                ReferenceId::from(&key)
+            }
+            UnresolvedReference::Method(method) => {
+                // M:<uri_id>:<start>-<end>
+                let key = format!(
+                    "M:{}:{}:{}-{}",
+                    method.name_id(),
+                    method.uri_id(),
+                    method.offset().start(),
+                    method.offset().end()
+                );
+                ReferenceId::from(&key)
+            }
+        }
+    }
 }
 
 impl ConstantReference {

@@ -4,7 +4,7 @@ use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{DeclarationId, DefinitionId, NameId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, UriId};
 use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ResolvedReference, UnresolvedReference};
 use crate::stats;
@@ -28,8 +28,8 @@ pub struct Graph {
     definitions: IdentityHashMap<DefinitionId, Definition>,
     // Map of unqualified names
     names: IdentityHashMap<NameId, String>,
-    // List of references that still need to be resolved
-    unresolved_references: Vec<UnresolvedReference>,
+    // Map of references that still need to be resolved
+    unresolved_references: IdentityHashMap<ReferenceId, UnresolvedReference>,
     db: Db,
 }
 
@@ -47,7 +47,7 @@ impl Graph {
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
-            unresolved_references: Vec::new(),
+            unresolved_references: IdentityHashMap::default(),
             db: Db::new(),
         }
     }
@@ -76,9 +76,9 @@ impl Graph {
         &self.documents
     }
 
-    // Returns an immutable reference to the list of unresolved references
+    // Returns an immutable reference to the unresolved references map
     #[must_use]
-    pub fn unresolved_references(&self) -> &Vec<UnresolvedReference> {
+    pub fn unresolved_references(&self) -> &IdentityHashMap<ReferenceId, UnresolvedReference> {
         &self.unresolved_references
     }
 
@@ -182,8 +182,10 @@ impl Graph {
     }
 
     // Register an unresolved reference to something (e.g.: constant, method, variable), which has to be resolved later
-    pub fn add_unresolved_reference(&mut self, reference: UnresolvedReference) {
-        self.unresolved_references.push(reference);
+    pub fn add_unresolved_reference(&mut self, reference: UnresolvedReference) -> ReferenceId {
+        let reference_id = reference.id();
+        self.unresolved_references.insert(reference_id, reference);
+        reference_id
     }
 
     /// Attempts to resolve a reference against the graph. Returns the fully qualified declaration ID that the reference
@@ -469,7 +471,7 @@ impl Graph {
         self.definitions = IdentityHashMap::default();
         self.documents = IdentityHashMap::default();
         self.names = IdentityHashMap::default();
-        self.unresolved_references = Vec::new();
+        self.unresolved_references = IdentityHashMap::default();
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -539,7 +541,7 @@ impl Graph {
     pub fn resolve_references(&mut self) {
         let unresolved = std::mem::take(&mut self.unresolved_references);
 
-        for reference in unresolved {
+        for (id, reference) in unresolved {
             match &reference {
                 UnresolvedReference::Constant(_) => {
                     if let Some(declaration) = self.resolve_reference(&reference) {
@@ -562,12 +564,12 @@ impl Graph {
                         }
                     } else {
                         // Keep unresolved references
-                        self.unresolved_references.push(reference);
+                        self.unresolved_references.insert(id, reference);
                     }
                 }
                 UnresolvedReference::Method(_) => {
                     // TODO: Implement method reference resolution
-                    self.unresolved_references.push(reference);
+                    self.unresolved_references.insert(id, reference);
                 }
             }
         }
@@ -594,7 +596,7 @@ impl Graph {
         // Count unresolved references by type
         let mut unresolved_constants = 0;
         let mut unresolved_methods = 0;
-        for reference in &self.unresolved_references {
+        for reference in self.unresolved_references.values() {
             match reference {
                 UnresolvedReference::Constant(_) => unresolved_constants += 1,
                 UnresolvedReference::Method(_) => unresolved_methods += 1,
@@ -705,7 +707,7 @@ mod tests {
             let constant = $context
                 .graph
                 .unresolved_references
-                .iter()
+                .values()
                 .filter_map(|r| {
                     if let UnresolvedReference::Constant(c) = r {
                         Some(c)
@@ -975,6 +977,14 @@ mod tests {
     fn resolving_constants() {
         let mut context = GraphTest::new();
 
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Bar
+              ::Foo::Bar # should be resolved to Foo::Bar from file:///foo.rb
+            end
+            "
+        });
+
         context.index_uri("file:///foo.rb", {
             r"
             module Foo
@@ -992,12 +1002,31 @@ mod tests {
             "
         });
 
-        context.index_uri("file:///bar.rb", {
-            r"
-            class Bar
-              ::Foo::Bar # should be resolved to Foo::Bar from file:///foo.rb
-            end
-            "
+        let mut unresolved_references = context.graph.unresolved_references().values().collect::<Vec<_>>();
+
+        unresolved_references.sort_by_key(|r| match r {
+            UnresolvedReference::Constant(constant) => (
+                context
+                    .graph
+                    .documents()
+                    .get(&constant.uri_id())
+                    .unwrap()
+                    .uri()
+                    .to_string(),
+                constant.offset().start(),
+                constant.offset().end(),
+            ),
+            UnresolvedReference::Method(method) => (
+                context
+                    .graph
+                    .documents()
+                    .get(&method.uri_id())
+                    .unwrap()
+                    .uri()
+                    .to_string(),
+                method.offset().start(),
+                method.offset().end(),
+            ),
         });
 
         context.graph.resolve_references();
