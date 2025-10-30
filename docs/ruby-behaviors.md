@@ -469,6 +469,48 @@ end
 2. Each enclosing lexical scope (Foo::String)
 3. Top-level (::String)
 
+### Inheritance Chain Resolution
+
+Ruby builds ancestors through the following steps recursively:
+
+1. Prepended modules (in reverse order of prepending)
+2. Current class
+3. Included modules (in reverse order of inclusion)
+4. Parent class
+
+And then it continues up the inheritance chain.
+
+```rb
+module PrependedInPrepended
+end
+
+module Prepended
+  prepend PrependedInPrepended
+end
+
+module PrependedInIncluded
+  prepend PrependedInPrepended
+end
+
+module IncludedInIncluded
+end
+
+module Included
+  include IncludedInIncluded
+end
+
+class Foo
+end
+
+class Bar < Foo
+  prepend Prepended
+  include Included
+end
+
+puts Bar.ancestors.to_s
+#=> [PrependedInPrepended, Prepended, Bar, Included, IncludedInIncluded, Foo, Object, Kernel, BasicObject]
+```
+
 ### Constant Resolution Through Inheritance
 
 Ruby also searches the inheritance chain when resolving constants:
@@ -487,15 +529,11 @@ end
 Child.new.show  # => "from parent"
 ```
 
-**Resolution order with inheritance:**
+**Resolution order:**
 
-1. Current class
-2. Prepended modules (in reverse order of prepending)
-3. Included modules (in reverse order of inclusion)
-4. Parent class
-5. Parent's prepended and included modules
-6. Continue up the inheritance chain
-7. Top-level
+1. Lexical scope
+2. [Inheritance chain](#inheritance-chain-resolution)
+3. Top-level
 
 **Example with modules:**
 
