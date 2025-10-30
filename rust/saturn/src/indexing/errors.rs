@@ -22,6 +22,7 @@ impl From<IndexingError> for MultipleErrors {
 pub enum IndexingError {
     FileReadError(String),
     InvalidUri(String),
+    DatabaseError(String),
 }
 
 impl std::fmt::Display for IndexingError {
@@ -29,6 +30,7 @@ impl std::fmt::Display for IndexingError {
         match self {
             IndexingError::FileReadError(msg) => write!(f, "File read error: {msg}"),
             IndexingError::InvalidUri(msg) => write!(f, "Invalid URI: {msg}"),
+            IndexingError::DatabaseError(msg) => write!(f, "Database error: {msg}"),
         }
     }
 }
