@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, LazyLock};
 
-use crate::indexing::errors::IndexingError;
+use crate::errors::Errors;
 use crate::indexing::scope::Scope;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
@@ -18,7 +18,7 @@ use crate::source_location::SourceLocationConverter;
 
 use ruby_prism::{ParseResult, Visit};
 
-pub type IndexerParts = (Graph, Vec<IndexingError>);
+pub type IndexerParts = (Graph, Vec<Errors>);
 static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 static MAIN_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("<main>"));
 
@@ -29,7 +29,7 @@ static MAIN_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("
 pub struct RubyIndexer<'a> {
     uri_id: UriId,
     local_graph: Graph,
-    errors: Vec<IndexingError>,
+    errors: Vec<Errors>,
     location_converter: &'a dyn SourceLocationConverter,
     comments: Vec<CommentGroup>,
     source: &'a str,
@@ -63,7 +63,7 @@ impl<'a> RubyIndexer<'a> {
         (self.local_graph, self.errors)
     }
 
-    pub fn add_error(&mut self, error: IndexingError) {
+    pub fn add_error(&mut self, error: Errors) {
         self.errors.push(error);
     }
 
