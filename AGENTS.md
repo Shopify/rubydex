@@ -40,7 +40,8 @@ When necessary, commands can be executed for the Ruby code.
 - `bundle exec rake compile`: compiles both the Rust crate and C extension
 - `bundle exec rake lint`: lints both the Ruby and Rust code
 - `bundle exec rake format`: auto formats both the Ruby and Rust code
-- `bundle exec rake test`: runs all automated Ruby tests
+- `bundle exec rake test`: runs the Ruby and Rust test suites
+- `bundle exec rake ruby_test`: runs all automated Ruby tests
 - `bundle exec ruby -Itest test/specific_test.rb`: runs a specific test file
 
 ## Rust workspace
