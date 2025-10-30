@@ -25,6 +25,25 @@ static VALUE sr_declaration_name(VALUE self) {
     return str;
 }
 
+// Declaration#unqualified_name -> String
+static VALUE sr_declaration_unqualified_name(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    const char *name = sat_declaration_unqualified_name(graph, data->id);
+
+    if (name == NULL) {
+        return Qnil;
+    }
+
+    VALUE str = rb_utf8_str_new_cstr(name);
+    free_c_string(name);
+
+    return str;
+}
+
 // Body function for rb_ensure in Declaration#definitions
 static VALUE declaration_definitions_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
@@ -97,6 +116,7 @@ void initialize_declaration(VALUE mSaturn) {
     rb_define_alloc_func(cDeclaration, sr_handle_alloc);
     rb_define_method(cDeclaration, "initialize", sr_handle_initialize, 2);
     rb_define_method(cDeclaration, "name", sr_declaration_name, 0);
+    rb_define_method(cDeclaration, "unqualified_name", sr_declaration_unqualified_name, 0);
     rb_define_method(cDeclaration, "definitions", sr_declaration_definitions, 0);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));

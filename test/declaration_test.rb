@@ -64,4 +64,21 @@ class DeclarationTest < Minitest::Test
       assert_equal(2, definitions.size)
     end
   end
+
+  def test_unqualified_name
+    with_context do |context|
+      context.write!("file1.rb", "module A; class B; end; end")
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      decl_a = graph["A"]
+      refute_nil(decl_a)
+      assert_equal("A", decl_a.unqualified_name)
+
+      decl_b = graph["A::B"]
+      refute_nil(decl_b)
+      assert_equal("B", decl_b.unqualified_name)
+    end
+  end
 end

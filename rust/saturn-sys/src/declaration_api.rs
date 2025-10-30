@@ -30,6 +30,28 @@ pub unsafe extern "C" fn sat_declaration_name(pointer: GraphPointer, name_id: i6
     })
 }
 
+/// Returns the UTF-8 unqualified name string for a declaration id.
+/// Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the name pointer is invalid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_declaration_unqualified_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let name_id = DeclarationId::new(name_id);
+        if let Some(decl) = graph.declarations().get(&name_id) {
+            CString::new(decl.unqualified_name()).unwrap().into_raw().cast_const()
+        } else {
+            ptr::null()
+        }
+    })
+}
+
 /// An iterator over definition IDs and kinds for a given declaration
 ///
 /// We snapshot the IDs at iterator creation so if the graph is modified, the iterator will not see the changes

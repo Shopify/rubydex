@@ -312,7 +312,8 @@ impl Graph {
                     && declaration.remove_definition(def_id)
                     && declaration.has_no_definitions()
                 {
-                    members_to_delete.push((*declaration.owner_id(), declaration.unqualified_name_id()));
+                    let unqualified_name_id = NameId::from(&declaration.unqualified_name());
+                    members_to_delete.push((*declaration.owner_id(), unqualified_name_id));
                     self.declarations.remove(definition.declaration_id());
                     removed.declaration_ids.push(*definition.declaration_id());
                 }
