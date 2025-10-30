@@ -803,11 +803,11 @@ mod tests {
         initial.graph.set_configuration(db_path.clone()).unwrap();
         initial.graph.save_to_database().unwrap();
 
-        let unchanged_hash = crate::indexing::Document::calculate_content_hash(unchanged_source.as_bytes());
+        let unchanged_hash = crate::indexing::calculate_content_hash(unchanged_source.as_bytes());
         let new_source = "module NewFile; end";
         let updated_source = "module Updated; def original; end; def extra; end; end";
-        let new_hash = crate::indexing::Document::calculate_content_hash(new_source.as_bytes());
-        let updated_hash = crate::indexing::Document::calculate_content_hash(updated_source.as_bytes());
+        let new_hash = crate::indexing::calculate_content_hash(new_source.as_bytes());
+        let updated_hash = crate::indexing::calculate_content_hash(updated_source.as_bytes());
 
         let mut updated = GraphTest::new();
         updated.graph.set_configuration(db_path.clone()).unwrap();
