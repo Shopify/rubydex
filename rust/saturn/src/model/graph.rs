@@ -1,6 +1,4 @@
-use std::collections::hash_map::Entry;
-use std::error::Error;
-
+use crate::indexing::errors::IndexingError;
 use crate::model::db::Db;
 use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
@@ -10,6 +8,7 @@ use crate::model::ids::{DeclarationId, DefinitionId, NameId, UriId};
 use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ResolvedReference, UnresolvedReference};
 use crate::stats;
+use std::collections::hash_map::Entry;
 
 /// Holds IDs of entities that were removed from the graph
 pub struct RemovedIds {
@@ -86,8 +85,10 @@ impl Graph {
     /// # Errors
     ///
     /// May error if we fail to initialize the database connection at the specified path
-    pub fn set_configuration(&mut self, db_path: String) -> Result<(), Box<dyn Error>> {
-        self.db.initialize_connection(Some(db_path))
+    pub fn set_configuration(&mut self, db_path: String) -> Result<(), IndexingError> {
+        self.db
+            .initialize_connection(Some(db_path))
+            .map_err(|err| IndexingError::DatabaseError(err.to_string()))
     }
 
     #[must_use]
@@ -155,10 +156,12 @@ impl Graph {
     /// # Errors
     ///
     /// Any database errors will prevent the data from being deleted
-    pub fn delete_uri(&mut self, uri: &str) -> Result<(), Box<dyn Error>> {
+    pub fn delete_uri(&mut self, uri: &str) -> Result<(), IndexingError> {
         let removed_ids = self.unload_uri(uri);
         let uri_id = UriId::from(uri);
-        self.db.delete_data_for_uri(uri_id, &removed_ids)?;
+        self.db
+            .delete_data_for_uri(uri_id, &removed_ids)
+            .map_err(|err| IndexingError::DatabaseError(err.to_string()))?;
         Ok(())
     }
 
@@ -220,9 +223,12 @@ impl Graph {
     /// # Errors
     ///
     /// Any database errors will prevent the data from being loaded
-    pub fn load_uri(&mut self, uri: &str) -> Result<(), Box<dyn Error>> {
+    pub fn load_uri(&mut self, uri: &str) -> Result<(), IndexingError> {
         let uri_id = UriId::from(uri);
-        let loaded_data = self.db.load_uri(uri_id)?;
+        let loaded_data = self
+            .db
+            .load_uri(uri_id)
+            .map_err(|err| IndexingError::DatabaseError(err.to_string()))?;
         self.documents.entry(uri_id).or_insert_with(|| loaded_data.document);
 
         for load_result in loaded_data.definitions {
@@ -258,8 +264,10 @@ impl Graph {
     /// # Errors
     ///
     /// Any database errors will prevent the data from being loaded
-    pub fn get_all_cached_content_hashes(&self) -> Result<IdentityHashMap<UriId, u16>, Box<dyn Error>> {
-        self.db.get_all_content_hashes()
+    pub fn get_all_cached_content_hashes(&self) -> Result<IdentityHashMap<UriId, u16>, IndexingError> {
+        self.db
+            .get_all_content_hashes()
+            .map_err(|err| IndexingError::DatabaseError(err.to_string()))
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
@@ -438,8 +446,10 @@ impl Graph {
 
     /// # Errors
     /// This method will return an error if batch inserting to the DB fails.
-    pub fn save_to_database(&self) -> Result<(), Box<dyn Error>> {
-        self.db.save_full_graph(self)
+    pub fn save_to_database(&self) -> Result<(), IndexingError> {
+        self.db
+            .save_full_graph(self)
+            .map_err(|err| IndexingError::DatabaseError(err.to_string()))
     }
 
     /// Clears all data from the database
@@ -447,8 +457,10 @@ impl Graph {
     /// # Errors
     ///
     /// This method will return an error if clearing the database fails.
-    pub fn clear_database(&self) -> Result<(), Box<dyn Error>> {
-        self.db.clear_database()
+    pub fn clear_database(&self) -> Result<(), IndexingError> {
+        self.db
+            .clear_database()
+            .map_err(|err| IndexingError::DatabaseError(err.to_string()))
     }
 
     // Clear graph data from memory
