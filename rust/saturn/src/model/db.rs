@@ -376,7 +376,7 @@ mod tests {
             .definition
             .comments()
             .iter()
-            .map(|c| c.string().to_string())
+            .map(|c| c.string().clone())
             .collect::<Vec<String>>();
         assert_eq!(*comments, vec!["# Class comment", "# Another class comment"]);
     }
