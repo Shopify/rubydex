@@ -724,7 +724,7 @@ mod tests {
         assert_eq!(
             def.comments()
                 .iter()
-                .map(|c| c.string().to_string())
+                .map(|c| c.string().clone())
                 .collect::<Vec<String>>(),
             vec!["# This is a class comment", "# Multi-line comment"]
         );
@@ -734,7 +734,7 @@ mod tests {
         assert_eq!(
             def.comments()
                 .iter()
-                .map(|c| c.string().to_string())
+                .map(|c| c.string().clone())
                 .collect::<Vec<String>>(),
             vec!["# Module comment"]
         );
