@@ -1,3 +1,4 @@
+pub mod errors;
 pub mod indexing;
 pub mod model;
 pub mod offset;
