@@ -11,6 +11,12 @@ impl std::fmt::Display for MultipleErrors {
 
 impl Error for MultipleErrors {}
 
+impl From<IndexingError> for MultipleErrors {
+    fn from(error: IndexingError) -> Self {
+        MultipleErrors(vec![error])
+    }
+}
+
 // Enum representing all types of indexing errors that may happen
 #[derive(Debug)]
 pub enum IndexingError {
