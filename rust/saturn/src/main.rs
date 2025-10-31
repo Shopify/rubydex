@@ -60,13 +60,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         graph
     });
 
-    let (documents, errors) = time_it!(listing, { indexing::collect_documents(vec![args.dir]) });
+    let (file_paths, errors) = time_it!(listing, { indexing::collect_file_paths(vec![args.dir]) });
 
     if !errors.is_empty() {
         return Err(Box::new(MultipleErrors(errors)));
     }
 
-    time_it!(indexing, { indexing::index_in_parallel(&mut graph, documents) })?;
+    time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
 
     // Run integrity checks if requested
     if args.check_integrity {

@@ -11,10 +11,7 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{Receiver, Sender},
 };
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::Path};
 use std::{sync::mpsc, thread};
 use url::Url;
 use xxhash_rust::xxh3::xxh3_64;
@@ -22,52 +19,6 @@ use xxhash_rust::xxh3::xxh3_64;
 pub mod errors;
 pub mod ruby_indexer;
 pub mod scope;
-
-// Represents a document to be indexed. If `source` is `Some(String)`, we're indexing a file state that's not committed
-// to disk yet and should then use the given `source` instead of reading from disk
-pub struct Document {
-    uri: Url,
-    source: Option<String>,
-}
-
-impl Document {
-    /// # Errors
-    ///
-    /// Creating a new document fails on invalid URIs
-    pub fn new(uri: &str, source: Option<String>) -> Result<Self, IndexingError> {
-        Ok(Self {
-            uri: Url::parse(uri).map_err(|e| IndexingError::InvalidUri(format!("Failed to parse URI '{uri}': {e}")))?,
-            source,
-        })
-    }
-
-    /// # Errors
-    ///
-    /// Errors if the file path cannot be turned into a URI
-    pub fn from_file_path(path: &str) -> Result<Self, IndexingError> {
-        Ok(Self {
-            uri: Url::from_file_path(path)
-                .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't build URI from path '{path}'")))?,
-            source: None,
-        })
-    }
-
-    /// # Errors
-    ///
-    /// Errors if the URI is not a valid file:// URI
-    pub fn path(&self) -> Result<PathBuf, IndexingError> {
-        self.uri
-            .to_file_path()
-            .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't convert URI '{}' to file path", self.uri)))
-    }
-
-    #[must_use]
-    pub fn calculate_content_hash(source: &[u8]) -> u16 {
-        // Explicitly take only the lower 16 bits of the hash
-        // This is intentional as this is only used for document staleness check
-        (xxh3_64(source) & 0xFFFF) as u16
-    }
-}
 
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
 ///
@@ -78,61 +29,64 @@ impl Document {
 /// # Panics
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
-pub fn index_in_parallel(graph: &mut Graph, documents: Vec<Document>) -> Result<(), MultipleErrors> {
-    let index_document = |document: Document| -> IndexerParts {
-        let uri = document.uri.to_string();
-        let (source, errors) = read_document_source(document);
+pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
+    let index_document = |file_path: &String| -> IndexerParts {
+        let (source, errors) = read_document_source(file_path);
         if !errors.is_empty() {
             return (None, errors);
         }
 
         let converter = UTF8SourceLocationConverter::new(&source);
-        let content_hash = Document::calculate_content_hash(source.as_bytes());
-        let mut ruby_indexer = RubyIndexer::new(uri, &converter, &source, content_hash);
+        let content_hash = calculate_content_hash(source.as_bytes());
+        let mut ruby_indexer = RubyIndexer::new(
+            uri_from_file_path(file_path).unwrap(),
+            &converter,
+            &source,
+            content_hash,
+        );
         ruby_indexer.index();
         ruby_indexer.into_parts()
     };
 
     let merge_result = |local_graph| graph.update(local_graph);
 
-    with_parallel_workers(documents, index_document, merge_result)
+    with_parallel_workers(file_paths, index_document, merge_result)
 }
 
 /// Reads the source content from a document, either from memory or disk
-fn read_document_source(document: Document) -> (String, Vec<IndexingError>) {
+fn read_document_source(file_path: &String) -> (String, Vec<IndexingError>) {
     let mut errors = Vec::new();
 
-    let source = if let Some(source) = document.source {
-        source
-    } else {
-        match document.path() {
-            Ok(path) => fs::read_to_string(&path).unwrap_or_else(|e| {
-                errors.push(IndexingError::FileReadError(format!(
-                    "Failed to read {}: {}",
-                    path.display(),
-                    e
-                )));
-                String::new()
-            }),
-            Err(e) => {
-                errors.push(e);
-                String::new()
-            }
-        }
-    };
+    let source = fs::read_to_string(file_path).unwrap_or_else(|e| {
+        errors.push(IndexingError::FileReadError(format!("Failed to read {file_path}: {e}")));
+        String::new()
+    });
 
     (source, errors)
 }
 
-fn with_parallel_workers<F, G>(documents: Vec<Document>, worker_fn: F, mut result_fn: G) -> Result<(), MultipleErrors>
+#[must_use]
+pub fn calculate_content_hash(source: &[u8]) -> u16 {
+    // Explicitly take only the lower 16 bits of the hash
+    // This is intentional as this is only used for document staleness check
+    (xxh3_64(source) & 0xFFFF) as u16
+}
+
+fn uri_from_file_path(path: &str) -> Result<String, IndexingError> {
+    Ok(Url::from_file_path(path)
+        .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't build URI from path '{path}'")))?
+        .to_string())
+}
+
+fn with_parallel_workers<F, G>(file_paths: Vec<String>, worker_fn: F, mut result_fn: G) -> Result<(), MultipleErrors>
 where
-    F: Fn(Document) -> IndexerParts + Send + Clone + 'static,
+    F: Fn(&String) -> IndexerParts + Send + Clone + 'static,
     G: FnMut(Graph),
 {
     let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let mut threads = Vec::with_capacity(num_threads);
-    let document_queue = Arc::new(Mutex::new(documents));
+    let document_queue = Arc::new(Mutex::new(file_paths));
 
     for _ in 0..num_threads {
         let thread_tx = tx.clone();
@@ -141,7 +95,7 @@ where
 
         let handle = thread::spawn(move || {
             while let Some(document) = { queue.lock().unwrap().pop() } {
-                let (result, errors) = thread_fn(document);
+                let (result, errors) = thread_fn(&document);
                 if result.is_some() || !errors.is_empty() {
                     thread_tx
                         .send((result, errors))
@@ -176,9 +130,9 @@ where
 ///
 /// Panics if there's a bug in how we're handling the arc mutex, like trying to acquire locks twice
 #[must_use]
-pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingError>) {
+pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<IndexingError>) {
     let mut errors = Vec::new();
-    let mut documents = Vec::new();
+    let mut file_paths = Vec::new();
 
     for path in paths {
         let path_obj = Path::new(&path);
@@ -188,10 +142,7 @@ pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingErro
                 Ok(entries) => {
                     for entry in entries {
                         match entry {
-                            Ok(path) => match Document::from_file_path(&path.to_string_lossy()) {
-                                Ok(document) => documents.push(document),
-                                Err(e) => errors.push(e),
-                            },
+                            Ok(path) => file_paths.push(path.to_string_lossy().into_owned()),
                             Err(e) => errors.push(IndexingError::FileReadError(format!(
                                 "Failed to read glob entry in '{path}': {e}"
                             ))),
@@ -209,10 +160,7 @@ pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingErro
         }
 
         if path_obj.exists() {
-            match Document::from_file_path(&path) {
-                Ok(document) => documents.push(document),
-                Err(e) => errors.push(e),
-            }
+            file_paths.push(path);
 
             continue;
         }
@@ -220,7 +168,7 @@ pub fn collect_documents(paths: Vec<String>) -> (Vec<Document>, Vec<IndexingErro
         errors.push(IndexingError::FileReadError(format!("Path '{path}' does not exist")));
     }
 
-    (documents, errors)
+    (file_paths, errors)
 }
 
 #[cfg(test)]
@@ -229,21 +177,16 @@ mod tests {
     use crate::test_utils::Context;
 
     fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<IndexingError>) {
-        let (documents, errors) = collect_documents(
+        let (file_paths, errors) = collect_file_paths(
             paths
                 .iter()
                 .map(|p| context.absolute_path_to(p).to_string_lossy().into_owned())
                 .collect(),
         );
 
-        let mut paths: Vec<String> = documents
+        let mut paths: Vec<String> = file_paths
             .iter()
-            .map(|d| {
-                context
-                    .relative_path_to(d.path().ok().unwrap())
-                    .to_string_lossy()
-                    .into_owned()
-            })
+            .map(|path| context.relative_path_to(path).to_string_lossy().into_owned())
             .collect();
 
         paths.sort();
@@ -288,7 +231,7 @@ mod tests {
     fn collect_non_existing_paths() {
         let context = Context::new();
 
-        let (documents, errors) = collect_documents(vec![
+        let (documents, errors) = collect_file_paths(vec![
             context
                 .absolute_path_to("non_existing_path")
                 .to_string_lossy()
@@ -311,15 +254,15 @@ mod tests {
 
     #[test]
     fn with_parallel_workers_skips_empty_results() {
-        let documents = vec![Document::new("file:///skipped.rb", Some("module Foo; end".to_string())).unwrap()];
+        let file_paths = vec![String::from("file:///skipped.rb")];
 
         let mut was_called = false;
-        let worker_fn = |_document: Document| -> IndexerParts { (None, vec![]) };
+        let worker_fn = |_file_path: &String| -> IndexerParts { (None, vec![]) };
         let result_fn = |_graph: Graph| {
             was_called = true;
         };
 
-        let result = with_parallel_workers(documents, worker_fn, result_fn);
+        let result = with_parallel_workers(file_paths, worker_fn, result_fn);
 
         assert!(result.is_ok());
 

@@ -53,7 +53,7 @@ pub unsafe extern "C" fn sat_index_all(
     let file_paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(file_paths, count).unwrap() };
     let mut all_errors = Vec::new();
 
-    let (documents, document_errors) = indexing::collect_documents(file_paths);
+    let (documents, document_errors) = indexing::collect_file_paths(file_paths);
     all_errors.extend(document_errors);
 
     with_graph(pointer, |graph| {
