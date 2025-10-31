@@ -2,7 +2,6 @@ use crate::{
     errors::{Errors, MultipleErrors},
     indexing::ruby_indexer::{IndexerParts, RubyIndexer},
     model::graph::Graph,
-    source_location::UTF8SourceLocationConverter,
 };
 use glob::glob;
 use std::sync::{
@@ -39,14 +38,8 @@ pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(
             return IndexResult::Errored(errors);
         }
 
-        let converter = UTF8SourceLocationConverter::new(&source);
         let content_hash = calculate_content_hash(source.as_bytes());
-        let mut ruby_indexer = RubyIndexer::new(
-            uri_from_file_path(file_path).unwrap(),
-            &converter,
-            &source,
-            content_hash,
-        );
+        let mut ruby_indexer = RubyIndexer::new(uri_from_file_path(file_path).unwrap(), &source, content_hash);
         ruby_indexer.index();
         IndexResult::Completed(Box::new(ruby_indexer.into_parts()))
     };
