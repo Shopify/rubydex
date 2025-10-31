@@ -985,8 +985,8 @@ mod tests {
                 assert_eq!(
                     def.comments()
                         .iter()
-                        .map(|c| c.string().to_string())
-                        .collect::<Vec<String>>(),
+                        .map(Comment::string)
+                        .collect::<Vec<&String>>(),
                     expected_vec
                 );
             });

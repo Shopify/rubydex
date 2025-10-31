@@ -314,7 +314,7 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::GraphTest;
+    use crate::{model::comment::Comment, test_utils::GraphTest};
 
     #[test]
     fn saving_graph_to_the_database() {
@@ -376,8 +376,8 @@ mod tests {
             .definition
             .comments()
             .iter()
-            .map(|c| c.string().clone())
-            .collect::<Vec<String>>();
+            .map(Comment::string)
+            .collect::<Vec<&String>>();
         assert_eq!(*comments, vec!["# Class comment", "# Another class comment"]);
     }
 

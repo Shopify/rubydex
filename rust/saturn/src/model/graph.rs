@@ -640,7 +640,7 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::GraphTest;
+    use crate::{model::comment::Comment, test_utils::GraphTest};
 
     /// Asserts that a declaration has a constant reference at the specified location
     ///
@@ -955,20 +955,14 @@ mod tests {
         let definitions = context.graph.get("CommentedClass").unwrap();
         let def = definitions.first().unwrap();
         assert_eq!(
-            def.comments()
-                .iter()
-                .map(|c| c.string().clone())
-                .collect::<Vec<String>>(),
+            def.comments().iter().map(Comment::string).collect::<Vec<&String>>(),
             vec!["# This is a class comment", "# Multi-line comment"]
         );
 
         let definitions = context.graph.get("CommentedModule").unwrap();
         let def = definitions.first().unwrap();
         assert_eq!(
-            def.comments()
-                .iter()
-                .map(|c| c.string().clone())
-                .collect::<Vec<String>>(),
+            def.comments().iter().map(Comment::string).collect::<Vec<&String>>(),
             vec!["# Module comment"]
         );
 
