@@ -12,7 +12,7 @@ use crate::model::definitions::{
 };
 use crate::model::graph::Graph;
 use crate::model::ids::{DeclarationId, UriId};
-use crate::model::references::{ConstantReference, UnresolvedReference};
+use crate::model::references::{ConstantReference, MethodReference, UnresolvedReference};
 use crate::offset::Offset;
 use crate::source_location::SourceLocationConverter;
 
@@ -284,6 +284,13 @@ impl<'a> RubyIndexer<'a> {
         let name_id = self.local_graph.add_name(name);
         let reference =
             UnresolvedReference::Constant(Box::new(ConstantReference::new(name_id, scope, self.uri_id, offset)));
+        self.local_graph.add_unresolved_reference(reference);
+    }
+
+    fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location) {
+        let offset = Offset::from_prism_location(location);
+        let name_id = self.local_graph.add_name(name);
+        let reference = UnresolvedReference::Method(Box::new(MethodReference::new(name_id, self.uri_id, offset)));
         self.local_graph.add_unresolved_reference(reference);
     }
 }
@@ -586,6 +593,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                             .add_definition(fully_qualified_name, definition, &nesting_id);
                     }
                 }
+                ruby_prism::Node::CallTargetNode { .. } => {
+                    let call_target_node = left.as_call_target_node().unwrap();
+                    self.visit(&call_target_node.receiver());
+
+                    let name = String::from_utf8_lossy(call_target_node.name().as_slice()).to_string();
+                    self.index_method_reference(name, &call_target_node.location());
+                }
                 _ => {}
             }
         }
@@ -725,7 +739,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             return;
         }
 
-        let message = Self::location_to_string(&message_loc.unwrap());
+        let message = String::from_utf8_lossy(node.name().as_slice()).to_string();
 
         match message.as_str() {
             "attr_accessor" => {
@@ -755,11 +769,33 @@ impl Visit<'_> for RubyIndexer<'_> {
                     create_attr_reader(self, node);
                 }
             }
+            "alias_method" => {
+                let arguments = node.arguments();
+
+                if let Some(arguments) = arguments {
+                    let nodes: Vec<_> = arguments.arguments().iter().collect();
+
+                    if nodes.len() == 2 {
+                        let alias_to =
+                            Self::location_to_string(&nodes[1].as_symbol_node().unwrap().value_loc().unwrap());
+                        self.index_method_reference(alias_to, &nodes[1].location());
+                    }
+                }
+            }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
                 // may discover something inside
                 if let Some(receiver) = node.receiver() {
                     self.visit(&receiver);
+                }
+
+                self.index_method_reference(message.clone(), &node.message_loc().unwrap());
+
+                match message.as_str() {
+                    ">" | "<" | ">=" | "<=" => {
+                        self.index_method_reference("<=>".to_string(), &node.message_loc().unwrap());
+                    }
+                    _ => {}
                 }
 
                 if let Some(arguments) = node.arguments() {
@@ -771,6 +807,48 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
         }
+    }
+
+    fn visit_call_and_write_node(&mut self, node: &ruby_prism::CallAndWriteNode) {
+        if let Some(receiver) = node.receiver() {
+            self.visit(&receiver);
+        }
+
+        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
+        self.index_method_reference(read_name, &node.operator_loc());
+
+        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
+        self.index_method_reference(write_name, &node.operator_loc());
+
+        self.visit(&node.value());
+    }
+
+    fn visit_call_operator_write_node(&mut self, node: &ruby_prism::CallOperatorWriteNode) {
+        if let Some(receiver) = node.receiver() {
+            self.visit(&receiver);
+        }
+
+        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
+        self.index_method_reference(read_name, &node.call_operator_loc().unwrap());
+
+        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
+        self.index_method_reference(write_name, &node.call_operator_loc().unwrap());
+
+        self.visit(&node.value());
+    }
+
+    fn visit_call_or_write_node(&mut self, node: &ruby_prism::CallOrWriteNode) {
+        if let Some(receiver) = node.receiver() {
+            self.visit(&receiver);
+        }
+
+        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
+        self.index_method_reference(read_name, &node.operator_loc());
+
+        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
+        self.index_method_reference(write_name, &node.operator_loc());
+
+        self.visit(&node.value());
     }
 
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
@@ -843,10 +921,45 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&node.value());
         }
     }
+
+    fn visit_block_argument_node(&mut self, node: &ruby_prism::BlockArgumentNode<'_>) {
+        let expression = node.expression();
+        if let Some(expression) = expression {
+            match expression {
+                ruby_prism::Node::SymbolNode { .. } => {
+                    let symbol = expression.as_symbol_node().unwrap();
+                    let name = Self::location_to_string(&symbol.value_loc().unwrap());
+                    self.index_method_reference(name, &node.location());
+                }
+                _ => {
+                    self.visit(&expression);
+                }
+            }
+        }
+    }
+
+    fn visit_alias_method_node(&mut self, node: &ruby_prism::AliasMethodNode<'_>) {
+        let name = Self::location_to_string(&node.old_name().location());
+        self.index_method_reference(name, &node.old_name().location());
+    }
+
+    fn visit_and_node(&mut self, node: &ruby_prism::AndNode) {
+        self.visit(&node.left());
+        self.index_method_reference("&&".to_string(), &node.location());
+        self.visit(&node.right());
+    }
+
+    fn visit_or_node(&mut self, node: &ruby_prism::OrNode) {
+        self.visit(&node.left());
+        self.index_method_reference("||".to_string(), &node.location());
+        self.visit(&node.right());
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::{model::ids::NameId, test_utils::GraphTest};
 
@@ -903,8 +1016,20 @@ mod tests {
         graph
             .unresolved_references()
             .iter()
-            .map(|r| match r {
-                UnresolvedReference::Constant(constant) => graph.names().get(constant.name_id()).unwrap(),
+            .filter_map(|r| match r {
+                UnresolvedReference::Constant(constant) => Some(graph.names().get(constant.name_id()).unwrap()),
+                UnresolvedReference::Method(_method) => None,
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn collect_method_reference_names(graph: &Graph) -> Vec<&String> {
+        graph
+            .unresolved_references()
+            .iter()
+            .filter_map(|r| match r {
+                UnresolvedReference::Constant(_) => None,
+                UnresolvedReference::Method(method) => Some(graph.names().get(method.name_id()).unwrap()),
             })
             .collect::<Vec<_>>()
     }
@@ -1959,6 +2084,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(19, 22));
             }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            }
         }
 
         let reference = &refs[1];
@@ -1972,6 +2100,9 @@ mod tests {
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(32, 38));
+            }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
             }
         }
     }
@@ -2005,6 +2136,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            }
         }
     }
 
@@ -2037,6 +2171,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            }
         }
 
         let reference = &refs[1];
@@ -2050,6 +2187,9 @@ mod tests {
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 41));
+            }
+            UnresolvedReference::Method(unresolved) => {
+                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
             }
         }
     }
@@ -2196,5 +2336,221 @@ mod tests {
                 "M15", "M16", "M17", "M18", "M18::M19",
             ]
         );
+    }
+
+    #[test]
+    fn index_unresolved_method_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            m1
+            m2(m3)
+            m4 m5
+            self.m6
+            self.m7(m8)
+            self.m9 m10
+            C.m11
+            C.m12(m13)
+            C.m14 m15
+            m16.m17
+            m18.m19(m20)
+            m21.m22 m23
+
+            m24.m25.m26
+
+            !m27 # The `!` is collected and will count as one more reference
+            m28&.m29
+            m30(&m31)
+            m32 { m33 }
+            m34 do m35 end
+            m36[m37] # The `[]` is collected and will count as one more reference
+
+            def foo(&block)
+                m38(&block)
+            end
+
+            m39(&:m40)
+            m41(&m42)
+            m43(m44, &m45(m46))
+            m47(x: m48, m49:)
+            m50(...)
+            "
+        });
+
+        assert_eq!(
+            collect_method_reference_names(&context.graph),
+            vec![
+                "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16",
+                "m17", "m18", "m19", "m20", "m21", "m22", "m23", "m24", "m25", "m26", "m27", "!", "m28", "m29", "m30",
+                "m31", "m32", "m33", "m34", "m35", "m36", "[]", "m37", "m38", "m39", "m40", "m41", "m42", "m43", "m44",
+                "m45", "m46", "m47", "m48", "m49", "m50"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_method_assign_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            self.m1 = m2
+            m3.m4.m5 = m6.m7.m8
+            self.m9, self.m10 = m11, m12
+            "
+        });
+
+        assert_eq!(
+            collect_method_reference_names(&context.graph),
+            vec![
+                "m1=", "m2", "m3", "m4", "m5=", "m6", "m7", "m8", "m9=", "m10=", "m11", "m12"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_method_opassign_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            self.m1 += 42
+            self.m2 |= 42
+            self.m3 ||= 42
+            self.m4 &&= 42
+            m5.m6 += m7
+            m8.m9 ||= m10
+            m11.m12 &&= m13
+            "
+        });
+
+        assert_eq!(
+            collect_method_reference_names(&context.graph),
+            vec![
+                "m1", "m1=", "m2", "m2=", "m3", "m3=", "m4", "m4=", "m5", "m6", "m6=", "m7", "m8", "m9", "m9=", "m10",
+                "m11", "m12", "m12=", "m13",
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_method_operator_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            x != x
+            x % x
+            x & x
+            x && x
+            x * x
+            x ** x
+            x + x
+            x - x
+            x / x
+            x << x
+            x == x
+            x === x
+            x >> x
+            x ^ x
+            x | x
+            x || x
+            x <=> x
+            "
+        });
+
+        let mut names = collect_method_reference_names(&context.graph)
+            .into_iter()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        names.sort();
+
+        assert_eq!(
+            names,
+            vec![
+                "!=", "%", "&", "&&", "*", "**", "+", "-", "/", "<<", "<=>", "==", "===", ">>", "^", "x", "|", "||",
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_method_lesser_than_operator_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            x < y
+            "
+        });
+
+        assert_eq!(
+            collect_method_reference_names(&context.graph),
+            vec!["x", "<", "<=>", "y"]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_method_lesser_than_or_equal_to_operator_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            x <= y
+            "
+        });
+
+        assert_eq!(
+            collect_method_reference_names(&context.graph),
+            vec!["x", "<=", "<=>", "y"]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_method_greater_than_operator_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            x > y
+            "
+        });
+
+        assert_eq!(
+            collect_method_reference_names(&context.graph),
+            vec!["x", ">", "<=>", "y"]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_method_greater_than_or_equal_to_operator_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            x >= y
+            "
+        });
+
+        assert_eq!(
+            collect_method_reference_names(&context.graph),
+            vec!["x", ">=", "<=>", "y"]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_method_alias_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            "
+            alias ignored m1
+            alias_method :ignored, :m2
+            "
+        });
+
+        assert_eq!(collect_method_reference_names(&context.graph), vec!["m1", "m2"]);
     }
 }

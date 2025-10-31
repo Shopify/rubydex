@@ -108,6 +108,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Found {} names", graph.declarations().len());
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.documents().len());
+        println!("Found {} references", graph.unresolved_references().len());
     }
 
     Ok(())
