@@ -43,7 +43,7 @@ task compile_release: :clean do
   Rake::Task[:compile].invoke
 end
 
-multitask test: [:cargo_test, :ruby_test]
-multitask check: [:lint, :test]
+task test: [:cargo_test, :ruby_test]
+task check: [:lint, :test]
 
 task default: :check
