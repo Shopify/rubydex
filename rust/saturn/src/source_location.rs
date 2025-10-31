@@ -30,7 +30,7 @@ pub trait SourceLocationConverter {
     #[must_use]
     fn byte_offset_to_position(&self, byte_offset: u32) -> Option<Position> {
         let (line_num, line) = self.byte_offset_to_line_slice(byte_offset)?;
-        Some(self.position_with_line_offset(line_num, byte_offset - line.start_offset, line.line_slice))
+        Some(self.position_with_line_offset(line_num + 1, byte_offset - line.start_offset, line.line_slice))
     }
 
     /// Converts a pair of byte offsets (start and end) to a pair of Positions.
@@ -189,18 +189,22 @@ impl SourceLocationConverter for UTF8SourceLocationConverter<'_> {
     fn position_with_line_offset(&self, line: u32, line_offset: u32, _line_slice: &str) -> Position {
         Position {
             line,
-            column: line_offset,
+            column: line_offset + 1,
         }
     }
 
     fn byte_offset_from_position(&self, position: Position) -> Option<u32> {
-        let line = self.source.lines.get(position.line as usize)?;
-
-        if position.column > line.line_len {
+        if position.line == 0 {
             return None;
         }
 
-        let offset = line.start_offset + position.column;
+        let line = self.source.lines.get((position.line - 1) as usize)?;
+
+        if position.column == 0 || position.column > line.line_len + 1 {
+            return None;
+        }
+
+        let offset = line.start_offset + (position.column - 1);
 
         if offset <= self.source.text_len {
             Some(offset)
@@ -248,18 +252,26 @@ impl SourceLocationConverter for UTF16SourceLocationConverter<'_> {
             column += ch.len_utf16() as u32;
         }
 
-        Position { line, column }
+        Position {
+            line,
+            column: column + 1,
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]
     fn byte_offset_from_position(&self, position: Position) -> Option<u32> {
-        let source_line = self.source.lines.get(position.line as usize)?;
+        if position.line == 0 {
+            return None;
+        }
 
-        let mut current_column = 0u32;
+        let source_line = self.source.lines.get((position.line - 1) as usize)?;
 
-        if position.column == 0 {
+        if position.column == 1 {
             return Some(source_line.start_offset);
         }
+
+        let mut current_units = 0u32;
+        let target_units = position.column - 1;
 
         let char_indices = source_line
             .line_slice
@@ -267,10 +279,9 @@ impl SourceLocationConverter for UTF16SourceLocationConverter<'_> {
             .take(source_line.line_len as usize);
 
         for (byte_pos, ch) in char_indices {
-            let code_units = ch.len_utf16() as u32;
-            current_column += code_units;
+            current_units += ch.len_utf16() as u32;
 
-            if current_column == position.column {
+            if current_units == target_units {
                 return Some(source_line.start_offset + byte_pos as u32 + ch.len_utf8() as u32);
             }
         }
@@ -316,18 +327,29 @@ impl SourceLocationConverter for UTF32SourceLocationConverter<'_> {
             column += 1;
         }
 
-        Position { line, column }
+        Position {
+            line,
+            column: column + 1,
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]
     fn byte_offset_from_position(&self, position: Position) -> Option<u32> {
-        let source_line = self.source.lines.get(position.line as usize)?;
+        if position.line == 0 {
+            return None;
+        }
 
-        if position.column == 0 {
+        let source_line = self.source.lines.get((position.line - 1) as usize)?;
+
+        if position.column == 1 {
             return Some(source_line.start_offset);
         }
 
-        match source_line.line_slice.char_indices().nth(position.column as usize) {
+        match source_line
+            .line_slice
+            .char_indices()
+            .nth((position.column - 1) as usize)
+        {
             Some((byte_pos, _ch)) => {
                 let offset = source_line.start_offset + byte_pos as u32;
                 Some(offset)
@@ -445,46 +467,46 @@ mod tests {
         assert_location_converter(
             &UTF8SourceLocationConverter::new(ASCII_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (1, Position { line: 0, column: 1 }),
-                (5, Position { line: 0, column: 5 }),
-                (6, Position { line: 1, column: 0 }),
-                (11, Position { line: 1, column: 5 }),
-                (12, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (1, Position { line: 1, column: 2 }),
+                (5, Position { line: 1, column: 6 }),
+                (6, Position { line: 2, column: 1 }),
+                (11, Position { line: 2, column: 6 }),
+                (12, Position { line: 3, column: 1 }),
             ],
             &[13],
             &[
-                Position { line: 2, column: 1 },
-                Position { line: 3, column: 0 }, // The input has only 3 lines
-                Position { line: 0, column: 6 }, // The first line has only 5 characters
+                Position { line: 3, column: 2 }, // Empty last line has only column 1
+                Position { line: 4, column: 1 }, // The input has only 3 lines
+                Position { line: 1, column: 7 }, // The first line has only 5 characters
             ],
         );
 
         assert_location_converter(
             &UTF8SourceLocationConverter::new(MULTIBYTE_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (3, Position { line: 0, column: 3 }),
-                (15, Position { line: 0, column: 15 }),
-                (16, Position { line: 1, column: 0 }),
-                (22, Position { line: 1, column: 6 }),
-                (23, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (3, Position { line: 1, column: 4 }),
+                (15, Position { line: 1, column: 16 }),
+                (16, Position { line: 2, column: 1 }),
+                (22, Position { line: 2, column: 7 }),
+                (23, Position { line: 3, column: 1 }),
             ],
             &[24],
-            &[Position { line: 2, column: 1 }],
+            &[Position { line: 3, column: 2 }],
         );
 
         assert_location_converter(
             &UTF8SourceLocationConverter::new(SURROGATE_PAIR_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (4, Position { line: 0, column: 4 }),
-                (5, Position { line: 1, column: 0 }),
-                (9, Position { line: 1, column: 4 }),
-                (10, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (4, Position { line: 1, column: 5 }),
+                (5, Position { line: 2, column: 1 }),
+                (9, Position { line: 2, column: 5 }),
+                (10, Position { line: 3, column: 1 }),
             ],
             &[11],
-            &[Position { line: 2, column: 1 }],
+            &[Position { line: 3, column: 2 }],
         );
     }
 
@@ -493,46 +515,46 @@ mod tests {
         assert_location_converter(
             &UTF16SourceLocationConverter::new(ASCII_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (1, Position { line: 0, column: 1 }),
-                (5, Position { line: 0, column: 5 }),
-                (6, Position { line: 1, column: 0 }),
-                (11, Position { line: 1, column: 5 }),
-                (12, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (1, Position { line: 1, column: 2 }),
+                (5, Position { line: 1, column: 6 }),
+                (6, Position { line: 2, column: 1 }),
+                (11, Position { line: 2, column: 6 }),
+                (12, Position { line: 3, column: 1 }),
             ],
             &[13],
             &[
-                Position { line: 2, column: 1 },
-                Position { line: 3, column: 0 }, // The input has only 3 lines
-                Position { line: 0, column: 6 }, // The first line has only 5 characters
+                Position { line: 3, column: 2 },
+                Position { line: 4, column: 1 }, // The input has only 3 lines
+                Position { line: 1, column: 7 }, // The first line has only 5 characters
             ],
         );
 
         assert_location_converter(
             &UTF16SourceLocationConverter::new(MULTIBYTE_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (3, Position { line: 0, column: 1 }),
-                (15, Position { line: 0, column: 5 }),
-                (16, Position { line: 1, column: 0 }),
-                (22, Position { line: 1, column: 2 }),
-                (23, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (3, Position { line: 1, column: 2 }),
+                (15, Position { line: 1, column: 6 }),
+                (16, Position { line: 2, column: 1 }),
+                (22, Position { line: 2, column: 3 }),
+                (23, Position { line: 3, column: 1 }),
             ],
             &[24],
-            &[Position { line: 2, column: 1 }],
+            &[Position { line: 3, column: 2 }],
         );
 
         assert_location_converter(
             &UTF16SourceLocationConverter::new(SURROGATE_PAIR_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (4, Position { line: 0, column: 2 }),
-                (5, Position { line: 1, column: 0 }),
-                (9, Position { line: 1, column: 2 }),
-                (10, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (4, Position { line: 1, column: 3 }),
+                (5, Position { line: 2, column: 1 }),
+                (9, Position { line: 2, column: 3 }),
+                (10, Position { line: 3, column: 1 }),
             ],
             &[11],
-            &[Position { line: 2, column: 1 }],
+            &[Position { line: 3, column: 2 }],
         );
     }
 
@@ -541,46 +563,46 @@ mod tests {
         assert_location_converter(
             &UTF32SourceLocationConverter::new(ASCII_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (1, Position { line: 0, column: 1 }),
-                (5, Position { line: 0, column: 5 }),
-                (6, Position { line: 1, column: 0 }),
-                (11, Position { line: 1, column: 5 }),
-                (12, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (1, Position { line: 1, column: 2 }),
+                (5, Position { line: 1, column: 6 }),
+                (6, Position { line: 2, column: 1 }),
+                (11, Position { line: 2, column: 6 }),
+                (12, Position { line: 3, column: 1 }),
             ],
             &[13],
             &[
-                Position { line: 2, column: 1 },
-                Position { line: 3, column: 0 }, // The input has only 3 lines
-                Position { line: 0, column: 6 }, // The first line has only 5 characters
+                Position { line: 3, column: 2 },
+                Position { line: 4, column: 1 }, // The input has only 3 lines
+                Position { line: 1, column: 7 }, // The first line has only 5 characters
             ],
         );
 
         assert_location_converter(
             &UTF32SourceLocationConverter::new(MULTIBYTE_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (3, Position { line: 0, column: 1 }),
-                (15, Position { line: 0, column: 5 }),
-                (16, Position { line: 1, column: 0 }),
-                (22, Position { line: 1, column: 2 }),
-                (23, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (3, Position { line: 1, column: 2 }),
+                (15, Position { line: 1, column: 6 }),
+                (16, Position { line: 2, column: 1 }),
+                (22, Position { line: 2, column: 3 }),
+                (23, Position { line: 3, column: 1 }),
             ],
             &[24],
-            &[Position { line: 2, column: 1 }],
+            &[Position { line: 3, column: 2 }],
         );
 
         assert_location_converter(
             &UTF32SourceLocationConverter::new(SURROGATE_PAIR_STRING),
             &[
-                (0, Position { line: 0, column: 0 }),
-                (4, Position { line: 0, column: 1 }),
-                (5, Position { line: 1, column: 0 }),
-                (9, Position { line: 1, column: 1 }),
-                (10, Position { line: 2, column: 0 }),
+                (0, Position { line: 1, column: 1 }),
+                (4, Position { line: 1, column: 2 }),
+                (5, Position { line: 2, column: 1 }),
+                (9, Position { line: 2, column: 2 }),
+                (10, Position { line: 3, column: 1 }),
             ],
             &[11],
-            &[Position { line: 2, column: 1 }],
+            &[Position { line: 3, column: 2 }],
         );
     }
 }
