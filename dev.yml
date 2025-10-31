@@ -6,7 +6,9 @@ up:
 commands:
   test:
     desc: Run Ruby and Rust test suites via Rake
-    run: bundle exec rake test
+    run: |
+      bundle exec rake test
+      bundle exec rake cargo_test
   lint:
     desc: Run RuboCop and Rust linting
     run: bundle exec rake lint
@@ -14,5 +16,8 @@ commands:
     desc: Format Ruby and Rust sources
     run: bundle exec rake format
 
+# dev check by default runs each command in parallel across available cores
 check:
-  all: bundle exec rake check
+  test_ruby: bundle exec rake test
+  test_rust: bundle exec rake cargo_test
+  lint: bundle exec rake lint

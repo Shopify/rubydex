@@ -18,8 +18,8 @@ test_config = lambda do |t|
   t.ruby_opts << ["--enable=frozen_string_literal"]
   t.test_files = FileList["test/**/*_test.rb"]
 end
-Rake::TestTask.new(ruby_test: :compile, &test_config)
-namespace(:ruby_test) { RubyMemcheck::TestTask.new(valgrind: :compile, &test_config) }
+Rake::TestTask.new(test: :compile, &test_config)
+namespace(:test) { RubyMemcheck::TestTask.new(valgrind: :compile, &test_config) }
 
 RuboCop::RakeTask.new
 
@@ -43,7 +43,4 @@ task compile_release: :clean do
   Rake::Task[:compile].invoke
 end
 
-multitask test: [:cargo_test, :ruby_test]
-multitask check: [:lint, :test]
-
-task default: :check
+task default: [:lint, :cargo_test, :test]
