@@ -32,10 +32,10 @@ jobs:
           rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
 
       - name: Run tests capturing leaks with `memory` sanitizer
-        run: SANITIZER=memory bundle exec rake test:valgrind
+        run: SANITIZER=memory bundle exec rake ruby_test:valgrind
 
       - name: Run tests capturing leaks with `leak` sanitizer
-        run: SANITIZER=leak bundle exec rake test:valgrind
+        run: SANITIZER=leak bundle exec rake ruby_test:valgrind
 
       - name: Run tests capturing leaks with `thread` sanitizer
-        run: SANITIZER=thread bundle exec rake test:valgrind
+        run: SANITIZER=thread bundle exec rake ruby_test:valgrind
