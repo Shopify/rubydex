@@ -1,8 +1,6 @@
 use crate::{
-    indexing::{
-        errors::{IndexingError, MultipleErrors},
-        ruby_indexer::{IndexerParts, RubyIndexer},
-    },
+    errors::{Errors, MultipleErrors},
+    indexing::ruby_indexer::{IndexerParts, RubyIndexer},
     model::graph::Graph,
     source_location::UTF8SourceLocationConverter,
 };
@@ -16,14 +14,13 @@ use std::{sync::mpsc, thread};
 use url::Url;
 use xxhash_rust::xxh3::xxh3_64;
 
-pub mod errors;
 pub mod ruby_indexer;
 pub mod scope;
 
 pub enum IndexResult {
     Completed(Box<IndexerParts>),
     Skipped,
-    Errored(Vec<IndexingError>),
+    Errored(Vec<Errors>),
 }
 
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
@@ -60,11 +57,11 @@ pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(
 }
 
 /// Reads the source content from a document, either from memory or disk
-fn read_document_source(file_path: &String) -> (String, Vec<IndexingError>) {
+fn read_document_source(file_path: &String) -> (String, Vec<Errors>) {
     let mut errors = Vec::new();
 
     let source = fs::read_to_string(file_path).unwrap_or_else(|e| {
-        errors.push(IndexingError::FileReadError(format!("Failed to read {file_path}: {e}")));
+        errors.push(Errors::FileReadError(format!("Failed to read {file_path}: {e}")));
         String::new()
     });
 
@@ -78,9 +75,9 @@ pub fn calculate_content_hash(source: &[u8]) -> u16 {
     (xxh3_64(source) & 0xFFFF) as u16
 }
 
-fn uri_from_file_path(path: &str) -> Result<String, IndexingError> {
+fn uri_from_file_path(path: &str) -> Result<String, Errors> {
     Ok(Url::from_file_path(path)
-        .map_err(|_e| IndexingError::InvalidUri(format!("Couldn't build URI from path '{path}'")))?
+        .map_err(|_e| Errors::InvalidUri(format!("Couldn't build URI from path '{path}'")))?
         .to_string())
 }
 
@@ -147,7 +144,7 @@ where
 ///
 /// Panics if there's a bug in how we're handling the arc mutex, like trying to acquire locks twice
 #[must_use]
-pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<IndexingError>) {
+pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
     let mut errors = Vec::new();
     let mut file_paths = Vec::new();
 
@@ -160,14 +157,14 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<IndexingError
                     for entry in entries {
                         match entry {
                             Ok(path) => file_paths.push(path.to_string_lossy().into_owned()),
-                            Err(e) => errors.push(IndexingError::FileReadError(format!(
+                            Err(e) => errors.push(Errors::FileReadError(format!(
                                 "Failed to read glob entry in '{path}': {e}"
                             ))),
                         }
                     }
                 }
                 Err(e) => {
-                    errors.push(IndexingError::FileReadError(format!(
+                    errors.push(Errors::FileReadError(format!(
                         "Failed to read glob pattern '{path}/**/*.rb': {e}"
                     )));
                 }
@@ -182,7 +179,7 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<IndexingError
             continue;
         }
 
-        errors.push(IndexingError::FileReadError(format!("Path '{path}' does not exist")));
+        errors.push(Errors::FileReadError(format!("Path '{path}' does not exist")));
     }
 
     (file_paths, errors)
@@ -193,7 +190,7 @@ mod tests {
     use super::*;
     use crate::test_utils::Context;
 
-    fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<IndexingError>) {
+    fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<Errors>) {
         let (file_paths, errors) = collect_file_paths(
             paths
                 .iter()

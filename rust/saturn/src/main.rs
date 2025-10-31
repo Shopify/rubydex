@@ -3,7 +3,8 @@ use std::{error::Error, fs};
 use clap::Parser;
 
 use saturn::{
-    indexing::{self, errors::MultipleErrors},
+    errors::MultipleErrors,
+    indexing::{self},
     model::graph::Graph,
     stats::{
         memory::MemoryStats,
