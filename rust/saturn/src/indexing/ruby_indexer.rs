@@ -775,10 +775,12 @@ impl Visit<'_> for RubyIndexer<'_> {
                 if let Some(arguments) = arguments {
                     let nodes: Vec<_> = arguments.arguments().iter().collect();
 
-                    if nodes.len() == 2 {
-                        let alias_to =
-                            Self::location_to_string(&nodes[1].as_symbol_node().unwrap().value_loc().unwrap());
-                        self.index_method_reference(alias_to, &nodes[1].location());
+                    if nodes.len() == 2
+                        && let Some(symbol_node) = nodes[1].as_symbol_node()
+                    {
+                        let value_loc = symbol_node.value_loc().unwrap();
+                        let alias_to = Self::location_to_string(&value_loc);
+                        self.index_method_reference(alias_to, &value_loc);
                     }
                 }
             }
@@ -2548,6 +2550,7 @@ mod tests {
             "
             alias ignored m1
             alias_method :ignored, :m2
+            alias_method :ignored, ignored
             "
         });
 
