@@ -20,7 +20,7 @@ impl GraphTest {
         let content_hash = crate::indexing::calculate_content_hash(source.as_bytes());
         let mut indexer = RubyIndexer::new(uri.to_string(), &converter, source, content_hash);
         indexer.index();
-        indexer.into_parts().0.unwrap()
+        indexer.into_parts().0
     }
 
     pub fn index_uri(&mut self, uri: &str, source: &str) {

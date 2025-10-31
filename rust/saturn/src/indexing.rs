@@ -20,6 +20,12 @@ pub mod errors;
 pub mod ruby_indexer;
 pub mod scope;
 
+pub enum IndexResult {
+    Completed(Box<IndexerParts>),
+    Skipped,
+    Errored(Vec<IndexingError>),
+}
+
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
 ///
 /// # Errors
@@ -30,10 +36,10 @@ pub mod scope;
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
-    let index_document = |file_path: &String| -> IndexerParts {
+    let index_document = |file_path: &String| -> IndexResult {
         let (source, errors) = read_document_source(file_path);
         if !errors.is_empty() {
-            return (None, errors);
+            return IndexResult::Errored(errors);
         }
 
         let converter = UTF8SourceLocationConverter::new(&source);
@@ -45,7 +51,7 @@ pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(
             content_hash,
         );
         ruby_indexer.index();
-        ruby_indexer.into_parts()
+        IndexResult::Completed(Box::new(ruby_indexer.into_parts()))
     };
 
     let merge_result = |local_graph| graph.update(local_graph);
@@ -80,10 +86,10 @@ fn uri_from_file_path(path: &str) -> Result<String, IndexingError> {
 
 fn with_parallel_workers<F, G>(file_paths: Vec<String>, worker_fn: F, mut result_fn: G) -> Result<(), MultipleErrors>
 where
-    F: Fn(&String) -> IndexerParts + Send + Clone + 'static,
+    F: Fn(&String) -> IndexResult + Send + Clone + 'static,
     G: FnMut(Graph),
 {
-    let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
+    let (tx, rx): (Sender<IndexResult>, Receiver<IndexResult>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let mut threads = Vec::with_capacity(num_threads);
     let document_queue = Arc::new(Mutex::new(file_paths));
@@ -95,11 +101,13 @@ where
 
         let handle = thread::spawn(move || {
             while let Some(document) = { queue.lock().unwrap().pop() } {
-                let (result, errors) = thread_fn(&document);
-                if result.is_some() || !errors.is_empty() {
-                    thread_tx
-                        .send((result, errors))
-                        .expect("Receiver end should not be closed until all threads are done");
+                match thread_fn(&document) {
+                    IndexResult::Skipped => {}
+                    result => {
+                        thread_tx
+                            .send(result)
+                            .expect("Receiver end should not be closed until all threads are done");
+                    }
                 }
             }
         });
@@ -110,11 +118,20 @@ where
     drop(tx);
 
     let mut all_errors = Vec::new();
-    for (result, errors) in rx {
-        if let Some(local_graph) = result {
-            result_fn(local_graph);
+    for result in rx {
+        match result {
+            IndexResult::Completed(parts) => {
+                let (local_graph, errors) = *parts;
+                result_fn(local_graph);
+                all_errors.extend(errors);
+            }
+            IndexResult::Errored(errors) => {
+                all_errors.extend(errors);
+            }
+            IndexResult::Skipped => {
+                unreachable!("We should not return information about skipped files");
+            }
         }
-        all_errors.extend(errors);
     }
 
     if all_errors.is_empty() {
@@ -257,7 +274,7 @@ mod tests {
         let file_paths = vec![String::from("file:///skipped.rb")];
 
         let mut was_called = false;
-        let worker_fn = |_file_path: &String| -> IndexerParts { (None, vec![]) };
+        let worker_fn = |_file_path: &String| -> IndexResult { IndexResult::Skipped };
         let result_fn = |_graph: Graph| {
             was_called = true;
         };
@@ -268,7 +285,7 @@ mod tests {
 
         assert!(
             !was_called,
-            "result_fn should not be called when worker_fn returns (None, vec![])"
+            "result_fn should not be called when worker_fn returns Skipped"
         );
     }
 }

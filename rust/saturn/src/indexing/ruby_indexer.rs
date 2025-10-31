@@ -18,7 +18,7 @@ use crate::source_location::SourceLocationConverter;
 
 use ruby_prism::{ParseResult, Visit};
 
-pub type IndexerParts = (Option<Graph>, Vec<IndexingError>);
+pub type IndexerParts = (Graph, Vec<IndexingError>);
 static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 static MAIN_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("<main>"));
 
@@ -60,7 +60,7 @@ impl<'a> RubyIndexer<'a> {
 
     #[must_use]
     pub fn into_parts(self) -> IndexerParts {
-        (Some(self.local_graph), self.errors)
+        (self.local_graph, self.errors)
     }
 
     pub fn add_error(&mut self, error: IndexingError) {
