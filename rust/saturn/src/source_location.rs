@@ -6,6 +6,11 @@ pub struct Position {
 
 impl Position {
     #[must_use]
+    pub const fn new(line: u32, column: u32) -> Self {
+        Self { line, column }
+    }
+
+    #[must_use]
     pub const fn line(&self) -> u32 {
         self.line
     }
