@@ -53,10 +53,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         graph
     });
 
-    let (documents, errors) = time_it!(listing, {
-        let (documents, errors) = indexing::collect_documents(vec![args.dir]);
-        Ok::<_, Box<dyn Error>>((documents, errors))
-    })?;
+    let (documents, errors) = time_it!(listing, { indexing::collect_documents(vec![args.dir]) });
 
     if !errors.is_empty() {
         return Err(Box::new(MultipleErrors(errors)));
