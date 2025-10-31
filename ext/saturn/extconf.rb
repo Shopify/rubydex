@@ -19,6 +19,7 @@ if Gem.win_platform?
   ENV["RUSTFLAGS"] = "-C target-feature=+crt-static"
 end
 
+append_cflags("-Werror=unused-but-set-variable")
 append_cflags("-Werror=implicit-function-declaration")
 
 if Gem.win_platform?

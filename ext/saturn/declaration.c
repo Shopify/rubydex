@@ -52,9 +52,6 @@ static VALUE declaration_definitions_yield(VALUE args) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
-
     int64_t id = 0;
     DefinitionKind kind;
     while (sat_definitions_iter_next(iter, &id, &kind)) {
