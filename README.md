@@ -20,7 +20,7 @@ The command `bundle exec rake compile` can be used to build both the Rust and C 
 
 ### Running tests
 
-Simply use the command `bundle exec rake test`, and the project will be built and tests located within `test/` will be run.
+Run `bundle exec rake test` to execute both the Ruby and Rust test suites. To run only the Ruby tests, use `bundle exec rake ruby_test`. The combined lint-and-test flow is available through `bundle exec rake check`.
 
 ### Running memory leak and other sanitization checks
 
@@ -33,11 +33,11 @@ Here's how to run the checks locally:
 
 ```shell
 # Run ruby_memcheck in combination with a Rust sanitization mode (Linux only)
-SANITIZER=leak bundle exec rake test:valgrind
+SANITIZER=leak bundle exec rake ruby_test:valgrind
 
 # Run only ruby_memcheck (Linux only)
-bundle exec rake test:valgrind
+bundle exec rake ruby_test:valgrind
 
 # Run Rust sanitization only
-SANITIZER=leak bundle exec rake test
+SANITIZER=leak bundle exec rake ruby_test
 ```
