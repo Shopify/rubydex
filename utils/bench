@@ -1,22 +1,75 @@
 #!/bin/bash
 
-# A script to benchmark indexing against the huge corpus in release mode. Use this to check for any performance
+# A script to benchmark indexing in release mode. Use this to check for any performance
 # improvements or regressions
+#
+# Usage:
+#   utils/bench              # defaults to huge corpus
+#   utils/bench tiny         # uses tiny corpus (scale 0.1)
+#   utils/bench small        # uses small corpus (scale 1)
+#   utils/bench medium       # uses medium corpus (scale 10)
+#   utils/bench large        # uses large corpus (scale 100)
+#   utils/bench huge         # uses huge corpus (scale 1000)
+#   utils/bench /path/to/dir # uses existing directory
+#
+# What this script does:
+# 1. Generate the corpus if it doesn't exist (for predefined sizes only)
+# 2. Build saturn_cli in release mode
+# 3. Clear any existing database
+# 4. Benchmark the indexer (measuring memory usage and execution time)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-if [ -z "$CORPUS_PATH" ]; then
-    CORPUS_PATH="$(dirname "$PROJECT_ROOT")/huge_corpus"
+
+# Get corpus size from argument or default to huge
+CORPUS_SIZE="${1:-huge}"
+
+# Corpora base directory - outside project to avoid triggering LSP
+CORPUS_BASE="$(dirname "$PROJECT_ROOT")/saturn_corpora"
+
+# Determine corpus path and scale based on input
+case "$CORPUS_SIZE" in
+    tiny)
+        CORPUS_PATH="$CORPUS_BASE/tiny"
+        SCALE=0.1
+        ;;
+    small)
+        CORPUS_PATH="$CORPUS_BASE/small"
+        SCALE=1
+        ;;
+    medium)
+        CORPUS_PATH="$CORPUS_BASE/medium"
+        SCALE=10
+        ;;
+    large)
+        CORPUS_PATH="$CORPUS_BASE/large"
+        SCALE=100
+        ;;
+    huge)
+        CORPUS_PATH="$CORPUS_BASE/huge"
+        SCALE=1000
+        ;;
+    *)
+        # Assume it's a path to an existing directory
+        CORPUS_PATH="$CORPUS_SIZE"
+        if [ ! -d "$CORPUS_PATH" ]; then
+            echo "Error: Directory '$CORPUS_PATH' does not exist"
+            echo "Usage: $0 [tiny|small|medium|large|huge|/path/to/existing/dir]"
+            exit 1
+        fi
+        SCALE=""
+        ;;
+esac
+
+# Only generate corpus for predefined sizes
+if [ -n "$SCALE" ] && [ ! -d "$CORPUS_PATH" ]; then
+    echo "Generating $CORPUS_SIZE corpus at $CORPUS_PATH (scale=$SCALE)..."
+    $SCRIPT_DIR/generate-corpus "$CORPUS_PATH" -s "$SCALE"
 fi
 
-# 1. Generate the huge corpus if it doesn't exist
-# 2. Compile in release mode (cargo build --release)
-# 3. Run the benchmark and time it
-
-if [ ! -d "$CORPUS_PATH" ]; then
-    echo "Generating huge corpus at $CORPUS_PATH..."
-    $SCRIPT_DIR/generate-corpus "$CORPUS_PATH" -s 1000
-fi
+echo "Benchmarking with corpus: $CORPUS_PATH"
+echo "----------------------------------------"
 
 cd "$PROJECT_ROOT/rust" || exit 1
-../utils/mem-use cargo run --release -- "$CORPUS_PATH" --stats --clear-db
+cargo build --release
+$PROJECT_ROOT/utils/mem-use "$PROJECT_ROOT/rust/target/release/saturn_cli" "$CORPUS_PATH" --stats --clear-db
