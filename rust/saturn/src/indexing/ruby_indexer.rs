@@ -14,7 +14,6 @@ use crate::model::graph::Graph;
 use crate::model::ids::{DeclarationId, UriId};
 use crate::model::references::{ConstantReference, MethodReference, UnresolvedReference};
 use crate::offset::Offset;
-use crate::source_location::SourceLocationConverter;
 
 use ruby_prism::{ParseResult, Visit};
 
@@ -30,7 +29,6 @@ pub struct RubyIndexer<'a> {
     uri_id: UriId,
     local_graph: Graph,
     errors: Vec<Errors>,
-    location_converter: &'a dyn SourceLocationConverter,
     comments: Vec<CommentGroup>,
     source: &'a str,
     scope: Scope,
@@ -38,12 +36,7 @@ pub struct RubyIndexer<'a> {
 
 impl<'a> RubyIndexer<'a> {
     #[must_use]
-    pub fn new(
-        uri: String,
-        location_converter: &'a dyn SourceLocationConverter,
-        source: &'a str,
-        content_hash: u16,
-    ) -> Self {
+    pub fn new(uri: String, source: &'a str, content_hash: u16) -> Self {
         let mut local_index = Graph::new();
         let uri_id = local_index.add_uri(uri, content_hash);
 
@@ -51,7 +44,6 @@ impl<'a> RubyIndexer<'a> {
             uri_id,
             local_graph: local_index,
             errors: Vec::new(),
-            location_converter,
             comments: Vec::new(),
             source,
             scope: Scope::new(),
@@ -345,9 +337,6 @@ impl Visit<'_> for RubyIndexer<'_> {
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
-        // Uses `location_converter` to evaluate the performance impact of the conversion
-        self.location_converter.offset_to_position(&offset).unwrap();
-
         let definition = Definition::Class(Box::new(ClassDefinition::new(
             declaration_id,
             self.uri_id,
@@ -384,8 +373,6 @@ impl Visit<'_> for RubyIndexer<'_> {
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
-        // Uses `location_converter` to evaluate the performance impact of the conversion
-        self.location_converter.offset_to_position(&offset).unwrap();
         let definition = Definition::Module(Box::new(ModuleDefinition::new(
             declaration_id,
             self.uri_id,
@@ -434,8 +421,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&name_loc);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        // Uses `location_converter` to evaluate the performance impact of the conversion
-        self.location_converter.offset_to_position(&offset).unwrap();
+
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
             declaration_id,
             self.uri_id,
@@ -470,8 +456,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&location);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        // Uses `location_converter` to evaluate the performance impact of the conversion
-        self.location_converter.offset_to_position(&offset).unwrap();
+
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
             declaration_id,
             self.uri_id,
@@ -513,8 +498,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let declaration_id = DeclarationId::from(&fully_qualified_name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-                    // Uses `location_converter` to evaluate the performance impact of the conversion
-                    self.location_converter.offset_to_position(&offset).unwrap();
 
                     let definition = Definition::Constant(Box::new(ConstantDefinition::new(
                         declaration_id,
@@ -532,8 +515,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let name = Self::location_to_string(&location);
                     let declaration_id = DeclarationId::from(&name);
                     let offset = Offset::from_prism_location(&location);
-                    // Uses `location_converter` to evaluate the performance impact of the conversion
-                    self.location_converter.offset_to_position(&offset).unwrap();
 
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
                     let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
@@ -555,8 +536,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let declaration_id = DeclarationId::from(&fully_qualified_name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-                    // Uses `location_converter` to evaluate the performance impact of the conversion
-                    self.location_converter.offset_to_position(&offset).unwrap();
 
                     let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
                         declaration_id,
@@ -578,8 +557,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                         let declaration_id = DeclarationId::from(&fully_qualified_name);
                         let offset = Offset::from_prism_location(&location);
                         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-                        // Uses `location_converter` to evaluate the performance impact of the conversion
-                        self.location_converter.offset_to_position(&offset).unwrap();
 
                         let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
                             declaration_id,
@@ -615,8 +592,6 @@ impl Visit<'_> for RubyIndexer<'_> {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        // Uses `location_converter` to evaluate the performance impact of the conversion
-        self.location_converter.offset_to_position(&offset).unwrap();
 
         let method = MethodDefinition::new(
             declaration_id,
@@ -648,8 +623,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let writer_declaration_id = DeclarationId::from(&writer_name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                    // Uses `location_converter` to evaluate the performance impact of the conversion
-                    indexer.location_converter.offset_to_position(&offset).unwrap();
+
                     indexer.local_graph.add_member(&nesting_id, declaration_id, &name);
                     indexer.local_graph.add_definition(
                         fully_qualified_name,
@@ -686,8 +660,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let declaration_id = DeclarationId::from(&fully_qualified_name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                    // Uses `location_converter` to evaluate the performance impact of the conversion
-                    indexer.location_converter.offset_to_position(&offset).unwrap();
 
                     indexer.local_graph.add_definition(
                         fully_qualified_name,
@@ -712,8 +684,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let declaration_id = DeclarationId::from(&writer_name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-                    // Uses `location_converter` to evaluate the performance impact of the conversion
-                    indexer.location_converter.offset_to_position(&offset).unwrap();
 
                     indexer.local_graph.add_definition(
                         writer_name,
@@ -881,8 +851,6 @@ impl Visit<'_> for RubyIndexer<'_> {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
         let offset = Offset::from_prism_location(&name_loc);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        // Uses `location_converter` to evaluate the performance impact of the conversion
-        self.location_converter.offset_to_position(&offset).unwrap();
 
         let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
             declaration_id,
@@ -907,8 +875,6 @@ impl Visit<'_> for RubyIndexer<'_> {
             let declaration_id = DeclarationId::from(&fully_qualified_name);
             let offset = Offset::from_prism_location(&name_loc);
             let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-            // Uses `location_converter` to evaluate the performance impact of the conversion
-            self.location_converter.offset_to_position(&offset).unwrap();
 
             let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
                 declaration_id,
