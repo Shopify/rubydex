@@ -69,8 +69,11 @@ pub fn calculate_content_hash(source: &[u8]) -> u16 {
 }
 
 fn uri_from_file_path(path: &str) -> Result<String, Errors> {
-    Ok(Url::from_file_path(path)
-        .map_err(|_e| Errors::InvalidUri(format!("Couldn't build URI from path '{path}'")))?
+    // Resolve the path to an absolute path
+    let path =
+        fs::canonicalize(path).map_err(|_e| Errors::FileReadError(format!("Failed to canonicalize path '{path}'")))?;
+    Ok(Url::from_file_path(&path)
+        .map_err(|_e| Errors::InvalidUri(format!("Couldn't build URI from path '{:?}'", &path.display())))?
         .to_string())
 }
 
@@ -277,5 +280,28 @@ mod tests {
             !was_called,
             "result_fn should not be called when worker_fn returns Skipped"
         );
+    }
+
+    #[test]
+    fn index_relative_paths() {
+        let context = Context::new();
+        context.touch("foo/bar.rb");
+
+        let working_directory = std::env::current_dir().unwrap();
+
+        let dotdots = "../".repeat(working_directory.components().count());
+
+        let relative_path = dotdots
+            + context
+                .absolute_path_to("foo/bar.rb")
+                .to_string_lossy()
+                .into_owned()
+                .as_str();
+
+        let mut graph = Graph::new();
+        let errors = index_in_parallel(&mut graph, vec![relative_path]);
+
+        assert!(errors.is_ok());
+        assert_eq!(graph.documents().len(), 1);
     }
 }

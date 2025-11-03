@@ -18,7 +18,7 @@ module Test
 
       #: (String absolute_path) -> void
       def initialize(absolute_path)
-        @absolute_path = ::File.expand_path(absolute_path) #: String
+        @absolute_path = ::File.realpath(absolute_path) #: String
       end
 
       #: (String relative_path) -> String
