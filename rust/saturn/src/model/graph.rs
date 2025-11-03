@@ -1,5 +1,3 @@
-use crate::errors::Errors;
-use crate::model::db::Db;
 use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
@@ -30,7 +28,6 @@ pub struct Graph {
     names: IdentityHashMap<NameId, String>,
     // Map of references that still need to be resolved
     unresolved_references: IdentityHashMap<ReferenceId, UnresolvedReference>,
-    db: Db,
 }
 
 impl Graph {
@@ -48,7 +45,6 @@ impl Graph {
             documents: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
             unresolved_references: IdentityHashMap::default(),
-            db: Db::new(),
         }
     }
 
@@ -80,15 +76,6 @@ impl Graph {
     #[must_use]
     pub fn unresolved_references(&self) -> &IdentityHashMap<ReferenceId, UnresolvedReference> {
         &self.unresolved_references
-    }
-
-    /// # Errors
-    ///
-    /// May error if we fail to initialize the database connection at the specified path
-    pub fn set_configuration(&mut self, db_path: String) -> Result<(), Errors> {
-        self.db
-            .initialize_connection(Some(db_path))
-            .map_err(|err| Errors::DatabaseError(err.to_string()))
     }
 
     #[must_use]
@@ -150,21 +137,6 @@ impl Graph {
         }
     }
 
-    /// Handles when a document (identified by `uri`) is deleted. This removes the URI from the graph along with all
-    /// relationships and definitions that had been discovered in it
-    ///
-    /// # Errors
-    ///
-    /// Any database errors will prevent the data from being deleted
-    pub fn delete_uri(&mut self, uri: &str) -> Result<(), Errors> {
-        let removed_ids = self.unload_uri(uri);
-        let uri_id = UriId::from(uri);
-        self.db
-            .delete_data_for_uri(uri_id, &removed_ids)
-            .map_err(|err| Errors::DatabaseError(err.to_string()))?;
-        Ok(())
-    }
-
     // Registers a definition into the `Graph`, automatically creating all relationships
     pub fn add_definition(&mut self, name: String, definition: Definition, owner_id: &DeclarationId) {
         let uri_id = *definition.uri_id();
@@ -222,54 +194,11 @@ impl Graph {
         }
     }
 
-    /// # Errors
-    ///
-    /// Any database errors will prevent the data from being loaded
-    pub fn load_uri(&mut self, uri: &str) -> Result<(), Errors> {
+    //// Handles the deletion of a document identified by `uri`
+    pub fn delete_uri(&mut self, uri: &str) {
         let uri_id = UriId::from(uri);
-        let loaded_data = self
-            .db
-            .load_uri(uri_id)
-            .map_err(|err| Errors::DatabaseError(err.to_string()))?;
-        self.documents.entry(uri_id).or_insert_with(|| loaded_data.document);
-
-        for load_result in loaded_data.definitions {
-            match self.declarations.entry(load_result.declaration_id) {
-                Entry::Vacant(entry) => {
-                    entry.insert(load_result.declaration);
-                }
-                Entry::Occupied(mut entry) => {
-                    entry.get_mut().extend(load_result.declaration);
-                }
-            }
-
-            self.definitions
-                .insert(load_result.definition_id, load_result.definition);
-        }
-
-        Ok(())
-    }
-
-    /// Removes all data related to the given URI from memory. This method should only be used for when a document is
-    /// closed. If the file is deleted, we also need to update the database
-    pub fn unload_uri(&mut self, uri: &str) -> RemovedIds {
-        let uri_id = UriId::from(uri);
-        let removed = self.remove_definitions_for_uri(uri_id);
+        self.remove_definitions_for_uri(uri_id);
         self.documents.remove(&uri_id);
-        removed
-    }
-
-    /// Get a list of uris and their content hashes from db.
-    /// This is used for synchronization where we will compare the content hashes
-    /// with the current documents to determine if a document needs updating.
-    ///
-    /// # Errors
-    ///
-    /// Any database errors will prevent the data from being loaded
-    pub fn get_all_cached_content_hashes(&self) -> Result<IdentityHashMap<UriId, u16>, Errors> {
-        self.db
-            .get_all_content_hashes()
-            .map_err(|err| Errors::DatabaseError(err.to_string()))
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
@@ -320,17 +249,12 @@ impl Graph {
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
     // document (identified by `uri_id`) changes or when a document is closed and we need to clean up the memory
-    fn remove_definitions_for_uri(&mut self, uri_id: UriId) -> RemovedIds {
-        let mut removed = RemovedIds {
-            definition_ids: Vec::new(),
-            declaration_ids: Vec::new(),
-        };
+    fn remove_definitions_for_uri(&mut self, uri_id: UriId) {
         // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
         let mut members_to_delete: Vec<(DeclarationId, NameId)> = Vec::new();
 
         if let Some(document) = self.documents.remove(&uri_id) {
             for def_id in document.definitions() {
-                removed.definition_ids.push(*def_id);
                 if let Some(definition) = self.definitions.remove(def_id)
                     && let Some(declaration) = self.declarations.get_mut(definition.declaration_id())
                     && declaration.remove_definition(def_id)
@@ -339,7 +263,6 @@ impl Graph {
                     let unqualified_name_id = NameId::from(&declaration.unqualified_name());
                     members_to_delete.push((*declaration.owner_id(), unqualified_name_id));
                     self.declarations.remove(definition.declaration_id());
-                    removed.declaration_ids.push(*definition.declaration_id());
                 }
             }
         }
@@ -351,8 +274,6 @@ impl Graph {
                 owner.remove_member(&member_name_id);
             }
         }
-
-        removed
     }
 
     /// Asserts that the index is in a valid state.
@@ -444,34 +365,6 @@ impl Graph {
         });
 
         checker
-    }
-
-    /// # Errors
-    /// This method will return an error if batch inserting to the DB fails.
-    pub fn save_to_database(&self) -> Result<(), Errors> {
-        self.db
-            .save_full_graph(self)
-            .map_err(|err| Errors::DatabaseError(err.to_string()))
-    }
-
-    /// Clears all data from the database
-    ///
-    /// # Errors
-    ///
-    /// This method will return an error if clearing the database fails.
-    pub fn clear_database(&self) -> Result<(), Errors> {
-        self.db
-            .clear_database()
-            .map_err(|err| Errors::DatabaseError(err.to_string()))
-    }
-
-    // Clear graph data from memory
-    pub fn clear_graph_data(&mut self) {
-        self.declarations = IdentityHashMap::default();
-        self.definitions = IdentityHashMap::default();
-        self.documents = IdentityHashMap::default();
-        self.names = IdentityHashMap::default();
-        self.unresolved_references = IdentityHashMap::default();
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -869,72 +762,6 @@ mod tests {
         assert_eq!([18, 33], offsets[1]);
 
         context.graph.assert_integrity();
-    }
-
-    #[test]
-    fn saving_graph_to_database() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "module Foo; end");
-        context
-            .graph
-            .set_configuration(String::from("file:save_graph_test?mode=memory&cache=shared"))
-            .unwrap();
-        context.graph.save_to_database().unwrap();
-        context.graph.clear_graph_data();
-
-        assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
-        assert!(context.graph.documents.is_empty());
-    }
-
-    #[test]
-    fn loading_a_document() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "module Foo; end");
-        context
-            .graph
-            .set_configuration(String::from("file:load_uri_test?mode=memory&cache=shared"))
-            .unwrap();
-        context.graph.save_to_database().unwrap();
-        context.graph.clear_graph_data();
-
-        assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
-        assert!(context.graph.documents.is_empty());
-
-        assert!(context.graph.get("Foo").is_none());
-
-        context.graph.load_uri("file:///foo.rb").unwrap();
-        assert_eq!(context.graph.definitions.len(), 1);
-        assert_eq!(context.graph.declarations.len(), 1);
-        assert_eq!(context.graph.documents.len(), 1);
-    }
-
-    #[test]
-    fn unloading_a_document() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "module Foo; end");
-        context
-            .graph
-            .set_configuration(String::from("file:unload_uri_test?mode=memory&cache=shared"))
-            .unwrap();
-        context.graph.save_to_database().unwrap();
-        context.graph.clear_graph_data();
-        assert!(context.graph.get("Foo").is_none());
-
-        context.graph.load_uri("file:///foo.rb").unwrap();
-        assert_eq!(context.graph.definitions.len(), 1);
-        assert_eq!(context.graph.declarations.len(), 1);
-        assert_eq!(context.graph.documents.len(), 1);
-
-        let definitions = context.graph.get("Foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-
-        context.graph.unload_uri("file:///foo.rb");
-        assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
-        assert!(context.graph.documents.is_empty());
-        assert!(context.graph.get("Foo").is_none());
     }
 
     #[test]

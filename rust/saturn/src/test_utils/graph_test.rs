@@ -37,7 +37,7 @@ impl GraphTest {
 
     pub fn delete_uri(&mut self, uri: &str) {
         self.sources.remove(uri);
-        self.graph.unload_uri(uri);
+        self.graph.delete_uri(uri);
     }
 
     /// Gets the source code for a URI

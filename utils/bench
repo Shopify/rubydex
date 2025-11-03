@@ -72,4 +72,4 @@ echo "----------------------------------------"
 
 cd "$PROJECT_ROOT/rust" || exit 1
 cargo build --release
-$PROJECT_ROOT/utils/mem-use "$PROJECT_ROOT/rust/target/release/saturn_cli" "$CORPUS_PATH" --stats --clear-db
+$PROJECT_ROOT/utils/mem-use "$PROJECT_ROOT/rust/target/release/saturn_cli" "$CORPUS_PATH" --stats

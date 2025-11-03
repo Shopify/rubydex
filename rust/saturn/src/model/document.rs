@@ -1,9 +1,8 @@
-use crate::model::{ids::DefinitionId, serializable::Serializable};
-use serde::{Deserialize, Serialize};
+use crate::model::ids::DefinitionId;
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
 // definitions discovered in it
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct Document {
     uri: String,
     definition_ids: Vec<DefinitionId>,
@@ -44,8 +43,6 @@ impl Document {
         self.definition_ids.push(definition_id);
     }
 }
-
-impl Serializable for Document {}
 
 #[cfg(test)]
 mod tests {

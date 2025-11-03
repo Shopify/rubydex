@@ -1,7 +1,5 @@
 //! This module contains stable ID representations that compose the `Graph` global representation
 
-use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, Value, ValueRef};
-use serde::{Deserialize, Serialize};
 use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
@@ -14,7 +12,7 @@ use xxhash_rust::xxh3::xxh3_64;
 /// We use i64 instead of u64 because `SQLite` doesn't support unsigned integers.
 /// IDs are generated from `xxh3_64` hashes (u64) then cast to i64, preserving all bits.
 /// Negative values are expected and normal - not a sign of memory corruption.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Id<T> {
     value: i64,
     _marker: PhantomData<T>,
@@ -64,18 +62,6 @@ impl<T> From<&String> for Id<T> {
     }
 }
 
-impl<T> ToSql for Id<T> {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::Owned(Value::Integer(self.value)))
-    }
-}
-
-impl<T> FromSql for Id<T> {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        Ok(Self::new(value.as_i64()?))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,28 +86,5 @@ mod tests {
     fn deref_unwraps_value() {
         let id = TestId::new(123);
         assert_eq!(*id, 123);
-    }
-
-    #[test]
-    fn test_sql_conversion_roundtrip() {
-        use rusqlite::types::{FromSql, ToSql, Value, ValueRef};
-
-        // Test small values
-        let id1 = TestId::new(12345);
-        let sql_val = id1.to_sql().unwrap();
-        if let rusqlite::types::ToSqlOutput::Owned(Value::Integer(i64_val)) = sql_val {
-            let value_ref = ValueRef::Integer(i64_val);
-            let recovered = TestId::column_result(value_ref).unwrap();
-            assert_eq!(id1, recovered);
-        }
-
-        // Test values generated from hash masking
-        let id2 = TestId::from("file:///test.rb"); // Use actual hash generation
-        let sql_val = id2.to_sql().unwrap();
-        if let rusqlite::types::ToSqlOutput::Owned(Value::Integer(i64_val)) = sql_val {
-            let value_ref = ValueRef::Integer(i64_val);
-            let recovered = TestId::column_result(value_ref).unwrap();
-            assert_eq!(id2, recovered);
-        }
     }
 }

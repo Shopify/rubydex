@@ -1,7 +1,6 @@
 use crate::offset::Offset;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct Comment {
     offset: Offset,
     string: String,

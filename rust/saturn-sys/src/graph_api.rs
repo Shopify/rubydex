@@ -73,26 +73,6 @@ pub unsafe extern "C" fn sat_index_all(
     })
 }
 
-/// # Safety
-///
-/// This function assumes that both the graph and the db path pointers are valid
-///
-/// # Panics
-///
-/// This function will panic in case of a dead lock on the graph mutex
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_set_configuration(pointer: GraphPointer, db_path: *const c_char) -> bool {
-    with_graph(pointer, |graph| {
-        match unsafe { utils::convert_char_ptr_to_string(db_path) } {
-            Ok(path) => graph.set_configuration(path).is_ok(),
-            Err(e) => {
-                eprintln!("Failed to convert db_path to String: {e}");
-                false
-            }
-        }
-    })
-}
-
 /// An iterator over declaration IDs
 ///
 /// We snapshot the IDs at iterator creation so if the graph is modified, the iterator will not see the changes

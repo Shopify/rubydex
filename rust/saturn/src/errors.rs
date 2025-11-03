@@ -22,7 +22,6 @@ impl From<Errors> for MultipleErrors {
 pub enum Errors {
     FileReadError(String),
     InvalidUri(String),
-    DatabaseError(String),
 }
 
 impl std::fmt::Display for Errors {
@@ -30,7 +29,6 @@ impl std::fmt::Display for Errors {
         match self {
             Errors::FileReadError(msg) => write!(f, "File read error: {msg}"),
             Errors::InvalidUri(msg) => write!(f, "Invalid URI: {msg}"),
-            Errors::DatabaseError(msg) => write!(f, "Database error: {msg}"),
         }
     }
 }

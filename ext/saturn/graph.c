@@ -53,19 +53,6 @@ static VALUE sr_graph_index_all(VALUE self, VALUE file_paths) {
     return Qnil;
 }
 
-static VALUE sr_graph_set_configuration(VALUE self, VALUE db_path) {
-    Check_Type(db_path, T_STRING);
-
-    void *graph;
-    TypedData_Get_Struct(self, void *, &graph_type, graph);
-
-    if (!sat_graph_set_configuration(graph, StringValueCStr(db_path))) {
-        rb_raise(rb_eRuntimeError, "Failed to set the database configuration");
-    }
-
-    return Qnil;
-}
-
 // Body function for rb_ensure in Graph#declarations
 static VALUE graph_declarations_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
@@ -197,7 +184,6 @@ void initialize_graph(VALUE mSaturn) {
 
     rb_define_alloc_func(cGraph, sr_graph_alloc);
     rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
-    rb_define_method(cGraph, "set_configuration", sr_graph_set_configuration, 1);
     rb_define_method(cGraph, "declarations", sr_graph_declarations, 0);
     rb_define_method(cGraph, "documents", sr_graph_documents, 0);
     rb_define_method(cGraph, "[]", sr_graph_aref, 1);
