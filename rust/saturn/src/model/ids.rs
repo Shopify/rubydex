@@ -29,3 +29,9 @@ pub struct NameMarker;
 ///
 /// In here, the `NameId` for `Bar` is just the hashed `Bar` string, not `Foo::Bar`
 pub type NameId = Id<NameMarker>;
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ReferenceMarker;
+/// `ReferenceId` represents the ID of a reference occurrence in a file.
+/// It is built from the reference kind, `uri_id` and the reference `offset`.
+pub type ReferenceId = Id<ReferenceMarker>;
