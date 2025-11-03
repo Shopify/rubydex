@@ -1,5 +1,4 @@
 pub mod comment;
-pub mod db;
 pub mod declaration;
 pub mod definitions;
 pub mod document;
@@ -9,4 +8,3 @@ pub mod identity_maps;
 pub mod ids;
 pub mod integrity;
 pub mod references;
-pub mod serializable;

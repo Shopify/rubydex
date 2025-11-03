@@ -23,18 +23,15 @@
 //! 1. The declaration for the name `Foo`
 //! 2. The declaration for the name `Foo::Bar`
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
     model::{
         comment::Comment,
         ids::{DeclarationId, UriId},
-        serializable::Serializable,
     },
     offset::Offset,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
     Module(Box<ModuleDefinition>),
@@ -108,8 +105,6 @@ impl Definition {
     }
 }
 
-impl Serializable for Definition {}
-
 /// A class definition
 ///
 /// # Example
@@ -117,7 +112,7 @@ impl Serializable for Definition {}
 /// class Foo
 /// end
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ClassDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -144,7 +139,7 @@ impl ClassDefinition {
 /// module Foo
 /// end
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ModuleDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -170,7 +165,7 @@ impl ModuleDefinition {
 /// ```ruby
 /// FOO = 1
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ConstantDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -197,7 +192,7 @@ impl ConstantDefinition {
 /// def foo(bar, baz)
 /// end
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct MethodDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -238,7 +233,7 @@ impl MethodDefinition {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum Parameter {
     RequiredPositional(ParameterStruct),
     OptionalPositional(ParameterStruct),
@@ -251,7 +246,7 @@ pub enum Parameter {
     Block(ParameterStruct),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ParameterStruct {
     offset: Offset,
     name: String,
@@ -280,7 +275,7 @@ impl ParameterStruct {
 /// ```ruby
 /// attr_accessor :foo
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct AttrAccessorDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -306,7 +301,7 @@ impl AttrAccessorDefinition {
 /// ```ruby
 /// attr_reader :foo
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct AttrReaderDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -332,7 +327,7 @@ impl AttrReaderDefinition {
 /// ```ruby
 /// attr_writer :foo
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct AttrWriterDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -358,7 +353,7 @@ impl AttrWriterDefinition {
 /// ```ruby
 /// $foo = 1
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct GlobalVariableDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -384,7 +379,7 @@ impl GlobalVariableDefinition {
 /// ```ruby
 /// @foo = 1
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct InstanceVariableDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,
@@ -410,7 +405,7 @@ impl InstanceVariableDefinition {
 /// ```ruby
 /// @@foo = 1
 /// ```
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ClassVariableDefinition {
     declaration_id: DeclarationId,
     uri_id: UriId,

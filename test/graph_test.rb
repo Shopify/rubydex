@@ -42,23 +42,6 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_setting_the_graph_configuration
-    graph = Saturn::Graph.new
-
-    assert_raises(TypeError) do
-      graph.set_configuration(123)
-    end
-
-    assert_raises(RuntimeError) do
-      graph.set_configuration(".non-existing-folder/graph.db")
-    end
-
-    graph.set_configuration("graph.db")
-    pass
-  ensure
-    Dir.glob("graph.db*").each { |f| File.delete(f) }
-  end
-
   def test_graph_get_declaration
     with_context do |context|
       context.write!("file1.rb", "class A; end")

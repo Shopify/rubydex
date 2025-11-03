@@ -3,10 +3,9 @@ use crate::{
     model::ids::{NameId, ReferenceId, UriId},
     offset::Offset,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ConstantReference {
     /// The unqualified name of the constant
     name_id: NameId,
@@ -19,7 +18,7 @@ pub struct ConstantReference {
     offset: Offset,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct MethodReference {
     /// The unqualified name of the method
     name_id: NameId,
@@ -29,7 +28,7 @@ pub struct MethodReference {
     offset: Offset,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum UnresolvedReference {
     /// An unresolved constant reference is a usage of a constant in a context where we can't immediately determine what it
     /// refers to. For example:
@@ -59,7 +58,7 @@ pub enum UnresolvedReference {
     Method(Box<MethodReference>),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum ResolvedReference {
     Constant(Box<ConstantReference>),
     Method(Box<MethodReference>),

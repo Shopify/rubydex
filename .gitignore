@@ -11,8 +11,6 @@
 *.o
 *.a
 *.dSYM
-*.db
-*.db-*
 /ext/saturn/Makefile
 mkmf.log
 target/

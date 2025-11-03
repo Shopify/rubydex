@@ -1,4 +1,4 @@
-use std::{error::Error, fs};
+use std::error::Error;
 
 use clap::Parser;
 
@@ -29,12 +29,6 @@ struct Args {
     #[arg(long = "visualize")]
     visualize: bool,
 
-    #[arg(long = "use-db", help = "Store the graph in a database", default_value = "false")]
-    use_db: bool,
-
-    #[arg(long = "clear-db", help = "Clear the database before saving the graph")]
-    clear_db: bool,
-
     #[arg(long = "stats", help = "Show detailed performance statistics")]
     stats: bool,
 }
@@ -46,21 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Timer::set_global_timer(Timer::new());
     }
 
-    let db_path = format!("{}/graph.db", &args.dir);
-    if args.clear_db {
-        let _ = fs::remove_file(&db_path);
-    }
-
-    let mut graph = time_it!(setup, {
-        let mut graph = Graph::new();
-
-        if args.use_db {
-            graph.set_configuration(db_path)?;
-        }
-
-        graph
-    });
-
+    let mut graph = Graph::new();
     let (file_paths, errors) = time_it!(listing, { indexing::collect_file_paths(vec![args.dir]) });
 
     if !errors.is_empty() {
@@ -84,10 +64,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 std::process::exit(1);
             }
         });
-    }
-
-    if args.use_db {
-        time_it!(database, { graph.save_to_database() })?;
     }
 
     if args.stats {

@@ -1,5 +1,4 @@
 use crate::model::ids::DeclarationId;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// The nesting structure is a linked list that represents the chain of lexical scopes we found. This is used to resolve
@@ -25,7 +24,7 @@ use std::sync::Arc;
 /// connected to `Foo` for purposes of constant resolution. The code in the example does not crash and properly finds
 /// `Foo::CONST`. Therefore, to properly resolve constants, we need to remember the exact chain of lexical scopes we
 /// entered, independentally if the fully qualified name was reset by a top level reference.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct Nesting {
     /// The parent scope if any
     parent: Option<Arc<Nesting>>,
