@@ -11,7 +11,7 @@ use crate::model::definitions::{
     ModuleDefinition, Parameter, ParameterStruct,
 };
 use crate::model::graph::Graph;
-use crate::model::ids::{DeclarationId, UriId};
+use crate::model::ids::{DeclarationId, ReferenceId, UriId};
 use crate::model::references::{ConstantReference, MethodRef, UnresolvedConstantRef};
 use crate::offset::Offset;
 
@@ -259,9 +259,30 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
-    fn index_constant_reference(&mut self, location: &ruby_prism::Location) {
-        let offset = Offset::from_prism_location(location);
-        let name = Self::location_to_string(location);
+    fn index_constant_reference(&mut self, node: &ruby_prism::Node) -> Option<ReferenceId> {
+        let location = match node {
+            ruby_prism::Node::ConstantPathNode { .. } => {
+                let constant = node.as_constant_path_node().unwrap();
+                if let Some(parent) = constant.parent() {
+                    self.index_constant_reference(&parent);
+                }
+
+                node.location()
+            }
+            ruby_prism::Node::ConstantReadNode { .. } => node.location(),
+            ruby_prism::Node::ConstantAndWriteNode { .. } => node.as_constant_and_write_node().unwrap().name_loc(),
+            ruby_prism::Node::ConstantOperatorWriteNode { .. } => {
+                node.as_constant_operator_write_node().unwrap().name_loc()
+            }
+            ruby_prism::Node::ConstantOrWriteNode { .. } => node.as_constant_or_write_node().unwrap().name_loc(),
+            ruby_prism::Node::ConstantTargetNode { .. } => node.as_constant_target_node().unwrap().location(),
+            _ => {
+                return None;
+            }
+        };
+
+        let offset = Offset::from_prism_location(&location);
+        let name = Self::location_to_string(&location);
 
         let (name, scope) = if let Some(trimmed) = name.strip_prefix("::") {
             (trimmed.to_string(), None)
@@ -276,7 +297,7 @@ impl<'a> RubyIndexer<'a> {
             self.uri_id,
             offset,
         )));
-        self.local_graph.add_constant_reference(reference);
+        Some(self.local_graph.add_constant_reference(reference))
     }
 
     fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location) {
@@ -337,11 +358,14 @@ impl Visit<'_> for RubyIndexer<'_> {
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
+        let superclass = node.superclass().and_then(|n| self.index_constant_reference(&n));
+
         let definition = Definition::Class(Box::new(ClassDefinition::new(
             declaration_id,
             self.uri_id,
             offset,
             comments,
+            superclass,
         )));
 
         self.local_graph
@@ -353,10 +377,6 @@ impl Visit<'_> for RubyIndexer<'_> {
             if let Some(parent) = constant_path.parent() {
                 self.visit(&parent);
             }
-        }
-
-        if let Some(superclass) = node.superclass() {
-            self.visit(&superclass);
         }
 
         if let Some(body) = node.body() {
@@ -398,17 +418,17 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_and_write_node(&mut self, node: &ruby_prism::ConstantAndWriteNode) {
-        self.index_constant_reference(&node.name_loc());
+        self.index_constant_reference(&node.as_node());
         self.visit(&node.value());
     }
 
     fn visit_constant_operator_write_node(&mut self, node: &ruby_prism::ConstantOperatorWriteNode) {
-        self.index_constant_reference(&node.name_loc());
+        self.index_constant_reference(&node.as_node());
         self.visit(&node.value());
     }
 
     fn visit_constant_or_write_node(&mut self, node: &ruby_prism::ConstantOrWriteNode) {
-        self.index_constant_reference(&node.name_loc());
+        self.index_constant_reference(&node.as_node());
         self.visit(&node.value());
     }
 
@@ -475,7 +495,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_read_node(&mut self, node: &ruby_prism::ConstantReadNode<'_>) {
-        self.index_constant_reference(&node.location());
+        self.index_constant_reference(&node.as_node());
     }
 
     fn visit_constant_path_node(&mut self, node: &ruby_prism::ConstantPathNode<'_>) {
@@ -483,7 +503,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&parent);
         }
 
-        self.index_constant_reference(&node.location());
+        self.index_constant_reference(&node.as_node());
     }
 
     fn visit_multi_write_node(&mut self, node: &ruby_prism::MultiWriteNode) {
@@ -1032,16 +1052,31 @@ mod tests {
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 0, 50);
         assert_owner!(context.graph, "Foo", "Object");
+        if let Definition::Class(class_def) = &definitions[0] {
+            assert!(class_def.superclass_ref().is_none());
+        } else {
+            panic!("Expected Foo to be a class definition");
+        }
 
         let definitions = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 12, 46);
         assert_owner!(context.graph, "Foo::Bar", "Foo");
+        if let Definition::Class(class_def) = &definitions[0] {
+            assert!(class_def.superclass_ref().is_none());
+        } else {
+            panic!("Expected Foo to be a class definition");
+        }
 
         let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_definition_offset!(definitions[0], 26, 40);
         assert_owner!(context.graph, "Foo::Bar::Baz", "Foo::Bar");
+        if let Definition::Class(class_def) = &definitions[0] {
+            assert!(class_def.superclass_ref().is_none());
+        } else {
+            panic!("Expected Foo to be a class definition");
+        }
 
         let not_found = context.graph.get("Foo::Bar::Baz::Qux");
         assert!(not_found.is_none());
@@ -2284,7 +2319,7 @@ mod tests {
         assert_eq!(
             collect_constant_reference_names(&context.graph),
             vec![
-                "C1", "C2", "C3", "C4", "C4::C5", "C6", "C6::C7", "C8", "C9", "C10", "C10::C11",
+                "C1", "C2", "C3", "C4", "C4::C5", "C6", "C6::C7", "C8", "C9", "C10", "C10::C11"
             ]
         );
     }
@@ -2538,5 +2573,74 @@ mod tests {
         });
 
         assert_eq!(collect_method_reference_names(&context.graph), vec!["m1", "m2"]);
+    }
+
+    #[test]
+    fn superclasses_are_indexed_as_constant_ref_ids() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo < Bar; end
+            "
+        });
+
+        let defs = context.graph.get("Foo").unwrap();
+        assert_eq!(defs.len(), 1);
+
+        if let Definition::Class(foo) = defs[0] {
+            let superclass_id = foo.superclass_ref().unwrap();
+            let reference = context.graph.constant_references().get(&superclass_id).unwrap();
+            assert_eq!(NameId::from("Bar"), *reference.name_id());
+        } else {
+            panic!("Expected Foo to be a class definition");
+        }
+    }
+
+    #[test]
+    fn constant_path_superclasses() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo < Bar::Baz; end
+            "
+        });
+
+        let defs = context.graph.get("Foo").unwrap();
+        assert_eq!(defs.len(), 1);
+
+        if let Definition::Class(foo) = defs[0] {
+            let superclass_id = foo.superclass_ref().unwrap();
+            let reference = context.graph.constant_references().get(&superclass_id).unwrap();
+            assert_eq!(NameId::from("Bar::Baz"), *reference.name_id());
+        } else {
+            panic!("Expected Foo to be a class definition");
+        }
+    }
+
+    #[test]
+    fn ignored_super_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo < method_call; end
+            class Bar < 123; end
+            class MyMigration < ActiveRecord::Migration[8.0]; end
+            "
+        });
+
+        let defs = context.graph.definitions();
+        assert_eq!(defs.len(), 3);
+
+        for def in defs.values() {
+            if let Definition::Class(foo) = def {
+                assert!(
+                    foo.superclass_ref().is_none(),
+                    "Expected no superclass for {}",
+                    context.graph.declarations().get(def.declaration_id()).unwrap().name()
+                );
+            } else {
+                panic!("Expected all definitions to be classes");
+            }
+        }
     }
 }
