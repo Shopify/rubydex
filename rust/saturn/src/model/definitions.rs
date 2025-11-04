@@ -23,6 +23,8 @@
 //! 1. The declaration for the name `Foo`
 //! 2. The declaration for the name `Foo::Bar`
 
+use std::ops::Deref;
+
 use crate::{
     model::{
         comment::Comment,
@@ -105,6 +107,25 @@ impl Definition {
     }
 }
 
+/// Represents either an included or a prepended module. Note that `extend` is modeled as an include on the singleton
+/// class
+#[derive(Debug)]
+pub enum Mixin {
+    Include(ReferenceId),
+    Prepend(ReferenceId),
+}
+
+// Deref implementation to conveniently extract the reference ID with a dereference
+impl Deref for Mixin {
+    type Target = ReferenceId;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Mixin::Include(id) | Mixin::Prepend(id) => id,
+        }
+    }
+}
+
 /// A class definition
 ///
 /// # Example
@@ -119,6 +140,7 @@ pub struct ClassDefinition {
     offset: Offset,
     comments: Vec<Comment>,
     superclass_ref: Option<ReferenceId>,
+    mixins: Vec<Mixin>,
 }
 
 impl ClassDefinition {
@@ -136,7 +158,17 @@ impl ClassDefinition {
             offset,
             comments,
             superclass_ref,
+            mixins: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
+    }
+
+    pub fn add_mixin(&mut self, mixin: Mixin) {
+        self.mixins.push(mixin);
     }
 
     #[must_use]
@@ -158,6 +190,7 @@ pub struct ModuleDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
+    mixins: Vec<Mixin>,
 }
 
 impl ModuleDefinition {
@@ -168,7 +201,17 @@ impl ModuleDefinition {
             uri_id,
             offset,
             comments,
+            mixins: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
+    }
+
+    pub fn add_mixin(&mut self, mixin: Mixin) {
+        self.mixins.push(mixin);
     }
 }
 

@@ -101,6 +101,11 @@ impl Graph {
         )
     }
 
+    #[must_use]
+    pub(crate) fn get_definition_mut(&mut self, definition_id: DefinitionId) -> Option<&mut Definition> {
+        self.definitions.get_mut(&definition_id)
+    }
+
     // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
     // then all definitions discovered in it get associated to the ID
     pub fn add_uri(&mut self, uri: String) -> UriId {
@@ -145,7 +150,7 @@ impl Graph {
     }
 
     // Registers a definition into the `Graph`, automatically creating all relationships
-    pub fn add_definition(&mut self, name: String, definition: Definition, owner_id: &DeclarationId) {
+    pub fn add_definition(&mut self, name: String, definition: Definition, owner_id: &DeclarationId) -> DefinitionId {
         let uri_id = *definition.uri_id();
         let definition_id = DefinitionId::from(&format!("{uri_id}{}{}", definition.start(), &name));
         let declaration_id = *definition.declaration_id();
@@ -158,6 +163,8 @@ impl Graph {
         self.documents
             .entry(uri_id)
             .and_modify(|doc| doc.add_definition(definition_id));
+
+        definition_id
     }
 
     // Register an unresolved constant reference
