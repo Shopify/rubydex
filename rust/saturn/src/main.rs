@@ -67,9 +67,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if args.stats {
-        time_it!(resolving, {
-            graph.print_resolution_statistics();
-        });
         time_it!(querying, {
             graph.print_query_statistics();
         });

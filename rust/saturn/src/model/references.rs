@@ -1,12 +1,13 @@
 use crate::{
     indexing::scope::Nesting,
-    model::ids::{NameId, ReferenceId, UriId},
+    model::ids::{DeclarationId, NameId, ReferenceId, UriId},
     offset::Offset,
 };
 use std::sync::Arc;
 
+/// An unresolved reference to a constant
 #[derive(Debug)]
-pub struct ConstantReference {
+pub struct UnresolvedConstantRef {
     /// The unqualified name of the constant
     name_id: NameId,
     /// The nesting where we found the constant reference. This is a chain of nesting objects representing the lexical
@@ -18,83 +19,7 @@ pub struct ConstantReference {
     offset: Offset,
 }
 
-#[derive(Debug)]
-pub struct MethodReference {
-    /// The unqualified name of the method
-    name_id: NameId,
-    /// The document where we found the reference
-    uri_id: UriId,
-    /// The offsets inside of the document where we found the reference
-    offset: Offset,
-}
-
-#[derive(Debug)]
-pub enum UnresolvedReference {
-    /// An unresolved constant reference is a usage of a constant in a context where we can't immediately determine what it
-    /// refers to. For example:
-    ///
-    /// ```ruby
-    /// module Foo
-    ///   BAR
-    /// end
-    /// ```
-    ///
-    /// Here, we don't immediately know if `BAR` refers to `Foo::BAR` or top level `BAR`. Until we resolve it, it is
-    /// considered an unresolved constant. For this example, `name_id` would be `NameId::from("BAR")` and `nesting` would be
-    /// `[NameId::from("Foo")]`.
-    Constant(Box<ConstantReference>),
-
-    /// An unresolved method reference is a usage of a method in a context where we can't immediately determine what it
-    /// refers to. For example:
-    ///
-    /// ```ruby
-    /// module Foo
-    ///   bar
-    /// end
-    /// ```
-    ///
-    /// Here, we don't immediately know if which `bar` method the call refers to. Until we resolve it, it is
-    /// considered an unresolved method. For this example, `name_id` would be `NameId::from("bar")`.
-    Method(Box<MethodReference>),
-}
-
-#[derive(Debug)]
-pub enum ResolvedReference {
-    Constant(Box<ConstantReference>),
-    Method(Box<MethodReference>),
-}
-
-impl UnresolvedReference {
-    #[must_use]
-    pub fn id(&self) -> ReferenceId {
-        match self {
-            UnresolvedReference::Constant(constant) => {
-                // C:<uri_id>:<start>-<end>
-                let key = format!(
-                    "C:{}:{}:{}-{}",
-                    constant.name_id(),
-                    constant.uri_id(),
-                    constant.offset().start(),
-                    constant.offset().end()
-                );
-                ReferenceId::from(&key)
-            }
-            UnresolvedReference::Method(method) => {
-                // M:<uri_id>:<start>-<end>
-                let key = format!(
-                    "M:{}:{}:{}-{}",
-                    method.name_id(),
-                    method.uri_id(),
-                    method.offset().start(),
-                    method.offset().end()
-                );
-                ReferenceId::from(&key)
-            }
-        }
-    }
-}
-
-impl ConstantReference {
+impl UnresolvedConstantRef {
     #[must_use]
     pub fn new(name_id: NameId, nesting: Option<Arc<Nesting>>, uri_id: UriId, offset: Offset) -> Self {
         Self {
@@ -126,7 +51,106 @@ impl ConstantReference {
     }
 }
 
-impl MethodReference {
+/// A resolved reference to a constant
+#[derive(Debug)]
+pub struct ConstantRef {
+    /// The original unresolved constant reference data. This is preserved so that we can figure out when this reference
+    /// gets invalidated due to a new definition or an inheritance change
+    original_ref: UnresolvedConstantRef,
+    declaration_id: DeclarationId,
+}
+
+impl ConstantRef {
+    #[must_use]
+    pub fn new(original_ref: UnresolvedConstantRef, declaration_id: DeclarationId) -> Self {
+        Self {
+            original_ref,
+            declaration_id,
+        }
+    }
+
+    #[must_use]
+    pub fn name_id(&self) -> &NameId {
+        &self.original_ref.name_id
+    }
+
+    #[must_use]
+    pub fn nesting(&self) -> &Option<Arc<Nesting>> {
+        &self.original_ref.nesting
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> UriId {
+        self.original_ref.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.original_ref.offset
+    }
+
+    #[must_use]
+    pub fn declaration_id(&self) -> DeclarationId {
+        self.declaration_id
+    }
+}
+
+/// An unresolved or resolved constant reference
+#[derive(Debug)]
+pub enum ConstantReference {
+    Resolved(Box<ConstantRef>),
+    Unresolved(Box<UnresolvedConstantRef>),
+}
+
+impl ConstantReference {
+    #[must_use]
+    pub fn id(&self) -> ReferenceId {
+        // C:<uri_id>:<start>-<end>
+        match self {
+            ConstantReference::Unresolved(constant) => {
+                let key = format!(
+                    "C:{}:{}:{}-{}",
+                    constant.name_id(),
+                    constant.uri_id(),
+                    constant.offset().start(),
+                    constant.offset().end()
+                );
+                ReferenceId::from(&key)
+            }
+            ConstantReference::Resolved(constant) => {
+                let key = format!(
+                    "C:{}:{}:{}-{}",
+                    constant.name_id(),
+                    constant.uri_id(),
+                    constant.offset().start(),
+                    constant.offset().end()
+                );
+                ReferenceId::from(&key)
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn name_id(&self) -> &NameId {
+        match self {
+            ConstantReference::Unresolved(constant) => constant.name_id(),
+            ConstantReference::Resolved(constant) => constant.name_id(),
+        }
+    }
+}
+
+/// A reference to a method
+#[derive(Debug)]
+pub struct MethodRef {
+    /// The unqualified name of the method
+    name_id: NameId,
+    /// The document where we found the reference
+    uri_id: UriId,
+    /// The offsets inside of the document where we found the reference
+    offset: Offset,
+}
+
+impl MethodRef {
     #[must_use]
     pub fn new(name_id: NameId, uri_id: UriId, offset: Offset) -> Self {
         Self {
@@ -149,5 +173,18 @@ impl MethodReference {
     #[must_use]
     pub fn offset(&self) -> &Offset {
         &self.offset
+    }
+
+    #[must_use]
+    pub fn id(&self) -> ReferenceId {
+        // M:<uri_id>:<start>-<end>
+        let key = format!(
+            "M:{}:{}:{}-{}",
+            self.name_id,
+            self.uri_id,
+            self.offset.start(),
+            self.offset.end()
+        );
+        ReferenceId::from(&key)
     }
 }
