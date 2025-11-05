@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, mem};
 
 use clap::Parser;
 
@@ -89,6 +89,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.documents().len());
     }
+
+    // Forget the graph so we don't have to wait for deallocation and let the system reclaim the memory at exit
+    mem::forget(graph);
 
     Ok(())
 }
