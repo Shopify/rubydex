@@ -26,7 +26,7 @@
 use crate::{
     model::{
         comment::Comment,
-        ids::{DeclarationId, UriId},
+        ids::{DeclarationId, ReferenceId, UriId},
     },
     offset::Offset,
 };
@@ -118,17 +118,30 @@ pub struct ClassDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
+    superclass_ref: Option<ReferenceId>,
 }
 
 impl ClassDefinition {
     #[must_use]
-    pub const fn new(declaration_id: DeclarationId, uri_id: UriId, offset: Offset, comments: Vec<Comment>) -> Self {
+    pub const fn new(
+        declaration_id: DeclarationId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Vec<Comment>,
+        superclass_ref: Option<ReferenceId>,
+    ) -> Self {
         Self {
             declaration_id,
             uri_id,
             offset,
             comments,
+            superclass_ref,
         }
+    }
+
+    #[must_use]
+    pub fn superclass_ref(&self) -> &Option<ReferenceId> {
+        &self.superclass_ref
     }
 }
 
