@@ -4,7 +4,7 @@ use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, UriId};
 use crate::model::integrity::IntegrityChecker;
-use crate::model::references::{ResolvedReference, UnresolvedReference};
+use crate::model::references::{ConstantRef, ConstantReference, MethodRef, UnresolvedConstantRef};
 use crate::stats;
 use std::collections::hash_map::Entry;
 
@@ -26,8 +26,10 @@ pub struct Graph {
     definitions: IdentityHashMap<DefinitionId, Definition>,
     // Map of unqualified names
     names: IdentityHashMap<NameId, String>,
-    // Map of references that still need to be resolved
-    unresolved_references: IdentityHashMap<ReferenceId, UnresolvedReference>,
+    // Map of constant references
+    constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
+    // Map of method references that still need to be resolved
+    method_references: IdentityHashMap<ReferenceId, MethodRef>,
 }
 
 impl Graph {
@@ -44,7 +46,8 @@ impl Graph {
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
-            unresolved_references: IdentityHashMap::default(),
+            constant_references: IdentityHashMap::default(),
+            method_references: IdentityHashMap::default(),
         }
     }
 
@@ -72,10 +75,16 @@ impl Graph {
         &self.documents
     }
 
-    // Returns an immutable reference to the unresolved references map
+    // Returns an immutable reference to the constant references map
     #[must_use]
-    pub fn unresolved_references(&self) -> &IdentityHashMap<ReferenceId, UnresolvedReference> {
-        &self.unresolved_references
+    pub fn constant_references(&self) -> &IdentityHashMap<ReferenceId, ConstantReference> {
+        &self.constant_references
+    }
+
+    // Returns an immutable reference to the method references map
+    #[must_use]
+    pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
+        &self.method_references
     }
 
     #[must_use]
@@ -151,44 +160,45 @@ impl Graph {
             .and_modify(|doc| doc.add_definition(definition_id));
     }
 
-    // Register an unresolved reference to something (e.g.: constant, method, variable), which has to be resolved later
-    pub fn add_unresolved_reference(&mut self, reference: UnresolvedReference) -> ReferenceId {
+    // Register an unresolved constant reference
+    pub fn add_constant_reference(&mut self, reference: ConstantReference) -> ReferenceId {
         let reference_id = reference.id();
-        self.unresolved_references.insert(reference_id, reference);
+        self.constant_references.insert(reference_id, reference);
         reference_id
     }
 
-    /// Attempts to resolve a reference against the graph. Returns the fully qualified declaration ID that the reference
-    /// is related to or `None`
-    pub fn resolve_reference(&self, reference: &UnresolvedReference) -> Option<&Declaration> {
-        match reference {
-            UnresolvedReference::Constant(constant) => {
-                if let Some(nesting) = constant.nesting() {
-                    let mut current_nesting = Some(nesting.as_ref());
+    // Register an unresolved method reference
+    pub fn add_method_reference(&mut self, reference: MethodRef) -> ReferenceId {
+        let reference_id = reference.id();
+        self.method_references.insert(reference_id, reference);
+        reference_id
+    }
 
-                    while let Some(nesting) = current_nesting {
-                        let declaration_id = nesting.declaration_id();
-                        if let Some(declaration) = self.declarations.get(declaration_id)
-                            && let Some(member) = declaration.members().get(constant.name_id())
-                        {
-                            return Some(self.declarations.get(member))?;
-                        }
-                        current_nesting = nesting.parent().as_ref().map(std::convert::AsRef::as_ref);
-                    }
-                    None
-                } else {
-                    // Top level reference
+    /// Attempts to resolve a constant reference against the graph. Returns the fully qualified declaration ID that the
+    /// reference is related to or `None`
+    pub fn resolve_constant(&self, reference: &UnresolvedConstantRef) -> Option<&Declaration> {
+        if let Some(nesting) = reference.nesting() {
+            let mut current_nesting = Some(nesting.as_ref());
 
-                    // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
-                    // up `Object` and then we search its members for the top level constant
-                    let name = self.names.get(constant.name_id())?;
-                    let declaration_id = DeclarationId::from(name);
-                    self.declarations.get(&declaration_id)
+            while let Some(nesting) = current_nesting {
+                let declaration_id = nesting.declaration_id();
+                if let Some(declaration) = self.declarations.get(declaration_id)
+                    && let Some(member) = declaration.members().get(reference.name_id())
+                {
+                    return Some(self.declarations.get(member))?;
                 }
+                current_nesting = nesting.parent().as_ref().map(std::convert::AsRef::as_ref);
             }
-            UnresolvedReference::Method(_unresolved) => {
-                unreachable!();
-            }
+
+            None
+        } else {
+            // Top level reference
+
+            // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
+            // up `Object` and then we search its members for the top level constant
+            let name = self.names.get(reference.name_id())?;
+            let declaration_id = DeclarationId::from(name);
+            self.declarations.get(&declaration_id)
         }
     }
 
@@ -204,8 +214,8 @@ impl Graph {
     pub fn extend(&mut self, incomplete_index: Graph) {
         self.definitions.extend(incomplete_index.definitions);
         self.names.extend(incomplete_index.names);
-        self.unresolved_references
-            .extend(incomplete_index.unresolved_references);
+        self.constant_references.extend(incomplete_index.constant_references);
+        self.method_references.extend(incomplete_index.method_references);
 
         for (declaration_id, declaration) in incomplete_index.declarations {
             match self.declarations.entry(declaration_id) {
@@ -429,102 +439,38 @@ impl Graph {
     }
 
     /// Resolve all unresolved references and add them to their corresponding declarations
+    ///
+    /// # Panics
+    ///
+    /// This will panic if we resolve a reference to a declaration ID that does not exist in the graph
     pub fn resolve_references(&mut self) {
-        let unresolved = std::mem::take(&mut self.unresolved_references);
+        let reference_map = std::mem::take(&mut self.constant_references);
 
-        for (id, reference) in unresolved {
-            match &reference {
-                UnresolvedReference::Constant(_) => {
-                    if let Some(declaration) = self.resolve_reference(&reference) {
-                        let declaration_name = declaration.name().to_string();
-                        let declaration_id = DeclarationId::from(&declaration_name);
+        for (id, reference) in reference_map {
+            match reference {
+                ConstantReference::Unresolved(constant_ref) => {
+                    if let Some(declaration) = self.resolve_constant(&constant_ref) {
+                        let declaration_id = DeclarationId::from(declaration.name());
+                        let decl = self
+                            .declarations
+                            .get_mut(&declaration_id)
+                            .expect("Resolved declaration must exist");
 
-                        if let Some(decl) = self.declarations.get_mut(&declaration_id) {
-                            // Now destructure to move the constant
-                            match reference {
-                                UnresolvedReference::Constant(constant) => {
-                                    decl.add_reference(ResolvedReference::Constant(constant));
-                                }
-                                UnresolvedReference::Method(_) => unreachable!(),
-                            }
-                        } else {
-                            unreachable!(
-                                "Declaration found for reference resolution but not found in graph: {}",
-                                declaration_name
-                            );
-                        }
+                        decl.add_reference(id);
+                        self.constant_references.insert(
+                            id,
+                            ConstantReference::Resolved(Box::new(ConstantRef::new(*constant_ref, declaration_id))),
+                        );
                     } else {
                         // Keep unresolved references
-                        self.unresolved_references.insert(id, reference);
+                        self.constant_references
+                            .insert(id, ConstantReference::Unresolved(constant_ref));
                     }
                 }
-                UnresolvedReference::Method(_) => {
-                    // TODO: Implement method reference resolution
-                    self.unresolved_references.insert(id, reference);
+                ConstantReference::Resolved(_) => {
+                    // Already resolved, nothing to do
+                    self.constant_references.insert(id, reference);
                 }
-            }
-        }
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    pub fn print_resolution_statistics(&mut self) {
-        let total_references = self.unresolved_references.len();
-        self.resolve_references();
-
-        // Count resolved references by type
-        let mut resolved_constants = 0;
-        let mut resolved_methods = 0;
-        for decl in self.declarations.values() {
-            for reference in decl.references() {
-                match reference {
-                    ResolvedReference::Constant(_) => resolved_constants += 1,
-                    ResolvedReference::Method(_) => resolved_methods += 1,
-                }
-            }
-        }
-        let total_resolved_references = resolved_constants + resolved_methods;
-
-        // Count unresolved references by type
-        let mut unresolved_constants = 0;
-        let mut unresolved_methods = 0;
-        for reference in self.unresolved_references.values() {
-            match reference {
-                UnresolvedReference::Constant(_) => unresolved_constants += 1,
-                UnresolvedReference::Method(_) => unresolved_methods += 1,
-            }
-        }
-        let total_unresolved_references = unresolved_constants + unresolved_methods;
-
-        let total_constants = resolved_constants + unresolved_constants;
-        let total_methods = resolved_methods + unresolved_methods;
-
-        println!();
-        println!("Resolution statistics");
-        println!();
-        println!("Overall reference counts:");
-        println!("  Total references:       {total_references:8}");
-        println!("  Total resolved:         {total_resolved_references:8}");
-        println!("    Constants:            {resolved_constants:8}");
-        println!("    Methods (TODO):       {resolved_methods:8}");
-        println!("  Total unresolved:       {total_unresolved_references:8}");
-        println!("    Constants:            {unresolved_constants:8}");
-        println!("    Methods:              {unresolved_methods:8}");
-        if total_references > 0 {
-            println!(
-                "  Resolution ratio:           {:.1}%",
-                stats::percentage(total_resolved_references, total_references)
-            );
-            if total_constants > 0 {
-                println!(
-                    "    Constants:               {:.1}%",
-                    stats::percentage(resolved_constants, total_constants)
-                );
-            }
-            if total_methods > 0 {
-                println!(
-                    "    Methods:                  {:.1}%",
-                    stats::percentage(resolved_methods, total_methods)
-                );
             }
         }
     }
@@ -559,7 +505,7 @@ mod tests {
                 .references()
                 .iter()
                 .filter_map(|r| {
-                    if let ResolvedReference::Constant(c) = r {
+                    if let ConstantReference::Resolved(c) = $context.graph.constant_references.get(r).unwrap() {
                         Some(c)
                     } else {
                         None
@@ -597,10 +543,10 @@ mod tests {
 
             let constant = $context
                 .graph
-                .unresolved_references
+                .constant_references
                 .values()
                 .filter_map(|r| {
-                    if let UnresolvedReference::Constant(c) = r {
+                    if let ConstantReference::Unresolved(c) = r {
                         Some(c)
                     } else {
                         None
@@ -827,10 +773,10 @@ mod tests {
             "
         });
 
-        let mut unresolved_references = context.graph.unresolved_references().values().collect::<Vec<_>>();
+        let mut constant_references = context.graph.constant_references().values().collect::<Vec<_>>();
 
-        unresolved_references.sort_by_key(|r| match r {
-            UnresolvedReference::Constant(constant) => (
+        constant_references.sort_by_key(|r| match r {
+            ConstantReference::Unresolved(constant) => (
                 context
                     .graph
                     .documents()
@@ -841,16 +787,16 @@ mod tests {
                 constant.offset().start(),
                 constant.offset().end(),
             ),
-            UnresolvedReference::Method(method) => (
+            ConstantReference::Resolved(constant) => (
                 context
                     .graph
                     .documents()
-                    .get(&method.uri_id())
+                    .get(&constant.uri_id())
                     .unwrap()
                     .uri()
                     .to_string(),
-                method.offset().start(),
-                method.offset().end(),
+                constant.offset().start(),
+                constant.offset().end(),
             ),
         });
 
@@ -891,7 +837,12 @@ mod tests {
         assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:1:2-1:12");
 
         assert_eq!(
-            context.graph.unresolved_references.len(),
+            context
+                .graph
+                .constant_references
+                .iter()
+                .filter(|(_, r)| matches!(r, ConstantReference::Unresolved(_)))
+                .count(),
             3,
             "Should have 3 unresolved references"
         );

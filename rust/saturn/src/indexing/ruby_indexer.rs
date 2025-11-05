@@ -12,7 +12,7 @@ use crate::model::definitions::{
 };
 use crate::model::graph::Graph;
 use crate::model::ids::{DeclarationId, UriId};
-use crate::model::references::{ConstantReference, MethodReference, UnresolvedReference};
+use crate::model::references::{ConstantReference, MethodRef, UnresolvedConstantRef};
 use crate::offset::Offset;
 
 use ruby_prism::{ParseResult, Visit};
@@ -270,16 +270,20 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let name_id = self.local_graph.add_name(name);
-        let reference =
-            UnresolvedReference::Constant(Box::new(ConstantReference::new(name_id, scope, self.uri_id, offset)));
-        self.local_graph.add_unresolved_reference(reference);
+        let reference = ConstantReference::Unresolved(Box::new(UnresolvedConstantRef::new(
+            name_id,
+            scope,
+            self.uri_id,
+            offset,
+        )));
+        self.local_graph.add_constant_reference(reference);
     }
 
     fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location) {
         let offset = Offset::from_prism_location(location);
         let name_id = self.local_graph.add_name(name);
-        let reference = UnresolvedReference::Method(Box::new(MethodReference::new(name_id, self.uri_id, offset)));
-        self.local_graph.add_unresolved_reference(reference);
+        let reference = MethodRef::new(name_id, self.uri_id, offset);
+        self.local_graph.add_method_reference(reference);
     }
 }
 
@@ -975,43 +979,38 @@ mod tests {
             assert_eq!(declaration.owner_id(), &DeclarationId::from($owner_name));
         };
     }
-
-    fn collect_unresolved_references(graph: &Graph) -> Vec<&UnresolvedReference> {
-        let mut unresolved_references = graph.unresolved_references().values().collect::<Vec<_>>();
-
-        unresolved_references.sort_by_key(|r| match r {
-            UnresolvedReference::Constant(constant) => (
+    fn collect_constant_reference_names(graph: &Graph) -> Vec<&String> {
+        let mut refs = graph.constant_references().values().collect::<Vec<_>>();
+        refs.sort_by_key(|r| match r {
+            ConstantReference::Unresolved(constant) => (
                 graph.documents().get(&constant.uri_id()).unwrap().uri().to_string(),
                 constant.offset().start(),
                 graph.names().get(constant.name_id()).unwrap(),
             ),
-            UnresolvedReference::Method(method) => (
-                graph.documents().get(&method.uri_id()).unwrap().uri().to_string(),
-                method.offset().start(),
-                graph.names().get(method.name_id()).unwrap(),
+            ConstantReference::Resolved(constant) => (
+                graph.documents().get(&constant.uri_id()).unwrap().uri().to_string(),
+                constant.offset().start(),
+                graph.names().get(constant.name_id()).unwrap(),
             ),
         });
 
-        unresolved_references
-    }
-
-    fn collect_constant_reference_names(graph: &Graph) -> Vec<&String> {
-        collect_unresolved_references(graph)
-            .iter()
-            .filter_map(|r| match r {
-                UnresolvedReference::Constant(constant) => Some(graph.names().get(constant.name_id()).unwrap()),
-                UnresolvedReference::Method(_method) => None,
-            })
+        refs.iter()
+            .map(|r| graph.names().get(r.name_id()).unwrap())
             .collect::<Vec<_>>()
     }
 
     fn collect_method_reference_names(graph: &Graph) -> Vec<&String> {
-        collect_unresolved_references(graph)
-            .iter()
-            .filter_map(|r| match r {
-                UnresolvedReference::Constant(_) => None,
-                UnresolvedReference::Method(method) => Some(graph.names().get(method.name_id()).unwrap()),
-            })
+        let mut refs = graph.method_references().values().collect::<Vec<_>>();
+        refs.sort_by_key(|m| {
+            (
+                graph.documents().get(&m.uri_id()).unwrap().uri().to_string(),
+                m.offset().start(),
+                graph.names().get(m.name_id()).unwrap(),
+            )
+        });
+
+        refs.iter()
+            .map(|r| graph.names().get(r.name_id()).unwrap())
             .collect::<Vec<_>>()
     }
 
@@ -2050,13 +2049,13 @@ mod tests {
             "
         });
 
-        let refs = context.graph.unresolved_references().values().collect::<Vec<_>>();
+        let refs = context.graph.constant_references().values().collect::<Vec<_>>();
         assert_eq!(refs.len(), 2);
 
         let reference = &refs[0];
 
         match reference {
-            UnresolvedReference::Constant(unresolved) => {
+            ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("Bar"));
                 assert_eq!(
                     unresolved.nesting().as_ref().unwrap().ids_as_vec(),
@@ -2065,15 +2064,16 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(19, 22));
             }
-            UnresolvedReference::Method(unresolved) => {
-                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            ConstantReference::Resolved(_) => {
+                let name = context.graph.names().get(reference.name_id()).unwrap();
+                panic!("Expected {name} to be unresolved")
             }
         }
 
         let reference = &refs[1];
 
         match reference {
-            UnresolvedReference::Constant(unresolved) => {
+            ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("String"));
                 assert_eq!(
                     unresolved.nesting().as_ref().unwrap().ids_as_vec(),
@@ -2082,8 +2082,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(32, 38));
             }
-            UnresolvedReference::Method(unresolved) => {
-                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            ConstantReference::Resolved(_) => {
+                let name = context.graph.names().get(reference.name_id()).unwrap();
+                panic!("Expected {name} to be unresolved")
             }
         }
     }
@@ -2102,13 +2103,13 @@ mod tests {
             "
         });
 
-        let refs = context.graph.unresolved_references().values().collect::<Vec<_>>();
+        let refs = context.graph.constant_references().values().collect::<Vec<_>>();
         assert_eq!(refs.len(), 1);
 
         let reference = &refs[0];
 
         match reference {
-            UnresolvedReference::Constant(unresolved) => {
+            ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("String"));
                 assert_eq!(
                     unresolved.nesting().as_ref().unwrap().ids_as_vec(),
@@ -2117,8 +2118,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
-            UnresolvedReference::Method(unresolved) => {
-                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            ConstantReference::Resolved(_) => {
+                let name = context.graph.names().get(reference.name_id()).unwrap();
+                panic!("Expected {name} to be unresolved")
             }
         }
     }
@@ -2137,13 +2139,13 @@ mod tests {
             "
         });
 
-        let refs = context.graph.unresolved_references().values().collect::<Vec<_>>();
+        let refs = context.graph.constant_references().values().collect::<Vec<_>>();
         assert_eq!(refs.len(), 2);
 
         let reference = &refs[0];
 
         match reference {
-            UnresolvedReference::Constant(unresolved) => {
+            ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("Object"));
                 assert_eq!(
                     unresolved.nesting().as_ref().unwrap().ids_as_vec(),
@@ -2152,15 +2154,16 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
-            UnresolvedReference::Method(unresolved) => {
-                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            ConstantReference::Resolved(_) => {
+                let name = context.graph.names().get(reference.name_id()).unwrap();
+                panic!("Expected {name} to be unresolved")
             }
         }
 
         let reference = &refs[1];
 
         match reference {
-            UnresolvedReference::Constant(unresolved) => {
+            ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("Object::String"));
                 assert_eq!(
                     unresolved.nesting().as_ref().unwrap().ids_as_vec(),
@@ -2169,8 +2172,9 @@ mod tests {
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 41));
             }
-            UnresolvedReference::Method(unresolved) => {
-                panic!("Expected UnresolvedReference::Constant, got {unresolved:?}")
+            ConstantReference::Resolved(_) => {
+                let name = context.graph.names().get(reference.name_id()).unwrap();
+                panic!("Expected {name} to be unresolved")
             }
         }
     }

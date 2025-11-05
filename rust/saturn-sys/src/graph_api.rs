@@ -1,13 +1,12 @@
 //! This file provides the C API for the Graph object
 
 // use crate::location_api::create_location_for_uri_and_offset; // no longer used here
-use crate::unresolved_reference_api::{UnresolvedReferenceKind, UnresolvedReferencesIter};
+use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::utils;
 use libc::{c_char, c_void};
 use saturn::indexing;
 use saturn::model::graph::Graph;
 use saturn::model::ids::DeclarationId;
-use saturn::model::references::UnresolvedReference;
 use std::ffi::CString;
 use std::{mem, ptr};
 
@@ -276,27 +275,36 @@ pub unsafe extern "C" fn sat_graph_get_declaration(pointer: GraphPointer, name: 
     })
 }
 
-/// Creates a new iterator over unresolved references by snapshotting the current set of (id, kind) pairs.
+/// Creates a new iterator over constant references by snapshotting the current set of (id, kind) pairs.
 ///
 /// # Safety
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_unresolved_references_iter_new(
-    pointer: GraphPointer,
-) -> *mut UnresolvedReferencesIter {
+pub unsafe extern "C" fn sat_graph_constant_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
     with_graph(pointer, |graph| {
-        let entries = graph
-            .unresolved_references()
-            .iter()
-            .map(|(id, r)| {
-                let kind = match r {
-                    UnresolvedReference::Constant(_) => UnresolvedReferenceKind::Constant,
-                    UnresolvedReference::Method(_) => UnresolvedReferenceKind::Method,
-                };
-                (**id, kind)
-            })
-            .collect::<Vec<(i64, UnresolvedReferenceKind)>>()
-            .into_boxed_slice();
-        UnresolvedReferencesIter::new(entries)
+        let refs: Vec<(i64, ReferenceKind)> = graph
+            .constant_references()
+            .keys()
+            .map(|id| (**id, ReferenceKind::Constant))
+            .collect();
+
+        ReferencesIter::new(refs.into_boxed_slice())
+    })
+}
+
+/// Creates a new iterator over method references by snapshotting the current set of (id, kind) pairs.
+///
+/// # Safety
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_graph_method_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
+    with_graph(pointer, |graph| {
+        let refs: Vec<(i64, ReferenceKind)> = graph
+            .method_references()
+            .keys()
+            .map(|id| (**id, ReferenceKind::Method))
+            .collect();
+
+        ReferencesIter::new(refs.into_boxed_slice())
     })
 }
