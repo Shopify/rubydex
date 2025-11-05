@@ -4,7 +4,7 @@ use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, UriId};
 use crate::model::integrity::IntegrityChecker;
-use crate::model::references::{ConstantRef, ConstantReference, MethodRef, UnresolvedConstantRef};
+use crate::model::references::{ConstantRef, ConstantReference, MethodRef};
 use crate::stats;
 use std::collections::hash_map::Entry;
 
@@ -183,35 +183,48 @@ impl Graph {
 
     /// Attempts to resolve a constant reference against the graph. Returns the fully qualified declaration ID that the
     /// reference is related to or `None`
-    pub fn resolve_constant(&self, reference: &UnresolvedConstantRef) -> Option<&Declaration> {
-        if let Some(nesting) = reference.nesting() {
-            let mut current_nesting = Some(nesting.as_ref());
-
-            while let Some(nesting) = current_nesting {
-                let declaration_id = nesting.declaration_id();
-                if let Some(declaration) = self.declarations.get(declaration_id)
-                    && let Some(member) = declaration.members().get(reference.name_id())
+    pub fn resolve_constant(&self, reference: &ConstantReference) -> Option<DeclarationId> {
+        match reference {
+            ConstantReference::Unresolved(constant) => {
+                if let Some(parent_scope) = constant
+                    .parent_scope_id()
+                    .and_then(|id| self.constant_references.get(&id))
                 {
-                    return Some(self.declarations.get(member))?;
+                    // This is a constant path and we must first recurse to resolve the parent scope
+                    let declaration_id = self.resolve_constant(parent_scope)?;
+                    let declaration = self.declarations.get(&declaration_id)?;
+                    declaration.members().get(constant.name_id()).copied()
+                } else if let Some(nesting) = constant.nesting() {
+                    // First search lexical scopes
+                    let mut current_nesting = Some(nesting.as_ref());
+
+                    while let Some(nesting) = current_nesting {
+                        let declaration_id = nesting.declaration_id();
+
+                        if let Some(declaration) = self.declarations.get(declaration_id)
+                            && let Some(member) = declaration.members().get(constant.name_id())
+                        {
+                            return Some(*member);
+                        }
+                        current_nesting = nesting.parent().as_ref().map(std::convert::AsRef::as_ref);
+                    }
+
+                    // Then search inheritance chain
+
+                    // Fall back to top level (member of Object)
+                    // Note: temporary while we're missing RBS indexing
+                    let name = self.names.get(reference.name_id())?;
+                    Some(DeclarationId::from(name))
+                } else {
+                    // Top level reference
+
+                    // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
+                    // up `Object` and then we search its members for the top level constant
+                    let name = self.names.get(reference.name_id())?;
+                    Some(DeclarationId::from(name))
                 }
-                current_nesting = nesting.parent().as_ref().map(std::convert::AsRef::as_ref);
             }
-
-            // Top level reference
-
-            // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
-            // up `Object` and then we search its members for the top level constant
-            let name = self.names.get(reference.name_id())?;
-            let declaration_id = DeclarationId::from(name);
-            self.declarations.get(&declaration_id)
-        } else {
-            // Top level reference
-
-            // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
-            // up `Object` and then we search its members for the top level constant
-            let name = self.names.get(reference.name_id())?;
-            let declaration_id = DeclarationId::from(name);
-            self.declarations.get(&declaration_id)
+            ConstantReference::Resolved(resolved) => Some(resolved.declaration_id()),
         }
     }
 
@@ -457,33 +470,24 @@ impl Graph {
     ///
     /// This will panic if we resolve a reference to a declaration ID that does not exist in the graph
     pub fn resolve_references(&mut self) {
-        let reference_map = std::mem::take(&mut self.constant_references);
+        let mut newly_resolved_references: Vec<(ReferenceId, DeclarationId)> = Vec::new();
 
-        for (id, reference) in reference_map {
-            match reference {
-                ConstantReference::Unresolved(constant_ref) => {
-                    if let Some(declaration) = self.resolve_constant(&constant_ref) {
-                        let declaration_id = DeclarationId::from(declaration.name());
-                        let decl = self
-                            .declarations
-                            .get_mut(&declaration_id)
-                            .expect("Resolved declaration must exist");
+        for (id, reference) in &self.constant_references {
+            if let ConstantReference::Unresolved(_) = reference
+                && let Some(declaration_id) = self.resolve_constant(reference)
+                && let Some(declaration) = self.declarations.get_mut(&declaration_id)
+            {
+                declaration.add_reference(*id);
+                newly_resolved_references.push((*id, declaration_id));
+            }
+        }
 
-                        decl.add_reference(id);
-                        self.constant_references.insert(
-                            id,
-                            ConstantReference::Resolved(Box::new(ConstantRef::new(*constant_ref, declaration_id))),
-                        );
-                    } else {
-                        // Keep unresolved references
-                        self.constant_references
-                            .insert(id, ConstantReference::Unresolved(constant_ref));
-                    }
-                }
-                ConstantReference::Resolved(_) => {
-                    // Already resolved, nothing to do
-                    self.constant_references.insert(id, reference);
-                }
+        for (id, declaration_id) in newly_resolved_references {
+            if let ConstantReference::Unresolved(unresolved_ref) = self.constant_references.remove(&id).unwrap() {
+                self.constant_references.insert(
+                    id,
+                    ConstantReference::Resolved(Box::new(ConstantRef::new(*unresolved_ref, declaration_id))),
+                );
             }
         }
     }
@@ -836,15 +840,7 @@ mod tests {
         });
 
         context.graph.resolve_references();
-        let references = context
-            .graph
-            .declarations
-            .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap()
-            .references();
-
-        // Needs parent scope resolution to work!
-        assert_eq!(references.len(), 0);
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:4:5-4:8");
     }
 
     #[test]
