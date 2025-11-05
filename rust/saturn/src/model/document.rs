@@ -6,15 +6,13 @@ use crate::model::ids::DefinitionId;
 pub struct Document {
     uri: String,
     definition_ids: Vec<DefinitionId>,
-    content_hash: u16,
 }
 
 impl Document {
     #[must_use]
-    pub fn new(uri: String, content_hash: u16) -> Self {
+    pub fn new(uri: String) -> Self {
         Self {
             uri,
-            content_hash,
             definition_ids: Vec::new(),
         }
     }
@@ -22,11 +20,6 @@ impl Document {
     #[must_use]
     pub fn uri(&self) -> &str {
         &self.uri
-    }
-
-    #[must_use]
-    pub fn content_hash(&self) -> u16 {
-        self.content_hash
     }
 
     #[must_use]
@@ -51,7 +44,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cannot add the same exact definition to a document twice. Duplicate definition IDs")]
     fn inserting_duplicate_definitions() {
-        let mut document = Document::new("file:///foo.rb".to_string(), 123u16);
+        let mut document = Document::new("file:///foo.rb".to_string());
         let def_id = DefinitionId::new(123);
 
         document.add_definition(def_id);

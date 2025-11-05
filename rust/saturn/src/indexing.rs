@@ -16,12 +16,6 @@ use xxhash_rust::xxh3::xxh3_64;
 pub mod ruby_indexer;
 pub mod scope;
 
-pub enum IndexResult {
-    Completed(Box<IndexerParts>),
-    Skipped,
-    Errored(Vec<Errors>),
-}
-
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
 ///
 /// # Errors
@@ -32,21 +26,18 @@ pub enum IndexResult {
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
-    let index_document = |file_path: &String| -> IndexResult {
+    let index_document = |file_path: &String| -> IndexerParts {
         let (source, errors) = read_document_source(file_path);
         if !errors.is_empty() {
-            return IndexResult::Errored(errors);
+            return (Graph::new(), errors);
         }
 
-        let content_hash = calculate_content_hash(source.as_bytes());
-        let mut ruby_indexer = RubyIndexer::new(uri_from_file_path(file_path).unwrap(), &source, content_hash);
+        let mut ruby_indexer = RubyIndexer::new(uri_from_file_path(file_path).unwrap(), &source);
         ruby_indexer.index();
-        IndexResult::Completed(Box::new(ruby_indexer.into_parts()))
+        ruby_indexer.into_parts()
     };
 
-    let merge_result = |local_graph| graph.update(local_graph);
-
-    with_parallel_workers(file_paths, index_document, merge_result)
+    with_parallel_workers(graph, file_paths, index_document)
 }
 
 /// Reads the source content from a document, either from memory or disk
@@ -77,12 +68,11 @@ fn uri_from_file_path(path: &str) -> Result<String, Errors> {
         .to_string())
 }
 
-fn with_parallel_workers<F, G>(file_paths: Vec<String>, worker_fn: F, mut result_fn: G) -> Result<(), MultipleErrors>
+fn with_parallel_workers<F>(graph: &mut Graph, file_paths: Vec<String>, worker_fn: F) -> Result<(), MultipleErrors>
 where
-    F: Fn(&String) -> IndexResult + Send + Clone + 'static,
-    G: FnMut(Graph),
+    F: Fn(&String) -> IndexerParts + Send + Clone + 'static,
 {
-    let (tx, rx): (Sender<IndexResult>, Receiver<IndexResult>) = mpsc::channel();
+    let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let mut threads = Vec::with_capacity(num_threads);
     let document_queue = Arc::new(Mutex::new(file_paths));
@@ -94,14 +84,10 @@ where
 
         let handle = thread::spawn(move || {
             while let Some(document) = { queue.lock().unwrap().pop() } {
-                match thread_fn(&document) {
-                    IndexResult::Skipped => {}
-                    result => {
-                        thread_tx
-                            .send(result)
-                            .expect("Receiver end should not be closed until all threads are done");
-                    }
-                }
+                let result = thread_fn(&document);
+                thread_tx
+                    .send(result)
+                    .expect("Receiver end should not be closed until all threads are done");
             }
         });
 
@@ -112,19 +98,9 @@ where
 
     let mut all_errors = Vec::new();
     for result in rx {
-        match result {
-            IndexResult::Completed(parts) => {
-                let (local_graph, errors) = *parts;
-                result_fn(local_graph);
-                all_errors.extend(errors);
-            }
-            IndexResult::Errored(errors) => {
-                all_errors.extend(errors);
-            }
-            IndexResult::Skipped => {
-                unreachable!("We should not return information about skipped files");
-            }
-        }
+        let (local_graph, errors) = result;
+        graph.update(local_graph);
+        all_errors.extend(errors);
     }
 
     if all_errors.is_empty() {
@@ -259,26 +235,6 @@ mod tests {
                 "File read error: Path '{}/non_existing_path' does not exist",
                 context.absolute_path().display()
             )]
-        );
-    }
-
-    #[test]
-    fn with_parallel_workers_skips_empty_results() {
-        let file_paths = vec![String::from("file:///skipped.rb")];
-
-        let mut was_called = false;
-        let worker_fn = |_file_path: &String| -> IndexResult { IndexResult::Skipped };
-        let result_fn = |_graph: Graph| {
-            was_called = true;
-        };
-
-        let result = with_parallel_workers(file_paths, worker_fn, result_fn);
-
-        assert!(result.is_ok());
-
-        assert!(
-            !was_called,
-            "result_fn should not be called when worker_fn returns Skipped"
         );
     }
 
