@@ -37,9 +37,7 @@ pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(
         ruby_indexer.into_parts()
     };
 
-    let merge_result = |local_graph| graph.update(local_graph);
-
-    with_parallel_workers(file_paths, index_document, merge_result)
+    with_parallel_workers(graph, file_paths, index_document)
 }
 
 /// Reads the source content from a document, either from memory or disk
@@ -70,10 +68,9 @@ fn uri_from_file_path(path: &str) -> Result<String, Errors> {
         .to_string())
 }
 
-fn with_parallel_workers<F, G>(file_paths: Vec<String>, worker_fn: F, mut result_fn: G) -> Result<(), MultipleErrors>
+fn with_parallel_workers<F>(graph: &mut Graph, file_paths: Vec<String>, worker_fn: F) -> Result<(), MultipleErrors>
 where
     F: Fn(&String) -> IndexerParts + Send + Clone + 'static,
-    G: FnMut(Graph),
 {
     let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
@@ -102,7 +99,7 @@ where
     let mut all_errors = Vec::new();
     for result in rx {
         let (local_graph, errors) = result;
-        result_fn(local_graph);
+        graph.update(local_graph);
         all_errors.extend(errors);
     }
 
