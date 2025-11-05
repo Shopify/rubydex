@@ -26,7 +26,7 @@ pub struct Graph {
     definitions: IdentityHashMap<DefinitionId, Definition>,
     // Map of unqualified names
     names: IdentityHashMap<NameId, String>,
-    // Map of constant references that still need to be resolved
+    // Map of constant references
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
     method_references: IdentityHashMap<ReferenceId, MethodRef>,

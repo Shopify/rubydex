@@ -137,6 +137,22 @@ impl ConstantReference {
             ConstantReference::Resolved(constant) => constant.name_id(),
         }
     }
+
+    #[must_use]
+    pub fn uri_id(&self) -> UriId {
+        match self {
+            ConstantReference::Unresolved(constant) => constant.uri_id(),
+            ConstantReference::Resolved(constant) => constant.uri_id(),
+        }
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        match self {
+            ConstantReference::Unresolved(constant) => constant.offset(),
+            ConstantReference::Resolved(constant) => constant.offset(),
+        }
+    }
 }
 
 /// A reference to a method
