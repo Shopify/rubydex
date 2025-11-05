@@ -55,10 +55,6 @@ impl<'a> RubyIndexer<'a> {
         (self.local_graph, self.errors)
     }
 
-    pub fn add_error(&mut self, error: Errors) {
-        self.errors.push(error);
-    }
-
     pub fn index(&mut self) {
         let result = ruby_prism::parse(self.source.as_bytes());
         self.comments = self.parse_comments_into_groups(&result);
