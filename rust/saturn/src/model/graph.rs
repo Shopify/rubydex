@@ -94,11 +94,9 @@ impl Graph {
 
     // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
     // then all definitions discovered in it get associated to the ID
-    pub fn add_uri(&mut self, uri: String, content_hash: u16) -> UriId {
+    pub fn add_uri(&mut self, uri: String) -> UriId {
         let uri_id = UriId::from(&uri);
-        self.documents
-            .entry(uri_id)
-            .or_insert_with(|| Document::new(uri, content_hash));
+        self.documents.entry(uri_id).or_insert_with(|| Document::new(uri));
         uri_id
     }
 
