@@ -10,6 +10,16 @@ use std::sync::Arc;
 pub struct UnresolvedConstantRef {
     /// The unqualified name of the constant
     name_id: NameId,
+    /// The ID of parent scope for this constant. For example:
+    ///
+    /// ```ruby
+    /// Foo::Bar::Baz
+    /// # ^ parent scope of Bar::Baz
+    /// #      ^ parent scope of Baz
+    /// ```
+    ///
+    /// `None` indicates that this is a simple constant read or a top level reference
+    parent_scope_id: Option<ReferenceId>,
     /// The nesting where we found the constant reference. This is a chain of nesting objects representing the lexical
     /// scopes surrounding the reference
     nesting: Option<Arc<Nesting>>,
@@ -21,13 +31,25 @@ pub struct UnresolvedConstantRef {
 
 impl UnresolvedConstantRef {
     #[must_use]
-    pub fn new(name_id: NameId, nesting: Option<Arc<Nesting>>, uri_id: UriId, offset: Offset) -> Self {
+    pub fn new(
+        name_id: NameId,
+        parent_scope_id: Option<ReferenceId>,
+        nesting: Option<Arc<Nesting>>,
+        uri_id: UriId,
+        offset: Offset,
+    ) -> Self {
         Self {
             name_id,
+            parent_scope_id,
             nesting,
             uri_id,
             offset,
         }
+    }
+
+    #[must_use]
+    pub fn parent_scope_id(&self) -> &Option<ReferenceId> {
+        &self.parent_scope_id
     }
 
     #[must_use]
@@ -67,6 +89,11 @@ impl ConstantRef {
             original_ref,
             declaration_id,
         }
+    }
+
+    #[must_use]
+    pub fn original_ref(&self) -> &UnresolvedConstantRef {
+        &self.original_ref
     }
 
     #[must_use]

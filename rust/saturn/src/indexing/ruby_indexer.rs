@@ -262,14 +262,25 @@ impl<'a> RubyIndexer<'a> {
     }
 
     fn index_constant_reference(&mut self, node: &ruby_prism::Node) -> Option<ReferenceId> {
+        let mut parent_scope_id = None;
+
         let location = match node {
             ruby_prism::Node::ConstantPathNode { .. } => {
                 let constant = node.as_constant_path_node().unwrap();
+
                 if let Some(parent) = constant.parent() {
-                    self.index_constant_reference(&parent);
+                    // Ignore parent scopes that are not constants, like `foo::Bar`
+                    match parent {
+                        ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
+                        _ => {
+                            return None;
+                        }
+                    }
+
+                    parent_scope_id = self.index_constant_reference(&parent);
                 }
 
-                node.location()
+                constant.name_loc()
             }
             ruby_prism::Node::ConstantReadNode { .. } => node.location(),
             ruby_prism::Node::ConstantAndWriteNode { .. } => node.as_constant_and_write_node().unwrap().name_loc(),
@@ -295,6 +306,7 @@ impl<'a> RubyIndexer<'a> {
         let name_id = self.local_graph.add_name(name);
         let reference = ConstantReference::Unresolved(Box::new(UnresolvedConstantRef::new(
             name_id,
+            parent_scope_id,
             scope,
             self.uri_id,
             offset,
@@ -559,10 +571,6 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_path_node(&mut self, node: &ruby_prism::ConstantPathNode<'_>) {
-        if let Some(parent) = node.parent() {
-            self.visit(&parent);
-        }
-
         self.index_constant_reference(&node.as_node());
     }
 
@@ -1064,24 +1072,52 @@ mod tests {
             assert_eq!(declaration.owner_id(), &DeclarationId::from($owner_name));
         };
     }
-    fn collect_constant_reference_names(graph: &Graph) -> Vec<&String> {
-        let mut refs = graph.constant_references().values().collect::<Vec<_>>();
-        refs.sort_by_key(|r| match r {
-            ConstantReference::Unresolved(constant) => (
-                graph.documents().get(&constant.uri_id()).unwrap().uri().to_string(),
-                constant.offset().start(),
-                graph.names().get(constant.name_id()).unwrap(),
-            ),
-            ConstantReference::Resolved(constant) => (
-                graph.documents().get(&constant.uri_id()).unwrap().uri().to_string(),
-                constant.offset().start(),
-                graph.names().get(constant.name_id()).unwrap(),
-            ),
-        });
 
-        refs.iter()
-            .map(|r| graph.names().get(r.name_id()).unwrap())
-            .collect::<Vec<_>>()
+    fn collect_constant_reference_names(graph: &Graph) -> Vec<String> {
+        let mut refs = graph
+            .constant_references()
+            .values()
+            .map(|reference| {
+                let name = match reference {
+                    ConstantReference::Unresolved(constant) => {
+                        let mut full_name = graph.names().get(constant.name_id()).unwrap().clone();
+                        let mut current_ref = constant.as_ref();
+
+                        while let Some(parent_ref) = current_ref
+                            .parent_scope_id()
+                            .and_then(|id| graph.constant_references().get(&id))
+                        {
+                            full_name.insert_str(0, &format!("{}::", graph.names().get(parent_ref.name_id()).unwrap()));
+
+                            match parent_ref {
+                                ConstantReference::Unresolved(parent_constant) => {
+                                    current_ref = parent_constant.as_ref();
+                                }
+                                ConstantReference::Resolved(resolved) => {
+                                    current_ref = resolved.original_ref();
+                                }
+                            }
+                        }
+
+                        full_name
+                    }
+                    ConstantReference::Resolved(constant) => {
+                        let declaration = graph.declarations().get(&constant.declaration_id()).unwrap();
+
+                        format!(
+                            "{}::{}",
+                            declaration.name(),
+                            graph.names().get(constant.name_id()).unwrap()
+                        )
+                    }
+                };
+
+                (reference.offset().start(), name)
+            })
+            .collect::<Vec<_>>();
+
+        refs.sort();
+        refs.into_iter().map(|(_, name)| name).collect::<Vec<String>>()
     }
 
     fn collect_method_reference_names(graph: &Graph) -> Vec<&String> {
@@ -2246,13 +2282,14 @@ mod tests {
 
         match reference {
             ConstantReference::Unresolved(unresolved) => {
-                assert_eq!(unresolved.name_id(), &NameId::from("Object"));
+                assert_eq!(unresolved.name_id(), &NameId::from("String"));
+                assert!(unresolved.parent_scope_id().is_some());
                 assert_eq!(
                     unresolved.nesting().as_ref().unwrap().ids_as_vec(),
                     vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
-                assert_eq!(unresolved.offset(), &Offset::new(27, 33));
+                assert_eq!(unresolved.offset(), &Offset::new(35, 41));
             }
             ConstantReference::Resolved(_) => {
                 let name = context.graph.names().get(reference.name_id()).unwrap();
@@ -2264,13 +2301,14 @@ mod tests {
 
         match reference {
             ConstantReference::Unresolved(unresolved) => {
-                assert_eq!(unresolved.name_id(), &NameId::from("Object::String"));
+                assert_eq!(unresolved.name_id(), &NameId::from("Object"));
+                assert!(unresolved.parent_scope_id().is_none());
                 assert_eq!(
                     unresolved.nesting().as_ref().unwrap().ids_as_vec(),
                     vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
-                assert_eq!(unresolved.offset(), &Offset::new(27, 41));
+                assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
             ConstantReference::Resolved(_) => {
                 let name = context.graph.names().get(reference.name_id()).unwrap();
@@ -2315,7 +2353,6 @@ mod tests {
                 "C2",
                 "C2::C3",
                 "C2::C3::C4",
-                "foo::C5",
                 "C6",
                 "C7",
                 "C8",
@@ -2676,7 +2713,7 @@ mod tests {
         if let Definition::Class(foo) = defs[0] {
             let superclass_id = foo.superclass_ref().unwrap();
             let reference = context.graph.constant_references().get(&superclass_id).unwrap();
-            assert_eq!(NameId::from("Bar::Baz"), *reference.name_id());
+            assert_eq!(NameId::from("Baz"), *reference.name_id());
         } else {
             panic!("Expected Foo to be a class definition");
         }

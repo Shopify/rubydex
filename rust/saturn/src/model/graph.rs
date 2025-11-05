@@ -197,7 +197,13 @@ impl Graph {
                 current_nesting = nesting.parent().as_ref().map(std::convert::AsRef::as_ref);
             }
 
-            None
+            // Top level reference
+
+            // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
+            // up `Object` and then we search its members for the top level constant
+            let name = self.names.get(reference.name_id())?;
+            let declaration_id = DeclarationId::from(name);
+            self.declarations.get(&declaration_id)
         } else {
             // Top level reference
 
@@ -752,110 +758,106 @@ mod tests {
     }
 
     #[test]
-    fn resolving_constants() {
+    fn resolving_top_level_references() {
         let mut context = GraphTest::new();
-
         context.index_uri("file:///bar.rb", {
             r"
-            class Bar
-              ::Foo::Bar # should be resolved to Foo::Bar from file:///foo.rb
-            end
+            class Bar; end
+
+            ::Bar
+            Bar
             "
         });
-
         context.index_uri("file:///foo.rb", {
             r"
             module Foo
-              CONST = 1
-              class Bar
-                CONST # should be resolved to Foo::CONST
-                ::Bar # should be resolved to Bar from file:///bar.rb
-                ::Baz # should not be resolved because it doesn't exist
-                String # should not be resolved because it's not top-level
-                ::Object # should not be resolved because ::Object does not exist in the graph yet
-              end
+              ::Bar
             end
-
-            Foo::CONST # should be resolved to Foo::CONST and Foo should be resolved to Foo
             "
         });
 
-        let mut constant_references = context.graph.constant_references().values().collect::<Vec<_>>();
+        context.graph.resolve_references();
+        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:2:2-2:5");
+        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:3:0-3:3");
+        assert_constant_reference_to!(context, "Bar", "file:///foo.rb:1:4-1:7");
+    }
 
-        constant_references.sort_by_key(|r| match r {
-            ConstantReference::Unresolved(constant) => (
-                context
-                    .graph
-                    .documents()
-                    .get(&constant.uri_id())
-                    .unwrap()
-                    .uri()
-                    .to_string(),
-                constant.offset().start(),
-                constant.offset().end(),
-            ),
-            ConstantReference::Resolved(constant) => (
-                context
-                    .graph
-                    .documents()
-                    .get(&constant.uri_id())
-                    .unwrap()
-                    .uri()
-                    .to_string(),
-                constant.offset().start(),
-                constant.offset().end(),
-            ),
+    #[test]
+    fn resolving_nested_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            module Foo
+              CONST = 123
+
+              class Bar
+                CONST
+                Foo::CONST
+              end
+            end
+            "
         });
 
         context.graph.resolve_references();
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:4:4-4:9");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:5:9-5:14");
+    }
 
-        let foo_declaration = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
-        assert_eq!(foo_declaration.references().len(), 2, "Foo should have 2 references");
-        assert_constant_reference_to!(context, "Foo", "file:///foo.rb:11:0-11:3");
-        assert_constant_reference_to!(context, "Foo", "file:///bar.rb:1:2-1:7");
+    #[test]
+    fn resolving_nested_reference_that_refer_to_top_level_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Baz; end
 
-        let foo_const_declaration = context
-            .graph
-            .declarations
-            .get(&DeclarationId::from("Foo::CONST"))
-            .unwrap();
-        assert_eq!(
-            foo_const_declaration.references().len(),
-            2,
-            "Foo::CONST should have 2 references"
-        );
-        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:3:4-3:9");
-        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:11:0-11:10");
+            module Foo
+              class Bar
+                Baz
+              end
+            end
+            "
+        });
 
-        let bar_declaration = context.graph.declarations.get(&DeclarationId::from("Bar")).unwrap();
-        assert_eq!(bar_declaration.references().len(), 1, "Bar should have 1 reference");
-        assert_constant_reference_to!(context, "Bar", "file:///foo.rb:4:4-4:9");
+        context.graph.resolve_references();
+        assert_constant_reference_to!(context, "Baz", "file:///bar.rb:4:4-4:7");
+    }
 
-        let foo_bar_declaration = context
+    #[test]
+    fn resolving_constant_path_references_at_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            module Foo
+              class Bar; end
+            end
+
+            Foo::Bar
+            "
+        });
+
+        context.graph.resolve_references();
+        let references = context
             .graph
             .declarations
             .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap();
-        assert_eq!(
-            foo_bar_declaration.references().len(),
-            1,
-            "Foo::Bar should have 1 reference"
-        );
-        assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:1:2-1:12");
+            .unwrap()
+            .references();
 
-        assert_eq!(
-            context
-                .graph
-                .constant_references
-                .iter()
-                .filter(|(_, r)| matches!(r, ConstantReference::Unresolved(_)))
-                .count(),
-            3,
-            "Should have 3 unresolved references"
-        );
-        assert_unresolved_constant!(context, "Baz", None, "file:///foo.rb:5:4-5:9");
-        assert_unresolved_constant!(context, "String", Some("Foo::Bar"), "file:///foo.rb:6:4-6:10");
-        assert_unresolved_constant!(context, "Object", None, "file:///foo.rb:7:4-7:12");
+        // Needs parent scope resolution to work!
+        assert_eq!(references.len(), 0);
+    }
+
+    #[test]
+    fn resolving_reference_for_non_existing_declaration() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo
+            "
+        });
+
+        context.graph.resolve_references();
+        assert_unresolved_constant!(context, "Foo", None, "file:///foo.rb:0:0-0:3");
     }
 
     #[test]
