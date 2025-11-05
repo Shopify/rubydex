@@ -55,6 +55,34 @@ impl<'a> RubyIndexer<'a> {
         (self.local_graph, self.errors)
     }
 
+    fn resolve_owner_for_constant_path(
+        default_owner: DeclarationId,
+        name: &str,
+        fully_qualified_name: &str,
+    ) -> (DeclarationId, String) {
+        if name.starts_with("::") {
+            let trimmed = name.trim_start_matches("::");
+
+            if trimmed.is_empty() {
+                return (default_owner, name.to_string());
+            }
+
+            if let Some((owner, leaf)) = trimmed.rsplit_once("::") {
+                return (DeclarationId::from(owner), leaf.to_string());
+            }
+
+            (*OBJECT_ID, trimmed.to_string())
+        } else if name.contains("::") {
+            if let Some((owner, leaf)) = fully_qualified_name.rsplit_once("::") {
+                return (DeclarationId::from(owner), leaf.to_string());
+            }
+
+            (default_owner, name.to_string())
+        } else {
+            (default_owner, name.to_string())
+        }
+    }
+
     pub fn add_error(&mut self, error: Errors) {
         self.errors.push(error);
     }
@@ -334,6 +362,8 @@ impl Visit<'_> for RubyIndexer<'_> {
         let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let name = Self::location_to_string(&node.constant_path().location());
         let (fully_qualified_name, declaration_id) = self.scope.enter(&name);
+        let (owner_declaration_id, member_name) =
+            Self::resolve_owner_for_constant_path(previous_nesting_id, &name, &fully_qualified_name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
@@ -345,8 +375,9 @@ impl Visit<'_> for RubyIndexer<'_> {
         )));
 
         self.local_graph
-            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
-        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
+            .add_definition(fully_qualified_name.clone(), definition, &owner_declaration_id);
+        self.local_graph
+            .add_member(&owner_declaration_id, declaration_id, &member_name);
 
         if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
             let constant_path = node.constant_path().as_constant_path_node().unwrap();
@@ -370,6 +401,8 @@ impl Visit<'_> for RubyIndexer<'_> {
         let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let name = Self::location_to_string(&node.constant_path().location());
         let (fully_qualified_name, declaration_id) = self.scope.enter(&name);
+        let (owner_declaration_id, member_name) =
+            Self::resolve_owner_for_constant_path(previous_nesting_id, &name, &fully_qualified_name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
@@ -380,8 +413,9 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
         )));
         self.local_graph
-            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
-        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
+            .add_definition(fully_qualified_name.clone(), definition, &owner_declaration_id);
+        self.local_graph
+            .add_member(&owner_declaration_id, declaration_id, &member_name);
 
         if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
             let constant_path = node.constant_path().as_constant_path_node().unwrap();
@@ -1860,8 +1894,6 @@ mod tests {
             "
         });
 
-        // FIXME: We are currently not handling constant paths correctly. `Bar::Baz` defines `Baz` under `Bar`, but we
-        // right now define `Bar::Baz` under `Foo`
         let bar = context
             .graph
             .declarations()
@@ -1869,15 +1901,20 @@ mod tests {
             .unwrap();
         let members = bar.members();
 
-        assert_eq!(members.len(), 0);
+        assert_eq!(members.len(), 1);
+        assert_eq!(
+            members.get(&NameId::from("Baz")).unwrap(),
+            &DeclarationId::from("Foo::Bar::Baz")
+        );
 
         let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
         let members = foo.members();
 
-        assert_eq!(members.len(), 2);
+        assert_eq!(members.len(), 1);
+        assert!(members.get(&NameId::from("Bar::Baz")).is_none());
         assert_eq!(
-            members.get(&NameId::from("Bar::Baz")).unwrap(),
-            &DeclarationId::from("Foo::Bar::Baz")
+            members.get(&NameId::from("Bar")).unwrap(),
+            &DeclarationId::from("Foo::Bar")
         );
     }
 
