@@ -18,7 +18,6 @@ pub mod scope;
 
 pub enum IndexResult {
     Completed(Box<IndexerParts>),
-    Skipped,
     Errored(Vec<Errors>),
 }
 
@@ -93,14 +92,10 @@ where
 
         let handle = thread::spawn(move || {
             while let Some(document) = { queue.lock().unwrap().pop() } {
-                match thread_fn(&document) {
-                    IndexResult::Skipped => {}
-                    result => {
-                        thread_tx
-                            .send(result)
-                            .expect("Receiver end should not be closed until all threads are done");
-                    }
-                }
+                let result = thread_fn(&document);
+                thread_tx
+                    .send(result)
+                    .expect("Receiver end should not be closed until all threads are done");
             }
         });
 
@@ -119,9 +114,6 @@ where
             }
             IndexResult::Errored(errors) => {
                 all_errors.extend(errors);
-            }
-            IndexResult::Skipped => {
-                unreachable!("We should not return information about skipped files");
             }
         }
     }
@@ -258,26 +250,6 @@ mod tests {
                 "File read error: Path '{}/non_existing_path' does not exist",
                 context.absolute_path().display()
             )]
-        );
-    }
-
-    #[test]
-    fn with_parallel_workers_skips_empty_results() {
-        let file_paths = vec![String::from("file:///skipped.rb")];
-
-        let mut was_called = false;
-        let worker_fn = |_file_path: &String| -> IndexResult { IndexResult::Skipped };
-        let result_fn = |_graph: Graph| {
-            was_called = true;
-        };
-
-        let result = with_parallel_workers(file_paths, worker_fn, result_fn);
-
-        assert!(result.is_ok());
-
-        assert!(
-            !was_called,
-            "result_fn should not be called when worker_fn returns Skipped"
         );
     }
 
