@@ -1,5 +1,5 @@
 use crate::{
-    indexing::scope::Nesting,
+    indexing::nesting_stack::Nesting,
     model::ids::{DeclarationId, NameId, ReferenceId, UriId},
     offset::Offset,
 };

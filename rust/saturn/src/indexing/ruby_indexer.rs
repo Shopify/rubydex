@@ -3,7 +3,7 @@
 use std::sync::{Arc, LazyLock};
 
 use crate::errors::Errors;
-use crate::indexing::scope::Scope;
+use crate::indexing::nesting_stack::NestingStack;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
@@ -31,7 +31,7 @@ pub struct RubyIndexer<'a> {
     errors: Vec<Errors>,
     comments: Vec<CommentGroup>,
     source: &'a str,
-    scope: Scope,
+    scope: NestingStack,
     namespace_stack: Vec<DefinitionId>,
 }
 
@@ -47,7 +47,7 @@ impl<'a> RubyIndexer<'a> {
             errors: Vec::new(),
             comments: Vec::new(),
             source,
-            scope: Scope::new(),
+            scope: NestingStack::new(),
             namespace_stack: Vec::new(),
         }
     }
