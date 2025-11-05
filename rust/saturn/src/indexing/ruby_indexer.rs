@@ -36,9 +36,9 @@ pub struct RubyIndexer<'a> {
 
 impl<'a> RubyIndexer<'a> {
     #[must_use]
-    pub fn new(uri: String, source: &'a str, content_hash: u16) -> Self {
+    pub fn new(uri: String, source: &'a str) -> Self {
         let mut local_index = Graph::new();
-        let uri_id = local_index.add_uri(uri, content_hash);
+        let uri_id = local_index.add_uri(uri);
 
         Self {
             uri_id,
