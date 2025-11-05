@@ -9,6 +9,7 @@ use url::Url;
 
 /// C-compatible struct representing a definition location with offsets and line/column positions.
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct Location {
     pub uri: *const c_char,
     pub start_line: u32,
@@ -27,7 +28,7 @@ fn file_path_from_uri(uri: &str) -> Option<String> {
 }
 
 /// Helper to create a location for a given URI and byte-offset range.
-/// Allocates and returns a pointer to `Location`. Caller must free with `sat_definition_location_free`.
+/// Allocates and returns a pointer to `Location`. Caller must free with `sat_location_free`.
 ///
 /// # Panics
 ///
@@ -61,10 +62,10 @@ pub(crate) fn create_location_for_uri_and_offset(uri: &str, start: u32, end: u32
 ///
 /// # Safety
 ///
-/// - `ptr` must be a valid pointer previously returned by `sat_definition_location`.
+/// - `ptr` must be a valid pointer previously returned by `create_location_for_uri_and_offset`.
 /// - `ptr` must not be used after being freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definition_location_free(ptr: *mut Location) {
+pub unsafe extern "C" fn sat_location_free(ptr: *mut Location) {
     if ptr.is_null() {
         return;
     }
