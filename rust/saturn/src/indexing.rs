@@ -16,11 +16,6 @@ use xxhash_rust::xxh3::xxh3_64;
 pub mod ruby_indexer;
 pub mod scope;
 
-pub enum IndexResult {
-    Completed(Box<IndexerParts>),
-    Errored(Vec<Errors>),
-}
-
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
 ///
 /// # Errors
@@ -31,15 +26,15 @@ pub enum IndexResult {
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
-    let index_document = |file_path: &String| -> IndexResult {
+    let index_document = |file_path: &String| -> IndexerParts {
         let (source, errors) = read_document_source(file_path);
         if !errors.is_empty() {
-            return IndexResult::Errored(errors);
+            return (Graph::new(), errors);
         }
 
         let mut ruby_indexer = RubyIndexer::new(uri_from_file_path(file_path).unwrap(), &source);
         ruby_indexer.index();
-        IndexResult::Completed(Box::new(ruby_indexer.into_parts()))
+        ruby_indexer.into_parts()
     };
 
     let merge_result = |local_graph| graph.update(local_graph);
@@ -77,10 +72,10 @@ fn uri_from_file_path(path: &str) -> Result<String, Errors> {
 
 fn with_parallel_workers<F, G>(file_paths: Vec<String>, worker_fn: F, mut result_fn: G) -> Result<(), MultipleErrors>
 where
-    F: Fn(&String) -> IndexResult + Send + Clone + 'static,
+    F: Fn(&String) -> IndexerParts + Send + Clone + 'static,
     G: FnMut(Graph),
 {
-    let (tx, rx): (Sender<IndexResult>, Receiver<IndexResult>) = mpsc::channel();
+    let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let mut threads = Vec::with_capacity(num_threads);
     let document_queue = Arc::new(Mutex::new(file_paths));
@@ -106,16 +101,9 @@ where
 
     let mut all_errors = Vec::new();
     for result in rx {
-        match result {
-            IndexResult::Completed(parts) => {
-                let (local_graph, errors) = *parts;
-                result_fn(local_graph);
-                all_errors.extend(errors);
-            }
-            IndexResult::Errored(errors) => {
-                all_errors.extend(errors);
-            }
-        }
+        let (local_graph, errors) = result;
+        result_fn(local_graph);
+        all_errors.extend(errors);
     }
 
     if all_errors.is_empty() {
