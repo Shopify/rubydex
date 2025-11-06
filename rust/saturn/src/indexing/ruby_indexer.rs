@@ -7,11 +7,11 @@ use crate::indexing::scope::Scope;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodDefinition,
+    ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodDefinition, Mixin,
     ModuleDefinition, Parameter, ParameterStruct,
 };
 use crate::model::graph::Graph;
-use crate::model::ids::{DeclarationId, ReferenceId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, ReferenceId, UriId};
 use crate::model::references::{ConstantReference, MethodRef, UnresolvedConstantRef};
 use crate::offset::Offset;
 
@@ -32,6 +32,7 @@ pub struct RubyIndexer<'a> {
     comments: Vec<CommentGroup>,
     source: &'a str,
     scope: Scope,
+    namespace_stack: Vec<DefinitionId>,
 }
 
 impl<'a> RubyIndexer<'a> {
@@ -47,6 +48,7 @@ impl<'a> RubyIndexer<'a> {
             comments: Vec::new(),
             source,
             scope: Scope::new(),
+            namespace_stack: Vec::new(),
         }
     }
 
@@ -306,6 +308,57 @@ impl<'a> RubyIndexer<'a> {
         let reference = MethodRef::new(name_id, self.uri_id, offset);
         self.local_graph.add_method_reference(reference);
     }
+
+    fn handle_mixin(&mut self, node: &ruby_prism::CallNode, prepend: bool) {
+        if let Some(arguments) = node.arguments() {
+            // Collect all arguments as constant references. Ignore anything that isn't a constant
+            let reference_ids = arguments
+                .arguments()
+                .iter()
+                .filter_map(|arg| self.index_constant_reference(&arg))
+                .collect::<Vec<_>>();
+
+            if let Some(owner_id) = self.namespace_stack.last()
+                && let Some(current_owner) = self.local_graph.get_definition_mut(*owner_id)
+            {
+                for id in reference_ids {
+                    match current_owner {
+                        Definition::Class(class_def) => {
+                            if prepend {
+                                class_def.add_mixin(Mixin::Prepend(id));
+                            } else {
+                                class_def.add_mixin(Mixin::Include(id));
+                            }
+                        }
+                        Definition::Module(module_def) => {
+                            if prepend {
+                                module_def.add_mixin(Mixin::Prepend(id));
+                            } else {
+                                module_def.add_mixin(Mixin::Include(id));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    /// Visits every part of a call node, except for the message itself. Convenient for when we're only interested in
+    /// continuing the traversal
+    fn visit_call_node_parts(&mut self, node: &ruby_prism::CallNode) {
+        if let Some(receiver) = node.receiver() {
+            self.visit(&receiver);
+        }
+
+        if let Some(arguments) = node.arguments() {
+            self.visit_arguments_node(&arguments);
+        }
+
+        if let Some(block) = node.block() {
+            self.visit(&block);
+        }
+    }
 }
 
 struct CommentGroup {
@@ -368,9 +421,11 @@ impl Visit<'_> for RubyIndexer<'_> {
             superclass,
         )));
 
-        self.local_graph
+        let definition_id = self
+            .local_graph
             .add_definition(fully_qualified_name, definition, &previous_nesting_id);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
+        self.namespace_stack.push(definition_id);
 
         if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
             let constant_path = node.constant_path().as_constant_path_node().unwrap();
@@ -383,6 +438,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&body);
         }
 
+        self.namespace_stack.pop();
         self.scope.leave();
     }
 
@@ -399,9 +455,12 @@ impl Visit<'_> for RubyIndexer<'_> {
             offset,
             comments,
         )));
-        self.local_graph
+
+        let definition_id = self
+            .local_graph
             .add_definition(fully_qualified_name, definition, &previous_nesting_id);
         self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
+        self.namespace_stack.push(definition_id);
 
         if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
             let constant_path = node.constant_path().as_constant_path_node().unwrap();
@@ -414,6 +473,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&body);
         }
 
+        self.namespace_stack.pop();
         self.scope.leave();
     }
 
@@ -774,13 +834,26 @@ impl Visit<'_> for RubyIndexer<'_> {
                     }
                 }
             }
+            "include" => {
+                let receiver = node.receiver();
+                if receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some()) {
+                    self.handle_mixin(node, false);
+                } else {
+                    self.visit_call_node_parts(node);
+                }
+            }
+            "prepend" => {
+                let receiver = node.receiver();
+                if receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some()) {
+                    self.handle_mixin(node, true);
+                } else {
+                    self.visit_call_node_parts(node);
+                }
+            }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
                 // may discover something inside
-                if let Some(receiver) = node.receiver() {
-                    self.visit(&receiver);
-                }
-
+                self.visit_call_node_parts(node);
                 self.index_method_reference(message.clone(), &node.message_loc().unwrap());
 
                 match message.as_str() {
@@ -788,14 +861,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.index_method_reference("<=>".to_string(), &node.message_loc().unwrap());
                     }
                     _ => {}
-                }
-
-                if let Some(arguments) = node.arguments() {
-                    self.visit_arguments_node(&arguments);
-                }
-
-                if let Some(block) = node.block() {
-                    self.visit(&block);
                 }
             }
         }
@@ -2642,5 +2707,177 @@ mod tests {
                 panic!("Expected all definitions to be classes");
             }
         }
+    }
+
+    #[test]
+    fn includes_in_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              include Bar, Baz, ignored, 123
+              include Qux
+            end
+            "
+        });
+
+        let uri_id = UriId::from("file:///foo.rb");
+        let definition_id = DefinitionId::from(&format!("{uri_id}0Foo"));
+
+        if let Definition::Class(definition) = context.graph.definitions().get(&definition_id).unwrap() {
+            let mixins: Vec<String> = definition
+                .mixins()
+                .iter()
+                .map(|mixin| {
+                    if let Mixin::Prepend(_) = mixin {
+                        panic!("Expected only includes, found a prepend");
+                    }
+
+                    let reference = context.graph.constant_references().get(mixin).unwrap();
+                    let name = context.graph.names().get(reference.name_id()).unwrap();
+                    name.clone()
+                })
+                .collect();
+
+            assert_eq!(mixins, vec!["Bar", "Baz", "Qux"]);
+        } else {
+            panic!("Expected Foo to be a class definition");
+        }
+    }
+
+    #[test]
+    fn includes_in_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            module Foo
+              include Bar, Baz, ignored, 123
+              include Qux
+            end
+            "
+        });
+
+        let uri_id = UriId::from("file:///foo.rb");
+        let definition_id = DefinitionId::from(&format!("{uri_id}0Foo"));
+
+        if let Definition::Module(definition) = context.graph.definitions().get(&definition_id).unwrap() {
+            let mixins: Vec<String> = definition
+                .mixins()
+                .iter()
+                .map(|mixin| {
+                    if let Mixin::Prepend(_) = mixin {
+                        panic!("Expected only includes, found a prepend");
+                    }
+
+                    let reference = context.graph.constant_references().get(mixin).unwrap();
+                    let name = context.graph.names().get(reference.name_id()).unwrap();
+                    name.clone()
+                })
+                .collect();
+
+            assert_eq!(mixins, vec!["Bar", "Baz", "Qux"]);
+        } else {
+            panic!("Expected Foo to be a module definition");
+        }
+    }
+
+    #[test]
+    fn prepends_in_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              prepend Bar, Baz, ignored, 123
+              prepend Qux
+            end
+            "
+        });
+
+        let uri_id = UriId::from("file:///foo.rb");
+        let definition_id = DefinitionId::from(&format!("{uri_id}0Foo"));
+
+        if let Definition::Class(definition) = context.graph.definitions().get(&definition_id).unwrap() {
+            let mixins: Vec<String> = definition
+                .mixins()
+                .iter()
+                .map(|mixin| {
+                    if let Mixin::Include(_) = mixin {
+                        panic!("Expected only prepends, found an include");
+                    }
+
+                    let reference = context.graph.constant_references().get(mixin).unwrap();
+                    let name = context.graph.names().get(reference.name_id()).unwrap();
+                    name.clone()
+                })
+                .collect();
+
+            assert_eq!(mixins, vec!["Bar", "Baz", "Qux"]);
+        } else {
+            panic!("Expected Foo to be a class definition");
+        }
+    }
+
+    #[test]
+    fn prepends_in_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            module Foo
+              prepend Bar, Baz, ignored, 123
+              prepend Qux
+            end
+            "
+        });
+
+        let uri_id = UriId::from("file:///foo.rb");
+        let definition_id = DefinitionId::from(&format!("{uri_id}0Foo"));
+
+        if let Definition::Module(definition) = context.graph.definitions().get(&definition_id).unwrap() {
+            let mixins: Vec<String> = definition
+                .mixins()
+                .iter()
+                .map(|mixin| {
+                    if let Mixin::Include(_) = mixin {
+                        panic!("Expected only prepends, found an include");
+                    }
+
+                    let reference = context.graph.constant_references().get(mixin).unwrap();
+                    let name = context.graph.names().get(reference.name_id()).unwrap();
+                    name.clone()
+                })
+                .collect();
+
+            assert_eq!(mixins, vec!["Bar", "Baz", "Qux"]);
+        } else {
+            panic!("Expected Foo to be a module definition");
+        }
+    }
+
+    #[test]
+    fn includes_at_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            include Bar, Baz, ignored, 123
+            include Qux
+            "
+        });
+
+        // This is currently wrong! We should be inserting top level includes into an artificial `Object` definition
+        assert!(context.graph.get("Object").is_none());
+    }
+
+    #[test]
+    fn prepends_at_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            prepend Bar, Baz, ignored, 123
+            prepend Qux
+            "
+        });
+
+        // This is currently wrong! We should be inserting top level includes into an artificial `Object` definition
+        assert!(context.graph.get("Object").is_none());
     }
 }
