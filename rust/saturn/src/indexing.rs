@@ -13,8 +13,8 @@ use std::{sync::mpsc, thread};
 use url::Url;
 use xxhash_rust::xxh3::xxh3_64;
 
+pub mod nesting_stack;
 pub mod ruby_indexer;
-pub mod scope;
 
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
 ///

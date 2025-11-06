@@ -61,11 +61,11 @@ impl Nesting {
     }
 }
 
-/// The Scope structure maintains both the `Nesting` linked list of all lexical scopes we encountered and a name stack,
-/// so that we can compute fully qualified names ahead of time for all entries in the graph and their respective
-/// declaration IDs
+/// The `NestingStack` structure maintains both the `Nesting` linked list of all lexical scopes we encountered and a
+/// name stack, so that we can compute fully qualified names ahead of time for all entries in the graph and their
+/// respective declaration IDs
 #[derive(Default)]
-pub struct Scope {
+pub struct NestingStack {
     /// A vector of **fully qualified names**. For example:
     ///
     /// ```ruby
@@ -83,7 +83,7 @@ pub struct Scope {
     nesting: Option<Arc<Nesting>>,
 }
 
-impl Scope {
+impl NestingStack {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn regular_nesting() {
-        let mut scope = Scope::new();
+        let mut scope = NestingStack::new();
 
         // Foo
         let (name, id) = scope.enter("Foo");
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn compact_namespace_nesting() {
-        let mut scope = Scope::new();
+        let mut scope = NestingStack::new();
 
         // Foo
         let (name, id) = scope.enter("Foo");
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn top_level_nesting() {
-        let mut scope = Scope::new();
+        let mut scope = NestingStack::new();
 
         // Foo
         let (name, id) = scope.enter("Foo");
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn top_level_compact_nesting() {
-        let mut scope = Scope::new();
+        let mut scope = NestingStack::new();
 
         // Foo
         let (name, id) = scope.enter("Foo");
