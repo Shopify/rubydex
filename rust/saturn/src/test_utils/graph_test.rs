@@ -1,7 +1,9 @@
 use super::normalize_indentation;
+use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
 use crate::offset::Offset;
+use crate::resolve;
 use crate::source_location::{Position, SourceLocationConverter, UTF8SourceLocationConverter};
 use std::collections::HashMap;
 
@@ -21,7 +23,7 @@ impl GraphTest {
     }
 
     #[must_use]
-    fn index_source(uri: &str, source: &str) -> Graph {
+    fn index_source(uri: &str, source: &str) -> LocalGraph {
         let mut indexer = RubyIndexer::new(uri.to_string(), source);
         indexer.index();
         indexer.into_parts().0
@@ -43,6 +45,10 @@ impl GraphTest {
     #[must_use]
     pub fn get_source(&self, uri: &str) -> Option<&str> {
         self.sources.get(uri).map(String::as_str)
+    }
+
+    pub fn resolve(&mut self) {
+        resolve::resolve(&mut self.graph);
     }
 
     /// Parses a location string like `<file:///foo.rb:3:0-3:5>` into `(uri, start_offset, end_offset)`
@@ -183,11 +189,12 @@ mod tests {
         let mut context = GraphTest::new();
 
         context.index_uri("file://method.rb", "class Foo; end");
+        context.resolve();
 
         let foo_defs = context.graph.get("Foo").unwrap();
         assert_eq!(foo_defs.len(), 1);
-        assert_eq!(foo_defs[0].start(), 0);
-        assert_eq!(foo_defs[0].end(), 14);
+        assert_eq!(foo_defs[0].offset().start(), 0);
+        assert_eq!(foo_defs[0].offset().end(), 14);
     }
 
     #[test]
@@ -202,15 +209,17 @@ mod tests {
             "
         });
 
+        context.resolve();
+
         let foo_defs = context.graph.get("Foo").unwrap();
         assert_eq!(foo_defs.len(), 1);
-        assert_eq!(foo_defs[0].start(), 0);
-        assert_eq!(foo_defs[0].end(), 30);
+        assert_eq!(foo_defs[0].offset().start(), 0);
+        assert_eq!(foo_defs[0].offset().end(), 30);
 
         let bar_defs = context.graph.get("Foo::Bar").unwrap();
         assert_eq!(bar_defs.len(), 1);
-        assert_eq!(bar_defs[0].start(), 12);
-        assert_eq!(bar_defs[0].end(), 26);
+        assert_eq!(bar_defs[0].offset().start(), 12);
+        assert_eq!(bar_defs[0].offset().end(), 26);
     }
 
     #[test]
@@ -218,10 +227,11 @@ mod tests {
         let mut context = GraphTest::new();
 
         context.index_uri("file://method.rb", "\n\nclass Foo; end");
+        context.resolve();
 
         let foo_defs = context.graph.get("Foo").unwrap();
         assert_eq!(foo_defs.len(), 1);
-        assert_eq!(foo_defs[0].start(), 2);
-        assert_eq!(foo_defs[0].end(), 16);
+        assert_eq!(foo_defs[0].offset().start(), 2);
+        assert_eq!(foo_defs[0].offset().end(), 16);
     }
 }

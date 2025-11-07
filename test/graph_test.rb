@@ -49,6 +49,7 @@ class GraphTest < Minitest::Test
 
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
 
       declaration = graph["A"]
       refute_nil(declaration)
@@ -68,12 +69,13 @@ class GraphTest < Minitest::Test
 
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
 
       enumerator = graph.declarations
 
-      assert_equal(3, enumerator.size)
-      assert_equal(3, enumerator.count)
-      assert_equal(3, enumerator.to_a.size)
+      assert_equal(2, enumerator.size)
+      assert_equal(2, enumerator.count)
+      assert_equal(2, enumerator.to_a.size)
     end
   end
 
@@ -84,13 +86,14 @@ class GraphTest < Minitest::Test
 
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
 
       declarations = []
       graph.declarations do |declaration|
         declarations << declaration
       end
 
-      assert_equal(3, declarations.size)
+      assert_equal(2, declarations.size)
     end
   end
 

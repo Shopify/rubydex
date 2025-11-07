@@ -20,6 +20,7 @@ class DeclarationTest < Minitest::Test
 
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
 
       declaration = graph["A"]
       assert_instance_of(Saturn::Declaration, declaration)
@@ -34,6 +35,7 @@ class DeclarationTest < Minitest::Test
 
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
 
       declaration = graph.declarations.first
       refute_nil(declaration)
@@ -52,6 +54,7 @@ class DeclarationTest < Minitest::Test
 
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
 
       declaration = graph.declarations.first
       refute_nil(declaration)
@@ -71,6 +74,7 @@ class DeclarationTest < Minitest::Test
 
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
 
       decl_a = graph["A"]
       refute_nil(decl_a)

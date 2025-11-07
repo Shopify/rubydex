@@ -1,9 +1,7 @@
 use crate::{
-    indexing::nesting_stack::Nesting,
-    model::ids::{DeclarationId, NameId, ReferenceId, UriId},
+    model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, UriId},
     offset::Offset,
 };
-use std::sync::Arc;
 
 /// An unresolved reference to a constant
 #[derive(Debug)]
@@ -22,7 +20,7 @@ pub struct UnresolvedConstantRef {
     parent_scope_id: Option<ReferenceId>,
     /// The nesting where we found the constant reference. This is a chain of nesting objects representing the lexical
     /// scopes surrounding the reference
-    nesting: Option<Arc<Nesting>>,
+    nesting: Vec<DefinitionId>,
     /// The document where we found the reference
     uri_id: UriId,
     /// The offsets inside of the document where we found the reference
@@ -34,7 +32,7 @@ impl UnresolvedConstantRef {
     pub fn new(
         name_id: NameId,
         parent_scope_id: Option<ReferenceId>,
-        nesting: Option<Arc<Nesting>>,
+        nesting: Vec<DefinitionId>,
         uri_id: UriId,
         offset: Offset,
     ) -> Self {
@@ -58,7 +56,7 @@ impl UnresolvedConstantRef {
     }
 
     #[must_use]
-    pub fn nesting(&self) -> &Option<Arc<Nesting>> {
+    pub fn nesting(&self) -> &Vec<DefinitionId> {
         &self.nesting
     }
 
@@ -102,7 +100,7 @@ impl ConstantRef {
     }
 
     #[must_use]
-    pub fn nesting(&self) -> &Option<Arc<Nesting>> {
+    pub fn nesting(&self) -> &Vec<DefinitionId> {
         &self.original_ref.nesting
     }
 

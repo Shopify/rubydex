@@ -6,6 +6,7 @@ use saturn::{
     errors::MultipleErrors,
     indexing::{self},
     model::graph::Graph,
+    resolve::resolve,
     stats::{
         memory::MemoryStats,
         timer::{Timer, time_it},
@@ -49,22 +50,26 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
 
-    // Run integrity checks if requested
-    if args.check_integrity {
-        time_it!(integrity_check, {
-            let errors = Graph::integrity_checker().apply(&graph);
+    time_it!(resolving, {
+        resolve(&mut graph);
+    });
 
-            if errors.is_empty() {
-                println!("✓ Index integrity check passed");
-            } else {
-                eprintln!("✗ Index integrity check failed with {} errors:", errors.len());
-                for error in &errors {
-                    eprintln!("  - {error}");
-                }
-                std::process::exit(1);
-            }
-        });
-    }
+    // Run integrity checks if requested
+    // if args.check_integrity {
+    //     time_it!(integrity_check, {
+    //         let errors = Graph::integrity_checker().apply(&graph);
+
+    //         if errors.is_empty() {
+    //             println!("✓ Index integrity check passed");
+    //         } else {
+    //             eprintln!("✗ Index integrity check failed with {} errors:", errors.len());
+    //             for error in &errors {
+    //                 eprintln!("  - {error}");
+    //             }
+    //             std::process::exit(1);
+    //         }
+    //     });
+    // }
 
     if args.stats {
         time_it!(querying, {

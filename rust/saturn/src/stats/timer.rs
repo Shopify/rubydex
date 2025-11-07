@@ -121,6 +121,7 @@ make_timer! {
     setup, "Initialization";
     listing, "Listing";
     indexing, "Indexing";
+    resolving, "Resolving";
     querying, "Querying";
     integrity_check, "Integrity Check";
     database, "Database";

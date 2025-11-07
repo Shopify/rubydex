@@ -1,7 +1,10 @@
 use crate::{
     errors::{Errors, MultipleErrors},
-    indexing::ruby_indexer::{IndexerParts, RubyIndexer},
-    model::graph::Graph,
+    indexing::{
+        local_graph::LocalGraph,
+        ruby_indexer::{IndexerParts, RubyIndexer},
+    },
+    model::{document::Document, graph::Graph, ids::UriId},
 };
 use glob::glob;
 use std::sync::{
@@ -13,6 +16,7 @@ use std::{sync::mpsc, thread};
 use url::Url;
 use xxhash_rust::xxh3::xxh3_64;
 
+pub mod local_graph;
 pub mod nesting_stack;
 pub mod ruby_indexer;
 
@@ -27,12 +31,15 @@ pub mod ruby_indexer;
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
     let index_document = |file_path: &String| -> IndexerParts {
+        let uri = uri_from_file_path(file_path).unwrap();
+        let uri_id = UriId::from(&uri);
+
         let (source, errors) = read_document_source(file_path);
         if !errors.is_empty() {
-            return (Graph::new(), errors);
+            return (LocalGraph::new(uri_id, Document::new(uri)), errors);
         }
 
-        let mut ruby_indexer = RubyIndexer::new(uri_from_file_path(file_path).unwrap(), &source);
+        let mut ruby_indexer = RubyIndexer::new(uri, &source);
         ruby_indexer.index();
         ruby_indexer.into_parts()
     };

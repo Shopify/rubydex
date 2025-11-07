@@ -44,22 +44,21 @@ class DefinitionTest < Minitest::Test
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      defs = graph.declarations
+      defs = graph.documents
         .map { |d| d.definitions.to_a }
         .flatten
         .sort_by(&:location)
 
       assert_instance_of(Saturn::ClassDefinition, defs[0])
       assert_instance_of(Saturn::ClassVariableDefinition, defs[1])
-      assert_instance_of(Saturn::AttrAccessorDefinition, defs[2]) # for the writer
-      assert_instance_of(Saturn::AttrAccessorDefinition, defs[3]) # for the reader
-      assert_instance_of(Saturn::AttrReaderDefinition, defs[4])
-      assert_instance_of(Saturn::AttrWriterDefinition, defs[5])
-      assert_instance_of(Saturn::ModuleDefinition, defs[6])
-      assert_instance_of(Saturn::ConstantDefinition, defs[7])
-      assert_instance_of(Saturn::MethodDefinition, defs[8])
-      assert_instance_of(Saturn::GlobalVariableDefinition, defs[9])
-      assert_instance_of(Saturn::InstanceVariableDefinition, defs[10])
+      assert_instance_of(Saturn::AttrAccessorDefinition, defs[2])
+      assert_instance_of(Saturn::AttrReaderDefinition, defs[3])
+      assert_instance_of(Saturn::AttrWriterDefinition, defs[4])
+      assert_instance_of(Saturn::ModuleDefinition, defs[5])
+      assert_instance_of(Saturn::ConstantDefinition, defs[6])
+      assert_instance_of(Saturn::MethodDefinition, defs[7])
+      assert_instance_of(Saturn::GlobalVariableDefinition, defs[8])
+      assert_instance_of(Saturn::InstanceVariableDefinition, defs[9])
     end
   end
 
@@ -74,7 +73,7 @@ class DefinitionTest < Minitest::Test
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      def_a = graph["A"]&.definitions&.first
+      def_a = graph.documents.first.definitions.find { |d| d.name == "A" }
       refute_nil(def_a)
       location = def_a.location
       refute_nil(location)
@@ -85,7 +84,7 @@ class DefinitionTest < Minitest::Test
       assert_equal(3, location.end_line)
       assert_equal(4, location.end_column)
 
-      def_foo = graph["A::foo"]&.definitions&.first
+      def_foo = graph.documents.first.definitions.find { |d| d.name == "foo" }
       refute_nil(def_foo)
       location = def_foo.location
       refute_nil(location)
@@ -112,7 +111,7 @@ class DefinitionTest < Minitest::Test
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      comments = graph["Foo"]&.definitions&.first&.comments
+      comments = graph.documents.first.definitions.find { |d| d.name == "Foo" }.comments
       assert_equal(
         [
           "# This is a class comment (#{context.absolute_path_to("file1.rb")}:1:1-1:26)",
@@ -121,7 +120,7 @@ class DefinitionTest < Minitest::Test
         comments.map { |c| "#{c.string} (#{c.location})" },
       )
 
-      comments = graph["Foo::foo"]&.definitions&.first&.comments
+      comments = graph.documents.first.definitions.find { |d| d.name == "foo" }.comments
       assert_equal(
         ["# Method comment (#{context.absolute_path_to("file1.rb")}:4:3-4:19)"],
         comments.map { |c| "#{c.string} (#{c.location})" },

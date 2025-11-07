@@ -100,6 +100,23 @@ static VALUE sr_definition_comments(VALUE self) {
     return ary;
 }
 
+// Definition#name -> String
+static VALUE sr_definition_name(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const char *name = sat_definition_name(graph, data->id);
+    if (name == NULL) {
+        return Qnil;
+    }
+    VALUE str = rb_utf8_str_new_cstr(name);
+    free_c_string(name);
+    return str;
+}
+
 void initialize_definition(VALUE mod) {
     mSaturn = mod;
 
@@ -111,6 +128,7 @@ void initialize_definition(VALUE mod) {
     rb_funcall(rb_singleton_class(cDefinition), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
     rb_define_method(cDefinition, "location", sr_definition_location, 0);
     rb_define_method(cDefinition, "comments", sr_definition_comments, 0);
+    rb_define_method(cDefinition, "name", sr_definition_name, 0);
 
     cClassDefinition = rb_define_class_under(mSaturn, "ClassDefinition", cDefinition);
     rb_define_alloc_func(cClassDefinition, sr_handle_alloc);
