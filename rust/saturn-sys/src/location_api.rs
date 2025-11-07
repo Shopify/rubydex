@@ -49,10 +49,10 @@ pub(crate) fn create_location_for_uri_and_offset(uri: &str, start: u32, end: u32
 
     let loc = Location {
         uri: CString::new(uri).unwrap().into_raw().cast_const(),
-        start_line: start_line + 1,
-        end_line: end_line + 1,
-        start_column: start_column + 1,
-        end_column: end_column + 1,
+        start_line,
+        end_line,
+        start_column,
+        end_column,
     };
 
     Box::into_raw(Box::new(loc))

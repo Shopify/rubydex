@@ -811,8 +811,8 @@ mod tests {
 
         let foo_declaration = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(foo_declaration.references().len(), 2, "Foo should have 2 references");
-        assert_constant_reference_to!(context, "Foo", "file:///foo.rb:11:0-11:3");
-        assert_constant_reference_to!(context, "Foo", "file:///bar.rb:1:2-1:7");
+        assert_constant_reference_to!(context, "Foo", "file:///foo.rb:12:1-12:4");
+        assert_constant_reference_to!(context, "Foo", "file:///bar.rb:2:3-2:8");
 
         let foo_const_declaration = context
             .graph
@@ -824,12 +824,12 @@ mod tests {
             2,
             "Foo::CONST should have 2 references"
         );
-        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:3:4-3:9");
-        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:11:0-11:10");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:4:5-4:10");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:12:1-12:11");
 
         let bar_declaration = context.graph.declarations.get(&DeclarationId::from("Bar")).unwrap();
         assert_eq!(bar_declaration.references().len(), 1, "Bar should have 1 reference");
-        assert_constant_reference_to!(context, "Bar", "file:///foo.rb:4:4-4:9");
+        assert_constant_reference_to!(context, "Bar", "file:///foo.rb:5:5-5:10");
 
         let foo_bar_declaration = context
             .graph
@@ -841,7 +841,7 @@ mod tests {
             1,
             "Foo::Bar should have 1 reference"
         );
-        assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:1:2-1:12");
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:2:3-2:13");
 
         assert_eq!(
             context
@@ -853,9 +853,9 @@ mod tests {
             3,
             "Should have 3 unresolved references"
         );
-        assert_unresolved_constant!(context, "Baz", None, "file:///foo.rb:5:4-5:9");
-        assert_unresolved_constant!(context, "String", Some("Foo::Bar"), "file:///foo.rb:6:4-6:10");
-        assert_unresolved_constant!(context, "Object", None, "file:///foo.rb:7:4-7:12");
+        assert_unresolved_constant!(context, "Baz", None, "file:///foo.rb:6:5-6:10");
+        assert_unresolved_constant!(context, "String", Some("Foo::Bar"), "file:///foo.rb:7:5-7:11");
+        assert_unresolved_constant!(context, "Object", None, "file:///foo.rb:8:5-8:13");
     }
 
     #[test]
