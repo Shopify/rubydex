@@ -181,50 +181,22 @@ impl Graph {
         reference_id
     }
 
-    /// Attempts to resolve a constant reference against the graph. Returns the fully qualified declaration ID that the
-    /// reference is related to or `None`
-    pub fn resolve_constant(&self, reference: &ConstantReference) -> Option<DeclarationId> {
-        match reference {
-            ConstantReference::Unresolved(constant) => {
-                if let Some(parent_scope) = constant
-                    .parent_scope_id()
-                    .and_then(|id| self.constant_references.get(&id))
-                {
-                    // This is a constant path and we must first recurse to resolve the parent scope
-                    let declaration_id = self.resolve_constant(parent_scope)?;
-                    let declaration = self.declarations.get(&declaration_id)?;
-                    declaration.members().get(constant.name_id()).copied()
-                } else if let Some(nesting) = constant.nesting() {
-                    // First search lexical scopes
-                    let mut current_nesting = Some(nesting.as_ref());
-
-                    while let Some(nesting) = current_nesting {
-                        let declaration_id = nesting.declaration_id();
-
-                        if let Some(declaration) = self.declarations.get(declaration_id)
-                            && let Some(member) = declaration.members().get(constant.name_id())
-                        {
-                            return Some(*member);
-                        }
-                        current_nesting = nesting.parent().as_ref().map(std::convert::AsRef::as_ref);
+    pub fn record_resolved_constant(&mut self, reference_id: ReferenceId, declaration_id: DeclarationId) {
+        match self.constant_references.entry(reference_id) {
+            Entry::Occupied(entry) => match entry.get() {
+                ConstantReference::Unresolved(_) => {
+                    if let Some(declaration) = self.declarations.get_mut(&declaration_id)
+                        && let ConstantReference::Unresolved(unresolved) = entry.remove()
+                    {
+                        declaration.add_reference(reference_id);
+                        let resolved_reference =
+                            ConstantReference::Resolved(Box::new(ConstantRef::new(*unresolved, declaration_id)));
+                        self.constant_references.insert(reference_id, resolved_reference);
                     }
-
-                    // Then search inheritance chain
-
-                    // Fall back to top level (member of Object)
-                    // Note: temporary while we're missing RBS indexing
-                    let name = self.names.get(reference.name_id())?;
-                    Some(DeclarationId::from(name))
-                } else {
-                    // Top level reference
-
-                    // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
-                    // up `Object` and then we search its members for the top level constant
-                    let name = self.names.get(reference.name_id())?;
-                    Some(DeclarationId::from(name))
                 }
-            }
-            ConstantReference::Resolved(resolved) => Some(resolved.declaration_id()),
+                ConstantReference::Resolved(_) => {}
+            },
+            Entry::Vacant(_) => {}
         }
     }
 
@@ -463,147 +435,12 @@ impl Graph {
             println!("  {kind:20} {count:6}");
         }
     }
-
-    /// Resolve all unresolved references and add them to their corresponding declarations
-    ///
-    /// # Panics
-    ///
-    /// This will panic if we resolve a reference to a declaration ID that does not exist in the graph
-    pub fn resolve_references(&mut self) {
-        let mut newly_resolved_references: Vec<(ReferenceId, DeclarationId)> = Vec::new();
-
-        for (id, reference) in &self.constant_references {
-            if let ConstantReference::Unresolved(_) = reference
-                && let Some(declaration_id) = self.resolve_constant(reference)
-                && let Some(declaration) = self.declarations.get_mut(&declaration_id)
-            {
-                declaration.add_reference(*id);
-                newly_resolved_references.push((*id, declaration_id));
-            }
-        }
-
-        for (id, declaration_id) in newly_resolved_references {
-            if let ConstantReference::Unresolved(unresolved_ref) = self.constant_references.remove(&id).unwrap() {
-                self.constant_references.insert(
-                    id,
-                    ConstantReference::Resolved(Box::new(ConstantRef::new(*unresolved_ref, declaration_id))),
-                );
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{model::comment::Comment, test_utils::GraphTest};
-
-    /// Asserts that a declaration has a constant reference at the specified location
-    ///
-    /// This macro:
-    /// 1. Parses the location string into `(uri, start_offset, end_offset)`
-    /// 2. Finds the declaration by name
-    /// 3. Finds a constant reference to that declaration at the given uri and start offset
-    /// 4. Asserts the end offset matches
-    ///
-    /// Location format: "uri:start_line:start_column-end_line:end_column"
-    /// Example: `<file:///foo.rb:3:0-3:5>`
-    macro_rules! assert_constant_reference_to {
-        ($context:expr, $declaration_name:expr, $location:expr) => {
-            let (uri, start, end) = $context.parse_location($location);
-
-            let declaration = $context
-                .graph
-                .declarations
-                .get(&DeclarationId::from($declaration_name))
-                .expect(&format!("Declaration '{}' not found in graph", $declaration_name));
-
-            let constant = declaration
-                .references()
-                .iter()
-                .filter_map(|r| {
-                    if let ConstantReference::Resolved(c) = $context.graph.constant_references.get(r).unwrap() {
-                        Some(c)
-                    } else {
-                        None
-                    }
-                })
-                .find(|c| c.uri_id() == UriId::from(&uri) && c.offset().start() == start)
-                .expect(&format!(
-                    "Declaration '{}' does not have a reference at {} starting at offset {}",
-                    $declaration_name, $location, start
-                ));
-
-            $context.assert_offset_matches(
-                &uri,
-                constant.offset(),
-                start,
-                end,
-                &format!("reference to '{}'", $declaration_name),
-                $location,
-            );
-        };
-    }
-
-    /// Asserts that an unresolved constant reference has specific properties
-    ///
-    /// The `$nesting` parameter should be:
-    /// - `None` for top-level references like `::Foo`
-    /// - `Some("Foo::Bar")` for references within a specific lexical scope
-    ///
-    /// Location format: "uri:start_line:start_column-end_line:end_column"
-    /// Example: `<file:///foo.rb:3:0-3:5>`
-    macro_rules! assert_unresolved_constant {
-        ($context:expr, $name:expr, $nesting:expr, $location:expr) => {
-            let (uri, start, end) = $context.parse_location($location);
-            let expected_nesting: Option<&str> = $nesting;
-
-            let constant = $context
-                .graph
-                .constant_references
-                .values()
-                .filter_map(|r| {
-                    if let ConstantReference::Unresolved(c) = r {
-                        Some(c)
-                    } else {
-                        None
-                    }
-                })
-                .find(|c| {
-                    let name_matches = $context.graph.names.get(c.name_id()) == Some(&String::from($name));
-                    let nesting_matches = match (c.nesting(), expected_nesting) {
-                        (None, None) => true,
-                        (Some(nesting), Some(expected_decl_id)) => {
-                            nesting.declaration_id() == &DeclarationId::from(expected_decl_id)
-                        }
-                        _ => false,
-                    };
-                    name_matches && nesting_matches
-                })
-                .expect(&format!(
-                    "{} with nesting {:?} is not found in unresolved references",
-                    $name, expected_nesting
-                ));
-
-            if constant.uri_id() != UriId::from(&uri) {
-                panic!(
-                    "URI mismatch for unresolved constant '{}'\n  actual:   {:?}\n  expected: {}",
-                    $name,
-                    constant.uri_id(),
-                    uri
-                );
-            }
-
-            $context.assert_offset_matches(
-                &uri,
-                constant.offset(),
-                start,
-                end,
-                &format!("unresolved constant '{}'", $name),
-                $location,
-            );
-        };
-    }
 
     #[test]
     fn deleting_a_uri() {
@@ -759,101 +596,6 @@ mod tests {
         let definitions = context.graph.get("NoCommentClass").unwrap();
         let def = definitions.first().unwrap();
         assert!(def.comments().is_empty());
-    }
-
-    #[test]
-    fn resolving_top_level_references() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///bar.rb", {
-            r"
-            class Bar; end
-
-            ::Bar
-            Bar
-            "
-        });
-        context.index_uri("file:///foo.rb", {
-            r"
-            module Foo
-              ::Bar
-            end
-            "
-        });
-
-        context.graph.resolve_references();
-        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:2:2-2:5");
-        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:3:0-3:3");
-        assert_constant_reference_to!(context, "Bar", "file:///foo.rb:1:4-1:7");
-    }
-
-    #[test]
-    fn resolving_nested_reference() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///bar.rb", {
-            r"
-            module Foo
-              CONST = 123
-
-              class Bar
-                CONST
-                Foo::CONST
-              end
-            end
-            "
-        });
-
-        context.graph.resolve_references();
-        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:4:4-4:9");
-        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:5:9-5:14");
-    }
-
-    #[test]
-    fn resolving_nested_reference_that_refer_to_top_level_constant() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///bar.rb", {
-            r"
-            class Baz; end
-
-            module Foo
-              class Bar
-                Baz
-              end
-            end
-            "
-        });
-
-        context.graph.resolve_references();
-        assert_constant_reference_to!(context, "Baz", "file:///bar.rb:4:4-4:7");
-    }
-
-    #[test]
-    fn resolving_constant_path_references_at_top_level() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///bar.rb", {
-            r"
-            module Foo
-              class Bar; end
-            end
-
-            Foo::Bar
-            "
-        });
-
-        context.graph.resolve_references();
-        assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:4:5-4:8");
-    }
-
-    #[test]
-    fn resolving_reference_for_non_existing_declaration() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            Foo
-            "
-        });
-
-        context.graph.resolve_references();
-        assert_unresolved_constant!(context, "Foo", None, "file:///foo.rb:0:0-0:3");
     }
 
     #[test]
