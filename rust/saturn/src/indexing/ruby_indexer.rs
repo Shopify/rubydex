@@ -120,7 +120,7 @@ impl<'a> RubyIndexer<'a> {
         let mut parameters: Vec<Parameter> = Vec::new();
 
         if let Some(parameters_list) = node.parameters() {
-            for parameter in parameters_list.requireds().iter() {
+            for parameter in &parameters_list.requireds() {
                 let location = parameter.location();
 
                 parameters.push(Parameter::RequiredPositional(ParameterStruct::new(
@@ -129,7 +129,7 @@ impl<'a> RubyIndexer<'a> {
                 )));
             }
 
-            for parameter in parameters_list.optionals().iter() {
+            for parameter in &parameters_list.optionals() {
                 let opt_param = parameter.as_optional_parameter_node().unwrap();
                 let name_loc = opt_param.name_loc();
 
@@ -149,7 +149,7 @@ impl<'a> RubyIndexer<'a> {
                 )));
             }
 
-            for post in parameters_list.posts().iter() {
+            for post in &parameters_list.posts() {
                 let location = post.location();
 
                 parameters.push(Parameter::Post(ParameterStruct::new(
@@ -158,7 +158,7 @@ impl<'a> RubyIndexer<'a> {
                 )));
             }
 
-            for keyword in parameters_list.keywords().iter() {
+            for keyword in &parameters_list.keywords() {
                 match keyword {
                     ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
                         let required = keyword.as_required_keyword_parameter_node().unwrap();
@@ -234,7 +234,7 @@ impl<'a> RubyIndexer<'a> {
         if (receiver.is_none() || receiver.unwrap().as_self_node().is_some())
             && let Some(arguments) = node.arguments()
         {
-            for argument in arguments.arguments().iter() {
+            for argument in &arguments.arguments() {
                 match argument {
                     ruby_prism::Node::SymbolNode { .. } => {
                         let symbol = argument.as_symbol_node().unwrap();
@@ -590,7 +590,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_multi_write_node(&mut self, node: &ruby_prism::MultiWriteNode) {
-        for left in node.lefts().iter() {
+        for left in &node.lefts() {
             match left {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
                     let location = left.location();
