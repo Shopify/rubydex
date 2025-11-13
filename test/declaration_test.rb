@@ -11,7 +11,7 @@ class DeclarationTest < Minitest::Test
       Saturn::Declaration.new
     end
 
-    assert_equal("private method 'new' called for class Saturn::Declaration", e.message)
+    assert_match(/private method .new. called for.* Saturn::Declaration/, e.message)
   end
 
   def test_declaration_initialize_from_graph

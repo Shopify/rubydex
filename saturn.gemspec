@@ -11,7 +11,7 @@ Gem::Specification.new do |spec|
   spec.summary = "A high performance static analysis suite for Ruby"
   spec.description = "A high performance static analysis suite for Ruby, built in Rust with Ruby APIs"
   spec.homepage = "https://github.com/Shopify/saturn"
-  spec.required_ruby_version = ">= 3.1.0"
+  spec.required_ruby_version = ">= 3.2.0"
   spec.required_rubygems_version = ">= 3.3.11"
 
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
