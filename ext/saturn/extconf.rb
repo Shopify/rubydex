@@ -71,6 +71,10 @@ new_makefile.gsub!("$(Q) $(POSTLINK)", <<~MAKEFILE.chomp)
 MAKEFILE
 File.write("Makefile", new_makefile)
 
-require "extconf_compile_commands_json"
-ExtconfCompileCommandsJson.generate!
-ExtconfCompileCommandsJson.symlink!
+begin
+  require "extconf_compile_commands_json"
+
+  ExtconfCompileCommandsJson.generate!
+  ExtconfCompileCommandsJson.symlink!
+rescue LoadError # rubocop:disable Lint/SuppressedException
+end
