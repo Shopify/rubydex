@@ -11,7 +11,7 @@ class DefinitionTest < Minitest::Test
       Saturn::Definition.new
     end
 
-    assert_equal("private method 'new' called for class Saturn::Definition", e.message)
+    assert_match(/private method .new. called for.* Saturn::Definition/, e.message)
 
     assert_raises(NoMethodError) { Saturn::ClassDefinition.new }
     assert_raises(NoMethodError) { Saturn::ModuleDefinition.new }
