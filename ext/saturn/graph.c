@@ -265,11 +265,21 @@ static VALUE sr_graph_method_references(VALUE self) {
     return self;
 }
 
+// Graph#resolve: () -> self
+// Runs the resolver to compute declarations and ownership
+static VALUE sr_graph_resolve(VALUE self) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+    sat_graph_resolve(graph);
+    return self;
+}
+
 void initialize_graph(VALUE mSaturn) {
     cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
 
     rb_define_alloc_func(cGraph, sr_graph_alloc);
     rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
+    rb_define_method(cGraph, "resolve", sr_graph_resolve, 0);
     rb_define_method(cGraph, "declarations", sr_graph_declarations, 0);
     rb_define_method(cGraph, "documents", sr_graph_documents, 0);
     rb_define_method(cGraph, "constant_references", sr_graph_constant_references, 0);

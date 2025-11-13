@@ -1,8 +1,10 @@
 mod context;
 mod graph_test;
+mod local_graph_test;
 
 pub use context::Context;
 pub use graph_test::GraphTest;
+pub use local_graph_test::LocalGraphTest;
 
 #[must_use]
 pub(crate) fn normalize_indentation(input: &str) -> String {

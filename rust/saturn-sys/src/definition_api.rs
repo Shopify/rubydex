@@ -60,6 +60,33 @@ pub unsafe extern "C" fn sat_definition_kind(pointer: GraphPointer, definition_i
     })
 }
 
+/// Returns the UTF-8 unqualified name string for a definition id.
+/// Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the definition cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_definition_name(pointer: GraphPointer, definition_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        if let Some(defn) = graph.definitions().get(&def_id) {
+            let name_id = defn.name_id();
+            if let Some(name) = graph.names().get(name_id) {
+                CString::new(name.as_str()).unwrap().into_raw().cast_const()
+            } else {
+                ptr::null()
+            }
+        } else {
+            ptr::null()
+        }
+    })
+}
+
 /// Shared iterator over definition (id, kind) pairs
 #[derive(Debug)]
 pub struct DefinitionsIter {
@@ -247,7 +274,8 @@ pub unsafe extern "C" fn sat_definition_location(pointer: GraphPointer, definiti
             panic!("Document not found: {uri_id:?}");
         };
 
-        create_location_for_uri_and_offset(&uri, defn.start(), defn.end())
+        let offset = defn.offset();
+        create_location_for_uri_and_offset(&uri, offset.start(), offset.end())
     })
 }
 

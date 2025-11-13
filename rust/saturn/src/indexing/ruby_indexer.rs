@@ -1,25 +1,21 @@
 //! Visit the Ruby AST and create the definitions.
 
-use std::sync::{Arc, LazyLock};
-
 use crate::errors::Errors;
-use crate::indexing::nesting_stack::NestingStack;
+use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodDefinition, Mixin,
     ModuleDefinition, Parameter, ParameterStruct,
 };
-use crate::model::graph::Graph;
-use crate::model::ids::{DeclarationId, DefinitionId, ReferenceId, UriId};
+use crate::model::document::Document;
+use crate::model::ids::{DefinitionId, ReferenceId, UriId};
 use crate::model::references::{ConstantReference, MethodRef, UnresolvedConstantRef};
 use crate::offset::Offset;
 
 use ruby_prism::{ParseResult, Visit};
 
-pub type IndexerParts = (Graph, Vec<Errors>);
-static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
-static MAIN_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("<main>"));
+pub type IndexerParts = (LocalGraph, Vec<Errors>);
 
 /// The indexer for the definitions found in the Ruby source code.
 ///
@@ -27,28 +23,26 @@ static MAIN_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("
 /// merged into the global state later.
 pub struct RubyIndexer<'a> {
     uri_id: UriId,
-    local_graph: Graph,
+    local_graph: LocalGraph,
+    source: &'a str,
     errors: Vec<Errors>,
     comments: Vec<CommentGroup>,
-    source: &'a str,
-    scope: NestingStack,
-    namespace_stack: Vec<DefinitionId>,
+    definitions_stack: Vec<DefinitionId>,
 }
 
 impl<'a> RubyIndexer<'a> {
     #[must_use]
     pub fn new(uri: String, source: &'a str) -> Self {
-        let mut local_index = Graph::new();
-        let uri_id = local_index.add_uri(uri);
+        let uri_id = UriId::from(&uri);
+        let local_graph = LocalGraph::new(uri_id, Document::new(uri));
 
         Self {
             uri_id,
-            local_graph: local_index,
+            local_graph,
+            source,
             errors: Vec::new(),
             comments: Vec::new(),
-            source,
-            scope: NestingStack::new(),
-            namespace_stack: Vec::new(),
+            definitions_stack: Vec::new(),
         }
     }
 
@@ -297,20 +291,21 @@ impl<'a> RubyIndexer<'a> {
         let offset = Offset::from_prism_location(&location);
         let name = Self::location_to_string(&location);
 
-        let (name, scope) = if let Some(trimmed) = name.strip_prefix("::") {
-            (trimmed.to_string(), None)
+        let (name, nesting) = if let Some(trimmed) = name.strip_prefix("::") {
+            (trimmed.to_string(), Vec::new())
         } else {
-            (name, self.scope.nesting().as_ref().map(Arc::clone))
+            (name, self.definitions_stack.clone())
         };
 
         let name_id = self.local_graph.add_name(name);
         let reference = ConstantReference::Unresolved(Box::new(UnresolvedConstantRef::new(
             name_id,
             parent_scope_id,
-            scope,
+            nesting,
             self.uri_id,
             offset,
         )));
+
         Some(self.local_graph.add_constant_reference(reference))
     }
 
@@ -330,7 +325,7 @@ impl<'a> RubyIndexer<'a> {
                 .filter_map(|arg| self.index_constant_reference(&arg))
                 .collect::<Vec<_>>();
 
-            if let Some(owner_id) = self.namespace_stack.last()
+            if let Some(owner_id) = self.definitions_stack.last()
                 && let Some(current_owner) = self.local_graph.get_definition_mut(*owner_id)
             {
                 for id in reference_ids {
@@ -370,6 +365,17 @@ impl<'a> RubyIndexer<'a> {
         if let Some(block) = node.block() {
             self.visit(&block);
         }
+    }
+
+    #[must_use]
+    fn parent_nesting_id(&self) -> Option<&DefinitionId> {
+        self.definitions_stack.last()
+    }
+
+    #[must_use]
+    fn parent_nesting(&mut self) -> Option<&mut Definition> {
+        let parent_id = self.parent_nesting_id()?;
+        self.local_graph.get_definition_mut(*parent_id)
     }
 }
 
@@ -417,76 +423,81 @@ impl CommentGroup {
 
 impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
-        let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let name = Self::location_to_string(&node.constant_path().location());
-        let (fully_qualified_name, declaration_id) = self.scope.enter(&name);
+        let name_id = self.local_graph.add_name(name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-
+        let owner_id = self.parent_nesting_id().copied();
         let superclass = node.superclass().and_then(|n| self.index_constant_reference(&n));
 
+        if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
+            // Visit the constant path to create the constant references
+            let constant_path = node.constant_path().as_constant_path_node().unwrap();
+            if let Some(parent) = constant_path.parent() {
+                self.visit(&parent);
+            }
+        }
+
         let definition = Definition::Class(Box::new(ClassDefinition::new(
-            declaration_id,
+            name_id,
             self.uri_id,
             offset,
             comments,
+            owner_id,
             superclass,
         )));
 
-        let definition_id = self
-            .local_graph
-            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
-        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
-        self.namespace_stack.push(definition_id);
+        let definition_id = self.local_graph.add_definition(definition);
 
-        if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
-            let constant_path = node.constant_path().as_constant_path_node().unwrap();
-            if let Some(parent) = constant_path.parent() {
-                self.visit(&parent);
-            }
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
         }
+
+        self.definitions_stack.push(definition_id);
 
         if let Some(body) = node.body() {
             self.visit(&body);
         }
 
-        self.namespace_stack.pop();
-        self.scope.leave();
+        self.definitions_stack.pop();
     }
 
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
-        let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let name = Self::location_to_string(&node.constant_path().location());
-        let (fully_qualified_name, declaration_id) = self.scope.enter(&name);
+        let name_id = self.local_graph.add_name(name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-
-        let definition = Definition::Module(Box::new(ModuleDefinition::new(
-            declaration_id,
-            self.uri_id,
-            offset,
-            comments,
-        )));
-
-        let definition_id = self
-            .local_graph
-            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
-        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
-        self.namespace_stack.push(definition_id);
+        let owner_id = self.parent_nesting_id().copied();
 
         if let ruby_prism::Node::ConstantPathNode { .. } = node.constant_path() {
+            // Visit the constant path to create the constant references
             let constant_path = node.constant_path().as_constant_path_node().unwrap();
             if let Some(parent) = constant_path.parent() {
                 self.visit(&parent);
             }
         }
 
+        let definition = Definition::Module(Box::new(ModuleDefinition::new(
+            name_id,
+            self.uri_id,
+            offset,
+            comments,
+            owner_id,
+        )));
+
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
+        }
+
+        self.definitions_stack.push(definition_id);
+
         if let Some(body) = node.body() {
             self.visit(&body);
         }
 
-        self.namespace_stack.pop();
-        self.scope.leave();
+        self.definitions_stack.pop();
     }
 
     fn visit_constant_and_write_node(&mut self, node: &ruby_prism::ConstantAndWriteNode) {
@@ -505,25 +516,27 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
-        let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let fully_qualified_name = self.scope.fully_qualify(&name);
-
-        let declaration_id = DeclarationId::from(&fully_qualified_name);
+        let name_id = self.local_graph.add_name(name);
         let offset = Offset::from_prism_location(&name_loc);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let owner_id = self.parent_nesting_id().copied();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-            declaration_id,
+            name_id,
             self.uri_id,
             offset,
             comments,
+            owner_id,
         )));
 
-        self.local_graph
-            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
-        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
+        }
+
         self.visit(&node.value());
     }
 
@@ -540,29 +553,31 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
-        let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
         let location = node.target().location();
         let name = Self::location_to_string(&location);
-        let fully_qualified_name = self.scope.fully_qualify(&name);
-
-        let declaration_id = DeclarationId::from(&fully_qualified_name);
+        let name_id = self.local_graph.add_name(name);
         let offset = Offset::from_prism_location(&location);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let owner_id = self.parent_nesting_id().copied();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-            declaration_id,
+            name_id,
             self.uri_id,
             offset,
             comments,
+            owner_id,
         )));
 
-        self.local_graph
-            .add_definition(fully_qualified_name, definition, &previous_nesting_id);
-        self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
+        }
 
         if let Some(parent) = node.target().parent() {
             self.visit(&parent);
         }
+
         self.visit(&node.value());
     }
 
@@ -578,84 +593,91 @@ impl Visit<'_> for RubyIndexer<'_> {
         for left in node.lefts().iter() {
             match left {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
-                    let previous_nesting_id = self.scope.current_nesting_id().unwrap_or(*OBJECT_ID);
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let fully_qualified_name = self.scope.fully_qualify(&name);
-
-                    let declaration_id = DeclarationId::from(&fully_qualified_name);
+                    let name_id = self.local_graph.add_name(name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                    let owner_id = self.parent_nesting_id().copied();
 
                     let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-                        declaration_id,
+                        name_id,
                         self.uri_id,
                         offset,
                         comments,
+                        owner_id,
                     )));
 
-                    self.local_graph
-                        .add_definition(fully_qualified_name, definition, &previous_nesting_id);
-                    self.local_graph.add_member(&previous_nesting_id, declaration_id, &name);
+                    let definition_id = self.local_graph.add_definition(definition);
+
+                    if let Some(parent_nesting) = self.parent_nesting() {
+                        parent_nesting.add_member(definition_id);
+                    }
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let declaration_id = DeclarationId::from(&name);
+                    let name_id = self.local_graph.add_name(name);
                     let offset = Offset::from_prism_location(&location);
-
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                    let owner_id = self.parent_nesting_id().copied();
+
                     let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                        declaration_id,
+                        name_id,
                         self.uri_id,
                         offset,
                         comments,
+                        owner_id,
                     )));
 
-                    self.local_graph.add_member(&MAIN_ID, declaration_id, &name);
-                    self.local_graph.add_definition(name, definition, &MAIN_ID);
+                    let definition_id = self.local_graph.add_definition(definition);
+
+                    if let Some(parent_nesting) = self.parent_nesting() {
+                        parent_nesting.add_member(definition_id);
+                    }
                 }
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
-                    let nesting_id = self.scope.current_nesting_id().unwrap_or(*MAIN_ID);
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let fully_qualified_name = self.scope.fully_qualify(&name);
-
-                    let declaration_id = DeclarationId::from(&fully_qualified_name);
+                    let name_id = self.local_graph.add_name(name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                    let owner_id = self.parent_nesting_id().copied();
 
                     let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                        declaration_id,
+                        name_id,
                         self.uri_id,
                         offset,
                         comments,
+                        owner_id,
                     )));
 
-                    self.local_graph
-                        .add_definition(fully_qualified_name, definition, &nesting_id);
-                    self.local_graph.add_member(&nesting_id, declaration_id, &name);
+                    let definition_id = self.local_graph.add_definition(definition);
+
+                    if let Some(parent_nesting) = self.parent_nesting() {
+                        parent_nesting.add_member(definition_id);
+                    }
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
-                    if let Some(nesting_id) = self.scope.current_nesting_id() {
-                        let location = left.location();
-                        let name = Self::location_to_string(&location);
-                        let fully_qualified_name = self.scope.fully_qualify(&name);
+                    let location = left.location();
+                    let name = Self::location_to_string(&location);
+                    let name_id = self.local_graph.add_name(name);
+                    let offset = Offset::from_prism_location(&location);
+                    let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                    let owner_id = self.parent_nesting_id().copied();
 
-                        let declaration_id = DeclarationId::from(&fully_qualified_name);
-                        let offset = Offset::from_prism_location(&location);
-                        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                    let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                        name_id,
+                        self.uri_id,
+                        offset,
+                        comments,
+                        owner_id,
+                    )));
 
-                        let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                            declaration_id,
-                            self.uri_id,
-                            offset,
-                            comments,
-                        )));
+                    let definition_id = self.local_graph.add_definition(definition);
 
-                        self.local_graph.add_member(&nesting_id, declaration_id, &name);
-                        self.local_graph
-                            .add_definition(fully_qualified_name, definition, &nesting_id);
+                    if let Some(parent_nesting) = self.parent_nesting() {
+                        parent_nesting.add_member(definition_id);
                     }
                 }
                 ruby_prism::Node::CallTargetNode { .. } => {
@@ -673,27 +695,31 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode) {
-        let nesting_id = self.scope.current_nesting_id().unwrap_or(*MAIN_ID);
         let name = Self::location_to_string(&node.name_loc());
-        let fully_qualified_name = self.scope.fully_qualify(&name);
-
-        let declaration_id = DeclarationId::from(&fully_qualified_name);
+        let name_id = self.local_graph.add_name(name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let owner_id = self.parent_nesting_id().copied();
+        let parameters = Self::collect_parameters(node);
+        let is_singleton = node
+            .receiver()
+            .is_some_and(|receiver| receiver.as_self_node().is_some());
 
-        let method = MethodDefinition::new(
-            declaration_id,
+        let method = Definition::Method(Box::new(MethodDefinition::new(
+            name_id,
             self.uri_id,
             offset,
-            Self::collect_parameters(node),
-            node.receiver()
-                .is_some_and(|receiver| receiver.as_self_node().is_some()),
             comments,
-        );
+            owner_id,
+            parameters,
+            is_singleton,
+        )));
 
-        self.local_graph
-            .add_definition(fully_qualified_name, Definition::Method(Box::new(method)), &nesting_id);
-        self.local_graph.add_member(&nesting_id, declaration_id, &name);
+        let definition_id = self.local_graph.add_definition(method);
+
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
+        }
 
         if let Some(body) = node.body() {
             self.visit(&body);
@@ -704,88 +730,65 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode) {
         fn create_attr_accessor(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                if let Some(nesting_id) = indexer.scope.current_nesting_id() {
-                    let fully_qualified_name = indexer.scope.fully_qualify(&name);
-                    let declaration_id = DeclarationId::from(&fully_qualified_name);
-                    let writer_name = format!("{fully_qualified_name}=");
-                    let writer_declaration_id = DeclarationId::from(&writer_name);
-                    let offset = Offset::from_prism_location(&location);
-                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                let name_id = indexer.local_graph.add_name(name);
+                let owner_id = indexer.parent_nesting_id().copied();
+                let offset = Offset::from_prism_location(&location);
+                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
 
-                    indexer.local_graph.add_member(&nesting_id, declaration_id, &name);
-                    indexer.local_graph.add_definition(
-                        fully_qualified_name,
-                        Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                            declaration_id,
-                            indexer.uri_id,
-                            offset,
-                            comments.clone(),
-                        ))),
-                        &nesting_id,
-                    );
+                let definition_id = indexer.local_graph.add_definition(Definition::AttrAccessor(Box::new(
+                    AttrAccessorDefinition::new(name_id, indexer.uri_id, offset, comments, owner_id),
+                )));
 
-                    indexer
-                        .local_graph
-                        .add_member(&nesting_id, writer_declaration_id, &format!("{name}="));
-                    indexer.local_graph.add_definition(
-                        writer_name,
-                        Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                            writer_declaration_id,
-                            indexer.uri_id,
-                            Offset::from_prism_location(&location),
-                            comments,
-                        ))),
-                        &nesting_id,
-                    );
+                if let Some(parent_nesting) = indexer.parent_nesting() {
+                    parent_nesting.add_member(definition_id);
                 }
             });
         }
 
         fn create_attr_reader(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                if let Some(nesting_id) = indexer.scope.current_nesting_id() {
-                    let fully_qualified_name = indexer.scope.fully_qualify(&name);
-                    let declaration_id = DeclarationId::from(&fully_qualified_name);
-                    let offset = Offset::from_prism_location(&location);
-                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                let name_id = indexer.local_graph.add_name(name);
+                let owner_id = indexer.parent_nesting_id().copied();
+                let offset = Offset::from_prism_location(&location);
+                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
 
-                    indexer.local_graph.add_definition(
-                        fully_qualified_name,
-                        Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                            declaration_id,
+                let definition_id =
+                    indexer
+                        .local_graph
+                        .add_definition(Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                            name_id,
                             indexer.uri_id,
                             offset,
                             comments,
-                        ))),
-                        &nesting_id,
-                    );
-                    indexer.local_graph.add_member(&nesting_id, declaration_id, &name);
+                            owner_id,
+                        ))));
+
+                if let Some(parent_nesting) = indexer.parent_nesting() {
+                    parent_nesting.add_member(definition_id);
                 }
             });
         }
 
         fn create_attr_writer(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                if let Some(nesting_id) = indexer.scope.current_nesting_id() {
-                    let fully_qualified_name = indexer.scope.fully_qualify(&name);
-                    let writer_name = format!("{fully_qualified_name}=");
-                    let declaration_id = DeclarationId::from(&writer_name);
-                    let offset = Offset::from_prism_location(&location);
-                    let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                let name_id = indexer.local_graph.add_name(name);
+                let owner_id = indexer.parent_nesting_id().copied();
+                let offset = Offset::from_prism_location(&location);
+                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
 
-                    indexer.local_graph.add_definition(
-                        writer_name,
-                        Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                            declaration_id,
+                let definition_id =
+                    indexer
+                        .local_graph
+                        .add_definition(Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                            name_id,
                             indexer.uri_id,
                             offset,
                             comments,
-                        ))),
-                        &nesting_id,
-                    );
-                    indexer
-                        .local_graph
-                        .add_member(&nesting_id, declaration_id, &format!("{name}="));
+                            owner_id,
+                        ))));
+
+                if let Some(parent_nesting) = indexer.parent_nesting() {
+                    parent_nesting.add_member(definition_id);
                 }
             });
         }
@@ -919,68 +922,76 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let declaration_id = DeclarationId::from(&name);
+        let name_id = self.local_graph.add_name(name);
         let offset = Offset::from_prism_location(&name_loc);
-
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let owner_id = self.parent_nesting_id().copied();
+
         let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-            declaration_id,
+            name_id,
             self.uri_id,
             offset,
             comments,
+            owner_id,
         )));
 
-        self.local_graph.add_member(&MAIN_ID, declaration_id, &name);
-        self.local_graph.add_definition(name, definition, &MAIN_ID);
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
+        }
+
         self.visit(&node.value());
     }
 
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
-        let nesting_id = self.scope.current_nesting_id().unwrap_or(*MAIN_ID);
+        let owner_id = self.parent_nesting_id().copied();
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let fully_qualified_name = self.scope.fully_qualify(&name);
-
-        let declaration_id = DeclarationId::from(&fully_qualified_name);
+        let name_id = self.local_graph.add_name(name);
         let offset = Offset::from_prism_location(&name_loc);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
         let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-            declaration_id,
+            name_id,
             self.uri_id,
             offset,
             comments,
+            owner_id,
         )));
 
-        self.local_graph
-            .add_definition(fully_qualified_name, definition, &nesting_id);
-        self.local_graph.add_member(&nesting_id, declaration_id, &name);
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
+        }
+
         self.visit(&node.value());
     }
 
     fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode) {
-        // Ruby immediately crashes when defining class variables on <main>
-        if let Some(nesting_id) = self.scope.current_nesting_id() {
-            let name_loc = node.name_loc();
-            let name = Self::location_to_string(&name_loc);
-            let fully_qualified_name = self.scope.fully_qualify(&name);
+        let owner_id = self.parent_nesting_id().copied();
+        let name_loc = node.name_loc();
+        let name = Self::location_to_string(&name_loc);
+        let name_id = self.local_graph.add_name(name);
+        let offset = Offset::from_prism_location(&name_loc);
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
-            let declaration_id = DeclarationId::from(&fully_qualified_name);
-            let offset = Offset::from_prism_location(&name_loc);
-            let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+            name_id,
+            self.uri_id,
+            offset,
+            comments,
+            owner_id,
+        )));
 
-            let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                declaration_id,
-                self.uri_id,
-                offset,
-                comments,
-            )));
+        let definition_id = self.local_graph.add_definition(definition);
 
-            self.local_graph.add_member(&nesting_id, declaration_id, &name);
-            self.local_graph
-                .add_definition(fully_qualified_name, definition, &nesting_id);
-            self.visit(&node.value());
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
         }
+
+        self.visit(&node.value());
     }
 
     fn visit_block_argument_node(&mut self, node: &ruby_prism::BlockArgumentNode<'_>) {
@@ -1019,127 +1030,139 @@ impl Visit<'_> for RubyIndexer<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use crate::{
+        model::{
+            definitions::{Definition, Mixin, Parameter},
+            ids::{NameId, UriId},
+            references::ConstantReference,
+        },
+        offset::Offset,
+        test_utils::LocalGraphTest,
+    };
 
-    use super::*;
-    use crate::{model::ids::NameId, test_utils::GraphTest};
-
-    /// Asserts that a definition exists, matches the expected type, and passes a custom assertion
-    macro_rules! assert_definition {
-        ($context:expr, $variant:ident, $name:expr, $assertion:expr) => {
-            let defs = $context.graph.get($name).unwrap();
-            match &defs[0] {
-                Definition::$variant(_) => {
-                    $assertion(&defs[0]);
+    macro_rules! assert_definition_at {
+        ($context:expr, $location:expr, $variant:ident, |$var:ident| $body:block) => {{
+            let __def = $context.definition_at($location);
+            let __kind = __def.kind();
+            match __def {
+                Definition::$variant(boxed) => {
+                    let $var = &*boxed.as_ref();
+                    $body
                 }
-                _ => panic!("Expected {} definition for '{}'", stringify!($variant), $name),
+                _ => panic!("expected {} definition, got {:?}", stringify!($variant), __kind),
+            }
+        }};
+    }
+
+    macro_rules! assert_name_eq {
+        ($context:expr, $expect_name_string:expr, $def:expr) => {{
+            let actual_name = $context.graph().names().get($def.name_id()).unwrap();
+
+            assert_eq!($expect_name_string, actual_name);
+        }};
+    }
+
+    macro_rules! assert_parameter {
+        ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
+            match $expr {
+                Parameter::$variant($param) => $body,
+                _ => panic!("expected {} parameter, got {:?}", stringify!($variant), $expr),
             }
         };
     }
 
-    /// Asserts that a definition has specific comments
-    macro_rules! assert_definition_comments {
-        ($context:expr, $variant:ident, $name:expr, $expected_comments:expr) => {
-            let expected_vec: Vec<&str> = $expected_comments;
-
-            assert_definition!($context, $variant, $name, |def: &Definition| {
-                assert_eq!(
-                    def.comments()
-                        .iter()
-                        .map(Comment::string)
-                        .collect::<Vec<&String>>(),
-                    expected_vec
-                );
-            });
-        };
+    macro_rules! assert_comments_eq {
+        ($context:expr, $def:expr, $expected_comments:expr) => {{
+            let actual_comments: Vec<String> = $def.comments().iter().map(|c| c.string().to_string()).collect();
+            assert_eq!($expected_comments, actual_comments);
+        }};
     }
 
-    /// Asserts that a definition has specific start and end offsets
-    macro_rules! assert_definition_offset {
-        ($definition:expr, $start:expr, $end:expr) => {
-            assert_eq!($definition.start(), $start);
-            assert_eq!($definition.end(), $end);
-        };
+    macro_rules! assert_constant_references_eq {
+        ($context:expr, $expected_names:expr) => {{
+            let mut actual_references = $context
+                .graph()
+                .constant_references()
+                .values()
+                .map(|r| (r.offset().start(), $context.graph().names().get(r.name_id()).unwrap()))
+                .collect::<Vec<_>>();
+
+            actual_references.sort();
+
+            let actual_names = actual_references
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>();
+
+            assert_eq!($expected_names, actual_names);
+        }};
     }
 
-    /// Asserts that the given fully qualified name is owned by the second fully qualified name
-    macro_rules! assert_owner {
-        ($graph:expr, $declaration_name:expr, $owner_name:expr) => {
-            let declaration = $graph
-                .declarations()
-                .get(&DeclarationId::from($declaration_name))
-                .unwrap();
-            assert_eq!(declaration.owner_id(), &DeclarationId::from($owner_name));
-        };
+    macro_rules! assert_method_references_eq {
+        ($context:expr, $expected_names:expr) => {{
+            let mut actual_references = $context
+                .graph()
+                .method_references()
+                .values()
+                .map(|m| (m.offset().start(), $context.graph().names().get(m.name_id()).unwrap()))
+                .collect::<Vec<_>>();
+
+            actual_references.sort();
+
+            let actual_names = actual_references
+                .iter()
+                .map(|(_offset, name)| name.as_str())
+                .collect::<Vec<_>>();
+
+            assert_eq!($expected_names, actual_names);
+        }};
     }
 
-    fn collect_constant_reference_names(graph: &Graph) -> Vec<String> {
-        let mut refs = graph
-            .constant_references()
-            .values()
-            .map(|reference| {
-                let name = match reference {
-                    ConstantReference::Unresolved(constant) => {
-                        let mut full_name = graph.names().get(constant.name_id()).unwrap().clone();
-                        let mut current_ref = constant.as_ref();
-
-                        while let Some(parent_ref) = current_ref
-                            .parent_scope_id()
-                            .and_then(|id| graph.constant_references().get(&id))
-                        {
-                            full_name.insert_str(0, &format!("{}::", graph.names().get(parent_ref.name_id()).unwrap()));
-
-                            match parent_ref {
-                                ConstantReference::Unresolved(parent_constant) => {
-                                    current_ref = parent_constant.as_ref();
-                                }
-                                ConstantReference::Resolved(resolved) => {
-                                    current_ref = resolved.original_ref();
-                                }
-                            }
-                        }
-
-                        full_name
+    macro_rules! assert_includes_eq {
+        ($context:expr, $def:expr, $expected_names:expr) => {{
+            let actual_names = $def
+                .mixins()
+                .iter()
+                .filter_map(|mixin| {
+                    if let Mixin::Include(reference_id) = mixin {
+                        let reference = $context.graph().constant_references().get(reference_id).unwrap();
+                        Some($context.graph().names().get(reference.name_id()).unwrap().as_str())
+                    } else {
+                        None
                     }
-                    ConstantReference::Resolved(constant) => {
-                        let declaration = graph.declarations().get(&constant.declaration_id()).unwrap();
+                })
+                .collect::<Vec<_>>();
 
-                        format!(
-                            "{}::{}",
-                            declaration.name(),
-                            graph.names().get(constant.name_id()).unwrap()
-                        )
-                    }
-                };
-
-                (reference.offset().start(), name)
-            })
-            .collect::<Vec<_>>();
-
-        refs.sort();
-        refs.into_iter().map(|(_, name)| name).collect::<Vec<String>>()
+            assert_eq!($expected_names, actual_names);
+        }};
     }
 
-    fn collect_method_reference_names(graph: &Graph) -> Vec<&String> {
-        let mut refs = graph.method_references().values().collect::<Vec<_>>();
-        refs.sort_by_key(|m| {
-            (
-                graph.documents().get(&m.uri_id()).unwrap().uri().to_string(),
-                m.offset().start(),
-                graph.names().get(m.name_id()).unwrap(),
-            )
-        });
+    macro_rules! assert_prepends_eq {
+        ($context:expr, $def:expr, $expected_names:expr) => {{
+            let actual_names = $def
+                .mixins()
+                .iter()
+                .filter_map(|mixin| {
+                    if let Mixin::Prepend(reference_id) = mixin {
+                        let reference = $context.graph().constant_references().get(reference_id).unwrap();
+                        Some($context.graph().names().get(reference.name_id()).unwrap().as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
 
-        refs.iter()
-            .map(|r| graph.names().get(r.name_id()).unwrap())
-            .collect::<Vec<_>>()
+            assert_eq!($expected_names, actual_names);
+        }};
+    }
+
+    fn index_source(source: &str) -> LocalGraphTest {
+        LocalGraphTest::new("file:///foo.rb", source)
     }
 
     #[test]
     fn index_class_node() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             class Foo
               class Bar
@@ -1149,64 +1172,85 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("Foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 50);
-        assert_owner!(context.graph, "Foo", "Object");
-        if let Definition::Class(class_def) = &definitions[0] {
-            assert!(class_def.superclass_ref().is_none());
-        } else {
-            panic!("Expected Foo to be a class definition");
-        }
+        assert_eq!(context.graph().definitions().len(), 3);
 
-        let definitions = context.graph.get("Foo::Bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 12, 46);
-        assert_owner!(context.graph, "Foo::Bar", "Foo");
-        if let Definition::Class(class_def) = &definitions[0] {
-            assert!(class_def.superclass_ref().is_none());
-        } else {
-            panic!("Expected Foo to be a class definition");
-        }
+        assert_definition_at!(&context, "1:1-5:4", Class, |def| {
+            assert_name_eq!(&context, "Foo", def);
+            assert!(def.superclass_ref().is_none());
+            assert_eq!(1, def.members().len());
+            assert!(def.owner_id().is_none());
+        });
 
-        let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 26, 40);
-        assert_owner!(context.graph, "Foo::Bar::Baz", "Foo::Bar");
-        if let Definition::Class(class_def) = &definitions[0] {
-            assert!(class_def.superclass_ref().is_none());
-        } else {
-            panic!("Expected Foo to be a class definition");
-        }
+        assert_definition_at!(&context, "2:3-4:6", Class, |def| {
+            assert_name_eq!(&context, "Bar", def);
+            assert!(def.superclass_ref().is_none());
+            assert_eq!(1, def.members().len());
 
-        let not_found = context.graph.get("Foo::Bar::Baz::Qux");
-        assert!(not_found.is_none());
+            assert_definition_at!(&context, "1:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "3:5-3:19", Class, |def| {
+            assert_name_eq!(context, "Baz", def);
+            assert!(def.superclass_ref().is_none());
+            assert!(def.members().is_empty());
+
+            assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_class_node_with_qualified_name() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             class Foo::Bar
-              class Baz::Qux; end
-              class ::Quuux; end
+              class Baz::Qux
+                class ::Quuux; end
+              end
             end
             "
         });
 
-        assert_eq!(context.graph.get("Foo::Bar").unwrap().len(), 1);
-        assert_eq!(context.graph.get("Foo::Bar::Baz::Qux").unwrap().len(), 1);
-        assert!(context.graph.get("Foo::Bar::Baz::Qux::Quuux").is_none());
-        assert_eq!(context.graph.get("Quuux").unwrap().len(), 1);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |def| {
+            assert_name_eq!(&context, "Foo::Bar", def);
+            assert!(def.superclass_ref().is_none());
+            assert!(def.owner_id().is_none());
+            assert_eq!(1, def.members().len());
+        });
+
+        assert_definition_at!(&context, "2:3-4:6", Class, |def| {
+            assert_name_eq!(&context, "Baz::Qux", def);
+            assert!(def.superclass_ref().is_none());
+            assert_eq!(1, def.members().len());
+
+            assert_definition_at!(&context, "1:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "3:5-3:23", Class, |def| {
+            assert_name_eq!(&context, "::Quuux", def);
+            assert!(def.superclass_ref().is_none());
+            assert!(def.members().is_empty());
+
+            assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_module_node() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             module Foo
               module Bar
@@ -1216,49 +1260,77 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("Foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 53);
-        assert_owner!(context.graph, "Foo", "Object");
+        assert_eq!(context.graph().definitions().len(), 3);
 
-        let definitions = context.graph.get("Foo::Bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 13, 49);
-        assert_owner!(context.graph, "Foo::Bar", "Foo");
+        assert_definition_at!(&context, "1:1-5:4", Module, |def| {
+            assert_name_eq!(&context, "Foo", def);
+            assert_eq!(1, def.members().len());
+            assert!(def.owner_id().is_none());
+        });
 
-        let definitions = context.graph.get("Foo::Bar::Baz").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 28, 43);
-        assert_owner!(context.graph, "Foo::Bar::Baz", "Foo::Bar");
+        assert_definition_at!(&context, "2:3-4:6", Module, |def| {
+            assert_name_eq!(&context, "Bar", def);
+            assert_eq!(1, def.members().len());
 
-        let not_found = context.graph.get("Foo::Bar::Baz::Qux");
-        assert!(not_found.is_none());
+            assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "3:5-3:20", Module, |def| {
+            assert_name_eq!(&context, "Baz", def);
+
+            assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_module_node_with_qualified_name() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             module Foo::Bar
-              module Baz::Qux; end
-              module ::Quuux; end
+              module Baz::Qux
+                module ::Quuux; end
+              end
             end
             "
         });
 
-        assert_eq!(context.graph.get("Foo::Bar").unwrap().len(), 1);
-        assert_eq!(context.graph.get("Foo::Bar::Baz::Qux").unwrap().len(), 1);
-        assert!(context.graph.get("Foo::Bar::Baz::Qux::Quuux").is_none());
-        assert_eq!(context.graph.get("Quuux").unwrap().len(), 1);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-5:4", Module, |def| {
+            assert_name_eq!(&context, "Foo::Bar", def);
+            assert_eq!(1, def.members().len());
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:3-4:6", Module, |def| {
+            assert_name_eq!(&context, "Baz::Qux", def);
+            assert_eq!(1, def.members().len());
+
+            assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "3:5-3:24", Module, |def| {
+            assert_name_eq!(context, "::Quuux", def);
+
+            assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_constant_write_node() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             FOO = 1
 
@@ -1268,22 +1340,26 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("FOO").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 3);
-        assert_owner!(context.graph, "FOO", "Object");
+        assert_eq!(context.graph().definitions().len(), 3);
 
-        let definitions = context.graph.get("Foo::FOO").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 21, 24);
-        assert_owner!(context.graph, "Foo::FOO", "Foo");
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_name_eq!(&context, "FOO", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_name_eq!(&context, "FOO", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_constant_path_write_node() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             FOO::BAR = 1
 
@@ -1294,24 +1370,35 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("FOO::BAR").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 8);
+        assert_eq!(context.graph().definitions().len(), 4);
 
-        let definitions = context.graph.get("Foo::FOO::BAR").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 26, 34);
+        assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
+            assert_name_eq!(&context, "FOO::BAR", def);
+            assert!(def.owner_id().is_none());
+        });
 
-        let definitions = context.graph.get("BAZ").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 41, 46);
+        assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
+            assert_name_eq!(&context, "FOO::BAR", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:3-5:8", Constant, |def| {
+            assert_name_eq!(&context, "::BAZ", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_constant_multi_write_node() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             FOO, BAR::BAZ = 1, 2
 
@@ -1321,32 +1408,48 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("FOO").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 3);
+        assert_eq!(context.graph().definitions().len(), 6);
 
-        let definitions = context.graph.get("BAR::BAZ").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 5, 13);
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_name_eq!(&context, "FOO", def);
+            assert!(def.owner_id().is_none());
+        });
 
-        let definitions = context.graph.get("Foo::FOO").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 34, 37);
+        assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
+            assert_name_eq!(&context, "BAR::BAZ", def);
+        });
 
-        let definitions = context.graph.get("Foo::BAR::BAZ").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 39, 47);
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_name_eq!(&context, "FOO", def);
 
-        let definitions = context.graph.get("BAZ").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 49, 54);
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
+            assert_name_eq!(&context, "BAR::BAZ", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
+            assert_name_eq!(&context, "::BAZ", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_def_node() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             def foo; end
 
@@ -1357,156 +1460,105 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 12);
-        assert_owner!(context.graph, "foo", "<main>");
+        assert_eq!(context.graph().definitions().len(), 4);
 
-        match definitions[0] {
-            Definition::Method(it) => {
-                assert_eq!(it.parameters().len(), 0);
-                assert!(!it.is_singleton());
-            }
-            _ => panic!("Expected method definition"),
-        }
+        assert_definition_at!(&context, "1:1-1:13", Method, |def| {
+            assert_name_eq!(&context, "foo", def);
+            assert_eq!(def.parameters().len(), 0);
+            assert!(!def.is_singleton());
+            assert!(def.owner_id().is_none());
+        });
 
-        let definitions = context.graph.get("Foo::bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 26, 38);
-        assert_owner!(context.graph, "Foo::bar", "Foo");
+        assert_definition_at!(&context, "4:3-4:15", Method, |def| {
+            assert_name_eq!(&context, "bar", def);
+            assert_eq!(def.parameters().len(), 0);
+            assert!(!def.is_singleton());
 
-        match definitions[0] {
-            Definition::Method(it) => {
-                assert_eq!(it.parameters().len(), 0);
-                assert!(!it.is_singleton());
-            }
-            _ => panic!("Expected method definition"),
-        }
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
 
-        let definitions = context.graph.get("Foo::baz").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 41, 58);
+        assert_definition_at!(&context, "5:3-5:20", Method, |def| {
+            assert_name_eq!(&context, "baz", def);
+            assert_eq!(def.parameters().len(), 0);
+            assert!(def.is_singleton());
 
-        // FIXME: The owner is wrong until we implement singletons
-        assert_owner!(context.graph, "Foo::baz", "Foo");
-
-        match definitions[0] {
-            Definition::Method(it) => {
-                assert_eq!(it.parameters().len(), 0);
-                assert!(it.is_singleton());
-            }
-            _ => panic!("Expected method definition"),
-        }
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_def_node_with_parameters() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             def foo(a, b = 42, *c, d, e:, g: 42, **i, &j); end
             "
         });
 
-        let definitions = context.graph.get("foo").unwrap();
+        assert_definition_at!(&context, "1:1-1:51", Method, |def| {
+            assert_eq!(def.parameters().len(), 8);
 
-        match definitions[0] {
-            Definition::Method(it) => {
-                assert_eq!(it.parameters().len(), 8);
+            assert_parameter!(&def.parameters()[0], RequiredPositional, |param| {
+                assert_eq!(param.name(), "a");
+            });
 
-                match &it.parameters()[0] {
-                    Parameter::RequiredPositional(it) => {
-                        assert_eq!(it.name(), "a");
-                    }
-                    _ => panic!("Expected required positional parameter"),
-                }
+            assert_parameter!(&def.parameters()[1], OptionalPositional, |param| {
+                assert_eq!(param.name(), "b");
+            });
 
-                match &it.parameters()[1] {
-                    Parameter::OptionalPositional(it) => {
-                        assert_eq!(it.name(), "b");
-                    }
-                    _ => panic!("Expected optional positional parameter"),
-                }
+            assert_parameter!(&def.parameters()[2], RestPositional, |param| {
+                assert_eq!(param.name(), "c");
+            });
 
-                match &it.parameters()[2] {
-                    Parameter::RestPositional(it) => {
-                        assert_eq!(it.name(), "c");
-                    }
-                    _ => panic!("Expected rest positional parameter"),
-                }
+            assert_parameter!(&def.parameters()[3], Post, |param| {
+                assert_eq!(param.name(), "d");
+            });
 
-                match &it.parameters()[3] {
-                    Parameter::Post(it) => {
-                        assert_eq!(it.name(), "d");
-                    }
-                    _ => panic!("Expected post parameter"),
-                }
+            assert_parameter!(&def.parameters()[4], RequiredKeyword, |param| {
+                assert_eq!(param.name(), "e");
+            });
 
-                match &it.parameters()[4] {
-                    Parameter::RequiredKeyword(it) => {
-                        assert_eq!(it.name(), "e");
-                    }
-                    _ => panic!("Expected required keyword parameter"),
-                }
+            assert_parameter!(&def.parameters()[5], OptionalKeyword, |param| {
+                assert_eq!(param.name(), "g");
+            });
 
-                match &it.parameters()[5] {
-                    Parameter::OptionalKeyword(it) => {
-                        assert_eq!(it.name(), "g");
-                    }
-                    _ => panic!("Expected optional keyword parameter"),
-                }
+            assert_parameter!(&def.parameters()[6], RestKeyword, |param| {
+                assert_eq!(param.name(), "i");
+            });
 
-                match &it.parameters()[6] {
-                    Parameter::RestKeyword(it) => {
-                        assert_eq!(it.name(), "i");
-                    }
-                    _ => panic!("Expected rest keyword parameter"),
-                }
-
-                match &it.parameters()[7] {
-                    Parameter::Block(it) => {
-                        assert_eq!(it.name(), "j");
-                    }
-                    _ => panic!("Expected block parameter"),
-                }
-            }
-            _ => panic!("Expected method definition"),
-        }
+            assert_parameter!(&def.parameters()[7], Block, |param| {
+                assert_eq!(param.name(), "j");
+            });
+        });
     }
 
     #[test]
     fn index_def_node_with_forward_parameters() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             def foo(...); end
             "
         });
 
-        let definitions = context.graph.get("foo").unwrap();
-
-        match definitions[0] {
-            Definition::Method(it) => {
-                assert_eq!(it.parameters().len(), 1);
-                match &it.parameters()[0] {
-                    Parameter::Forward(it) => {
-                        assert_eq!(it.name(), "...");
-                    }
-                    _ => panic!("Expected forward parameter"),
-                }
-            }
-            _ => panic!("Expected method definition"),
-        }
+        assert_definition_at!(&context, "1:1-1:18", Method, |def| {
+            assert_eq!(def.parameters().len(), 1);
+            assert_parameter!(&def.parameters()[0], Forward, |param| {
+                assert_eq!(param.name(), "...");
+            });
+        });
     }
 
     #[test]
     fn index_attr_accessor_definition() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
+            attr_accessor :foo
+
             class Foo
               attr_accessor :bar, :baz
             end
@@ -1515,35 +1567,301 @@ mod tests {
             "
         });
 
-        let definitions = context.graph.get("Foo::bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 27, 30);
-        assert_owner!(context.graph, "Foo::bar", "Foo");
+        assert_eq!(context.graph().definitions().len(), 4);
 
-        let definitions = context.graph.get("Foo::bar=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 27, 30);
-        assert_owner!(context.graph, "Foo::bar=", "Foo");
+        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
+            assert_name_eq!(&context, "foo", def);
+            assert!(def.owner_id().is_none());
+        });
 
-        let definitions = context.graph.get("Foo::baz").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 33, 36);
-        assert_owner!(context.graph, "Foo::baz", "Foo");
+        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
+            assert_name_eq!(&context, "bar", def);
 
-        let definitions = context.graph.get("Foo::baz=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 33, 36);
-        assert_owner!(context.graph, "Foo::baz=", "Foo");
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
 
-        assert!(context.graph.get("not_indexed").is_none());
-        assert!(context.graph.get("not_indexed=").is_none());
+        assert_definition_at!(&context, "4:24-4:27", AttrAccessor, |def| {
+            assert_name_eq!(&context, "baz", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_reader_definition() {
+        let context = index_source({
+            "
+            attr_reader :foo
+
+            class Foo
+              attr_reader :bar, :baz
+            end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
+            assert_name_eq!(&context, "foo", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
+            assert_name_eq!(&context, "bar", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
+            assert_name_eq!(&context, "baz", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_writer_definition() {
+        let context = index_source({
+            "
+            attr_writer :foo
+
+            class Foo
+              attr_writer :bar, :baz
+            end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
+            assert_name_eq!(&context, "foo", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
+            assert_name_eq!(&context, "bar", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
+            assert_name_eq!(&context, "baz", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_definition() {
+        let context = index_source({
+            r#"
+            attr "a1", :a2
+
+            class Foo
+              attr "a3", true
+              attr :a4, false
+              attr :a5, 123
+            end
+            "#
+        });
+
+        assert_eq!(context.graph().definitions().len(), 6);
+
+        assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
+            assert_name_eq!(&context, "a1", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "1:13-1:15", AttrReader, |def| {
+            assert_name_eq!(&context, "a2", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
+            assert_name_eq!(&context, "a3", def);
+
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:9-5:11", AttrReader, |def| {
+            assert_name_eq!(&context, "a4", def);
+
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "6:9-6:11", AttrReader, |def| {
+            assert_name_eq!(&context, "a5", def);
+
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_global_variable_definition() {
+        let context = index_source({
+            "
+            $foo = 1
+            $bar, $baz = 2, 3
+
+            class Foo
+              $qux = 2
+            end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 5);
+
+        assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
+            assert_name_eq!(&context, "$foo", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:1-2:5", GlobalVariable, |def| {
+            assert_name_eq!(&context, "$bar", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:7-2:11", GlobalVariable, |def| {
+            assert_name_eq!(&context, "$baz", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "5:3-5:7", GlobalVariable, |def| {
+            assert_name_eq!(&context, "$qux", def);
+
+            assert_definition_at!(&context, "4:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_definition() {
+        let context = index_source({
+            "
+            @foo = 1
+
+            class Foo
+              @bar = 2
+              @baz, @qux = 3, 4
+            end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 5);
+
+        assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@foo", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@bar", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:3-5:7", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@baz", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:9-5:13", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@qux", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_definition() {
+        let context = index_source({
+            "
+            @@foo = 1
+
+            class Foo
+              @@bar = 2
+              @@baz, @@qux = 3, 4
+            end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 5);
+
+        assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
+            assert_name_eq!(&context, "@@foo", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:3-4:8", ClassVariable, |def| {
+            assert_name_eq!(&context, "@@bar", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:3-5:8", ClassVariable, |def| {
+            assert_name_eq!(&context, "@@baz", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:10-5:15", ClassVariable, |def| {
+            assert_name_eq!(&context, "@@qux", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
     }
 
     #[test]
     fn index_comments_attached_to_definitions() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             # Single comment
             class Single; end
@@ -1576,34 +1894,53 @@ mod tests {
             "
         });
 
-        assert_definition_comments!(context, Class, "Single", vec!["# Single comment"]);
-        assert_definition_comments!(
-            context,
-            Module,
-            "Multi",
-            vec![
-                "# Multi-line comment 1",
-                "# Multi-line comment 2",
-                "# Multi-line comment 3"
-            ]
-        );
-        assert_definition_comments!(
-            context,
-            Class,
-            "EmptyCommentLine",
-            vec!["# Comment 1", "#", "# Comment 2"]
-        );
-        assert_definition_comments!(context, Constant, "NoGap", vec!["# Comment directly above (no gap)"]);
-        assert_definition_comments!(context, Method, "foo", vec!["#: ()", "#| -> void"]);
-        assert_definition_comments!(context, Class, "BlankLine", vec!["# Comment with blank line"]);
-        assert_definition_comments!(context, Class, "NoComment", vec![]);
+        assert_definition_at!(&context, "2:1-2:18", Class, |def| {
+            assert_name_eq!(&context, "Single", def);
+            assert_comments_eq!(&context, def, vec!["# Single comment"]);
+        });
+
+        assert_definition_at!(&context, "7:1-7:18", Module, |def| {
+            assert_name_eq!(&context, "Multi", def);
+            assert_comments_eq!(
+                &context,
+                def,
+                vec![
+                    "# Multi-line comment 1",
+                    "# Multi-line comment 2",
+                    "# Multi-line comment 3"
+                ]
+            );
+        });
+
+        assert_definition_at!(&context, "12:1-12:28", Class, |def| {
+            assert_name_eq!(&context, "EmptyCommentLine", def);
+            assert_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
+        });
+
+        assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
+            assert_name_eq!(&context, "NoGap", def);
+            assert_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
+        });
+
+        assert_definition_at!(&context, "19:1-19:13", Method, |def| {
+            assert_name_eq!(&context, "foo", def);
+            assert_comments_eq!(&context, def, vec!["#: ()", "#| -> void"]);
+        });
+
+        assert_definition_at!(&context, "23:1-23:21", Class, |def| {
+            assert_name_eq!(&context, "BlankLine", def);
+            assert_comments_eq!(&context, def, vec!["# Comment with blank line"]);
+        });
+
+        assert_definition_at!(&context, "28:1-28:21", Class, |def| {
+            assert_name_eq!(&context, "NoComment", def);
+            assert!(def.comments().is_empty());
+        });
     }
 
     #[test]
     fn index_comments_indented_and_nested() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             # Outer class
             class Outer
@@ -1620,563 +1957,31 @@ mod tests {
             "
         });
 
-        assert_definition_comments!(context, Class, "Outer", vec!["# Outer class"]);
-        assert_definition_comments!(context, Class, "Outer::Inner", vec!["# Inner class at 2 spaces"]);
-        assert_definition_comments!(context, Class, "Outer::Inner::Deep", vec!["# Deep class at 4 spaces"]);
-        assert_definition_comments!(
-            context,
-            Class,
-            "Outer::AnotherInner",
-            vec!["# Another inner class", "# with multiple lines"]
-        );
-    }
-
-    #[test]
-    fn index_attr_reader_definition() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            "
-            class Foo
-              attr_reader :bar, :baz
-            end
-            "
+        assert_definition_at!(&context, "2:1-12:4", Class, |def| {
+            assert_name_eq!(&context, "Outer", def);
+            assert_comments_eq!(&context, def, vec!["# Outer class"]);
         });
 
-        let definitions = context.graph.get("Foo::bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 25, 28);
-        assert_owner!(context.graph, "Foo::bar", "Foo");
-
-        assert!(context.graph.get("Foo::bar=").is_none());
-
-        let definitions = context.graph.get("Foo::baz").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 31, 34);
-        assert_owner!(context.graph, "Foo::baz", "Foo");
-
-        assert!(context.graph.get("Foo::baz=").is_none());
-    }
-
-    #[test]
-    fn index_attr_writer_definition() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            "
-            class Foo
-              attr_writer :bar, :baz
-            end
-            "
+        assert_definition_at!(&context, "4:3-7:6", Class, |def| {
+            assert_name_eq!(&context, "Inner", def);
+            assert_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
         });
 
-        let definitions = context.graph.get("Foo::bar=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 25, 28);
-        assert_owner!(context.graph, "Foo::bar=", "Foo");
-
-        assert!(context.graph.get("Foo::bar").is_none());
-
-        let definitions = context.graph.get("Foo::baz=").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 31, 34);
-        assert_owner!(context.graph, "Foo::baz=", "Foo");
-
-        assert!(context.graph.get("Foo::baz").is_none());
-    }
-
-    #[test]
-    fn ignores_attributes_defined_on_main() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            "
-            attr_writer :foo
-            attr_reader :bar
-            attr_accessor :baz
-            attr :qux, true
-            "
-        });
-        assert!(context.graph.get("foo=").is_none());
-        assert!(context.graph.get("bar").is_none());
-        assert!(context.graph.get("baz").is_none());
-        assert!(context.graph.get("baz=").is_none());
-        assert!(context.graph.get("qux").is_none());
-        assert!(context.graph.get("qux=").is_none());
-    }
-
-    #[test]
-    fn index_global_variable_definition() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            "
-            $foo = 1
-            $bar, $baz = 2, 3
-
-            class Foo
-              $qux = 2
-            end
-            "
+        assert_definition_at!(&context, "6:5-6:20", Class, |def| {
+            assert_name_eq!(&context, "Deep", def);
+            assert_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
         });
 
-        let definitions = context.graph.get("$foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 4);
-        assert_owner!(context.graph, "$foo", "<main>");
-
-        let definitions = context.graph.get("$bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 9, 13);
-        assert_owner!(context.graph, "$bar", "<main>");
-
-        let definitions = context.graph.get("$baz").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 15, 19);
-        assert_owner!(context.graph, "$baz", "<main>");
-
-        let definitions = context.graph.get("$qux").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 40, 44);
-        assert_owner!(context.graph, "$qux", "<main>");
-    }
-
-    #[test]
-    fn index_instance_variable_definition() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            "
-            @foo = 1
-
-            class Foo
-              @bar = 2
-
-              @baz, @qux = 3, 4
-            end
-            "
+        assert_definition_at!(&context, "11:3-11:26", Class, |def| {
+            assert_name_eq!(&context, "AnotherInner", def);
+            assert_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
         });
-
-        let definitions = context.graph.get("@foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 0, 4);
-        assert_owner!(context.graph, "@foo", "<main>");
-
-        let definitions = context.graph.get("Foo::@bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 22, 26);
-        assert_owner!(context.graph, "Foo::@bar", "Foo");
-
-        let definitions = context.graph.get("Foo::@baz").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 34, 38);
-        assert_owner!(context.graph, "Foo::@baz", "Foo");
-
-        let definitions = context.graph.get("Foo::@qux").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 40, 44);
-        assert_owner!(context.graph, "Foo::@qux", "Foo");
-    }
-
-    #[test]
-    fn index_class_variable_definition() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            "
-            @@foo = 1
-
-            class Foo
-              @@bar = 2
-
-              @@baz, @@qux = 3, 4
-            end
-            "
-        });
-
-        assert!(context.graph.get("@@foo").is_none());
-
-        let definitions = context.graph.get("Foo::@@bar").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 23, 28);
-        assert_owner!(context.graph, "Foo::@@bar", "Foo");
-
-        let definitions = context.graph.get("Foo::@@baz").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 36, 41);
-        assert_owner!(context.graph, "Foo::@@baz", "Foo");
-
-        let definitions = context.graph.get("Foo::@@qux").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_definition_offset!(definitions[0], 43, 48);
-        assert_owner!(context.graph, "Foo::@@qux", "Foo");
-    }
-
-    #[test]
-    fn index_attr_with_no_parameter() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r#"
-            class Foo
-              attr "foo"
-              attr :bar
-            end
-            "#
-        });
-
-        for reader_name in ["Foo::foo", "Foo::bar"] {
-            let definitions = context.graph.get(reader_name).unwrap();
-            assert_eq!(definitions.len(), 1);
-            assert!(matches!(definitions[0], Definition::AttrReader(_)));
-            assert_owner!(context.graph, reader_name, "Foo");
-        }
-
-        for writer_name in ["Foo::foo=", "Foo::bar="] {
-            assert!(context.graph.get(writer_name).is_none());
-        }
-    }
-
-    #[test]
-    fn index_attr_with_false_parameter() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r#"
-            class Foo
-              attr "foo", false
-              attr :bar, false
-            end
-            "#
-        });
-
-        for reader_name in ["Foo::foo", "Foo::bar"] {
-            let definitions = context.graph.get(reader_name).unwrap();
-            assert_eq!(definitions.len(), 1);
-            assert!(matches!(definitions[0], Definition::AttrReader(_)));
-        }
-
-        for writer_name in ["Foo::foo=", "Foo::bar="] {
-            assert!(context.graph.get(writer_name).is_none());
-        }
-    }
-
-    #[test]
-    fn index_attr_with_true_parameter() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r#"
-            class Foo
-              attr "foo", true
-              attr :bar, true
-            end
-            "#
-        });
-
-        for name in ["Foo::foo", "Foo::foo=", "Foo::bar", "Foo::bar="] {
-            let definitions = context.graph.get(name).unwrap();
-            assert_eq!(definitions.len(), 1);
-            assert!(matches!(definitions[0], Definition::AttrAccessor(_)));
-        }
-    }
-
-    #[test]
-    fn index_attr_with_string_and_symbol_parameter() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r#"
-            class Foo
-              attr "foo", :bar, :baz
-              attr :a, "b", "c", :d
-            end
-            "#
-        });
-
-        for name in [
-            "Foo::foo", "Foo::bar", "Foo::baz", "Foo::a", "Foo::b", "Foo::c", "Foo::d",
-        ] {
-            let definitions = context.graph.get(name).unwrap();
-            assert_eq!(definitions.len(), 1);
-            assert!(matches!(definitions[0], Definition::AttrReader(_)));
-        }
-
-        for writer_name in [
-            "Foo::foo=",
-            "Foo::bar=",
-            "Foo::baz=",
-            "Foo::a=",
-            "Foo::b=",
-            "Foo::c=",
-            "Foo::d=",
-        ] {
-            assert!(context.graph.get(writer_name).is_none());
-        }
-    }
-
-    #[test]
-    fn rejects_attr_with_incorrect_parameter() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r#"
-            class Foo
-              attr "foo", 123
-            end
-            "#
-        });
-
-        let definitions = context.graph.get("Foo::foo").unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert!(matches!(definitions[0], Definition::AttrReader(_)));
-
-        assert!(context.graph.get("Foo::foo=").is_none());
-        assert!(context.graph.get("Foo::123").is_none());
-    }
-
-    #[test]
-    fn constant_members() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            module Foo
-              module Bar; end
-              class Baz; end
-
-              A = 1
-              B::C = 2
-              D, E::F = 3, 4
-            end
-            "
-        });
-
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        let members = foo.members();
-
-        // FIX ME: missing assert that `Foo` is owned by `Object`. Depends on the RBS crate!
-        // let object = context.graph.declarations().get(&DeclarationId::from("Object")).unwrap();
-        // let object_members = object.members();
-        // assert!(object_members.contains_key(&NameId::from("Foo")));
-
-        assert_eq!(members.len(), 6);
-        assert_eq!(
-            members.get(&NameId::from("Bar")).unwrap(),
-            &DeclarationId::from("Foo::Bar")
-        );
-        assert_eq!(
-            members.get(&NameId::from("Baz")).unwrap(),
-            &DeclarationId::from("Foo::Baz")
-        );
-        assert_eq!(members.get(&NameId::from("A")).unwrap(), &DeclarationId::from("Foo::A"));
-        assert_eq!(members.get(&NameId::from("D")).unwrap(), &DeclarationId::from("Foo::D"));
-        assert_eq!(
-            members.get(&NameId::from("B::C")).unwrap(),
-            &DeclarationId::from("Foo::B::C")
-        );
-        assert_eq!(
-            members.get(&NameId::from("E::F")).unwrap(),
-            &DeclarationId::from("Foo::E::F")
-        );
-    }
-
-    #[test]
-    fn constant_path_members() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            module Foo
-              module Bar; end
-              class Bar::Baz; end
-            end
-            "
-        });
-
-        // FIXME: We are currently not handling constant paths correctly. `Bar::Baz` defines `Baz` under `Bar`, but we
-        // right now define `Bar::Baz` under `Foo`
-        let bar = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap();
-        let members = bar.members();
-
-        assert_eq!(members.len(), 0);
-
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        let members = foo.members();
-
-        assert_eq!(members.len(), 2);
-        assert_eq!(
-            members.get(&NameId::from("Bar::Baz")).unwrap(),
-            &DeclarationId::from("Foo::Bar::Baz")
-        );
-    }
-
-    #[test]
-    fn instance_variable_members() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            class Foo
-              @bar = 1
-              @baz, @qux = 2, 3
-            end
-            "
-        });
-
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        let members = foo.members();
-        assert_eq!(members.len(), 3);
-        assert_eq!(
-            members.get(&NameId::from("@bar")).unwrap(),
-            &DeclarationId::from("Foo::@bar")
-        );
-        assert_eq!(
-            members.get(&NameId::from("@baz")).unwrap(),
-            &DeclarationId::from("Foo::@baz")
-        );
-        assert_eq!(
-            members.get(&NameId::from("@qux")).unwrap(),
-            &DeclarationId::from("Foo::@qux")
-        );
-    }
-
-    #[test]
-    fn method_members() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            class Foo
-              def bar; end
-            end
-            "
-        });
-
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        let members = foo.members();
-        assert_eq!(members.len(), 1);
-        assert_eq!(
-            members.get(&NameId::from("bar")).unwrap(),
-            &DeclarationId::from("Foo::bar")
-        );
-    }
-
-    #[test]
-    fn global_variable_members() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            $var = 1
-            class Foo
-              $var2, $var3 = 2
-            end
-            "
-        });
-
-        let declarations = context.graph.declarations();
-        let main = declarations.get(&DeclarationId::from("<main>")).unwrap();
-        let members = main.members();
-        assert_eq!(members.len(), 3);
-        assert_eq!(
-            members.get(&NameId::from("$var")).unwrap(),
-            &DeclarationId::from("$var")
-        );
-        assert_eq!(
-            members.get(&NameId::from("$var2")).unwrap(),
-            &DeclarationId::from("$var2")
-        );
-        assert_eq!(
-            members.get(&NameId::from("$var3")).unwrap(),
-            &DeclarationId::from("$var3")
-        );
-    }
-
-    #[test]
-    fn class_variable_members() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            @@ignored = 1
-            class Foo
-              @@var1 = 1
-              @@var2, @@var3 = 2
-
-              class << self
-                @@var4 = 2
-              end
-            end
-            "
-        });
-
-        let declarations = context.graph.declarations();
-        // Foo + 5 class variables + <main>, but not @@ignored
-        assert_eq!(declarations.len(), 6);
-        let main = declarations.get(&DeclarationId::from("Foo")).unwrap();
-        let members = main.members();
-        assert_eq!(members.len(), 4);
-        assert_eq!(
-            members.get(&NameId::from("@@var1")).unwrap(),
-            &DeclarationId::from("Foo::@@var1")
-        );
-        assert_eq!(
-            members.get(&NameId::from("@@var2")).unwrap(),
-            &DeclarationId::from("Foo::@@var2")
-        );
-        assert_eq!(
-            members.get(&NameId::from("@@var3")).unwrap(),
-            &DeclarationId::from("Foo::@@var3")
-        );
-        assert_eq!(
-            members.get(&NameId::from("@@var4")).unwrap(),
-            &DeclarationId::from("Foo::@@var4")
-        );
-    }
-
-    #[test]
-    fn attribute_members() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            class Foo
-              attr_reader :a
-              attr_accessor :b
-              attr_writer :c
-              attr :d
-              attr :e, true
-              attr :f, :g
-            end
-            "
-        });
-
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        let members = foo.members();
-        assert_eq!(members.len(), 9);
-        assert_eq!(members.get(&NameId::from("a")).unwrap(), &DeclarationId::from("Foo::a"));
-        assert_eq!(members.get(&NameId::from("b")).unwrap(), &DeclarationId::from("Foo::b"));
-        assert_eq!(
-            members.get(&NameId::from("b=")).unwrap(),
-            &DeclarationId::from("Foo::b=")
-        );
-        assert_eq!(
-            members.get(&NameId::from("c=")).unwrap(),
-            &DeclarationId::from("Foo::c=")
-        );
-        assert_eq!(members.get(&NameId::from("d")).unwrap(), &DeclarationId::from("Foo::d"));
-        assert_eq!(members.get(&NameId::from("e")).unwrap(), &DeclarationId::from("Foo::e"));
-        assert_eq!(
-            members.get(&NameId::from("e=")).unwrap(),
-            &DeclarationId::from("Foo::e=")
-        );
-        assert_eq!(members.get(&NameId::from("f")).unwrap(), &DeclarationId::from("Foo::f"));
-        assert_eq!(members.get(&NameId::from("g")).unwrap(), &DeclarationId::from("Foo::g"));
     }
 
     #[test]
     fn index_unresolved_constant_references_inside_compact_namespace() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r"
+        let context = index_source({
+            "
             module Foo
               class Bar::Baz
                 String
@@ -2185,52 +1990,44 @@ mod tests {
             "
         });
 
-        let refs = context.graph.constant_references().values().collect::<Vec<_>>();
+        let refs = context.graph().constant_references().values().collect::<Vec<_>>();
         assert_eq!(refs.len(), 2);
 
-        let reference = &refs[0];
-
-        match reference {
+        match &refs[0] {
             ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("Bar"));
-                assert_eq!(
-                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar::Baz")]
-                );
+                assert_eq!(*unresolved.nesting(), vec![context.definition_at("1:1-5:4").id(),]);
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(19, 22));
             }
             ConstantReference::Resolved(_) => {
-                let name = context.graph.names().get(reference.name_id()).unwrap();
-                panic!("Expected {name} to be unresolved")
+                panic!("Expected reference to be unresolved")
             }
         }
 
-        let reference = &refs[1];
-
-        match reference {
+        match &refs[1] {
             ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("String"));
                 assert_eq!(
-                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar::Baz")]
+                    *unresolved.nesting(),
+                    vec![
+                        context.definition_at("1:1-5:4").id(),
+                        context.definition_at("2:3-4:6").id()
+                    ]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(32, 38));
             }
             ConstantReference::Resolved(_) => {
-                let name = context.graph.names().get(reference.name_id()).unwrap();
-                panic!("Expected {name} to be unresolved")
+                panic!("Expected reference to be unresolved")
             }
         }
     }
 
     #[test]
     fn index_unresolved_constant_reference_context() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r"
+        let context = index_source({
+            "
             module Foo
               class Bar
                 String
@@ -2239,34 +2036,32 @@ mod tests {
             "
         });
 
-        let refs = context.graph.constant_references().values().collect::<Vec<_>>();
+        let refs = context.graph().constant_references().values().collect::<Vec<_>>();
         assert_eq!(refs.len(), 1);
 
-        let reference = &refs[0];
-
-        match reference {
+        match &refs[0] {
             ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("String"));
                 assert_eq!(
-                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
+                    *unresolved.nesting(),
+                    vec![
+                        context.definition_at("1:1-5:4").id(),
+                        context.definition_at("2:3-4:6").id()
+                    ]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
             ConstantReference::Resolved(_) => {
-                let name = context.graph.names().get(reference.name_id()).unwrap();
-                panic!("Expected {name} to be unresolved")
+                panic!("Expected reference to be unresolved")
             }
         }
     }
 
     #[test]
     fn index_unresolved_constant_path_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
-            r"
+        let context = index_source({
+            "
             module Foo
               class Bar
                 Object::String
@@ -2275,57 +2070,55 @@ mod tests {
             "
         });
 
-        let refs = context.graph.constant_references().values().collect::<Vec<_>>();
+        let refs = context.graph().constant_references().values().collect::<Vec<_>>();
         assert_eq!(refs.len(), 2);
 
-        let reference = &refs[0];
-
-        match reference {
+        match &refs[0] {
             ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("String"));
                 assert!(unresolved.parent_scope_id().is_some());
                 assert_eq!(
-                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
+                    *unresolved.nesting(),
+                    vec![
+                        context.definition_at("1:1-5:4").id(),
+                        context.definition_at("2:3-4:6").id()
+                    ]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(35, 41));
             }
             ConstantReference::Resolved(_) => {
-                let name = context.graph.names().get(reference.name_id()).unwrap();
-                panic!("Expected {name} to be unresolved")
+                panic!("Expected reference to be unresolved")
             }
         }
 
-        let reference = &refs[1];
-
-        match reference {
+        match &refs[1] {
             ConstantReference::Unresolved(unresolved) => {
                 assert_eq!(unresolved.name_id(), &NameId::from("Object"));
                 assert!(unresolved.parent_scope_id().is_none());
                 assert_eq!(
-                    unresolved.nesting().as_ref().unwrap().ids_as_vec(),
-                    vec![DeclarationId::from("Foo"), DeclarationId::from("Foo::Bar")]
+                    *unresolved.nesting(),
+                    vec![
+                        context.definition_at("1:1-5:4").id(),
+                        context.definition_at("2:3-4:6").id()
+                    ]
                 );
                 assert_eq!(unresolved.uri_id(), UriId::from("file:///foo.rb"));
                 assert_eq!(unresolved.offset(), &Offset::new(27, 33));
             }
             ConstantReference::Resolved(_) => {
-                let name = context.graph.names().get(reference.name_id()).unwrap();
-                panic!("Expected {name} to be unresolved")
+                panic!("Expected reference to be unresolved")
             }
         }
     }
 
     #[test]
     fn index_unresolved_constant_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             puts C1
             puts C2::C3::C4
-            puts foo::C5
+            puts foo::IGNORED0
             puts C6.foo
             foo = C7
             C8 << 42
@@ -2346,40 +2139,18 @@ mod tests {
             "
         });
 
-        assert_eq!(
-            collect_constant_reference_names(&context.graph),
+        assert_constant_references_eq!(
+            &context,
             vec![
-                "C1",
-                "C2",
-                "C2::C3",
-                "C2::C3::C4",
-                "C6",
-                "C7",
-                "C8",
-                "C9",
-                "C10",
-                "C11",
-                "C12",
-                "C13",
-                "C14",
-                "C15",
-                "C15::C16",
-                "C17",
-                "C17::C18",
-                "C19",
-                "C19::C20",
-                "C21",
-                "C21::C22",
-                "C23"
+                "C1", "C2", "C3", "C4", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17",
+                "C18", "C19", "C20", "C21", "C22", "C23"
             ]
         );
     }
 
     #[test]
     fn index_unresolved_constant_references_from_values() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             IGNORED1 = C1
             IGNORED2 = [C2::C3]
@@ -2391,19 +2162,17 @@ mod tests {
             "
         });
 
-        assert_eq!(
-            collect_constant_reference_names(&context.graph),
+        assert_constant_references_eq!(
+            &context,
             vec![
-                "C1", "C2", "C2::C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14",
+                "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14"
             ]
         );
     }
 
     #[test]
     fn index_unresolved_constant_references_for_classes() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             C1.new
 
@@ -2418,19 +2187,15 @@ mod tests {
             "
         });
 
-        assert_eq!(
-            collect_constant_reference_names(&context.graph),
-            vec![
-                "C1", "C2", "C3", "C4", "C4::C5", "C6", "C6::C7", "C8", "C9", "C10", "C10::C11"
-            ]
+        assert_constant_references_eq!(
+            &context,
+            vec!["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"]
         );
     }
 
     #[test]
     fn index_unresolved_constant_references_for_modules() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             module X
               include M1
@@ -2451,20 +2216,18 @@ mod tests {
             "
         });
 
-        assert_eq!(
-            collect_constant_reference_names(&context.graph),
+        assert_constant_references_eq!(
+            &context,
             vec![
-                "M1", "M2", "M2::M3", "M4", "M5", "M5::M6", "M7", "M8", "M8::M9", "M10", "M11", "M12", "M13", "M14",
-                "M15", "M16", "M17", "M18", "M18::M19",
+                "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16",
+                "M17", "M18", "M19",
             ]
         );
     }
 
     #[test]
-    fn index_unresolved_method_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_references() {
+        let context = index_source({
             "
             m1
             m2(m3)
@@ -2500,8 +2263,8 @@ mod tests {
             "
         });
 
-        assert_eq!(
-            collect_method_reference_names(&context.graph),
+        assert_method_references_eq!(
+            &context,
             vec![
                 "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16",
                 "m17", "m18", "m19", "m20", "m21", "m22", "m23", "m24", "m25", "m26", "!", "m27", "m28", "m29", "m30",
@@ -2512,10 +2275,8 @@ mod tests {
     }
 
     #[test]
-    fn index_unresolved_method_assign_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_assign_references() {
+        let context = index_source({
             "
             self.m1 = m2
             m3.m4.m5 = m6.m7.m8
@@ -2523,8 +2284,8 @@ mod tests {
             "
         });
 
-        assert_eq!(
-            collect_method_reference_names(&context.graph),
+        assert_method_references_eq!(
+            &context,
             vec![
                 "m1=", "m2", "m3", "m4", "m5=", "m6", "m7", "m8", "m9=", "m10=", "m11", "m12"
             ]
@@ -2532,10 +2293,8 @@ mod tests {
     }
 
     #[test]
-    fn index_unresolved_method_opassign_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_opassign_references() {
+        let context = index_source({
             "
             self.m1 += 42
             self.m2 |= 42
@@ -2547,8 +2306,8 @@ mod tests {
             "
         });
 
-        assert_eq!(
-            collect_method_reference_names(&context.graph),
+        assert_method_references_eq!(
+            &context,
             vec![
                 "m1", "m1=", "m2", "m2=", "m3", "m3=", "m4", "m4=", "m5", "m6", "m6=", "m7", "m8", "m9", "m9=", "m10",
                 "m11", "m12", "m12=", "m13",
@@ -2557,116 +2316,84 @@ mod tests {
     }
 
     #[test]
-    fn index_unresolved_method_operator_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_operator_references() {
+        let context = index_source({
             "
-            x != x
-            x % x
-            x & x
-            x && x
-            x * x
-            x ** x
-            x + x
-            x - x
-            x / x
-            x << x
-            x == x
-            x === x
-            x >> x
-            x ^ x
-            x | x
-            x || x
-            x <=> x
+            X != Y
+            X % Y
+            X & Y
+            X && Y
+            X * Y
+            X ** Y
+            X + Y
+            X - Y
+            X / Y
+            X << Y
+            X == Y
+            X === Y
+            X >> Y
+            X ^ Y
+            X | Y
+            X || Y
+            X <=> Y
             "
         });
 
-        let mut names = collect_method_reference_names(&context.graph)
-            .into_iter()
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        names.sort();
-
-        assert_eq!(
-            names,
+        assert_method_references_eq!(
+            &context,
             vec![
-                "!=", "%", "&", "&&", "*", "**", "+", "-", "/", "<<", "<=>", "==", "===", ">>", "^", "x", "|", "||",
+                "!=", "%", "&", "&&", "*", "**", "+", "-", "/", "<<", "==", "===", ">>", "^", "|", "||", "<=>",
             ]
         );
     }
 
     #[test]
-    fn index_unresolved_method_lesser_than_operator_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_lesser_than_operator_references() {
+        let context = index_source({
             "
             x < y
             "
         });
 
-        assert_eq!(
-            collect_method_reference_names(&context.graph),
-            vec!["x", "<", "<=>", "y"]
-        );
+        assert_method_references_eq!(&context, vec!["x", "<", "<=>", "y"]);
     }
 
     #[test]
-    fn index_unresolved_method_lesser_than_or_equal_to_operator_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_lesser_than_or_equal_to_operator_references() {
+        let context = index_source({
             "
             x <= y
             "
         });
 
-        assert_eq!(
-            collect_method_reference_names(&context.graph),
-            vec!["x", "<=", "<=>", "y"]
-        );
+        assert_method_references_eq!(&context, vec!["x", "<=", "<=>", "y"]);
     }
 
     #[test]
-    fn index_unresolved_method_greater_than_operator_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_greater_than_operator_references() {
+        let context = index_source({
             "
             x > y
             "
         });
 
-        assert_eq!(
-            collect_method_reference_names(&context.graph),
-            vec!["x", "<=>", ">", "y"]
-        );
+        assert_method_references_eq!(&context, vec!["x", "<=>", ">", "y"]);
     }
 
     #[test]
-    fn index_unresolved_method_greater_than_or_equal_to_operator_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_greater_than_or_equal_to_operator_references() {
+        let context = index_source({
             "
             x >= y
             "
         });
 
-        assert_eq!(
-            collect_method_reference_names(&context.graph),
-            vec!["x", "<=>", ">=", "y"]
-        );
+        assert_method_references_eq!(&context, vec!["x", "<=>", ">=", "y"]);
     }
 
     #[test]
-    fn index_unresolved_method_alias_references() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///foo.rb", {
+    fn index_method_reference_alias_references() {
+        let context = index_source({
             "
             alias ignored m1
             alias_method :ignored, :m2
@@ -2674,55 +2401,44 @@ mod tests {
             "
         });
 
-        assert_eq!(collect_method_reference_names(&context.graph), vec!["m1", "m2"]);
+        assert_method_references_eq!(&context, vec!["m1", "m2"]);
     }
 
     #[test]
     fn superclasses_are_indexed_as_constant_ref_ids() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             class Foo < Bar; end
             "
         });
 
-        let defs = context.graph.get("Foo").unwrap();
-        assert_eq!(defs.len(), 1);
-
-        if let Definition::Class(foo) = defs[0] {
-            let superclass_id = foo.superclass_ref().unwrap();
-            let reference = context.graph.constant_references().get(&superclass_id).unwrap();
-            assert_eq!(NameId::from("Bar"), *reference.name_id());
-        } else {
-            panic!("Expected Foo to be a class definition");
-        }
+        assert_definition_at!(&context, "1:1-1:21", Class, |def| {
+            assert_eq!(
+                def.superclass_ref().unwrap(),
+                context.graph().constant_references().values().collect::<Vec<_>>()[0].id()
+            );
+        });
     }
 
     #[test]
     fn constant_path_superclasses() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             class Foo < Bar::Baz; end
             "
         });
 
-        let defs = context.graph.get("Foo").unwrap();
-        assert_eq!(defs.len(), 1);
-
-        if let Definition::Class(foo) = defs[0] {
-            let superclass_id = foo.superclass_ref().unwrap();
-            let reference = context.graph.constant_references().get(&superclass_id).unwrap();
-            assert_eq!(NameId::from("Baz"), *reference.name_id());
-        } else {
-            panic!("Expected Foo to be a class definition");
-        }
+        assert_definition_at!(&context, "1:1-1:26", Class, |def| {
+            assert_eq!(
+                def.superclass_ref().unwrap(),
+                context.graph().constant_references().values().collect::<Vec<_>>()[1].id()
+            );
+        });
     }
 
     #[test]
     fn ignored_super_classes() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
+        let context = index_source({
             "
             class Foo < method_call; end
             class Bar < 123; end
@@ -2730,191 +2446,104 @@ mod tests {
             "
         });
 
-        let defs = context.graph.definitions();
-        assert_eq!(defs.len(), 3);
-
-        for def in defs.values() {
-            if let Definition::Class(foo) = def {
-                assert!(
-                    foo.superclass_ref().is_none(),
-                    "Expected no superclass for {}",
-                    context.graph.declarations().get(def.declaration_id()).unwrap().name()
-                );
-            } else {
-                panic!("Expected all definitions to be classes");
-            }
-        }
-    }
-
-    #[test]
-    fn includes_in_classes() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            "
-            class Foo
-              include Bar, Baz, ignored, 123
-              include Qux
-            end
-            "
+        assert_definition_at!(&context, "1:1-1:29", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
         });
 
-        let uri_id = UriId::from("file:///foo.rb");
-        let definition_id = DefinitionId::from(&format!("{uri_id}0Foo"));
-
-        if let Definition::Class(definition) = context.graph.definitions().get(&definition_id).unwrap() {
-            let mixins: Vec<String> = definition
-                .mixins()
-                .iter()
-                .map(|mixin| {
-                    if let Mixin::Prepend(_) = mixin {
-                        panic!("Expected only includes, found a prepend");
-                    }
-
-                    let reference = context.graph.constant_references().get(mixin).unwrap();
-                    let name = context.graph.names().get(reference.name_id()).unwrap();
-                    name.clone()
-                })
-                .collect();
-
-            assert_eq!(mixins, vec!["Bar", "Baz", "Qux"]);
-        } else {
-            panic!("Expected Foo to be a class definition");
-        }
-    }
-
-    #[test]
-    fn includes_in_modules() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            "
-            module Foo
-              include Bar, Baz, ignored, 123
-              include Qux
-            end
-            "
+        assert_definition_at!(&context, "2:1-2:21", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
         });
 
-        let uri_id = UriId::from("file:///foo.rb");
-        let definition_id = DefinitionId::from(&format!("{uri_id}0Foo"));
-
-        if let Definition::Module(definition) = context.graph.definitions().get(&definition_id).unwrap() {
-            let mixins: Vec<String> = definition
-                .mixins()
-                .iter()
-                .map(|mixin| {
-                    if let Mixin::Prepend(_) = mixin {
-                        panic!("Expected only includes, found a prepend");
-                    }
-
-                    let reference = context.graph.constant_references().get(mixin).unwrap();
-                    let name = context.graph.names().get(reference.name_id()).unwrap();
-                    name.clone()
-                })
-                .collect();
-
-            assert_eq!(mixins, vec!["Bar", "Baz", "Qux"]);
-        } else {
-            panic!("Expected Foo to be a module definition");
-        }
-    }
-
-    #[test]
-    fn prepends_in_classes() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            "
-            class Foo
-              prepend Bar, Baz, ignored, 123
-              prepend Qux
-            end
-            "
+        assert_definition_at!(&context, "3:1-3:54", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
         });
-
-        let uri_id = UriId::from("file:///foo.rb");
-        let definition_id = DefinitionId::from(&format!("{uri_id}0Foo"));
-
-        if let Definition::Class(definition) = context.graph.definitions().get(&definition_id).unwrap() {
-            let mixins: Vec<String> = definition
-                .mixins()
-                .iter()
-                .map(|mixin| {
-                    if let Mixin::Include(_) = mixin {
-                        panic!("Expected only prepends, found an include");
-                    }
-
-                    let reference = context.graph.constant_references().get(mixin).unwrap();
-                    let name = context.graph.names().get(reference.name_id()).unwrap();
-                    name.clone()
-                })
-                .collect();
-
-            assert_eq!(mixins, vec!["Bar", "Baz", "Qux"]);
-        } else {
-            panic!("Expected Foo to be a class definition");
-        }
     }
 
     #[test]
-    fn prepends_in_modules() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            "
-            module Foo
-              prepend Bar, Baz, ignored, 123
-              prepend Qux
-            end
-            "
-        });
-
-        let uri_id = UriId::from("file:///foo.rb");
-        let definition_id = DefinitionId::from(&format!("{uri_id}0Foo"));
-
-        if let Definition::Module(definition) = context.graph.definitions().get(&definition_id).unwrap() {
-            let mixins: Vec<String> = definition
-                .mixins()
-                .iter()
-                .map(|mixin| {
-                    if let Mixin::Include(_) = mixin {
-                        panic!("Expected only prepends, found an include");
-                    }
-
-                    let reference = context.graph.constant_references().get(mixin).unwrap();
-                    let name = context.graph.names().get(reference.name_id()).unwrap();
-                    name.clone()
-                })
-                .collect();
-
-            assert_eq!(mixins, vec!["Bar", "Baz", "Qux"]);
-        } else {
-            panic!("Expected Foo to be a module definition");
-        }
-    }
-
-    #[test]
-    fn includes_at_top_level() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
+    fn index_includes_at_top_level() {
+        let context = index_source({
             "
             include Bar, Baz, ignored, 123
             include Qux
             "
         });
 
-        // This is currently wrong! We should be inserting top level includes into an artificial `Object` definition
-        assert!(context.graph.get("Object").is_none());
+        assert_eq!(context.graph().definitions().len(), 0);
     }
 
     #[test]
-    fn prepends_at_top_level() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
+    fn index_includes_in_classes() {
+        let context = index_source({
+            "
+            class Foo
+              include Bar, Baz, ignored, 123
+              include Qux
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |def| {
+            assert_includes_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_includes_in_modules() {
+        let context = index_source({
+            "
+            module Foo
+              include Bar, Baz, ignored, 123
+              include Qux
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-4:4", Module, |def| {
+            assert_includes_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_prepends_at_top_level() {
+        let context = index_source({
             "
             prepend Bar, Baz, ignored, 123
             prepend Qux
             "
         });
 
-        // This is currently wrong! We should be inserting top level includes into an artificial `Object` definition
-        assert!(context.graph.get("Object").is_none());
+        assert_eq!(context.graph().definitions().len(), 0);
+    }
+
+    #[test]
+    fn index_prepends_in_classes() {
+        let context = index_source({
+            "
+            class Foo
+              prepend Bar, Baz, ignored, 123
+              prepend Qux
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |def| {
+            assert_prepends_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_prepends_in_modules() {
+        let context = index_source({
+            "
+            module Foo
+              prepend Bar, Baz, ignored, 123
+              prepend Qux
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-4:4", Module, |def| {
+            assert_prepends_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+        });
     }
 }

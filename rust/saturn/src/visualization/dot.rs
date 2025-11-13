@@ -66,7 +66,7 @@ fn write_definition_nodes(output: &mut String, graph: &Graph) {
         .filter_map(|(def_id, definition)| {
             graph
                 .declarations()
-                .get(definition.declaration_id())
+                .get(graph.definitions_to_declarations().get(def_id).unwrap())
                 .map(|declaration| {
                     let def_type = definition.kind();
                     let escaped_name = escape_dot_string(declaration.name());
@@ -123,6 +123,7 @@ mod tests {
                 end
             ",
         );
+        graph_test.resolve();
         graph_test.graph
     }
 
@@ -149,7 +150,6 @@ mod tests {
             r#"digraph {{
     rankdir=TB;
 
-    "Name:<main>" [label="<main>",shape=hexagon];
     "Name:TestClass" [label="TestClass",shape=hexagon];
     "Name:TestClass" -> "def_{class_def_id}" [dir=both];
     "Name:TestModule" [label="TestModule",shape=hexagon];
