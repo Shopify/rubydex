@@ -11,4 +11,8 @@ gem "minitest"
 gem "rubocop"
 gem "rubocop-shopify"
 gem "extconf_compile_commands_json"
-gem "ruby_memcheck"
+
+# Gems that aren't supported on Windows
+platforms :ruby do
+  gem "ruby_memcheck"
+end

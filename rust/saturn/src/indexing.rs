@@ -166,6 +166,8 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::test_utils::Context;
 
@@ -190,18 +192,21 @@ mod tests {
     #[test]
     fn collect_all_documents() {
         let context = Context::new();
-        context.touch("bar/baz.rb");
-        context.touch("bar/qux.rb");
-        context.touch("foo/bar.rb");
+        let baz = Path::new("bar").join("baz.rb");
+        let qux = Path::new("bar").join("qux.rb");
+        let bar = Path::new("foo").join("bar.rb");
+        context.touch(&baz);
+        context.touch(&qux);
+        context.touch(&bar);
 
         let (paths, errors) = collect_document_paths(&context, &["foo", "bar"]);
 
         assert_eq!(
             paths,
             vec![
-                "bar/baz.rb".to_string(),
-                "bar/qux.rb".to_string(),
-                "foo/bar.rb".to_string()
+                baz.to_str().unwrap().to_string(),
+                qux.to_str().unwrap().to_string(),
+                bar.to_str().unwrap().to_string()
             ]
         );
         assert!(errors.is_empty());
@@ -210,13 +215,19 @@ mod tests {
     #[test]
     fn collect_some_documents_based_on_paths() {
         let context = Context::new();
-        context.touch("bar/baz.rb");
-        context.touch("bar/qux.rb");
-        context.touch("foo/bar.rb");
+        let baz = Path::new("bar").join("baz.rb");
+        let qux = Path::new("bar").join("qux.rb");
+        let bar = Path::new("foo").join("bar.rb");
 
+        context.touch(&baz);
+        context.touch(&qux);
+        context.touch(&bar);
         let (paths, errors) = collect_document_paths(&context, &["bar"]);
 
-        assert_eq!(paths, vec!["bar/baz.rb".to_string(), "bar/qux.rb".to_string()]);
+        assert_eq!(
+            paths,
+            vec![baz.to_str().unwrap().to_string(), qux.to_str().unwrap().to_string()]
+        );
         assert!(errors.is_empty());
     }
 
@@ -239,30 +250,31 @@ mod tests {
                 .map(std::string::ToString::to_string)
                 .collect::<Vec<String>>(),
             vec![format!(
-                "File read error: Path '{}/non_existing_path' does not exist",
-                context.absolute_path().display()
+                "File read error: Path '{}' does not exist",
+                context.absolute_path_to("non_existing_path").display()
             )]
         );
     }
 
     #[test]
     fn index_relative_paths() {
+        let relative_path = Path::new("foo").join("bar.rb");
         let context = Context::new();
-        context.touch("foo/bar.rb");
+        context.touch(&relative_path);
 
         let working_directory = std::env::current_dir().unwrap();
+        let absolute_path = context.absolute_path_to("foo/bar.rb");
 
-        let dotdots = "../".repeat(working_directory.components().count());
+        let mut dots = PathBuf::from("..");
 
-        let relative_path = dotdots
-            + context
-                .absolute_path_to("foo/bar.rb")
-                .to_string_lossy()
-                .into_owned()
-                .as_str();
+        for _ in 0..working_directory.components().count() - 1 {
+            dots = dots.join("..");
+        }
+
+        let relative_to_pwd = &dots.join(absolute_path);
 
         let mut graph = Graph::new();
-        let errors = index_in_parallel(&mut graph, vec![relative_path]);
+        let errors = index_in_parallel(&mut graph, vec![relative_to_pwd.to_str().unwrap().to_string()]);
 
         assert!(errors.is_ok());
         assert_eq!(graph.documents().len(), 1);

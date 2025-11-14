@@ -77,7 +77,7 @@ class DefinitionTest < Minitest::Test
       refute_nil(def_a)
       location = def_a.location
       refute_nil(location)
-      assert_equal("file://#{context.absolute_path_to("file1.rb")}", location.uri)
+      assert_equal(context.uri_to("file1.rb"), location.uri)
       assert_equal(context.absolute_path_to("file1.rb"), location.path)
       assert_equal(1, location.start_line)
       assert_equal(1, location.start_column)
@@ -88,7 +88,7 @@ class DefinitionTest < Minitest::Test
       refute_nil(def_foo)
       location = def_foo.location
       refute_nil(location)
-      assert_equal("file://#{context.absolute_path_to("file1.rb")}", location.uri)
+      assert_equal(context.uri_to("file1.rb"), location.uri)
       assert_equal(context.absolute_path_to("file1.rb"), location.path)
       assert_equal(2, location.start_line)
       assert_equal(3, location.start_column)
@@ -104,27 +104,44 @@ class DefinitionTest < Minitest::Test
         # Multi-line comment
         class Foo
           # Method comment
-          def foo; end
+          def bar; end
         end
       RUBY
 
       graph = Saturn::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      comments = graph.documents.first.definitions.find { |d| d.name == "Foo" }.comments
+      foo_comments = graph.documents.first.definitions.find { |d| d.name == "Foo" }.comments
       assert_equal(
         [
           "# This is a class comment (#{context.absolute_path_to("file1.rb")}:1:1-1:26)",
           "# Multi-line comment (#{context.absolute_path_to("file1.rb")}:2:1-2:21)",
         ],
-        comments.map { |c| "#{c.string} (#{c.location})" },
+        foo_comments.map { |c| "#{c.string} (#{normalized_comment_location(c)})" },
       )
 
-      comments = graph.documents.first.definitions.find { |d| d.name == "foo" }.comments
+      bar_comments = graph.documents.first.definitions.find { |d| d.name == "bar" }.comments
       assert_equal(
         ["# Method comment (#{context.absolute_path_to("file1.rb")}:4:3-4:19)"],
-        comments.map { |c| "#{c.string} (#{c.location})" },
+        bar_comments.map { |c| "#{c.string} (#{normalized_comment_location(c)})" },
       )
     end
+  end
+
+  private
+
+  # Comment locations on Windows include the carriage return. This means that the end column is off by one when compared
+  # to Unix locations. This method creates a fake adjusted location for Windows so that we can assert locations once
+  def normalized_comment_location(comment)
+    loc = comment.location
+    return loc unless Gem.win_platform?
+
+    Saturn::Location.new(
+      uri: loc.uri,
+      start_line: loc.start_line,
+      start_column: loc.start_column,
+      end_line: loc.end_line,
+      end_column: loc.end_column - 1,
+    )
   end
 end

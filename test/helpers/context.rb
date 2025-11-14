@@ -26,6 +26,14 @@ module Test
         ::File.join(@absolute_path, relative_path)
       end
 
+      #: (String) -> String
+      def uri_to(relative_path)
+        path = absolute_path_to(relative_path)
+        # TODO: This has to go away once we have a proper URI abstraction
+        path.prepend("/") if Gem.win_platform?
+        URI::File.build(path: path).to_s
+      end
+
       #: (String relative_path, ?String contents, ?append: bool) -> void
       def write!(relative_path, contents = "", append: false)
         absolute_path = absolute_path_to(relative_path)
