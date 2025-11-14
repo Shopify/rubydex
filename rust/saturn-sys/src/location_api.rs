@@ -1,8 +1,7 @@
 //! Location-related C API and structs
 
 use libc::c_char;
-use saturn::offset::Offset;
-use saturn::source_location::{SourceLocationConverter, UTF8SourceLocationConverter};
+use line_index::LineIndex;
 use std::ffi::CString;
 use std::fs;
 use url::Url;
@@ -38,21 +37,18 @@ fn file_path_from_uri(uri: &str) -> Option<String> {
 #[must_use]
 pub(crate) fn create_location_for_uri_and_offset(uri: &str, start: u32, end: u32) -> *mut Location {
     let path_str = file_path_from_uri(uri).unwrap_or_else(|| panic!("Failed to convert URI to file path: {uri}"));
-
     let source = fs::read_to_string(&path_str).unwrap_or_else(|_| panic!("Failed to read file at path {path_str}"));
-    let converter = UTF8SourceLocationConverter::new(&source);
-    let offset = Offset::new(start, end);
-    let (start_line, start_column, end_line, end_column) = match converter.offset_to_position(&offset) {
-        Some((start_pos, end_pos)) => (start_pos.line(), start_pos.column(), end_pos.line(), end_pos.column()),
-        None => (0, 0, 0, 0),
-    };
+
+    let line_index = LineIndex::new(&source);
+    let start_pos = line_index.line_col(start.into());
+    let end_pos = line_index.line_col(end.into());
 
     let loc = Location {
         uri: CString::new(uri).unwrap().into_raw().cast_const(),
-        start_line: start_line + 1,
-        end_line: end_line + 1,
-        start_column: start_column + 1,
-        end_column: end_column + 1,
+        start_line: start_pos.line + 1,
+        end_line: end_pos.line + 1,
+        start_column: start_pos.col + 1,
+        end_column: end_pos.col + 1,
     };
 
     Box::into_raw(Box::new(loc))

@@ -1,10 +1,11 @@
+use line_index::{LineCol, LineIndex};
+
 use super::normalize_indentation;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
 use crate::offset::Offset;
 use crate::resolve;
-use crate::source_location::{Position, SourceLocationConverter, UTF8SourceLocationConverter};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -62,25 +63,19 @@ impl GraphTest {
     #[must_use]
     pub fn parse_location(&self, location: &str) -> (String, u32, u32) {
         let (uri, start_position, end_position) = Self::parse_location_positions(location);
-        let converter = self.converter_for(uri.as_str());
+        let line_index = self.line_index_for(uri.as_str());
 
-        let start_offset = converter.byte_offset_from_position(start_position).unwrap_or_else(|| {
-            panic!(
-                "Invalid start position: {}:{}",
-                start_position.line(),
-                start_position.column()
-            )
-        });
-
-        let end_offset = converter.byte_offset_from_position(end_position).unwrap_or_else(|| {
-            panic!(
-                "Invalid end position: {}:{}",
-                end_position.line(),
-                end_position.column()
-            )
-        });
-
-        (uri, start_offset, end_offset)
+        (
+            uri,
+            line_index
+                .offset(start_position)
+                .unwrap_or_else(|| panic!("Invalid start position {}:{}", start_position.line, start_position.col))
+                .into(),
+            line_index
+                .offset(end_position)
+                .unwrap_or_else(|| panic!("Invalid end position {}:{}", end_position.line, end_position.col))
+                .into(),
+        )
     }
 
     /// Asserts that the given offset matches the expected offset, providing clear error messages
@@ -99,19 +94,16 @@ impl GraphTest {
         context_message: &str,
         location: &str,
     ) {
-        let converter = self.converter_for(uri);
-        let expected_offset = Offset::new(expected_start, expected_end);
+        let line_index = self.line_index_for(uri);
 
         if actual_offset.start() == expected_start && actual_offset.end() == expected_end {
             return;
         }
 
-        let (actual_start_pos, actual_end_pos) = converter
-            .offset_to_position(actual_offset)
-            .unwrap_or_else(|| panic!("Invalid byte offset"));
-        let (expected_start_pos, expected_end_pos) = converter
-            .offset_to_position(&expected_offset)
-            .unwrap_or_else(|| panic!("Invalid byte offset"));
+        let actual_start_pos = line_index.line_col(actual_offset.start().into());
+        let actual_end_pos = line_index.line_col(actual_offset.end().into());
+        let expected_start_pos = line_index.line_col(expected_start.into());
+        let expected_end_pos = line_index.line_col(expected_end.into());
 
         assert!(
             actual_offset.start() == expected_start,
@@ -132,14 +124,14 @@ impl GraphTest {
         );
     }
 
-    fn converter_for(&self, uri: &str) -> UTF8SourceLocationConverter<'_> {
+    fn line_index_for(&self, uri: &str) -> LineIndex {
         let source = self
             .get_source(uri)
             .unwrap_or_else(|| panic!("Source not found for URI: {uri}"));
-        UTF8SourceLocationConverter::new(source)
+        LineIndex::new(source)
     }
 
-    fn parse_location_positions(location: &str) -> (String, Position, Position) {
+    fn parse_location_positions(location: &str) -> (String, LineCol, LineCol) {
         let trimmed = location.trim().trim_start_matches('<').trim_end_matches('>');
 
         let (start_part, end_part) = trimmed.rsplit_once('-').unwrap_or_else(|| {
@@ -164,8 +156,14 @@ impl GraphTest {
 
         (
             uri.to_string(),
-            Position::new(start_line, start_column),
-            Position::new(end_line, end_column),
+            LineCol {
+                line: start_line,
+                col: start_column,
+            },
+            LineCol {
+                line: end_line,
+                col: end_column,
+            },
         )
     }
 
@@ -175,8 +173,8 @@ impl GraphTest {
             .unwrap_or_else(|_| panic!("Invalid {field} '{value}' in location {location}"))
     }
 
-    fn format_position(position: Position) -> String {
-        format!("line {}, column {}", position.line(), position.column())
+    fn format_position(position: LineCol) -> String {
+        format!("line {}, column {}", position.line, position.col)
     }
 }
 
