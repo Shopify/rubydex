@@ -75,8 +75,9 @@ pub unsafe extern "C" fn sat_definition_name(pointer: GraphPointer, definition_i
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         if let Some(defn) = graph.definitions().get(&def_id) {
-            let name_id = defn.name_id();
-            if let Some(name) = graph.names().get(name_id) {
+            let name_id = graph.definition_string_id(defn);
+
+            if let Some(name) = graph.strings().get(&name_id) {
                 CString::new(name.as_str()).unwrap().into_raw().cast_const()
             } else {
                 ptr::null()
