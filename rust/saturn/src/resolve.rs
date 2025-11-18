@@ -2,8 +2,8 @@ use crate::model::definitions::Definition;
 use crate::model::graph::Graph;
 
 fn fully_qualify_definition_name(graph: &Graph, definition: &Definition) -> String {
-    let definition_name_id = definition.name_id();
-    let definition_name = graph.names().get(definition_name_id).unwrap();
+    let definition_name_id = graph.definition_string_id(definition);
+    let definition_name = graph.strings().get(&definition_name_id).unwrap();
 
     if let Some(fully_qualified_name) = definition_name.strip_prefix("::") {
         return fully_qualified_name.to_string();
@@ -27,8 +27,8 @@ pub fn create_declarations_for_definitions(graph: &mut Graph) {
 
     for definition_id in definition_ids {
         let definition = graph.definitions().get(&definition_id).unwrap();
-        let definition_name_id = definition.name_id();
-        let definition_name = graph.names().get(definition_name_id).unwrap();
+        let definition_name_id = graph.definition_string_id(definition);
+        let definition_name = graph.strings().get(&definition_name_id).unwrap();
 
         if let Some(declaration_name) = definition_name.strip_prefix("::") {
             // Handle top level declarations like these ones:
@@ -72,7 +72,8 @@ fn compute_declaration_members_and_ownership(graph: &mut Graph) {
         for definition_id in definition_ids {
             if let Some(definition_owner_id) = graph.definitions().get(&definition_id).unwrap().owner_id() {
                 let declaration_owner_id = *graph.definitions_to_declarations().get(definition_owner_id).unwrap();
-                let member_name_id = *graph.definitions().get(&definition_id).unwrap().name_id();
+                let definition = graph.definitions().get(&definition_id).unwrap();
+                let member_name_id = graph.definition_string_id(definition);
                 let declaration_owner = graph.get_declaration_mut(&declaration_owner_id).unwrap();
 
                 declaration_owner.add_member(member_name_id, declaration_id);
