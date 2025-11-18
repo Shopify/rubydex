@@ -1073,7 +1073,7 @@ mod tests {
 
     macro_rules! assert_name_eq {
         ($context:expr, $expect_name_string:expr, $def:expr) => {{
-            let actual_name = $context.graph().strings().get($def.name_id()).unwrap();
+            let actual_name = $context.graph().strings().get($def.str_id()).unwrap();
 
             assert_eq!($expect_name_string, actual_name);
         }};

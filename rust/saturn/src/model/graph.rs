@@ -113,14 +113,14 @@ impl Graph {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
             }
-            Definition::Constant(it) => it.name_id(),
-            Definition::GlobalVariable(it) => it.name_id(),
-            Definition::InstanceVariable(it) => it.name_id(),
-            Definition::ClassVariable(it) => it.name_id(),
-            Definition::AttrAccessor(it) => it.name_id(),
-            Definition::AttrReader(it) => it.name_id(),
-            Definition::AttrWriter(it) => it.name_id(),
-            Definition::Method(it) => it.name_id(),
+            Definition::Constant(it) => it.str_id(),
+            Definition::GlobalVariable(it) => it.str_id(),
+            Definition::InstanceVariable(it) => it.str_id(),
+            Definition::ClassVariable(it) => it.str_id(),
+            Definition::AttrAccessor(it) => it.str_id(),
+            Definition::AttrReader(it) => it.str_id(),
+            Definition::AttrWriter(it) => it.str_id(),
+            Definition::Method(it) => it.str_id(),
         };
 
         *id

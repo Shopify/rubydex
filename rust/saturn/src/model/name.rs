@@ -14,8 +14,8 @@ pub struct Name {
     ///
     /// `None` indicates that this is a simple constant read or a top level reference
     parent_scope: Option<NameId>,
-    /// The nesting where we found the constant reference. This is a chain of nesting objects representing the lexical
-    /// scopes surrounding the reference
+    /// The ID of the name for the nesting where we found this name. This effectively turns the structure into a linked
+    /// list of names to represent the nesting
     nesting: Option<NameId>,
 }
 
