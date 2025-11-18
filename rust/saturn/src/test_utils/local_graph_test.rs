@@ -1,10 +1,11 @@
+use line_index::{LineCol, LineIndex};
+
 use super::normalize_indentation;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::definitions::Definition;
 use crate::model::ids::UriId;
 use crate::offset::Offset;
-use crate::source_location::{Position, SourceLocationConverter, UTF8SourceLocationConverter};
 
 #[cfg(test)]
 pub struct LocalGraphTest {
@@ -89,33 +90,23 @@ impl LocalGraphTest {
     #[must_use]
     pub fn parse_location(&self, location: &str) -> (String, Offset) {
         let (uri, start_position, end_position) = Self::parse_location_positions(location);
-        let converter = UTF8SourceLocationConverter::new(&self.source);
+        let line_index = LineIndex::new(&self.source);
 
-        let start_offset = converter.byte_offset_from_position(start_position).unwrap_or(0);
-        let end_offset = converter.byte_offset_from_position(end_position).unwrap_or(0);
+        let start_offset = line_index.offset(start_position).unwrap_or(0.into());
+        let end_offset = line_index.offset(end_position).unwrap_or(0.into());
 
-        (uri, Offset::new(start_offset, end_offset))
+        (uri, Offset::new(start_offset.into(), end_offset.into()))
     }
 
     #[must_use]
     pub fn offset_to_display_range(&self, offset: &Offset) -> String {
-        let converter = UTF8SourceLocationConverter::new(&self.source);
-        match converter.offset_to_position(offset) {
-            Some((start, end)) => {
-                // Convert to 1-based for display
-                format!(
-                    "{}:{}-{}:{}",
-                    start.line() + 1,
-                    start.column() + 1,
-                    end.line() + 1,
-                    end.column() + 1
-                )
-            }
-            None => String::from("INVALID_OFFSET"),
-        }
+        let line_index = LineIndex::new(&self.source);
+        let start = line_index.line_col(offset.start().into());
+        let end = line_index.line_col(offset.end().into());
+        format!("{}:{}-{}:{}", start.line + 1, start.col + 1, end.line + 1, end.col + 1)
     }
 
-    fn parse_location_positions(location: &str) -> (String, Position, Position) {
+    fn parse_location_positions(location: &str) -> (String, LineCol, LineCol) {
         let trimmed = location.trim().trim_start_matches('<').trim_end_matches('>');
 
         let (start_part, end_part) = trimmed.rsplit_once('-').unwrap_or_else(|| {
@@ -140,8 +131,14 @@ impl LocalGraphTest {
 
         (
             uri.to_string(),
-            Position::new(start_line - 1, start_column - 1),
-            Position::new(end_line - 1, end_column - 1),
+            LineCol {
+                line: start_line - 1,
+                col: start_column - 1,
+            },
+            LineCol {
+                line: end_line - 1,
+                col: end_column - 1,
+            },
         )
     }
 
