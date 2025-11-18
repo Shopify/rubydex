@@ -1,14 +1,16 @@
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{DefinitionId, NameId, ReferenceId, UriId};
+use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
+use crate::model::name::{Name, NameRef};
 use crate::model::references::{ConstantReference, MethodRef};
 
 type LocalGraphParts = (
     UriId,
     Document,
     IdentityHashMap<DefinitionId, Definition>,
-    IdentityHashMap<NameId, String>,
+    IdentityHashMap<StringId, String>,
+    IdentityHashMap<NameId, NameRef>,
     IdentityHashMap<ReferenceId, ConstantReference>,
     IdentityHashMap<ReferenceId, MethodRef>,
 );
@@ -18,7 +20,8 @@ pub struct LocalGraph {
     uri_id: UriId,
     document: Document,
     definitions: IdentityHashMap<DefinitionId, Definition>,
-    names: IdentityHashMap<NameId, String>,
+    strings: IdentityHashMap<StringId, String>,
+    names: IdentityHashMap<NameId, NameRef>,
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
 }
@@ -30,6 +33,7 @@ impl LocalGraph {
             uri_id,
             document,
             definitions: IdentityHashMap::default(),
+            strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
@@ -61,16 +65,29 @@ impl LocalGraph {
         definition_id
     }
 
+    // Strings
+
+    #[must_use]
+    pub fn strings(&self) -> &IdentityHashMap<StringId, String> {
+        &self.strings
+    }
+
+    pub fn intern_string(&mut self, string: String) -> StringId {
+        let name_id = StringId::from(&string);
+        self.strings.insert(name_id, string);
+        name_id
+    }
+
     // Names
 
     #[must_use]
-    pub fn names(&self) -> &IdentityHashMap<NameId, String> {
+    pub fn names(&self) -> &IdentityHashMap<NameId, NameRef> {
         &self.names
     }
 
-    pub fn add_name(&mut self, name: String) -> NameId {
-        let name_id = NameId::from(&name);
-        self.names.insert(name_id, name);
+    pub fn add_name(&mut self, name: Name) -> NameId {
+        let name_id = name.id();
+        self.names.insert(name_id, NameRef::Unresolved(Box::new(name)));
         name_id
     }
 
@@ -108,6 +125,7 @@ impl LocalGraph {
             self.uri_id,
             self.document,
             self.definitions,
+            self.strings,
             self.names,
             self.constant_references,
             self.method_references,

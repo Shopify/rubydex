@@ -518,13 +518,13 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let name_id = self.local_graph.add_name(name);
+        let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&name_loc);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
         let owner_id = self.parent_nesting_id().copied();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-            name_id,
+            str_id,
             self.uri_id,
             offset,
             comments,
@@ -555,13 +555,13 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
         let location = node.target().location();
         let name = Self::location_to_string(&location);
-        let name_id = self.local_graph.add_name(name);
+        let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&location);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
         let owner_id = self.parent_nesting_id().copied();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-            name_id,
+            str_id,
             self.uri_id,
             offset,
             comments,
@@ -595,13 +595,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let name_id = self.local_graph.add_name(name);
+                    let str_id = self.local_graph.intern_string(name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
                     let owner_id = self.parent_nesting_id().copied();
 
                     let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-                        name_id,
+                        str_id,
                         self.uri_id,
                         offset,
                         comments,
@@ -617,13 +617,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let name_id = self.local_graph.add_name(name);
+                    let str_id = self.local_graph.intern_string(name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
                     let owner_id = self.parent_nesting_id().copied();
 
                     let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                        name_id,
+                        str_id,
                         self.uri_id,
                         offset,
                         comments,
@@ -639,13 +639,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let name_id = self.local_graph.add_name(name);
+                    let str_id = self.local_graph.intern_string(name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
                     let owner_id = self.parent_nesting_id().copied();
 
                     let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                        name_id,
+                        str_id,
                         self.uri_id,
                         offset,
                         comments,
@@ -661,13 +661,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
                     let location = left.location();
                     let name = Self::location_to_string(&location);
-                    let name_id = self.local_graph.add_name(name);
+                    let str_id = self.local_graph.intern_string(name);
                     let offset = Offset::from_prism_location(&location);
                     let comments = self.find_comments_for(offset.start()).unwrap_or_default();
                     let owner_id = self.parent_nesting_id().copied();
 
                     let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                        name_id,
+                        str_id,
                         self.uri_id,
                         offset,
                         comments,
@@ -696,7 +696,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode) {
         let name = Self::location_to_string(&node.name_loc());
-        let name_id = self.local_graph.add_name(name);
+        let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
         let owner_id = self.parent_nesting_id().copied();
@@ -706,7 +706,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             .is_some_and(|receiver| receiver.as_self_node().is_some());
 
         let method = Definition::Method(Box::new(MethodDefinition::new(
-            name_id,
+            str_id,
             self.uri_id,
             offset,
             comments,
@@ -730,13 +730,13 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode) {
         fn create_attr_accessor(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let name_id = indexer.local_graph.add_name(name);
+                let str_id = indexer.local_graph.intern_string(name);
                 let owner_id = indexer.parent_nesting_id().copied();
                 let offset = Offset::from_prism_location(&location);
                 let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
 
                 let definition_id = indexer.local_graph.add_definition(Definition::AttrAccessor(Box::new(
-                    AttrAccessorDefinition::new(name_id, indexer.uri_id, offset, comments, owner_id),
+                    AttrAccessorDefinition::new(str_id, indexer.uri_id, offset, comments, owner_id),
                 )));
 
                 if let Some(parent_nesting) = indexer.parent_nesting() {
@@ -747,7 +747,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         fn create_attr_reader(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let name_id = indexer.local_graph.add_name(name);
+                let str_id = indexer.local_graph.intern_string(name);
                 let owner_id = indexer.parent_nesting_id().copied();
                 let offset = Offset::from_prism_location(&location);
                 let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
@@ -756,7 +756,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     indexer
                         .local_graph
                         .add_definition(Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                            name_id,
+                            str_id,
                             indexer.uri_id,
                             offset,
                             comments,
@@ -771,7 +771,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         fn create_attr_writer(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
             RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let name_id = indexer.local_graph.add_name(name);
+                let str_id = indexer.local_graph.intern_string(name);
                 let owner_id = indexer.parent_nesting_id().copied();
                 let offset = Offset::from_prism_location(&location);
                 let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
@@ -780,7 +780,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     indexer
                         .local_graph
                         .add_definition(Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                            name_id,
+                            str_id,
                             indexer.uri_id,
                             offset,
                             comments,
@@ -922,13 +922,13 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let name_id = self.local_graph.add_name(name);
+        let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&name_loc);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
         let owner_id = self.parent_nesting_id().copied();
 
         let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-            name_id,
+            str_id,
             self.uri_id,
             offset,
             comments,
@@ -948,12 +948,12 @@ impl Visit<'_> for RubyIndexer<'_> {
         let owner_id = self.parent_nesting_id().copied();
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let name_id = self.local_graph.add_name(name);
+        let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&name_loc);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
         let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-            name_id,
+            str_id,
             self.uri_id,
             offset,
             comments,
@@ -973,12 +973,12 @@ impl Visit<'_> for RubyIndexer<'_> {
         let owner_id = self.parent_nesting_id().copied();
         let name_loc = node.name_loc();
         let name = Self::location_to_string(&name_loc);
-        let name_id = self.local_graph.add_name(name);
+        let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&name_loc);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
         let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-            name_id,
+            str_id,
             self.uri_id,
             offset,
             comments,
@@ -1056,7 +1056,7 @@ mod tests {
 
     macro_rules! assert_name_eq {
         ($context:expr, $expect_name_string:expr, $def:expr) => {{
-            let actual_name = $context.graph().names().get($def.name_id()).unwrap();
+            let actual_name = $context.graph().strings().get($def.name_id()).unwrap();
 
             assert_eq!($expect_name_string, actual_name);
         }};
@@ -1104,7 +1104,7 @@ mod tests {
                 .graph()
                 .method_references()
                 .values()
-                .map(|m| (m.offset().start(), $context.graph().names().get(m.name_id()).unwrap()))
+                .map(|m| (m.offset().start(), $context.graph().strings().get(m.name_id()).unwrap()))
                 .collect::<Vec<_>>();
 
             actual_references.sort();

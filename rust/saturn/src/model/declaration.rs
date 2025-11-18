@@ -1,6 +1,6 @@
 use crate::model::{
     identity_maps::IdentityHashMap,
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId},
+    ids::{DeclarationId, DefinitionId, StringId, ReferenceId},
 };
 
 /// A `Declaration` represents the global concept of an entity in Ruby. For example, the class `Foo` may be defined 3
@@ -16,7 +16,7 @@ pub struct Declaration {
     /// the namespace. Note that this is a hashmap of unqualified name IDs to declaration IDs. That assists the
     /// traversal of the graph when trying to resolve constant references or trying to discover which methods exist in a
     /// class
-    members: IdentityHashMap<NameId, DeclarationId>,
+    members: IdentityHashMap<StringId, DeclarationId>,
     /// The list of references that are made to this declaration
     references: Vec<ReferenceId>,
     /// The ID of the owner of this declaration
@@ -87,20 +87,20 @@ impl Declaration {
     }
 
     #[must_use]
-    pub fn members(&self) -> &IdentityHashMap<NameId, DeclarationId> {
+    pub fn members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
         &self.members
     }
 
-    pub fn add_member(&mut self, name_id: NameId, declaration_id: DeclarationId) {
+    pub fn add_member(&mut self, name_id: StringId, declaration_id: DeclarationId) {
         self.members.insert(name_id, declaration_id);
     }
 
-    pub fn remove_member(&mut self, name_id: &NameId) -> Option<DeclarationId> {
+    pub fn remove_member(&mut self, name_id: &StringId) -> Option<DeclarationId> {
         self.members.remove(name_id)
     }
 
     #[must_use]
-    pub fn get_member(&self, name_id: &NameId) -> Option<&DeclarationId> {
+    pub fn get_member(&self, name_id: &StringId) -> Option<&DeclarationId> {
         self.members.get(name_id)
     }
 
