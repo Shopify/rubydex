@@ -733,70 +733,50 @@ impl Visit<'_> for RubyIndexer<'_> {
 
     #[allow(clippy::too_many_lines)]
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode) {
-        fn create_attr_accessor(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
-            RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let str_id = indexer.local_graph.intern_string(name);
-                let owner_id = indexer.parent_nesting_id().copied();
+        enum AttrKind {
+            Accessor,
+            Reader,
+            Writer,
+        }
+
+        let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
+            Self::each_string_or_symbol_arg(call, |name, location| {
+                let str_id = self.local_graph.intern_string(name);
+                let owner_id = self.parent_nesting_id().copied();
                 let offset = Offset::from_prism_location(&location);
-                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
+                let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
-                let definition_id = indexer.local_graph.add_definition(Definition::AttrAccessor(Box::new(
-                    AttrAccessorDefinition::new(str_id, indexer.uri_id, offset, comments, owner_id),
-                )));
+                let definition = match kind {
+                    AttrKind::Accessor => Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                        str_id,
+                        self.uri_id,
+                        offset,
+                        comments,
+                        owner_id,
+                    ))),
+                    AttrKind::Reader => Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                        str_id,
+                        self.uri_id,
+                        offset,
+                        comments,
+                        owner_id,
+                    ))),
+                    AttrKind::Writer => Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                        str_id,
+                        self.uri_id,
+                        offset,
+                        comments,
+                        owner_id,
+                    ))),
+                };
 
-                if let Some(parent_nesting) = indexer.parent_nesting() {
+                let definition_id = self.local_graph.add_definition(definition);
+
+                if let Some(parent_nesting) = self.parent_nesting() {
                     parent_nesting.add_member(definition_id);
                 }
             });
-        }
-
-        fn create_attr_reader(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
-            RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let str_id = indexer.local_graph.intern_string(name);
-                let owner_id = indexer.parent_nesting_id().copied();
-                let offset = Offset::from_prism_location(&location);
-                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-
-                let definition_id =
-                    indexer
-                        .local_graph
-                        .add_definition(Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                            str_id,
-                            indexer.uri_id,
-                            offset,
-                            comments,
-                            owner_id,
-                        ))));
-
-                if let Some(parent_nesting) = indexer.parent_nesting() {
-                    parent_nesting.add_member(definition_id);
-                }
-            });
-        }
-
-        fn create_attr_writer(indexer: &mut RubyIndexer, node: &ruby_prism::CallNode) {
-            RubyIndexer::each_string_or_symbol_arg(node, |name, location| {
-                let str_id = indexer.local_graph.intern_string(name);
-                let owner_id = indexer.parent_nesting_id().copied();
-                let offset = Offset::from_prism_location(&location);
-                let comments = indexer.find_comments_for(offset.start()).unwrap_or_default();
-
-                let definition_id =
-                    indexer
-                        .local_graph
-                        .add_definition(Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                            str_id,
-                            indexer.uri_id,
-                            offset,
-                            comments,
-                            owner_id,
-                        ))));
-
-                if let Some(parent_nesting) = indexer.parent_nesting() {
-                    parent_nesting.add_member(definition_id);
-                }
-            });
-        }
+        };
 
         let message_loc = node.message_loc();
 
@@ -809,13 +789,13 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         match message.as_str() {
             "attr_accessor" => {
-                create_attr_accessor(self, node);
+                index_attr(AttrKind::Accessor, node);
             }
             "attr_reader" => {
-                create_attr_reader(self, node);
+                index_attr(AttrKind::Reader, node);
             }
             "attr_writer" => {
-                create_attr_writer(self, node);
+                index_attr(AttrKind::Writer, node);
             }
             "attr" => {
                 // attr :foo, true        => both reader and writer
@@ -830,9 +810,9 @@ impl Visit<'_> for RubyIndexer<'_> {
                 };
 
                 if create_writer {
-                    create_attr_accessor(self, node);
+                    index_attr(AttrKind::Accessor, node);
                 } else {
-                    create_attr_reader(self, node);
+                    index_attr(AttrKind::Reader, node);
                 }
             }
             "alias_method" => {
