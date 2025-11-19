@@ -9,7 +9,7 @@ use crate::model::definitions::{
     ModuleDefinition, Parameter, ParameterStruct,
 };
 use crate::model::document::Document;
-use crate::model::ids::{DefinitionId, NameId, UriId};
+use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
 use crate::model::name::Name;
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::offset::Offset;
@@ -337,6 +337,27 @@ impl<'a> RubyIndexer<'a> {
         self.local_graph.add_method_reference(reference);
     }
 
+    fn add_definition_from_location<F>(&mut self, location: &ruby_prism::Location, builder: F) -> DefinitionId
+    where
+        F: FnOnce(StringId, Offset, Vec<Comment>, Option<DefinitionId>, UriId) -> Definition,
+    {
+        let name = Self::location_to_string(location);
+        let str_id = self.local_graph.intern_string(name);
+        let offset = Offset::from_prism_location(location);
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let owner_id = self.parent_nesting_id().copied();
+        let uri_id = self.uri_id;
+
+        let definition = builder(str_id, offset, comments, owner_id, uri_id);
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
+        }
+
+        definition_id
+    }
+
     fn handle_mixin(&mut self, node: &ruby_prism::CallNode, prepend: bool) {
         if let Some(arguments) = node.arguments() {
             // Collect all arguments as constant references. Ignore anything that isn't a constant
@@ -521,27 +542,11 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
-        let name_loc = node.name_loc();
-        let name = Self::location_to_string(&name_loc);
-        let str_id = self.local_graph.intern_string(name);
-        let offset = Offset::from_prism_location(&name_loc);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let owner_id = self.parent_nesting_id().copied();
-
-        let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-            str_id,
-            self.uri_id,
-            offset,
-            comments,
-            owner_id,
-        )));
-
-        let definition_id = self.local_graph.add_definition(definition);
-
-        if let Some(parent_nesting) = self.parent_nesting() {
-            parent_nesting.add_member(definition_id);
-        }
-
+        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
+            Definition::Constant(Box::new(ConstantDefinition::new(
+                str_id, uri_id, offset, comments, owner_id,
+            )))
+        });
         self.visit(&node.value());
     }
 
@@ -559,25 +564,11 @@ impl Visit<'_> for RubyIndexer<'_> {
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
         let location = node.target().location();
-        let name = Self::location_to_string(&location);
-        let str_id = self.local_graph.intern_string(name);
-        let offset = Offset::from_prism_location(&location);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let owner_id = self.parent_nesting_id().copied();
-
-        let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-            str_id,
-            self.uri_id,
-            offset,
-            comments,
-            owner_id,
-        )));
-
-        let definition_id = self.local_graph.add_definition(definition);
-
-        if let Some(parent_nesting) = self.parent_nesting() {
-            parent_nesting.add_member(definition_id);
-        }
+        self.add_definition_from_location(&location, |str_id, offset, comments, owner_id, uri_id| {
+            Definition::Constant(Box::new(ConstantDefinition::new(
+                str_id, uri_id, offset, comments, owner_id,
+            )))
+        });
 
         if let Some(parent) = node.target().parent() {
             self.visit(&parent);
@@ -598,92 +589,44 @@ impl Visit<'_> for RubyIndexer<'_> {
         for left in &node.lefts() {
             match left {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
-                    let location = left.location();
-                    let name = Self::location_to_string(&location);
-                    let str_id = self.local_graph.intern_string(name);
-                    let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-                    let owner_id = self.parent_nesting_id().copied();
-
-                    let definition = Definition::Constant(Box::new(ConstantDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        owner_id,
-                    )));
-
-                    let definition_id = self.local_graph.add_definition(definition);
-
-                    if let Some(parent_nesting) = self.parent_nesting() {
-                        parent_nesting.add_member(definition_id);
-                    }
+                    self.add_definition_from_location(
+                        &left.location(),
+                        |str_id, offset, comments, owner_id, uri_id| {
+                            Definition::Constant(Box::new(ConstantDefinition::new(
+                                str_id, uri_id, offset, comments, owner_id,
+                            )))
+                        },
+                    );
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
-                    let location = left.location();
-                    let name = Self::location_to_string(&location);
-                    let str_id = self.local_graph.intern_string(name);
-                    let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-                    let owner_id = self.parent_nesting_id().copied();
-
-                    let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        owner_id,
-                    )));
-
-                    let definition_id = self.local_graph.add_definition(definition);
-
-                    if let Some(parent_nesting) = self.parent_nesting() {
-                        parent_nesting.add_member(definition_id);
-                    }
+                    self.add_definition_from_location(
+                        &left.location(),
+                        |str_id, offset, comments, owner_id, uri_id| {
+                            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                                str_id, uri_id, offset, comments, owner_id,
+                            )))
+                        },
+                    );
                 }
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
-                    let location = left.location();
-                    let name = Self::location_to_string(&location);
-                    let str_id = self.local_graph.intern_string(name);
-                    let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-                    let owner_id = self.parent_nesting_id().copied();
-
-                    let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        owner_id,
-                    )));
-
-                    let definition_id = self.local_graph.add_definition(definition);
-
-                    if let Some(parent_nesting) = self.parent_nesting() {
-                        parent_nesting.add_member(definition_id);
-                    }
+                    self.add_definition_from_location(
+                        &left.location(),
+                        |str_id, offset, comments, owner_id, uri_id| {
+                            Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                                str_id, uri_id, offset, comments, owner_id,
+                            )))
+                        },
+                    );
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
-                    let location = left.location();
-                    let name = Self::location_to_string(&location);
-                    let str_id = self.local_graph.intern_string(name);
-                    let offset = Offset::from_prism_location(&location);
-                    let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-                    let owner_id = self.parent_nesting_id().copied();
-
-                    let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        owner_id,
-                    )));
-
-                    let definition_id = self.local_graph.add_definition(definition);
-
-                    if let Some(parent_nesting) = self.parent_nesting() {
-                        parent_nesting.add_member(definition_id);
-                    }
+                    self.add_definition_from_location(
+                        &left.location(),
+                        |str_id, offset, comments, owner_id, uri_id| {
+                            Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                                str_id, uri_id, offset, comments, owner_id,
+                            )))
+                        },
+                    );
                 }
                 ruby_prism::Node::CallTargetNode { .. } => {
                     let call_target_node = left.as_call_target_node().unwrap();
@@ -905,77 +848,29 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
-        let name_loc = node.name_loc();
-        let name = Self::location_to_string(&name_loc);
-        let str_id = self.local_graph.intern_string(name);
-        let offset = Offset::from_prism_location(&name_loc);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let owner_id = self.parent_nesting_id().copied();
-
-        let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-            str_id,
-            self.uri_id,
-            offset,
-            comments,
-            owner_id,
-        )));
-
-        let definition_id = self.local_graph.add_definition(definition);
-
-        if let Some(parent_nesting) = self.parent_nesting() {
-            parent_nesting.add_member(definition_id);
-        }
-
+        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
+            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                str_id, uri_id, offset, comments, owner_id,
+            )))
+        });
         self.visit(&node.value());
     }
 
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
-        let owner_id = self.parent_nesting_id().copied();
-        let name_loc = node.name_loc();
-        let name = Self::location_to_string(&name_loc);
-        let str_id = self.local_graph.intern_string(name);
-        let offset = Offset::from_prism_location(&name_loc);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-
-        let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-            str_id,
-            self.uri_id,
-            offset,
-            comments,
-            owner_id,
-        )));
-
-        let definition_id = self.local_graph.add_definition(definition);
-
-        if let Some(parent_nesting) = self.parent_nesting() {
-            parent_nesting.add_member(definition_id);
-        }
-
+        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
+            Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                str_id, uri_id, offset, comments, owner_id,
+            )))
+        });
         self.visit(&node.value());
     }
 
     fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode) {
-        let owner_id = self.parent_nesting_id().copied();
-        let name_loc = node.name_loc();
-        let name = Self::location_to_string(&name_loc);
-        let str_id = self.local_graph.intern_string(name);
-        let offset = Offset::from_prism_location(&name_loc);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-
-        let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-            str_id,
-            self.uri_id,
-            offset,
-            comments,
-            owner_id,
-        )));
-
-        let definition_id = self.local_graph.add_definition(definition);
-
-        if let Some(parent_nesting) = self.parent_nesting() {
-            parent_nesting.add_member(definition_id);
-        }
-
+        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
+            Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                str_id, uri_id, offset, comments, owner_id,
+            )))
+        });
         self.visit(&node.value());
     }
 
