@@ -4,7 +4,15 @@ require "bundler"
 require "uri"
 
 require "saturn/version"
-require "saturn/saturn"
+begin
+  # Load the precompiled version of the library
+  ruby_version = /(\d+\.\d+)/.match(RUBY_VERSION)
+  require "saturn/#{ruby_version}/saturn"
+rescue LoadError
+  # It's important to leave for users that can not or don't want to use the gem with precompiled binaries.
+  require "saturn/saturn"
+end
+
 require "saturn/location"
 require "saturn/comment"
 require "saturn/graph"
