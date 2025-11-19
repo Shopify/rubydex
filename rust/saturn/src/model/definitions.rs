@@ -28,7 +28,7 @@ use std::ops::Deref;
 use crate::{
     model::{
         comment::Comment,
-        ids::{DefinitionId, NameId, ReferenceId, UriId},
+        ids::{DefinitionId, NameId, StringId, UriId},
     },
     offset::Offset,
 };
@@ -68,11 +68,6 @@ impl Definition {
     #[must_use]
     pub fn id(&self) -> DefinitionId {
         all_definitions!(self, it => it.id())
-    }
-
-    #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        all_definitions!(self, it => &it.name_id())
     }
 
     #[must_use]
@@ -127,13 +122,13 @@ impl Definition {
 /// class
 #[derive(Debug)]
 pub enum Mixin {
-    Include(ReferenceId),
-    Prepend(ReferenceId),
+    Include(NameId),
+    Prepend(NameId),
 }
 
 // Deref implementation to conveniently extract the reference ID with a dereference
 impl Deref for Mixin {
-    type Target = ReferenceId;
+    type Target = NameId;
 
     fn deref(&self) -> &Self::Target {
         match self {
@@ -157,7 +152,7 @@ pub struct ClassDefinition {
     comments: Vec<Comment>,
     owner_id: Option<DefinitionId>,
     members: Vec<DefinitionId>,
-    superclass_ref: Option<ReferenceId>,
+    superclass_ref: Option<NameId>,
     mixins: Vec<Mixin>,
 }
 
@@ -169,7 +164,7 @@ impl ClassDefinition {
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
-        superclass_ref: Option<ReferenceId>,
+        superclass_ref: Option<NameId>,
     ) -> Self {
         Self {
             name_id,
@@ -214,7 +209,7 @@ impl ClassDefinition {
     }
 
     #[must_use]
-    pub fn superclass_ref(&self) -> &Option<ReferenceId> {
+    pub fn superclass_ref(&self) -> &Option<NameId> {
         &self.superclass_ref
     }
 
@@ -332,7 +327,7 @@ impl ModuleDefinition {
 /// ```
 #[derive(Debug)]
 pub struct ConstantDefinition {
-    name_id: NameId,
+    str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -342,14 +337,14 @@ pub struct ConstantDefinition {
 impl ConstantDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            name_id,
+            str_id,
             uri_id,
             offset,
             comments,
@@ -359,12 +354,12 @@ impl ConstantDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
     }
 
     #[must_use]
@@ -397,7 +392,7 @@ impl ConstantDefinition {
 /// ```
 #[derive(Debug)]
 pub struct MethodDefinition {
-    name_id: NameId,
+    str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -409,7 +404,7 @@ pub struct MethodDefinition {
 impl MethodDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
@@ -418,7 +413,7 @@ impl MethodDefinition {
         is_singleton: bool,
     ) -> Self {
         Self {
-            name_id,
+            str_id,
             uri_id,
             offset,
             comments,
@@ -430,12 +425,12 @@ impl MethodDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
     }
 
     #[must_use]
@@ -513,7 +508,7 @@ impl ParameterStruct {
 /// ```
 #[derive(Debug)]
 pub struct AttrAccessorDefinition {
-    name_id: NameId,
+    str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -523,14 +518,14 @@ pub struct AttrAccessorDefinition {
 impl AttrAccessorDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            name_id,
+            str_id,
             uri_id,
             offset,
             comments,
@@ -540,12 +535,12 @@ impl AttrAccessorDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
     }
 
     #[must_use]
@@ -577,7 +572,7 @@ impl AttrAccessorDefinition {
 /// ```
 #[derive(Debug)]
 pub struct AttrReaderDefinition {
-    name_id: NameId,
+    str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -587,14 +582,14 @@ pub struct AttrReaderDefinition {
 impl AttrReaderDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            name_id,
+            str_id,
             uri_id,
             offset,
             comments,
@@ -604,12 +599,12 @@ impl AttrReaderDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
     }
 
     #[must_use]
@@ -641,7 +636,7 @@ impl AttrReaderDefinition {
 /// ```
 #[derive(Debug)]
 pub struct AttrWriterDefinition {
-    name_id: NameId,
+    str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -651,14 +646,14 @@ pub struct AttrWriterDefinition {
 impl AttrWriterDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            name_id,
+            str_id,
             uri_id,
             offset,
             comments,
@@ -668,12 +663,12 @@ impl AttrWriterDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
     }
 
     #[must_use]
@@ -705,7 +700,7 @@ impl AttrWriterDefinition {
 /// ```
 #[derive(Debug)]
 pub struct GlobalVariableDefinition {
-    name_id: NameId,
+    str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -715,14 +710,14 @@ pub struct GlobalVariableDefinition {
 impl GlobalVariableDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            name_id,
+            str_id,
             uri_id,
             offset,
             comments,
@@ -732,12 +727,12 @@ impl GlobalVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
     }
 
     #[must_use]
@@ -769,7 +764,7 @@ impl GlobalVariableDefinition {
 /// ```
 #[derive(Debug)]
 pub struct InstanceVariableDefinition {
-    name_id: NameId,
+    str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -779,14 +774,14 @@ pub struct InstanceVariableDefinition {
 impl InstanceVariableDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            name_id,
+            str_id,
             uri_id,
             offset,
             comments,
@@ -796,12 +791,12 @@ impl InstanceVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
     }
 
     #[must_use]
@@ -833,7 +828,7 @@ impl InstanceVariableDefinition {
 /// ```
 #[derive(Debug)]
 pub struct ClassVariableDefinition {
-    name_id: NameId,
+    str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -843,14 +838,14 @@ pub struct ClassVariableDefinition {
 impl ClassVariableDefinition {
     #[must_use]
     pub const fn new(
-        name_id: NameId,
+        str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            name_id,
+            str_id,
             uri_id,
             offset,
             comments,
@@ -860,12 +855,12 @@ impl ClassVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
     }
 
     #[must_use]

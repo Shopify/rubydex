@@ -5,9 +5,10 @@ use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
+use crate::model::name::{Name, NameRef, ResolvedName};
 // use crate::model::integrity::IntegrityChecker;
-use crate::model::references::{ConstantRef, ConstantReference, MethodRef};
+use crate::model::references::{ConstantReference, MethodRef};
 use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
@@ -32,7 +33,9 @@ pub struct Graph {
     definitions_to_declarations: IdentityHashMap<DefinitionId, DeclarationId>,
 
     // Map of unqualified names
-    names: IdentityHashMap<NameId, String>,
+    strings: IdentityHashMap<StringId, String>,
+    // Map of names
+    names: IdentityHashMap<NameId, NameRef>,
     // Map of constant references
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
@@ -55,6 +58,7 @@ impl Graph {
             definitions: IdentityHashMap::default(),
             definitions_to_declarations: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
+            strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
@@ -93,10 +97,39 @@ impl Graph {
         &self.definitions
     }
 
-    // Returns an immutable reference to the names map
+    /// Returns the ID of the unqualified name of a definition
+    ///
+    /// # Panics
+    ///
+    /// This will panic if there's inconsistent data in the graph
     #[must_use]
-    pub fn names(&self) -> &IdentityHashMap<NameId, String> {
-        &self.names
+    pub fn definition_string_id(&self, definition: &Definition) -> StringId {
+        let id = match definition {
+            Definition::Class(it) => {
+                let name = self.names.get(it.name_id()).unwrap();
+                name.str()
+            }
+            Definition::Module(it) => {
+                let name = self.names.get(it.name_id()).unwrap();
+                name.str()
+            }
+            Definition::Constant(it) => it.str_id(),
+            Definition::GlobalVariable(it) => it.str_id(),
+            Definition::InstanceVariable(it) => it.str_id(),
+            Definition::ClassVariable(it) => it.str_id(),
+            Definition::AttrAccessor(it) => it.str_id(),
+            Definition::AttrReader(it) => it.str_id(),
+            Definition::AttrWriter(it) => it.str_id(),
+            Definition::Method(it) => it.str_id(),
+        };
+
+        *id
+    }
+
+    // Returns an immutable reference to the strings map
+    #[must_use]
+    pub fn strings(&self) -> &IdentityHashMap<StringId, String> {
+        &self.strings
     }
 
     // Returns an immutable reference to the URI pool map
@@ -141,19 +174,9 @@ impl Graph {
         self.declarations.get_mut(declaration_id)
     }
 
-    // Registers a URI into the graph and returns the generated ID. This happens once when starting to index the URI and
-    // then all definitions discovered in it get associated to the ID
-    pub fn add_uri(&mut self, uri: String) -> UriId {
-        let uri_id = UriId::from(&uri);
-        self.documents.entry(uri_id).or_insert_with(|| Document::new(uri));
-        uri_id
-    }
-
-    /// Register an unqualified name into the graph
-    pub fn add_name(&mut self, name: String) -> NameId {
-        let name_id = NameId::from(&name);
-        self.names.entry(name_id).or_insert(name);
-        name_id
+    #[must_use]
+    pub fn names(&self) -> &IdentityHashMap<NameId, NameRef> {
+        &self.names
     }
 
     /// Register a member relationship from a declaration to another declaration through its unqualified name id. For example, in
@@ -179,23 +202,9 @@ impl Graph {
         member_name: &str,
     ) {
         if let Some(declaration) = self.declarations.get_mut(declaration_id) {
-            let name_id = NameId::from(member_name);
+            let name_id = StringId::from(member_name);
             declaration.add_member(name_id, member_declaration_id);
         }
-    }
-
-    // Register an unresolved constant reference
-    pub fn add_constant_reference(&mut self, reference: ConstantReference) -> ReferenceId {
-        let reference_id = reference.id();
-        self.constant_references.insert(reference_id, reference);
-        reference_id
-    }
-
-    // Register an unresolved method reference
-    pub fn add_method_reference(&mut self, reference: MethodRef) -> ReferenceId {
-        let reference_id = reference.id();
-        self.method_references.insert(reference_id, reference);
-        reference_id
     }
 
     /// Attempts to resolve a constant reference against the graph. Returns the fully qualified declaration ID that the
@@ -205,48 +214,40 @@ impl Graph {
     ///
     /// This will panic if the nesting is invalid
     #[must_use]
-    pub fn resolve_constant(&self, reference: &ConstantReference) -> Option<DeclarationId> {
-        match reference {
-            ConstantReference::Unresolved(constant) => {
-                if let Some(parent_scope) = constant
-                    .parent_scope_id()
-                    .and_then(|id| self.constant_references.get(&id))
+    pub fn resolve_constant(&self, name: &Name) -> Option<DeclarationId> {
+        if let Some(parent_scope) = name.parent_scope().and_then(|id| self.names.get(&id)) {
+            // This is a constant path and we must first recurse to resolve the parent scope
+            let declaration_id = match parent_scope {
+                NameRef::Resolved(name) => *name.declaration_id(),
+                NameRef::Unresolved(name) => self.resolve_constant(name)?,
+            };
+
+            let declaration = self.declarations.get(&declaration_id)?;
+            declaration.members().get(name.str()).copied()
+        } else {
+            // First search lexical scopes
+            let mut current_name = name;
+
+            while let Some(nesting_id) = current_name.nesting() {
+                let nesting_name_ref = self.names.get(nesting_id).unwrap();
+                let (nesting_name, declaration_id) = match nesting_name_ref {
+                    NameRef::Resolved(resolved) => (resolved.name(), *resolved.declaration_id()),
+                    NameRef::Unresolved(name) => (&**name, self.resolve_constant(name)?),
+                };
+
+                if let Some(declaration) = self.declarations.get(&declaration_id)
+                    && let Some(member) = declaration.members().get(name.str())
                 {
-                    // This is a constant path and we must first recurse to resolve the parent scope
-                    let declaration_id = self.resolve_constant(parent_scope)?;
-                    let declaration = self.declarations.get(&declaration_id)?;
-                    declaration.members().get(constant.name_id()).copied()
-                } else if !constant.nesting().is_empty() {
-                    let mut current_nesting = constant.nesting().clone();
-                    current_nesting.reverse();
-
-                    // First search lexical scopes
-                    for nesting in current_nesting {
-                        let declaration_id = self.definitions_to_declarations.get(&nesting).unwrap();
-
-                        if let Some(declaration) = self.declarations.get(declaration_id)
-                            && let Some(member) = declaration.members().get(constant.name_id())
-                        {
-                            return Some(*member);
-                        }
-                    }
-
-                    // Then search inheritance chain
-
-                    // Fall back to top level (member of Object)
-                    // Note: temporary while we're missing RBS indexing
-                    let name = self.names.get(reference.name_id())?;
-                    Some(DeclarationId::from(name))
-                } else {
-                    // Top level reference
-
-                    // Note: this code is temporary. Once we have RBS indexing, we can simply enter the graph by looking
-                    // up `Object` and then we search its members for the top level constant
-                    let name = self.names.get(reference.name_id())?;
-                    Some(DeclarationId::from(name))
+                    return Some(*member);
                 }
+
+                current_name = nesting_name;
             }
-            ConstantReference::Resolved(resolved) => Some(resolved.declaration_id()),
+
+            // TODO: Then search inheritance chain
+            // Fall back to top level (member of Object). Note: temporary while we're missing RBS indexing
+            let name = self.strings.get(name.str())?;
+            Some(DeclarationId::from(name))
         }
     }
 
@@ -260,10 +261,12 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, names, constant_references, method_references) = local_graph.into_parts();
+        let (uri_id, document, definitions, strings, names, constant_references, method_references) =
+            local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
         self.definitions.extend(definitions);
+        self.strings.extend(strings);
         self.names.extend(names);
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
@@ -473,24 +476,33 @@ impl Graph {
     ///
     /// This will panic if we resolve a reference to a declaration ID that does not exist in the graph
     pub fn resolve_references(&mut self) {
-        let mut newly_resolved_references: Vec<(ReferenceId, DeclarationId)> = Vec::new();
+        let ref_ids = self.constant_references.keys().copied().collect::<Vec<_>>();
 
-        for (id, reference) in &self.constant_references {
-            if let ConstantReference::Unresolved(_) = reference
-                && let Some(declaration_id) = self.resolve_constant(reference)
-                && let Some(declaration) = self.declarations.get_mut(&declaration_id)
-            {
-                declaration.add_reference(*id);
-                newly_resolved_references.push((*id, declaration_id));
-            }
-        }
+        for id in ref_ids {
+            let reference = self.constant_references.get(&id).unwrap();
+            let name_id = reference.name_id();
 
-        for (id, declaration_id) in newly_resolved_references {
-            if let ConstantReference::Unresolved(unresolved_ref) = self.constant_references.remove(&id).unwrap() {
-                self.constant_references.insert(
-                    id,
-                    ConstantReference::Resolved(Box::new(ConstantRef::new(*unresolved_ref, declaration_id))),
-                );
+            match self.names.get(name_id).unwrap() {
+                NameRef::Resolved(resolved) => {
+                    if let Some(declaration) = self.declarations.get_mut(resolved.declaration_id()) {
+                        declaration.add_reference(id);
+                    }
+                }
+                NameRef::Unresolved(name) => {
+                    if let Some(declaration_id) = self.resolve_constant(name)
+                        && let Some(declaration) = self.declarations.get_mut(&declaration_id)
+                    {
+                        declaration.add_reference(id);
+
+                        let name_ref = self.names.remove(name_id).unwrap();
+                        let removed_name = name_ref.into_unresolved().unwrap();
+
+                        self.names.insert(
+                            *name_id,
+                            NameRef::Resolved(Box::new(ResolvedName::new(removed_name, declaration_id))),
+                        );
+                    }
+                }
             }
         }
     }
@@ -525,8 +537,18 @@ mod tests {
                 .references()
                 .iter()
                 .filter_map(|r| {
-                    if let ConstantReference::Resolved(c) = $context.graph.constant_references.get(r).unwrap() {
-                        Some(c)
+                    let reference = $context
+                        .graph
+                        .constant_references
+                        .get(r)
+                        .expect("Reference should exist");
+                    if let NameRef::Resolved(_) = $context
+                        .graph
+                        .names
+                        .get(reference.name_id())
+                        .expect("Name should exist")
+                    {
+                        Some(reference)
                     } else {
                         None
                     }
@@ -807,8 +829,10 @@ mod tests {
         context.resolve();
         context.graph.resolve_references();
 
-        match context.graph.constant_references.values().next() {
-            Some(ConstantReference::Unresolved(_)) => {}
+        let reference = context.graph.constant_references.values().next().unwrap();
+
+        match context.graph.names().get(reference.name_id()) {
+            Some(NameRef::Unresolved(_)) => {}
             _ => panic!("expected unresolved constant reference"),
         }
     }
@@ -833,7 +857,7 @@ mod tests {
         context.resolve();
 
         let foo = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
-        assert!(foo.members().contains_key(&NameId::from("Bar")));
+        assert!(foo.members().contains_key(&StringId::from("Bar")));
 
         // Delete `Bar`
         context.index_uri("file:///foo2.rb", {
@@ -845,6 +869,6 @@ mod tests {
         context.resolve();
 
         let foo = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
-        assert!(!foo.members().contains_key(&NameId::from("Bar")));
+        assert!(!foo.members().contains_key(&StringId::from("Bar")));
     }
 }

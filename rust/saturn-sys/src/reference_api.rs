@@ -105,12 +105,10 @@ pub unsafe extern "C" fn sat_constant_reference_name(pointer: GraphPointer, refe
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
-        let name = graph
-            .names()
-            .get(reference.name_id())
-            .expect("Name ID should exist")
-            .clone();
-        CString::new(name).unwrap().into_raw().cast_const()
+        let name = graph.names().get(reference.name_id()).expect("Name ID should exist");
+
+        let name_string = graph.strings().get(name.str()).expect("String ID should exist").clone();
+        CString::new(name_string).unwrap().into_raw().cast_const()
     })
 }
 
@@ -130,7 +128,7 @@ pub unsafe extern "C" fn sat_method_reference_name(pointer: GraphPointer, refere
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");
         let name = graph
-            .names()
+            .strings()
             .get(reference.name_id())
             .expect("Name ID should exist")
             .clone();
