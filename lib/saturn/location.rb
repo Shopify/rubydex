@@ -24,7 +24,10 @@ module Saturn
       uri = URI(@uri)
       raise Saturn::Error, "URI is not a file:// URI: #{@uri}" unless uri.scheme == "file"
 
-      uri.path
+      path = uri.path
+      # TODO: This has to go away once we have a proper URI abstraction
+      path.delete_prefix!("/") if Gem.win_platform?
+      path
     end
 
     #: (other: BasicObject) -> Integer

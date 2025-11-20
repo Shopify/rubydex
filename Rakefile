@@ -4,7 +4,6 @@ require "bundler/gem_tasks"
 require "rubocop/rake_task"
 require "rake/extensiontask"
 require "rake/testtask"
-require "ruby_memcheck"
 
 GEMSPEC = Gem::Specification.load("saturn.gemspec")
 
@@ -19,7 +18,13 @@ test_config = lambda do |t|
   t.test_files = FileList["test/**/*_test.rb"]
 end
 Rake::TestTask.new(ruby_test: :compile, &test_config)
-namespace(:ruby_test) { RubyMemcheck::TestTask.new(valgrind: :compile, &test_config) }
+
+begin
+  require "ruby_memcheck"
+  namespace(:ruby_test) { RubyMemcheck::TestTask.new(valgrind: :compile, &test_config) }
+rescue LoadError
+  # ruby_memcheck is not available on Windows
+end
 
 RuboCop::RakeTask.new
 
