@@ -1,10 +1,11 @@
-use line_index::{LineCol, LineIndex};
+use line_index::LineIndex;
 
 use super::normalize_indentation;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
 use crate::offset::Offset;
+use crate::position::Position;
 use crate::resolve;
 use std::collections::HashMap;
 
@@ -131,7 +132,7 @@ impl GraphTest {
         LineIndex::new(source)
     }
 
-    fn parse_location_positions(location: &str) -> (String, LineCol, LineCol) {
+    fn parse_location_positions(location: &str) -> (String, Position, Position) {
         let trimmed = location.trim().trim_start_matches('<').trim_end_matches('>');
 
         let (start_part, end_part) = trimmed.rsplit_once('-').unwrap_or_else(|| {
@@ -156,11 +157,11 @@ impl GraphTest {
 
         (
             uri.to_string(),
-            LineCol {
+            Position {
                 line: start_line,
                 col: start_column,
             },
-            LineCol {
+            Position {
                 line: end_line,
                 col: end_column,
             },
@@ -173,7 +174,7 @@ impl GraphTest {
             .unwrap_or_else(|_| panic!("Invalid {field} '{value}' in location {location}"))
     }
 
-    fn format_position(position: LineCol) -> String {
+    fn format_position(position: Position) -> String {
         format!("line {}, column {}", position.line, position.col)
     }
 }

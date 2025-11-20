@@ -1,4 +1,4 @@
-use line_index::{LineCol, LineIndex};
+use line_index::LineIndex;
 
 use super::normalize_indentation;
 use crate::indexing::local_graph::LocalGraph;
@@ -6,6 +6,7 @@ use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::definitions::Definition;
 use crate::model::ids::UriId;
 use crate::offset::Offset;
+use crate::position::Position;
 
 #[cfg(test)]
 pub struct LocalGraphTest {
@@ -106,7 +107,7 @@ impl LocalGraphTest {
         format!("{}:{}-{}:{}", start.line + 1, start.col + 1, end.line + 1, end.col + 1)
     }
 
-    fn parse_location_positions(location: &str) -> (String, LineCol, LineCol) {
+    fn parse_location_positions(location: &str) -> (String, Position, Position) {
         let trimmed = location.trim().trim_start_matches('<').trim_end_matches('>');
 
         let (start_part, end_part) = trimmed.rsplit_once('-').unwrap_or_else(|| {
@@ -131,11 +132,11 @@ impl LocalGraphTest {
 
         (
             uri.to_string(),
-            LineCol {
+            Position {
                 line: start_line - 1,
                 col: start_column - 1,
             },
-            LineCol {
+            Position {
                 line: end_line - 1,
                 col: end_column - 1,
             },
