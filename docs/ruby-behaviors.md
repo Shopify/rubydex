@@ -11,6 +11,7 @@ This document describes various Ruby language behaviors, compiled from observati
 5. [Attribute Methods](#attribute-methods)
 6. [Variable Scoping](#variable-scoping)
 7. [Constant References](#constant-references)
+8. [Singleton Classes](#singleton-classes)
 
 ## Namespace Qualification
 
@@ -568,3 +569,91 @@ end
 ```
 
 Constant paths are resolved left-to-right: `Object` is resolved first, then `String` is looked up within `Object`.
+
+## Singleton Classes
+
+Ruby can create a *singleton class* for most objects, but it usually materializes that class lazily the first time
+singleton-specific syntax/methods are used.
+
+- Defining singleton behavior (`def self.*`, `class << Foo`, `extend`, etc.) forces Ruby to create the singleton class if it was not created already.
+- Calling `Foo.singleton_class` also forces creation and returns the singleton class object.
+- Plain objects behave the same way: `obj.singleton_class` or `def obj.special` allocates one lazily for that object.
+- Classes and modules that never reference their singleton class may run indefinitely without allocating it.
+- Certain objects can never have singleton classes: integers, floats, symbols, and frozen strings. Calling `singleton_class` on them raises `TypeError`.
+- Ruby boots with singleton classes for `true`, `false`, and `nil` already created.
+
+Calling `Foo.new` does **not** force Foo's singleton class to exist. The `new` method is defined on `Class`
+itself, so every class object inherits it automatically. Unless you override `Foo.new` via
+`def self.new` (which would then create the singleton class) Ruby can instantiate `Foo` instances without ever
+materializing `Foo`'s singleton class.
+
+```ruby
+Class.instance_method(:new).owner
+# => Class
+```
+
+The singleton class is the receiver for `def self.*`, `class << self`, and it is where modules mixed in via `extend`
+actually insert their methods.
+
+```ruby
+class Foo
+  class << self # reopens (or creates) Foo's singleton class
+    A = 1
+    def bar; A; end
+  end
+
+  def self.baz; end # adds the method to Foo's singleton class
+
+  @ivar = 1 # assigns a class instance variable on Foo's singleton class (NOT a class variable)
+end
+```
+
+### Lexical Scope vs Singleton Receiver
+
+- Inside the class body the current *receiver* (`self`) is `Foo`, so `@ivar` writes to the singleton class and `def self.baz`
+  defines a singleton method.
+- Lexical constant lookup still follows the surrounding constant scope, so constants created inside `class << self` do not
+  become `Foo::CONST`.
+
+```ruby
+class Foo
+  @counter = 0
+
+  class << self
+    A = 1
+
+    def bar
+      @counter += 1      # valid: singleton ivar
+      puts A             # valid: constant defined in this singleton scope
+    end
+  end
+
+  def self.baz
+    puts @counter        # valid: reads the singleton's @counter
+    puts A               # NameError: Foo::A is not defined
+  end
+end
+```
+
+If a constant must be visible as `Foo::CONST`, define it in the regular class body instead of inside a `class << self`
+block.
+
+### Reopening Singleton Class Explicitly
+
+The singleton class can be reopened anywhere with `class << Foo` as long as the constant already exists:
+
+```ruby
+# file: foo.rb
+class Foo; end
+
+# file: foo_singleton.rb
+class << Foo
+  def support!
+    puts "supporting #{self}"
+  end
+end
+
+Foo.support!
+```
+
+Attempting to reopen the singleton before the constant exists raises `NameError`.
