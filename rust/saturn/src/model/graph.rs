@@ -13,12 +13,6 @@ use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 
-/// Holds IDs of entities that were removed from the graph
-pub struct RemovedIds {
-    pub definition_ids: Vec<DefinitionId>,
-    pub declaration_ids: Vec<DeclarationId>,
-}
-
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
 #[derive(Default, Debug)]
