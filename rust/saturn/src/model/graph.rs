@@ -10,6 +10,7 @@ use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, String
 use crate::model::name::{NameRef, ResolvedName};
 // use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ConstantReference, MethodRef};
+use crate::resolution::Unit;
 use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
@@ -40,16 +41,17 @@ pub struct Graph {
 impl Graph {
     #[must_use]
     pub fn new() -> Self {
-        // let mut declarations = IdentityHashMap::default();
         // Insert the magic top level self <main> object into the graph, so that we can associate global variables or
         // definitions made at the top level with it
         // let main_id = DeclarationId::from("<main>");
         // declarations.insert(main_id, Declaration::new(String::from("<main>"), main_id));
 
-        //declarations.insert(object_id, Declaration::new(String::from("Object"), object_id));
+        // Insert `Object` head of time into the graph
+        let mut declarations = IdentityHashMap::default();
+        declarations.insert(*OBJECT_ID, Declaration::new(String::from("Object"), *OBJECT_ID));
 
         Self {
-            declarations: IdentityHashMap::default(),
+            declarations,
             definitions: IdentityHashMap::default(),
             definitions_to_declarations: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
@@ -60,24 +62,33 @@ impl Graph {
         }
     }
 
+    // TODO: remove this method once we have proper synchronization. This is a hack
+    #[must_use]
+    pub(crate) fn declarations_mut(&mut self) -> &mut IdentityHashMap<DeclarationId, Declaration> {
+        &mut self.declarations
+    }
+
     // Returns an immutable reference to the declarations map
     #[must_use]
     pub fn declarations(&self) -> &IdentityHashMap<DeclarationId, Declaration> {
         &self.declarations
     }
 
-    pub fn add_declaration(&mut self, fully_qualified_name: String, definition_id: DefinitionId) -> DeclarationId {
+    pub fn add_declaration(
+        &mut self,
+        fully_qualified_name: String,
+        definition_id: DefinitionId,
+        owner_id: DeclarationId,
+    ) -> DeclarationId {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
         let declaration = self
             .declarations
             .entry(declaration_id)
-            .or_insert_with(|| Declaration::new(fully_qualified_name));
+            .or_insert_with(|| Declaration::new(fully_qualified_name, owner_id));
 
         declaration.add_definition(definition_id);
-
         self.definitions_to_declarations.insert(definition_id, declaration_id);
-
         declaration_id
     }
 
@@ -122,6 +133,106 @@ impl Graph {
         };
 
         *id
+    }
+
+    /// Returns a tuple of r vectors:
+    /// - The first one contains all constants, sorted in order for resolution (less complex constant names first)
+    /// - The second one contains all other definitions, in no particular order
+    ///
+    /// # Panics
+    ///
+    /// This will panic if there's a definition with a name ID that doesn't exist
+    #[must_use]
+    pub fn sorted_resolution_units(&self) -> (Vec<Unit>, Vec<DefinitionId>) {
+        let estimated_length = self.definitions.len() / 2;
+        let mut constants = Vec::with_capacity(estimated_length);
+        let mut others = Vec::with_capacity(estimated_length);
+
+        for (id, definition) in &self.definitions {
+            match definition {
+                Definition::Class(def) => {
+                    constants.push((Unit::Definition(*id), self.names.get(def.name_id()).unwrap()));
+                }
+                Definition::Module(def) => {
+                    constants.push((Unit::Definition(*id), self.names.get(def.name_id()).unwrap()));
+                }
+                Definition::Constant(_) => {
+                    // TODO: This should go in the constants vector, but we didn't change constant definitions to hold a
+                    // name id yet. Fix the `resolving_nested_reference` test in resolution.rs too!!!
+                    others.push(*id);
+                }
+                _ => {
+                    others.push(*id);
+                }
+            }
+        }
+
+        for (id, constant_ref) in &self.constant_references {
+            constants.push((Unit::Reference(*id), self.names.get(constant_ref.name_id()).unwrap()));
+        }
+
+        // Sort namespaces based on their name complexity so that simpler names are always first
+        constants.sort_by(|(_, name_a), (_, name_b)| {
+            let complexity_a = self.name_complexity(name_a);
+            let complexity_b = self.name_complexity(name_b);
+            complexity_a.cmp(&complexity_b)
+        });
+
+        others.shrink_to_fit();
+        (constants.into_iter().map(|(id, _)| id).collect(), others)
+    }
+
+    /// Returns a complexity score for a given name, which is used to sort names for resolution. The complexity is based
+    /// on how many parent scopes are involved in a name's nesting. This is because simple names are always
+    /// straightforward to resolve no matter how deep the nesting is. For example:
+    ///
+    /// ```ruby
+    /// module Foo
+    ///   module Bar
+    ///     class Baz; end
+    ///   end
+    /// end
+    /// ```
+    ///
+    /// These are all simple names because they don't require resolution logic to determine the final name of each step.
+    /// We only have to ensure that they are ordered by nesting level. Names with parent scopes require that their parts
+    /// be resolved to determine what they refer to and so they must be sorted last.
+    ///
+    /// ```ruby
+    /// module Foo
+    ///   module Bar::Baz
+    ///     class Qux; end
+    ///  end
+    /// end
+    /// ```
+    ///
+    /// In this case, we need `Bar` to have already been processed so that we can resolve the `Bar` reference inside of
+    /// the `Foo` nesting, which then unblocks the resolution of `Baz` and finally `Qux`. Notice how `Qux` is a simple
+    /// name, but it's nested under a complex name so we have to sort it last. This is why we consider the number of
+    /// parent scopes in the entire nesting, not just for the name itself
+    #[must_use]
+    fn name_complexity(&self, name: &NameRef) -> u32 {
+        let mut current_name = name;
+        let mut complexity = if current_name.parent_scope().is_some() { 2 } else { 1 };
+
+        while let Some(nesting) = current_name.nesting() {
+            if let Some(parent_id) = current_name.parent_scope() {
+                let mut parent = self.names.get(parent_id).unwrap();
+                let mut current_complexity = if current_name.parent_scope().is_some() { 2 } else { 1 };
+
+                while let Some(parent_scope) = parent.parent_scope() {
+                    current_complexity += 1;
+                    parent = self.names.get(parent_scope).unwrap();
+                }
+
+                complexity += current_complexity;
+            }
+
+            complexity += 1;
+            current_name = self.names.get(nesting).unwrap();
+        }
+
+        complexity
     }
 
     // Returns an immutable reference to the strings map
@@ -195,13 +306,12 @@ impl Graph {
     /// ```
     pub fn add_member(
         &mut self,
-        declaration_id: &DeclarationId,
+        owner_id: &DeclarationId,
         member_declaration_id: DeclarationId,
-        member_name: &str,
+        member_str_id: StringId,
     ) {
-        if let Some(declaration) = self.declarations.get_mut(declaration_id) {
-            let string_id = StringId::from(member_name);
-            declaration.add_member(string_id, member_declaration_id);
+        if let Some(declaration) = self.declarations.get_mut(owner_id) {
+            declaration.add_member(member_str_id, member_declaration_id);
         }
     }
 
@@ -467,7 +577,8 @@ mod tests {
 
         assert!(context.graph.documents.is_empty());
         assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
+        // Object is left
+        assert_eq!(context.graph.declarations.len(), 1);
 
         context.graph.assert_integrity();
     }
@@ -482,7 +593,8 @@ mod tests {
         context.resolve();
 
         assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
+        // Object is left
+        assert_eq!(context.graph.declarations.len(), 1);
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(context.graph.documents.len(), 1);
 
@@ -656,5 +768,40 @@ mod tests {
 
         let foo = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
         assert!(!foo.members().contains_key(&StringId::from("Bar")));
+    }
+
+    #[test]
+    fn name_complexity() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar
+                module Baz
+                end
+              end
+
+              module Qux::Zip
+                module Zap
+                  class Zop::Boop
+                  end
+                end
+              end
+            end
+            "
+        });
+
+        let mut names = context.graph.names().values().collect::<Vec<_>>();
+        assert_eq!(8, names.len());
+
+        names.sort_by_key(|a| context.graph.name_complexity(a));
+
+        assert_eq!(
+            vec!["Foo", "Qux", "Bar", "Baz", "Zip", "Zap", "Zop", "Boop"],
+            names
+                .iter()
+                .map(|n| context.graph.strings.get(n.str()).unwrap().as_str())
+                .collect::<Vec<_>>()
+        );
     }
 }

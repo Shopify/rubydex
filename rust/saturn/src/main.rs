@@ -6,7 +6,7 @@ use saturn::{
     errors::MultipleErrors,
     indexing::{self},
     model::graph::Graph,
-    resolve::resolve,
+    resolution,
     stats::{
         memory::MemoryStats,
         timer::{Timer, time_it},
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
 
     time_it!(resolving, {
-        resolve(&mut graph);
+        resolution::resolve_all(&mut graph);
     });
 
     // Run integrity checks if requested
