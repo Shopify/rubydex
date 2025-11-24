@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
 
-    time_it!(resolving, {
+    time_it!(resolution, {
         resolution::resolve_all(&mut graph);
     });
 

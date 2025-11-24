@@ -278,6 +278,7 @@ impl<'a> RubyIndexer<'a> {
 
     fn index_constant_reference(&mut self, node: &ruby_prism::Node, push_final_reference: bool) -> Option<NameId> {
         let mut parent_scope_id = None;
+        let mut top_level_ref = false;
 
         let location = match node {
             ruby_prism::Node::ConstantPathNode { .. } => {
@@ -293,6 +294,8 @@ impl<'a> RubyIndexer<'a> {
                     }
 
                     parent_scope_id = self.index_constant_reference(&parent, true);
+                } else {
+                    top_level_ref = true;
                 }
 
                 constant.name_loc()
@@ -334,10 +337,10 @@ impl<'a> RubyIndexer<'a> {
         //  - A top level reference starting with `::` (if branch)
         //  - A reference inside of a nesting
         //  - A reference outside of any nesting
-        let (name, nesting) = if let Some(trimmed) = name.strip_prefix("::") {
-            (trimmed.to_string(), None)
+        let nesting = if top_level_ref {
+            None
         } else {
-            (name, self.current_nesting_name_id())
+            self.current_nesting_name_id()
         };
 
         let string_id = self.local_graph.intern_string(name);

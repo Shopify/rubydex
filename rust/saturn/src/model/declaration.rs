@@ -128,10 +128,9 @@ mod tests {
         let mut decl = Declaration::new("MyDecl".to_string(), DeclarationId::from("Object"));
         let def_id = DefinitionId::new(123);
 
+        // The second call will panic because we're adding the same exact ID twice
         decl.add_definition(def_id);
         decl.add_definition(def_id);
-
-        assert_eq!(decl.definitions().len(), 1);
     }
 
     #[test]
