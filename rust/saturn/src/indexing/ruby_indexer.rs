@@ -284,6 +284,23 @@ impl<'a> RubyIndexer<'a> {
             }
             ruby_prism::Node::ConstantOrWriteNode { .. } => node.as_constant_or_write_node().unwrap().name_loc(),
             ruby_prism::Node::ConstantTargetNode { .. } => node.as_constant_target_node().unwrap().location(),
+            ruby_prism::Node::ConstantWriteNode { .. } => node.as_constant_write_node().unwrap().name_loc(),
+            ruby_prism::Node::ConstantPathTargetNode { .. } => {
+                let target = node.as_constant_path_target_node().unwrap();
+
+                if let Some(parent) = target.parent() {
+                    match parent {
+                        ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
+                        _ => {
+                            return None;
+                        }
+                    }
+
+                    parent_scope_id = self.index_constant_reference(&parent, true);
+                }
+
+                target.name_loc()
+            }
             _ => {
                 return None;
             }
@@ -300,21 +317,7 @@ impl<'a> RubyIndexer<'a> {
         let (name, nesting) = if let Some(trimmed) = name.strip_prefix("::") {
             (trimmed.to_string(), None)
         } else {
-            let latest_definition = self.definitions_stack.last().map(|definition_id| {
-                let definition = self
-                    .local_graph
-                    .definitions()
-                    .get(definition_id)
-                    .expect("Definition must exist");
-
-                match definition {
-                    Definition::Class(class_def) => *class_def.name_id(),
-                    Definition::Module(module_def) => *module_def.name_id(),
-                    _ => panic!("Only classes and modules can be nesting scopes"),
-                }
-            });
-
-            (name, latest_definition)
+            (name, self.current_nesting_name_id())
         };
 
         let string_id = self.local_graph.intern_string(name);
@@ -356,6 +359,52 @@ impl<'a> RubyIndexer<'a> {
         }
 
         definition_id
+    }
+
+    fn add_constant_definition(&mut self, node: &ruby_prism::Node) -> Option<DefinitionId> {
+        let name_id = self.index_constant_reference(node, false)?;
+
+        // Get the location for the constant name/path only (not including the value)
+        let location = match node {
+            ruby_prism::Node::ConstantWriteNode { .. } => node.as_constant_write_node().unwrap().name_loc(),
+            _ => node.location(),
+        };
+
+        let offset = Offset::from_prism_location(&location);
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let owner_id = self.parent_nesting_id().copied();
+
+        let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+            name_id,
+            self.uri_id,
+            offset,
+            comments,
+            owner_id,
+        )));
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(parent_nesting) = self.parent_nesting() {
+            parent_nesting.add_member(definition_id);
+        }
+
+        Some(definition_id)
+    }
+
+    /// Returns the `NameId` of the current nesting scope (class or module), if any.
+    fn current_nesting_name_id(&self) -> Option<NameId> {
+        self.parent_nesting_id().map(|definition_id| {
+            let definition = self
+                .local_graph
+                .definitions()
+                .get(definition_id)
+                .expect("Definition must exist");
+
+            match definition {
+                Definition::Class(class_def) => *class_def.name_id(),
+                Definition::Module(module_def) => *module_def.name_id(),
+                _ => panic!("Only classes and modules can be nesting scopes"),
+            }
+        })
     }
 
     fn handle_mixin(&mut self, node: &ruby_prism::CallNode, prepend: bool) {
@@ -542,11 +591,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
-            Definition::Constant(Box::new(ConstantDefinition::new(
-                str_id, uri_id, offset, comments, owner_id,
-            )))
-        });
+        self.add_constant_definition(&node.as_node());
         self.visit(&node.value());
     }
 
@@ -563,12 +608,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
-        let location = node.target().location();
-        self.add_definition_from_location(&location, |str_id, offset, comments, owner_id, uri_id| {
-            Definition::Constant(Box::new(ConstantDefinition::new(
-                str_id, uri_id, offset, comments, owner_id,
-            )))
-        });
+        self.add_constant_definition(&node.target().as_node());
 
         if let Some(parent) = node.target().parent() {
             self.visit(&parent);
@@ -589,14 +629,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         for left in &node.lefts() {
             match left {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
-                    self.add_definition_from_location(
-                        &left.location(),
-                        |str_id, offset, comments, owner_id, uri_id| {
-                            Definition::Constant(Box::new(ConstantDefinition::new(
-                                str_id, uri_id, offset, comments, owner_id,
-                            )))
-                        },
-                    );
+                    self.add_constant_definition(&left);
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     self.add_definition_from_location(
@@ -954,6 +987,54 @@ mod tests {
         }};
     }
 
+    /// Asserts the name and `parent_scope` of a constant definition.
+    ///
+    /// Usage:
+    /// - `assert_constant_name!(ctx, "Foo::Bar::Baz", def)` - asserts the full path `Foo::Bar::Baz`
+    /// - `assert_constant_name!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
+    macro_rules! assert_constant_name {
+        ($context:expr, $expect_path:expr, $def:expr) => {{
+            let segments: Vec<&str> = $expect_path.split("::").collect();
+            assert!(!segments.is_empty(), "expected path must have at least one segment");
+
+            // The name stores the last segment, with parent_scope chain going backwards
+            let expected_name = segments.last().unwrap();
+            let expected_parents: Vec<&str> = segments[..segments.len() - 1].iter().rev().copied().collect();
+
+            let name = $context.graph().names().get($def.name_id()).unwrap();
+            let actual_name = $context.graph().strings().get(name.str()).unwrap();
+            assert_eq!(
+                *expected_name, actual_name,
+                "constant name mismatch: expected '{}', got '{}'",
+                expected_name, actual_name
+            );
+
+            let mut current_name = name;
+            for (i, expected_parent) in expected_parents.iter().enumerate() {
+                if let Some(parent_scope_id) = current_name.parent_scope() {
+                    let parent_name = $context.graph().names().get(&parent_scope_id).unwrap();
+                    let actual_parent = $context.graph().strings().get(parent_name.str()).unwrap();
+                    assert_eq!(
+                        *expected_parent, actual_parent,
+                        "parent_scope mismatch at depth {}: expected '{}', got '{}'",
+                        i, expected_parent, actual_parent
+                    );
+                    current_name = parent_name;
+                } else {
+                    panic!(
+                        "expected parent_scope '{}' at depth {}, but got None",
+                        expected_parent, i
+                    );
+                }
+            }
+
+            assert!(
+                current_name.parent_scope().is_none(),
+                "expected no more parent_scopes after chain, but got Some"
+            );
+        }};
+    }
+
     macro_rules! assert_parameter {
         ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
             match $expr {
@@ -1260,12 +1341,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_name_eq!(&context, "FOO", def);
+            assert_constant_name!(&context, "FOO", def);
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_name_eq!(&context, "FOO", def);
+            assert_constant_name!(&context, "FOO", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1290,12 +1371,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
-            assert_name_eq!(&context, "FOO::BAR", def);
+            assert_constant_name!(&context, "FOO::BAR", def);
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
-            assert_name_eq!(&context, "FOO::BAR", def);
+            assert_constant_name!(&context, "FOO::BAR", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1304,7 +1385,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "5:3-5:8", Constant, |def| {
-            assert_name_eq!(&context, "::BAZ", def);
+            assert_constant_name!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1328,16 +1409,16 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_name_eq!(&context, "FOO", def);
+            assert_constant_name!(&context, "FOO", def);
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
-            assert_name_eq!(&context, "BAR::BAZ", def);
+            assert_constant_name!(&context, "BAR::BAZ", def);
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_name_eq!(&context, "FOO", def);
+            assert_constant_name!(&context, "FOO", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1346,7 +1427,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
-            assert_name_eq!(&context, "BAR::BAZ", def);
+            assert_constant_name!(&context, "BAR::BAZ", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1355,7 +1436,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
-            assert_name_eq!(&context, "::BAZ", def);
+            assert_constant_name!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1835,7 +1916,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
-            assert_name_eq!(&context, "NoGap", def);
+            assert_constant_name!(&context, "NoGap", def);
             assert_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
         });
 

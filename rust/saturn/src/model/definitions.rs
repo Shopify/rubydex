@@ -327,7 +327,7 @@ impl ModuleDefinition {
 /// ```
 #[derive(Debug)]
 pub struct ConstantDefinition {
-    str_id: StringId,
+    name_id: NameId,
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
@@ -337,14 +337,14 @@ pub struct ConstantDefinition {
 impl ConstantDefinition {
     #[must_use]
     pub const fn new(
-        str_id: StringId,
+        name_id: NameId,
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            str_id,
+            name_id,
             uri_id,
             offset,
             comments,
@@ -354,12 +354,12 @@ impl ConstantDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
     }
 
     #[must_use]
-    pub fn str_id(&self) -> &StringId {
-        &self.str_id
+    pub fn name_id(&self) -> &NameId {
+        &self.name_id
     }
 
     #[must_use]
