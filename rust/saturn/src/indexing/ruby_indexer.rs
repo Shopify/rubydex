@@ -609,11 +609,6 @@ impl Visit<'_> for RubyIndexer<'_> {
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
         self.add_constant_definition(&node.target().as_node());
-
-        if let Some(parent) = node.target().parent() {
-            self.visit(&parent);
-        }
-
         self.visit(&node.value());
     }
 
@@ -962,23 +957,6 @@ mod tests {
         }};
     }
 
-    macro_rules! concatenated_mod_or_class_name {
-        ($context:expr, $class_or_mod:expr) => {{
-            let mut name = $context.graph().names().get($class_or_mod.name_id()).unwrap();
-            let mut concatenated_name = $context.graph().strings().get(name.str()).unwrap().to_string();
-
-            while let Some(parent_scope_id) = name.parent_scope() {
-                let parent_name = $context.graph().names().get(&parent_scope_id).unwrap();
-                let name_string = $context.graph().strings().get(parent_name.str()).unwrap();
-
-                concatenated_name.insert_str(0, &format!("{}::", name_string));
-                name = parent_name;
-            }
-
-            concatenated_name
-        }};
-    }
-
     macro_rules! assert_name_eq {
         ($context:expr, $expect_name_string:expr, $def:expr) => {{
             let actual_name = $context.graph().strings().get($def.str_id()).unwrap();
@@ -987,12 +965,13 @@ mod tests {
         }};
     }
 
-    /// Asserts the name and `parent_scope` of a constant definition.
+    /// Asserts the full path of a definition's `name_id` matches the expected string.
+    /// Works with any definition that has a `name_id()` method (`ClassDefinition`, `ModuleDefinition`, `ConstantDefinition`).
     ///
     /// Usage:
-    /// - `assert_constant_name!(ctx, "Foo::Bar::Baz", def)` - asserts the full path `Foo::Bar::Baz`
-    /// - `assert_constant_name!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
-    macro_rules! assert_constant_name {
+    /// - `assert_name_id_to_string_eq!(ctx, "Foo::Bar::Baz", def)` - asserts the full path `Foo::Bar::Baz`
+    /// - `assert_name_id_to_string_eq!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
+    macro_rules! assert_name_id_to_string_eq {
         ($context:expr, $expect_path:expr, $def:expr) => {{
             let segments: Vec<&str> = $expect_path.split("::").collect();
             assert!(!segments.is_empty(), "expected path must have at least one segment");
@@ -1151,14 +1130,14 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
-            assert_eq!("Foo", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Foo", def);
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
-            assert_eq!("Bar", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Bar", def);
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -1169,7 +1148,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:19", Class, |def| {
-            assert_eq!("Baz", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Baz", def);
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -1195,14 +1174,14 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
-            assert_eq!("Foo::Bar", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
             assert!(def.superclass_ref().is_none());
             assert!(def.owner_id().is_none());
             assert_eq!(1, def.members().len());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
-            assert_eq!("Baz::Qux", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Baz::Qux", def);
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -1213,7 +1192,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:23", Class, |def| {
-            assert_eq!("Quuux", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Quuux", def);
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -1250,13 +1229,13 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_eq!("Foo", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Foo", def);
             assert_eq!(1, def.members().len());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
-            assert_eq!("Bar", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Bar", def);
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -1266,7 +1245,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:20", Module, |def| {
-            assert_eq!("Baz", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Baz", def);
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1290,13 +1269,13 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_eq!("Foo::Bar", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
             assert_eq!(1, def.members().len());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
-            assert_eq!("Baz::Qux", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Baz::Qux", def);
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -1306,7 +1285,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:24", Module, |def| {
-            assert_eq!("Quuux", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Quuux", def);
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1341,12 +1320,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_constant_name!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def);
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_constant_name!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1371,12 +1350,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
-            assert_constant_name!(&context, "FOO::BAR", def);
+            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
-            assert_constant_name!(&context, "FOO::BAR", def);
+            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1385,7 +1364,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "5:3-5:8", Constant, |def| {
-            assert_constant_name!(&context, "BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1409,16 +1388,16 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_constant_name!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def);
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
-            assert_constant_name!(&context, "BAR::BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAR::BAZ", def);
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_constant_name!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1427,7 +1406,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
-            assert_constant_name!(&context, "BAR::BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAR::BAZ", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1436,7 +1415,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
-            assert_constant_name!(&context, "BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1893,12 +1872,12 @@ mod tests {
         });
 
         assert_definition_at!(&context, "2:1-2:18", Class, |def| {
-            assert_eq!("Single", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Single", def);
             assert_comments_eq!(&context, def, vec!["# Single comment"]);
         });
 
         assert_definition_at!(&context, "7:1-7:18", Module, |def| {
-            assert_eq!("Multi", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Multi", def);
             assert_comments_eq!(
                 &context,
                 def,
@@ -1911,12 +1890,12 @@ mod tests {
         });
 
         assert_definition_at!(&context, "12:1-12:28", Class, |def| {
-            assert_eq!("EmptyCommentLine", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "EmptyCommentLine", def);
             assert_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
         });
 
         assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
-            assert_constant_name!(&context, "NoGap", def);
+            assert_name_id_to_string_eq!(&context, "NoGap", def);
             assert_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
         });
 
@@ -1926,12 +1905,12 @@ mod tests {
         });
 
         assert_definition_at!(&context, "23:1-23:21", Class, |def| {
-            assert_eq!("BlankLine", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "BlankLine", def);
             assert_comments_eq!(&context, def, vec!["# Comment with blank line"]);
         });
 
         assert_definition_at!(&context, "28:1-28:21", Class, |def| {
-            assert_eq!("NoComment", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "NoComment", def);
             assert!(def.comments().is_empty());
         });
     }
@@ -1956,22 +1935,22 @@ mod tests {
         });
 
         assert_definition_at!(&context, "2:1-12:4", Class, |def| {
-            assert_eq!("Outer", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Outer", def);
             assert_comments_eq!(&context, def, vec!["# Outer class"]);
         });
 
         assert_definition_at!(&context, "4:3-7:6", Class, |def| {
-            assert_eq!("Inner", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Inner", def);
             assert_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
         });
 
         assert_definition_at!(&context, "6:5-6:20", Class, |def| {
-            assert_eq!("Deep", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "Deep", def);
             assert_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
         });
 
         assert_definition_at!(&context, "11:3-11:26", Class, |def| {
-            assert_eq!("AnotherInner", concatenated_mod_or_class_name!(&context, def));
+            assert_name_id_to_string_eq!(&context, "AnotherInner", def);
             assert_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
         });
     }

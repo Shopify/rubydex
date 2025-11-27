@@ -1,6 +1,6 @@
 use crate::model::{
     identity_maps::IdentityHashMap,
-    ids::{DeclarationId, DefinitionId, StringId, ReferenceId},
+    ids::{DeclarationId, DefinitionId, ReferenceId, StringId},
 };
 
 /// A `Declaration` represents the global concept of an entity in Ruby. For example, the class `Foo` may be defined 3
