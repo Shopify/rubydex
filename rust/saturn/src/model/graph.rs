@@ -108,7 +108,10 @@ impl Graph {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
             }
-            Definition::Constant(it) => it.str_id(),
+            Definition::Constant(it) => {
+                let name = self.names.get(it.name_id()).unwrap();
+                name.str()
+            }
             Definition::GlobalVariable(it) => it.str_id(),
             Definition::InstanceVariable(it) => it.str_id(),
             Definition::ClassVariable(it) => it.str_id(),
