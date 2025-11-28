@@ -200,8 +200,8 @@ impl Graph {
         member_name: &str,
     ) {
         if let Some(declaration) = self.declarations.get_mut(declaration_id) {
-            let name_id = StringId::from(member_name);
-            declaration.add_member(name_id, member_declaration_id);
+            let string_id = StringId::from(member_name);
+            declaration.add_member(string_id, member_declaration_id);
         }
     }
 

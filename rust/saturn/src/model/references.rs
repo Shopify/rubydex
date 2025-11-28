@@ -57,7 +57,7 @@ impl ConstantReference {
 #[derive(Debug)]
 pub struct MethodRef {
     /// The unqualified name of the method
-    name_id: StringId,
+    str: StringId,
     /// The document where we found the reference
     uri_id: UriId,
     /// The offsets inside of the document where we found the reference
@@ -66,17 +66,13 @@ pub struct MethodRef {
 
 impl MethodRef {
     #[must_use]
-    pub fn new(name_id: StringId, uri_id: UriId, offset: Offset) -> Self {
-        Self {
-            name_id,
-            uri_id,
-            offset,
-        }
+    pub fn new(str: StringId, uri_id: UriId, offset: Offset) -> Self {
+        Self { str, uri_id, offset }
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &StringId {
-        &self.name_id
+    pub fn str(&self) -> &StringId {
+        &self.str
     }
 
     #[must_use]
@@ -94,7 +90,7 @@ impl MethodRef {
         // M:<uri_id>:<start>-<end>
         let key = format!(
             "M:{}:{}:{}-{}",
-            self.name_id,
+            self.str,
             self.uri_id,
             self.offset.start(),
             self.offset.end()

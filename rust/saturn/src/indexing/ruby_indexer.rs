@@ -1059,7 +1059,7 @@ mod tests {
                 .graph()
                 .method_references()
                 .values()
-                .map(|m| (m.offset().start(), $context.graph().strings().get(m.name_id()).unwrap()))
+                .map(|m| (m.offset().start(), $context.graph().strings().get(m.str()).unwrap()))
                 .collect::<Vec<_>>();
 
             actual_references.sort();

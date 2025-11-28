@@ -91,17 +91,17 @@ impl Declaration {
         &self.members
     }
 
-    pub fn add_member(&mut self, name_id: StringId, declaration_id: DeclarationId) {
-        self.members.insert(name_id, declaration_id);
+    pub fn add_member(&mut self, string_id: StringId, declaration_id: DeclarationId) {
+        self.members.insert(string_id, declaration_id);
     }
 
-    pub fn remove_member(&mut self, name_id: &StringId) -> Option<DeclarationId> {
-        self.members.remove(name_id)
+    pub fn remove_member(&mut self, string_id: &StringId) -> Option<DeclarationId> {
+        self.members.remove(string_id)
     }
 
     #[must_use]
-    pub fn get_member(&self, name_id: &StringId) -> Option<&DeclarationId> {
-        self.members.get(name_id)
+    pub fn get_member(&self, string_id: &StringId) -> Option<&DeclarationId> {
+        self.members.get(string_id)
     }
 
     #[must_use]

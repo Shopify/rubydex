@@ -73,9 +73,9 @@ impl LocalGraph {
     }
 
     pub fn intern_string(&mut self, string: String) -> StringId {
-        let name_id = StringId::from(&string);
-        self.strings.insert(name_id, string);
-        name_id
+        let string_id = StringId::from(&string);
+        self.strings.insert(string_id, string);
+        string_id
     }
 
     // Names

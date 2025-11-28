@@ -2,8 +2,8 @@ use crate::model::definitions::Definition;
 use crate::model::graph::Graph;
 
 fn fully_qualify_definition_name(graph: &Graph, definition: &Definition) -> String {
-    let definition_name_id = graph.definition_string_id(definition);
-    let definition_name = graph.strings().get(&definition_name_id).unwrap();
+    let definition_string_id = graph.definition_string_id(definition);
+    let definition_name = graph.strings().get(&definition_string_id).unwrap();
 
     if let Some(fully_qualified_name) = definition_name.strip_prefix("::") {
         return fully_qualified_name.to_string();
