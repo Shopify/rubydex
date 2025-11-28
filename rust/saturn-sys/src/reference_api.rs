@@ -129,7 +129,7 @@ pub unsafe extern "C" fn sat_method_reference_name(pointer: GraphPointer, refere
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");
         let name = graph
             .strings()
-            .get(reference.name_id())
+            .get(reference.str())
             .expect("Name ID should exist")
             .clone();
         CString::new(name).unwrap().into_raw().cast_const()
