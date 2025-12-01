@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use crate::model::{
     identity_maps::IdentityHashMap,
     ids::{DeclarationId, DefinitionId, ReferenceId, StringId},
@@ -21,6 +23,7 @@ pub struct Declaration {
     references: Vec<ReferenceId>,
     /// The ID of the owner of this declaration
     owner_id: DeclarationId,
+    ancestors: OnceCell<Vec<DeclarationId>>,
 }
 
 impl Declaration {
@@ -32,6 +35,7 @@ impl Declaration {
             members: IdentityHashMap::default(),
             references: Vec::new(),
             owner_id,
+            ancestors: OnceCell::new(),
         }
     }
 
@@ -107,6 +111,20 @@ impl Declaration {
     #[must_use]
     pub fn owner_id(&self) -> &DeclarationId {
         &self.owner_id
+    }
+
+    /// # Panics
+    ///
+    /// Will panic if invoked twice without clearing ancestors
+    pub fn set_ancestors(&self, ancestors: Vec<DeclarationId>) {
+        self.ancestors
+            .set(ancestors)
+            .expect("ancestors should only be set once per declaration");
+    }
+
+    #[must_use]
+    pub fn ancestors(&self) -> Option<&[DeclarationId]> {
+        self.ancestors.get().map(Vec::as_slice)
     }
 
     // This will change once we fix fully qualified names to not use `::` as separators for everything. Also, we may

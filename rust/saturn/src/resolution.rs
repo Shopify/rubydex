@@ -1,10 +1,13 @@
-use std::collections::VecDeque;
+use std::{
+    collections::{HashSet, VecDeque},
+    hash::BuildHasher,
+};
 
 use crate::model::{
     declaration::Declaration,
     definitions::Definition,
     graph::{Graph, OBJECT_ID},
-    identity_maps::IdentityHashMap,
+    identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
     name::{Name, NameRef},
 };
@@ -30,6 +33,18 @@ impl Outcome {
     fn is_resolved_or_retry(&self) -> bool {
         matches!(self, Outcome::Resolved(_) | Outcome::Retry)
     }
+}
+
+pub enum AncestorOutcome {
+    /// The ancestors were fully linearized
+    Resolved(Vec<DeclarationId>),
+    /// Represents a cyclic outcome when linearizing ancestors. For example, if a class inherits from itself (either
+    /// directly or through a chain of parent classes). We still try our best effort to approximate something, but this
+    /// case is an error
+    Cyclic(Vec<DeclarationId>),
+    /// Represents that we didn't have all of the information necessary to complete linearizing the ancestors. We must
+    /// retry in the next iteration of the resolution phase
+    Retry,
 }
 
 /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are computed:
@@ -215,6 +230,78 @@ fn get_or_create_singleton_class(graph: &mut Graph, owner_decl_id: DeclarationId
     singleton_decl_id
 }
 
+/// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
+///
+/// # Panics
+///
+/// Can panic if there's inconsistent data in the graph
+#[must_use]
+pub fn ancestors_of(graph: &Graph, declaration_id: DeclarationId) -> AncestorOutcome {
+    let mut seen_ids = IdentityHashSet::default();
+    linearize_ancestors(graph, declaration_id, &mut seen_ids)
+}
+
+/// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
+///
+/// # Panics
+///
+/// Can panic if there's inconsistent data in the graph
+#[must_use]
+pub fn linearize_ancestors<S: BuildHasher>(
+    graph: &Graph,
+    declaration_id: DeclarationId,
+    seen_ids: &mut HashSet<DeclarationId, S>,
+) -> AncestorOutcome {
+    if !seen_ids.insert(declaration_id) {
+        // If we find a cycle when linearizing ancestors, it's an error that the programmer must fix. However, we try to
+        // still approximate features by assuming that it must inherit from `Object` at some point (which is what most
+        // classes/modules inherit from). This is not 100% correct, but it allows us to provide a bit better IDE support
+        // for these cases
+        return AncestorOutcome::Cyclic(vec![*OBJECT_ID]);
+    }
+
+    let mut cyclic = false;
+    let declaration = graph.declarations().get(&declaration_id).unwrap();
+
+    // Return the cached ancestors if we already computed them
+    if let Some(cached) = declaration.ancestors() {
+        return AncestorOutcome::Resolved(cached.to_vec());
+    }
+
+    let mut ancestors = Vec::new();
+    let definitions = declaration
+        .definitions()
+        .iter()
+        .filter_map(|def_id| graph.definitions().get(def_id))
+        .collect::<Vec<_>>();
+
+    ancestors.push(declaration_id);
+
+    // TODO: this check is against `Object` for now to avoid infinite recursion. After RBS indexing, we need to change
+    // this to `BasicObject` since it's the only class that cannot have a parent
+    if declaration_id != *OBJECT_ID {
+        match linearize_parent_class(graph, &definitions, seen_ids) {
+            AncestorOutcome::Resolved(ids) => {
+                ancestors.extend(ids);
+            }
+            AncestorOutcome::Cyclic(ids) => {
+                cyclic = true;
+                ancestors.extend(ids);
+            }
+            AncestorOutcome::Retry => {
+                return AncestorOutcome::Retry;
+            }
+        }
+    }
+
+    declaration.set_ancestors(ancestors.clone());
+    if cyclic {
+        AncestorOutcome::Cyclic(ancestors)
+    } else {
+        AncestorOutcome::Resolved(ancestors)
+    }
+}
+
 // Handles the resolution of the namespace name, the creation of the declaration and membership
 fn handle_constant_declaration(graph: &mut Graph, name_id: NameId, definition_id: DefinitionId) -> Outcome {
     let name_ref = graph.names().get(&name_id).unwrap();
@@ -310,7 +397,7 @@ fn resolve_constant(graph: &mut Graph, name_id: NameId) -> Outcome {
 fn run_resolution(graph: &Graph, name: &Name) -> Outcome {
     let str_id = *name.str();
 
-    if name.nesting().is_some() {
+    if let Some(nesting) = name.nesting() {
         let scope_outcome = search_lexical_scopes(graph, name, str_id);
 
         // If we already resolved or need to retry, return early
@@ -319,11 +406,31 @@ fn run_resolution(graph: &Graph, name: &Name) -> Outcome {
         }
 
         // Search inheritance chain
+        let ancestor_outcome = search_ancestors(graph, *nesting, str_id);
+        if ancestor_outcome.is_resolved_or_retry() {
+            return ancestor_outcome;
+        }
     }
 
     // If it's a top level reference starting with `::` or if we didn't find the constant anywhere else, the
     // fallback is the top level
     search_top_level(graph, str_id)
+}
+
+fn search_ancestors(graph: &Graph, nesting_name_id: NameId, str_id: StringId) -> Outcome {
+    match graph.names().get(&nesting_name_id).unwrap() {
+        NameRef::Resolved(nesting_name_ref) => match ancestors_of(graph, *nesting_name_ref.declaration_id()) {
+            AncestorOutcome::Resolved(ids) | AncestorOutcome::Cyclic(ids) => ids
+                .iter()
+                .find_map(|ancestor_id| {
+                    let declaration = graph.declarations().get(ancestor_id).unwrap();
+                    declaration.get_member(&str_id).map(|id| Outcome::Resolved(*id))
+                })
+                .unwrap_or(Outcome::Unresolved),
+            AncestorOutcome::Retry => Outcome::Retry,
+        },
+        NameRef::Unresolved(_) => Outcome::Retry,
+    }
 }
 
 /// Look for the constant in the lexical scopes that are a part of its nesting
@@ -446,6 +553,38 @@ fn sorted_units(graph: &Graph) -> (VecDeque<Unit>, Vec<DefinitionId>) {
     )
 }
 
+fn linearize_parent_class<S: BuildHasher>(
+    graph: &Graph,
+    definitions: &[&Definition],
+    seen_ids: &mut HashSet<DeclarationId, S>,
+) -> AncestorOutcome {
+    let mut explicit_parents = Vec::new();
+
+    for def in definitions {
+        if let Definition::Class(class) = def
+            && let Some(superclass) = class.superclass_ref()
+        {
+            let name = graph.names().get(&superclass).unwrap();
+
+            match name {
+                NameRef::Resolved(resolved) => {
+                    explicit_parents.push(*resolved.declaration_id());
+                }
+                NameRef::Unresolved(_) => {
+                    // If we're trying to linearize a class for which the superclass we haven't resolved yet, we
+                    // need to retry later
+                    return AncestorOutcome::Retry;
+                }
+            }
+        }
+    }
+
+    // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
+    // mismatch error. TODO: We should add a diagnostic here
+    let picked_parent = explicit_parents.first().copied().unwrap_or(*OBJECT_ID);
+    linearize_ancestors(graph, picked_parent, seen_ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,6 +645,31 @@ mod tests {
                 &format!("reference to '{}'", $declaration_name),
                 $location,
             );
+        };
+    }
+
+    macro_rules! assert_ancestors_eq {
+        ($context:expr, $name:expr, $expected:expr) => {
+            match ancestors_of(&$context.graph, DeclarationId::from($name)) {
+                AncestorOutcome::Cyclic(ancestors) | AncestorOutcome::Resolved(ancestors) => {
+                    assert_eq!(
+                        $expected
+                            .iter()
+                            .map(|n| DeclarationId::from(*n))
+                            .collect::<Vec<_>>(),
+                        ancestors,
+                        "Incorrect ancestors {}",
+                        ancestors
+                            .iter()
+                            .map(|id| $context.graph.declarations().get(id).unwrap().name())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                AncestorOutcome::Retry => {
+                    panic!("Expected ancestors to be resolved");
+                }
+            }
         };
     }
 
@@ -968,5 +1132,71 @@ mod tests {
             .unwrap();
         assert_members(bar_singleton, &["qux"]);
         assert_owner(bar_singleton, "Bar");
+    }
+
+    #[test]
+    fn linearizing_super_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar < Foo; end
+            class Baz < Bar; end
+            class Qux < Baz; end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Qux", ["Qux", "Baz", "Bar", "Foo", "Object"]);
+    }
+
+    #[test]
+    fn linearizing_circular_super_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo < Bar; end
+            class Bar < Baz; end
+            class Baz < Foo; end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
+    }
+
+    #[test]
+    fn resolving_a_constant_inherited_from_the_super_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 123
+            end
+
+            class Bar < Foo
+              CONST
+            end
+            "
+        });
+        context.resolve();
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:5:2-5:7");
+    }
+
+    #[test]
+    fn does_not_loop_forever_on_non_existing_parents() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar < Foo
+              CONST
+            end
+            "
+        });
+        context.resolve();
+        assert_eq!(2, context.graph.declarations().len());
+
+        assert!(matches!(
+            ancestors_of(&context.graph, DeclarationId::from("Bar")),
+            AncestorOutcome::Retry
+        ));
     }
 }
