@@ -53,32 +53,6 @@ impl GraphTest {
         resolution::resolve_all(&mut self.graph);
     }
 
-    /// Parses a location string like `<file:///foo.rb:3:0-3:5>` into `(uri, start_offset, end_offset)`
-    ///
-    /// Format: uri:start_line:start_column-end_line:end_column
-    /// Line and column numbers are 0-indexed
-    ///
-    /// # Panics
-    ///
-    /// Panics if the location format is invalid, the URI has no source, or the positions are invalid.
-    #[must_use]
-    pub fn parse_location(&self, location: &str) -> (String, u32, u32) {
-        let (uri, start_position, end_position) = Self::parse_location_positions(location);
-        let line_index = self.line_index_for(uri.as_str());
-
-        (
-            uri,
-            line_index
-                .offset(start_position)
-                .unwrap_or_else(|| panic!("Invalid start position {}:{}", start_position.line, start_position.col))
-                .into(),
-            line_index
-                .offset(end_position)
-                .unwrap_or_else(|| panic!("Invalid end position {}:{}", end_position.line, end_position.col))
-                .into(),
-        )
-    }
-
     /// Asserts that the given offset matches the expected offset, providing clear error messages
     /// with line:column positions when they don't match
     ///
@@ -130,48 +104,6 @@ impl GraphTest {
             .get_source(uri)
             .unwrap_or_else(|| panic!("Source not found for URI: {uri}"));
         LineIndex::new(source)
-    }
-
-    fn parse_location_positions(location: &str) -> (String, Position, Position) {
-        let trimmed = location.trim().trim_start_matches('<').trim_end_matches('>');
-
-        let (start_part, end_part) = trimmed.rsplit_once('-').unwrap_or_else(|| {
-            panic!("Invalid location format: {location} (expected uri:start_line:start_column-end_line:end_column)")
-        });
-
-        let (start_prefix, start_column_str) = start_part
-            .rsplit_once(':')
-            .unwrap_or_else(|| panic!("Invalid location format: missing start column in {location}"));
-        let (uri, start_line_str) = start_prefix
-            .rsplit_once(':')
-            .unwrap_or_else(|| panic!("Invalid location format: missing start line in {location}"));
-
-        let (end_line_str, end_column_str) = end_part
-            .split_once(':')
-            .unwrap_or_else(|| panic!("Invalid location format: missing end line or column in {location}"));
-
-        let start_line = Self::parse_number(start_line_str, "start line", location);
-        let start_column = Self::parse_number(start_column_str, "start column", location);
-        let end_line = Self::parse_number(end_line_str, "end line", location);
-        let end_column = Self::parse_number(end_column_str, "end column", location);
-
-        (
-            uri.to_string(),
-            Position {
-                line: start_line,
-                col: start_column,
-            },
-            Position {
-                line: end_line,
-                col: end_column,
-            },
-        )
-    }
-
-    fn parse_number(value: &str, field: &str, location: &str) -> u32 {
-        value
-            .parse()
-            .unwrap_or_else(|_| panic!("Invalid {field} '{value}' in location {location}"))
     }
 
     fn format_position(position: Position) -> String {
