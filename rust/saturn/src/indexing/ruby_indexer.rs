@@ -1,5 +1,6 @@
 //! Visit the Ruby AST and create the definitions.
 
+use crate::diagnostic::{Diagnostic, Severity};
 use crate::errors::Errors;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
@@ -54,6 +55,25 @@ impl<'a> RubyIndexer<'a> {
 
     pub fn index(&mut self) {
         let result = ruby_prism::parse(self.source.as_bytes());
+
+        for error in result.errors() {
+            self.local_graph.add_diagnostic(Diagnostic::new(
+                self.uri_id,
+                Offset::from_prism_location(&error.location()),
+                error.message().to_string(),
+                Severity::Error,
+            ));
+        }
+
+        for warning in result.warnings() {
+            self.local_graph.add_diagnostic(Diagnostic::new(
+                self.uri_id,
+                Offset::from_prism_location(&warning.location()),
+                warning.message().to_string(),
+                Severity::Warning,
+            ));
+        }
+
         self.comments = self.parse_comments_into_groups(&result);
         self.visit(&result.node());
     }
@@ -1115,6 +1135,53 @@ mod tests {
 
     fn index_source(source: &str) -> LocalGraphTest {
         LocalGraphTest::new("file:///foo.rb", source)
+    }
+
+    #[test]
+    fn index_source_with_errors() {
+        let context = index_source({
+            "
+            class Foo
+            "
+        });
+
+        // We still index the definition, even though it has errors
+        assert_eq!(context.graph().definitions().len(), 1);
+        assert_definition_at!(&context, "1:1-2:1", Class, |def| {
+            assert_name_id_to_string_eq!(&context, "Foo", def);
+        });
+
+        assert_eq!(
+            vec![
+                "Error: unexpected end-of-input, assuming it is closing the parent top level context",
+                "Error: expected an `end` to close the `class` statement"
+            ],
+            context
+                .graph()
+                .diagnostics()
+                .iter()
+                .map(|d| format!("{}: {}", d.severity().as_str(), d.message()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn index_source_with_warnings() {
+        let context = index_source({
+            "
+            foo = 42
+            "
+        });
+
+        assert_eq!(
+            vec!["Warning: assigned but unused variable - foo"],
+            context
+                .graph()
+                .diagnostics()
+                .iter()
+                .map(|d| format!("{}: {}", d.severity().as_str(), d.message()))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

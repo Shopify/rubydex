@@ -1,3 +1,4 @@
+use crate::diagnostic::Diagnostic;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
@@ -24,6 +25,7 @@ pub struct LocalGraph {
     names: IdentityHashMap<NameId, NameRef>,
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl LocalGraph {
@@ -37,6 +39,7 @@ impl LocalGraph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -114,6 +117,17 @@ impl LocalGraph {
         let reference_id = reference.id();
         self.method_references.insert(reference_id, reference);
         reference_id
+    }
+
+    // Diagnostics
+
+    #[must_use]
+    pub fn diagnostics(&self) -> &Vec<Diagnostic> {
+        &self.diagnostics
+    }
+
+    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+        self.diagnostics.push(diagnostic);
     }
 
     // Into parts

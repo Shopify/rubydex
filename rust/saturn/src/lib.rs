@@ -1,3 +1,4 @@
+pub mod diagnostic;
 pub mod errors;
 pub mod indexing;
 pub mod model;
