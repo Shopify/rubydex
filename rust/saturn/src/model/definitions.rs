@@ -480,13 +480,13 @@ pub enum Parameter {
 #[derive(Debug)]
 pub struct ParameterStruct {
     offset: Offset,
-    name: String,
+    str: StringId,
 }
 
 impl ParameterStruct {
     #[must_use]
-    pub const fn new(offset: Offset, name: String) -> Self {
-        Self { offset, name }
+    pub const fn new(offset: Offset, str: StringId) -> Self {
+        Self { offset, str }
     }
 
     #[must_use]
@@ -495,8 +495,8 @@ impl ParameterStruct {
     }
 
     #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn str(&self) -> &StringId {
+        &self.str
     }
 }
 

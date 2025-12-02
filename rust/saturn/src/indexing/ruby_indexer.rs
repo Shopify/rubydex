@@ -137,45 +137,49 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
-    fn collect_parameters(node: &ruby_prism::DefNode) -> Vec<Parameter> {
+    fn collect_parameters(&mut self, node: &ruby_prism::DefNode) -> Vec<Parameter> {
         let mut parameters: Vec<Parameter> = Vec::new();
 
         if let Some(parameters_list) = node.parameters() {
             for parameter in &parameters_list.requireds() {
                 let location = parameter.location();
+                let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
 
                 parameters.push(Parameter::RequiredPositional(ParameterStruct::new(
                     Offset::from_prism_location(&location),
-                    Self::location_to_string(&location),
+                    str_id,
                 )));
             }
 
             for parameter in &parameters_list.optionals() {
                 let opt_param = parameter.as_optional_parameter_node().unwrap();
                 let name_loc = opt_param.name_loc();
+                let str_id = self.local_graph.intern_string(Self::location_to_string(&name_loc));
 
                 parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
                     Offset::from_prism_location(&name_loc),
-                    Self::location_to_string(&name_loc),
+                    str_id,
                 )));
             }
 
             if let Some(rest) = parameters_list.rest() {
                 let rest_param = rest.as_rest_parameter_node().unwrap();
                 let location = rest_param.name_loc().unwrap_or_else(|| rest.location());
+                let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
 
                 parameters.push(Parameter::RestPositional(ParameterStruct::new(
                     Offset::from_prism_location(&location),
-                    Self::location_to_string(&location),
+                    str_id,
                 )));
             }
 
             for post in &parameters_list.posts() {
                 let location = post.location();
+                let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
 
                 parameters.push(Parameter::Post(ParameterStruct::new(
                     Offset::from_prism_location(&location),
-                    Self::location_to_string(&location),
+                    str_id,
                 )));
             }
 
@@ -184,19 +188,25 @@ impl<'a> RubyIndexer<'a> {
                     ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
                         let required = keyword.as_required_keyword_parameter_node().unwrap();
                         let name_loc = required.name_loc();
+                        let str_id = self
+                            .local_graph
+                            .intern_string(Self::location_to_string(&name_loc).trim_end_matches(':').to_string());
 
                         parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
                             Offset::from_prism_location(&name_loc),
-                            Self::location_to_string(&name_loc).trim_end_matches(':').to_string(),
+                            str_id,
                         )));
                     }
                     ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
                         let optional = keyword.as_optional_keyword_parameter_node().unwrap();
                         let name_loc = optional.name_loc();
+                        let str_id = self
+                            .local_graph
+                            .intern_string(Self::location_to_string(&name_loc).trim_end_matches(':').to_string());
 
                         parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
                             Offset::from_prism_location(&name_loc),
-                            Self::location_to_string(&name_loc).trim_end_matches(':').to_string(),
+                            str_id,
                         )));
                     }
                     _ => {}
@@ -211,18 +221,20 @@ impl<'a> RubyIndexer<'a> {
                             .unwrap()
                             .name_loc()
                             .unwrap_or_else(|| rest.location());
+                        let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
 
                         parameters.push(Parameter::RestKeyword(ParameterStruct::new(
                             Offset::from_prism_location(&location),
-                            Self::location_to_string(&location),
+                            str_id,
                         )));
                     }
                     ruby_prism::Node::ForwardingParameterNode { .. } => {
                         let location = rest.location();
+                        let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
 
                         parameters.push(Parameter::Forward(ParameterStruct::new(
                             Offset::from_prism_location(&location),
-                            Self::location_to_string(&location),
+                            str_id,
                         )));
                     }
                     _ => {
@@ -233,10 +245,11 @@ impl<'a> RubyIndexer<'a> {
 
             if let Some(block) = parameters_list.block() {
                 let location = block.name_loc().unwrap_or_else(|| block.location());
+                let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
 
                 parameters.push(Parameter::Block(ParameterStruct::new(
                     Offset::from_prism_location(&location),
-                    Self::location_to_string(&location),
+                    str_id,
                 )));
             }
         }
@@ -701,7 +714,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
         let owner_id = self.parent_nesting_id().copied();
-        let parameters = Self::collect_parameters(node);
+        let parameters = self.collect_parameters(node);
         let is_singleton = node
             .receiver()
             .is_some_and(|receiver| receiver.as_self_node().is_some());
@@ -1133,6 +1146,13 @@ mod tests {
                 .collect::<Vec<_>>();
 
             assert_eq!($expected_names, actual_names);
+        }};
+    }
+
+    macro_rules! assert_string_eq {
+        ($context:expr, $str_id:expr, $expected_name:expr) => {{
+            let string_name = $context.graph().strings().get($str_id).unwrap();
+            assert_eq!(string_name, $expected_name);
         }};
     }
 
@@ -1625,35 +1645,35 @@ mod tests {
             assert_eq!(def.parameters().len(), 8);
 
             assert_parameter!(&def.parameters()[0], RequiredPositional, |param| {
-                assert_eq!(param.name(), "a");
+                assert_string_eq!(context, param.str(), "a");
             });
 
             assert_parameter!(&def.parameters()[1], OptionalPositional, |param| {
-                assert_eq!(param.name(), "b");
+                assert_string_eq!(context, param.str(), "b");
             });
 
             assert_parameter!(&def.parameters()[2], RestPositional, |param| {
-                assert_eq!(param.name(), "c");
+                assert_string_eq!(context, param.str(), "c");
             });
 
             assert_parameter!(&def.parameters()[3], Post, |param| {
-                assert_eq!(param.name(), "d");
+                assert_string_eq!(context, param.str(), "d");
             });
 
             assert_parameter!(&def.parameters()[4], RequiredKeyword, |param| {
-                assert_eq!(param.name(), "e");
+                assert_string_eq!(context, param.str(), "e");
             });
 
             assert_parameter!(&def.parameters()[5], OptionalKeyword, |param| {
-                assert_eq!(param.name(), "g");
+                assert_string_eq!(context, param.str(), "g");
             });
 
             assert_parameter!(&def.parameters()[6], RestKeyword, |param| {
-                assert_eq!(param.name(), "i");
+                assert_string_eq!(context, param.str(), "i");
             });
 
             assert_parameter!(&def.parameters()[7], Block, |param| {
-                assert_eq!(param.name(), "j");
+                assert_string_eq!(context, param.str(), "j");
             });
         });
     }
@@ -1669,7 +1689,7 @@ mod tests {
         assert_definition_at!(&context, "1:1-1:18", Method, |def| {
             assert_eq!(def.parameters().len(), 1);
             assert_parameter!(&def.parameters()[0], Forward, |param| {
-                assert_eq!(param.name(), "...");
+                assert_string_eq!(context, param.str(), "...");
             });
         });
     }
