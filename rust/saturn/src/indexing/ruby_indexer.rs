@@ -361,12 +361,13 @@ impl<'a> RubyIndexer<'a> {
         definition_id
     }
 
-    fn add_constant_definition(&mut self, node: &ruby_prism::Node) -> Option<DefinitionId> {
-        let name_id = self.index_constant_reference(node, false)?;
+    fn add_constant_definition(&mut self, node: &ruby_prism::Node, also_add_reference: bool) -> Option<DefinitionId> {
+        let name_id = self.index_constant_reference(node, also_add_reference)?;
 
         // Get the location for the constant name/path only (not including the value)
         let location = match node {
             ruby_prism::Node::ConstantWriteNode { .. } => node.as_constant_write_node().unwrap().name_loc(),
+            ruby_prism::Node::ConstantOrWriteNode { .. } => node.as_constant_or_write_node().unwrap().name_loc(),
             _ => node.location(),
         };
 
@@ -586,12 +587,12 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_or_write_node(&mut self, node: &ruby_prism::ConstantOrWriteNode) {
-        self.add_constant_definition(&node.as_node());
+        self.add_constant_definition(&node.as_node(), true);
         self.visit(&node.value());
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
-        self.add_constant_definition(&node.as_node());
+        self.add_constant_definition(&node.as_node(), false);
         self.visit(&node.value());
     }
 
@@ -604,12 +605,12 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_path_or_write_node(&mut self, node: &ruby_prism::ConstantPathOrWriteNode) {
-        self.index_constant_reference(&node.target().as_node(), true);
+        self.add_constant_definition(&node.target().as_node(), true);
         self.visit(&node.value());
     }
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
-        self.add_constant_definition(&node.target().as_node());
+        self.add_constant_definition(&node.target().as_node(), false);
         self.visit(&node.value());
     }
 
@@ -625,7 +626,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         for left in &node.lefts() {
             match left {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
-                    self.add_constant_definition(&left);
+                    self.add_constant_definition(&left, false);
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     self.add_definition_from_location(
@@ -1372,6 +1373,78 @@ mod tests {
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
+    }
+
+    #[test]
+    fn index_constant_or_write_node() {
+        let context = index_source({
+            "
+            FOO ||= 1
+
+            class Bar
+              BAZ ||= 2
+            end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_name_id_to_string_eq!(&context, "BAZ", def);
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_constant_references_eq!(&context, vec!["FOO", "BAZ"]);
+    }
+
+    #[test]
+    fn index_constant_path_or_write_node() {
+        let context = index_source({
+            "
+            FOO::BAR ||= 1
+
+            class MyClass
+              FOO::BAR ||= 2
+              ::BAZ ||= 3
+            end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
+            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert!(def.owner_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
+            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:3-5:8", Constant, |def| {
+            assert_name_id_to_string_eq!(&context, "BAZ", def);
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_constant_references_eq!(&context, vec!["FOO", "BAR", "FOO", "BAR", "BAZ"]);
     }
 
     #[test]
@@ -2195,8 +2268,8 @@ mod tests {
         assert_constant_references_eq!(
             &context,
             vec![
-                "C1", "C2", "C3", "C4", "C6", "C7", "C8", "C9", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18",
-                "C19", "C20", "C21", "C22", "C23"
+                "C1", "C2", "C3", "C4", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17",
+                "C18", "C19", "C20", "C21", "C22", "C23"
             ]
         );
     }
@@ -2218,7 +2291,7 @@ mod tests {
         assert_constant_references_eq!(
             &context,
             vec![
-                "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C9", "C10", "C11", "C12", "C13", "C14"
+                "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14"
             ]
         );
     }
