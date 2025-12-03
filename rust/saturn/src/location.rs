@@ -161,6 +161,17 @@ impl Location {
     pub fn column_end(&self) -> u32 {
         self.column_end
     }
+
+    #[must_use]
+    pub fn to_zero_based(&self) -> Location {
+        Location::new(
+            self.uri.clone(),
+            self.line_start - 1,
+            self.line_end - 1,
+            self.column_start - 1,
+            self.column_end - 1,
+        )
+    }
 }
 
 impl Display for Location {
@@ -278,5 +289,17 @@ mod tests {
 
         let computed_offset = recreated.to_offset(source);
         assert_eq!(computed_offset, offset);
+    }
+
+    #[test]
+    fn location_to_0_based_location() {
+        let location = Location::from_string("file://foo.rb:1:1-1:14");
+        let zero_based_location = location.to_zero_based();
+        assert_eq!(zero_based_location.uri(), location.uri());
+        assert_eq!(zero_based_location.line_start(), location.line_start() - 1);
+        assert_eq!(zero_based_location.column_start(), location.column_start() - 1);
+        assert_eq!(zero_based_location.line_end(), location.line_end() - 1);
+        assert_eq!(zero_based_location.column_end(), location.column_end() - 1);
+        assert_eq!(zero_based_location.to_string(), "file://foo.rb:0:0-0:13");
     }
 }
