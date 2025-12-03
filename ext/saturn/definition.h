@@ -6,6 +6,7 @@
 
 extern VALUE cDefinition;
 extern VALUE cClassDefinition;
+extern VALUE cSingletonClassDefinition;
 extern VALUE cModuleDefinition;
 extern VALUE cConstantDefinition;
 extern VALUE cMethodDefinition;
@@ -14,6 +15,7 @@ extern VALUE cAttrReaderDefinition;
 extern VALUE cAttrWriterDefinition;
 extern VALUE cGlobalVariableDefinition;
 extern VALUE cInstanceVariableDefinition;
+extern VALUE cClassInstanceVariableDefinition;
 extern VALUE cClassVariableDefinition;
 
 void initialize_definition(VALUE mSaturn);

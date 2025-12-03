@@ -13,20 +13,23 @@ use std::ptr;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DefinitionKind {
     Class = 0,
-    Module = 1,
-    Constant = 2,
-    Method = 3,
-    AttrAccessor = 4,
-    AttrReader = 5,
-    AttrWriter = 6,
-    GlobalVariable = 7,
-    InstanceVariable = 8,
-    ClassVariable = 9,
+    SingletonClass = 1,
+    Module = 2,
+    Constant = 3,
+    Method = 4,
+    AttrAccessor = 5,
+    AttrReader = 6,
+    AttrWriter = 7,
+    GlobalVariable = 8,
+    InstanceVariable = 9,
+    ClassInstanceVariable = 10,
+    ClassVariable = 11,
 }
 
 pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
     match defn {
         Definition::Class(_) => DefinitionKind::Class,
+        Definition::SingletonClass(_) => DefinitionKind::SingletonClass,
         Definition::Module(_) => DefinitionKind::Module,
         Definition::Constant(_) => DefinitionKind::Constant,
         Definition::Method(_) => DefinitionKind::Method,
@@ -35,6 +38,7 @@ pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
         Definition::AttrWriter(_) => DefinitionKind::AttrWriter,
         Definition::GlobalVariable(_) => DefinitionKind::GlobalVariable,
         Definition::InstanceVariable(_) => DefinitionKind::InstanceVariable,
+        Definition::ClassInstanceVariable(_) => DefinitionKind::ClassInstanceVariable,
         Definition::ClassVariable(_) => DefinitionKind::ClassVariable,
     }
 }

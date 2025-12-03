@@ -109,6 +109,10 @@ impl Graph {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
             }
+            Definition::SingletonClass(it) => {
+                let name = self.names.get(it.attached_target()).unwrap();
+                name.str()
+            }
             Definition::Module(it) => {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
@@ -119,6 +123,7 @@ impl Graph {
             }
             Definition::GlobalVariable(it) => it.str_id(),
             Definition::InstanceVariable(it) => it.str_id(),
+            Definition::ClassInstanceVariable(it) => it.str_id(),
             Definition::ClassVariable(it) => it.str_id(),
             Definition::AttrAccessor(it) => it.str_id(),
             Definition::AttrReader(it) => it.str_id(),
@@ -457,8 +462,60 @@ impl Graph {
         let mut types: Vec<_> = definition_types.iter().collect();
         types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
         for (kind, count) in types {
-            println!("  {kind:20} {count:6}");
+            println!("  {kind:25} {count:7}");
         }
+
+        self.print_singleton_statistics();
+    }
+
+    fn print_singleton_statistics(&self) {
+        let mut singletons_on_classes = 0;
+        let mut singletons_on_modules = 0;
+        let mut nested_singletons = 0;
+        let mut singletons_with_members = 0;
+
+        for def in self.definitions().values() {
+            if let Definition::SingletonClass(singleton) = def {
+                match singleton.owner_id().as_ref().and_then(|id| self.definitions().get(id)) {
+                    Some(Definition::Class(_)) => singletons_on_classes += 1,
+                    Some(Definition::Module(_)) => singletons_on_modules += 1,
+                    Some(Definition::SingletonClass(_)) => nested_singletons += 1,
+                    _ => {}
+                }
+
+                if !singleton.members().is_empty() {
+                    singletons_with_members += 1;
+                }
+            }
+        }
+
+        let total_singletons = singletons_on_classes + singletons_on_modules + nested_singletons;
+        if total_singletons == 0 {
+            return;
+        }
+
+        println!();
+        println!("Singleton class definitions (class << X):");
+        println!(
+            "    On classes:            {:5} ({:.1}%)",
+            singletons_on_classes,
+            stats::percentage(singletons_on_classes, total_singletons)
+        );
+        println!(
+            "    On modules:            {:5} ({:.1}%)",
+            singletons_on_modules,
+            stats::percentage(singletons_on_modules, total_singletons)
+        );
+        println!(
+            "    Nested:                {:5} ({:.1}%)",
+            nested_singletons,
+            stats::percentage(nested_singletons, total_singletons)
+        );
+        println!(
+            "  With members:            {:5} ({:.1}%)",
+            singletons_with_members,
+            stats::percentage(singletons_with_members, total_singletons)
+        );
     }
 }
 

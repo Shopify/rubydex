@@ -36,6 +36,7 @@ use crate::{
 #[derive(Debug)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
+    SingletonClass(Box<SingletonClassDefinition>),
     Module(Box<ModuleDefinition>),
     Constant(Box<ConstantDefinition>),
     Method(Box<MethodDefinition>),
@@ -44,6 +45,7 @@ pub enum Definition {
     AttrWriter(Box<AttrWriterDefinition>),
     GlobalVariable(Box<GlobalVariableDefinition>),
     InstanceVariable(Box<InstanceVariableDefinition>),
+    ClassInstanceVariable(Box<ClassInstanceVariableDefinition>),
     ClassVariable(Box<ClassVariableDefinition>),
 }
 
@@ -51,10 +53,12 @@ macro_rules! all_definitions {
     ($value:expr, $var:ident => $expr:expr) => {
         match $value {
             Definition::Class($var) => $expr,
+            Definition::SingletonClass($var) => $expr,
             Definition::Module($var) => $expr,
             Definition::Constant($var) => $expr,
             Definition::GlobalVariable($var) => $expr,
             Definition::InstanceVariable($var) => $expr,
+            Definition::ClassInstanceVariable($var) => $expr,
             Definition::ClassVariable($var) => $expr,
             Definition::AttrAccessor($var) => $expr,
             Definition::AttrReader($var) => $expr,
@@ -94,6 +98,7 @@ impl Definition {
     pub fn kind(&self) -> &'static str {
         match self {
             Definition::Class(_) => "Class",
+            Definition::SingletonClass(_) => "SingletonClass",
             Definition::Module(_) => "Module",
             Definition::Constant(_) => "Constant",
             Definition::Method(_) => "Method",
@@ -102,28 +107,31 @@ impl Definition {
             Definition::AttrWriter(_) => "AttrWriter",
             Definition::GlobalVariable(_) => "GlobalVariable",
             Definition::InstanceVariable(_) => "InstanceVariable",
+            Definition::ClassInstanceVariable(_) => "ClassInstanceVariable",
             Definition::ClassVariable(_) => "ClassVariable",
         }
     }
 
     /// # Panics
     ///
-    /// Panics if the definition is not a nesting definition (class or module)
+    /// Panics if the definition is not a nesting definition (class, module, or singleton block)
     pub fn add_member(&mut self, member_id: DefinitionId) {
         match self {
             Definition::Class(class) => class.add_member(member_id),
+            Definition::SingletonClass(block) => block.add_member(member_id),
             Definition::Module(module) => module.add_member(member_id),
             _ => panic!("Cannot add a member to a non-nesting definition"),
         }
     }
 }
 
-/// Represents either an included or a prepended module. Note that `extend` is modeled as an include on the singleton
-/// class
+/// Represents a mixin: include, prepend, or extend.
+/// During resolution, `Extend` mixins are attached to the singleton class.
 #[derive(Debug)]
 pub enum Mixin {
     Include(NameId),
     Prepend(NameId),
+    Extend(NameId),
 }
 
 // Deref implementation to conveniently extract the reference ID with a dereference
@@ -132,7 +140,7 @@ impl Deref for Mixin {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Mixin::Include(id) | Mixin::Prepend(id) => id,
+            Mixin::Include(id) | Mixin::Prepend(id) | Mixin::Extend(id) => id,
         }
     }
 }
@@ -154,6 +162,118 @@ pub struct ClassDefinition {
     members: Vec<DefinitionId>,
     superclass_ref: Option<NameId>,
     mixins: Vec<Mixin>,
+}
+
+/// A singleton class definition created from `class << X` syntax.
+/// This is created only when `class << X` syntax is encountered, NOT for `def self.foo`.
+/// Methods with receivers (like `def self.foo`) have their `receiver` field set instead.
+///
+/// # Examples
+/// ```ruby
+/// class Foo
+///   class << self     # attached_target = NameId("Foo")
+///     def bar; end
+///   end
+/// end
+///
+/// class << Foo        # attached_target = NameId("Foo")
+///   def baz; end
+/// end
+/// ```
+#[derive(Debug)]
+pub struct SingletonClassDefinition {
+    /// The name of this singleton class (e.g., `<Foo>` for `class << self` inside `class Foo`)
+    name_id: NameId,
+    /// The class/module whose singleton is being opened (aligns with Ruby's `attached_object`).
+    /// - `class << self` inside `class Foo` → NameId("Foo")
+    /// - `class << Bar` → NameId("Bar")
+    /// - Nested `class << self` → `NameId("<Foo>")` (the outer singleton)
+    attached_target: NameId,
+    uri_id: UriId,
+    offset: Offset,
+    comments: Vec<Comment>,
+    /// The definition where `class << X` was found (lexical owner)
+    owner_id: Option<DefinitionId>,
+    /// Members defined directly in this block
+    members: Vec<DefinitionId>,
+    /// Mixins declared in this block
+    mixins: Vec<Mixin>,
+}
+
+impl SingletonClassDefinition {
+    #[must_use]
+    pub const fn new(
+        name_id: NameId,
+        attached_target: NameId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Vec<Comment>,
+        owner_id: Option<DefinitionId>,
+    ) -> Self {
+        Self {
+            name_id,
+            attached_target,
+            uri_id,
+            offset,
+            comments,
+            owner_id,
+            members: Vec::new(),
+            mixins: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+    }
+
+    #[must_use]
+    pub fn name_id(&self) -> &NameId {
+        &self.name_id
+    }
+
+    #[must_use]
+    pub fn attached_target(&self) -> &NameId {
+        &self.attached_target
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn owner_id(&self) -> &Option<DefinitionId> {
+        &self.owner_id
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &[DefinitionId] {
+        &self.members
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
+    }
+
+    pub fn add_member(&mut self, member_id: DefinitionId) {
+        self.members.push(member_id);
+    }
+
+    pub fn add_mixin(&mut self, mixin: Mixin) {
+        self.mixins.push(mixin);
+    }
 }
 
 impl ClassDefinition {
@@ -398,7 +518,12 @@ pub struct MethodDefinition {
     comments: Vec<Comment>,
     owner_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
-    is_singleton: bool,
+    /// The receiver for this method, if any.
+    /// - `None` for instance methods (`def foo`)
+    /// - `Some(NameId)` for singleton methods:
+    ///   - `def self.foo` inside `class Foo` → Some(NameId("Foo"))
+    ///   - `def Bar.foo` → Some(NameId("Bar"))
+    receiver: Option<NameId>,
 }
 
 impl MethodDefinition {
@@ -410,7 +535,7 @@ impl MethodDefinition {
         comments: Vec<Comment>,
         owner_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
-        is_singleton: bool,
+        receiver: Option<NameId>,
     ) -> Self {
         Self {
             str_id,
@@ -419,7 +544,7 @@ impl MethodDefinition {
             comments,
             owner_id,
             parameters,
-            is_singleton,
+            receiver,
         }
     }
 
@@ -459,8 +584,8 @@ impl MethodDefinition {
     }
 
     #[must_use]
-    pub fn is_singleton(&self) -> bool {
-        self.is_singleton
+    pub fn receiver(&self) -> &Option<NameId> {
+        &self.receiver
     }
 }
 
@@ -772,6 +897,78 @@ pub struct InstanceVariableDefinition {
 }
 
 impl InstanceVariableDefinition {
+    #[must_use]
+    pub const fn new(
+        str_id: StringId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Vec<Comment>,
+        owner_id: Option<DefinitionId>,
+    ) -> Self {
+        Self {
+            str_id,
+            uri_id,
+            offset,
+            comments,
+            owner_id,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+    }
+
+    #[must_use]
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn owner_id(&self) -> &Option<DefinitionId> {
+        &self.owner_id
+    }
+}
+
+/// A class instance variable definition.
+/// This represents `@ivar` found in a class/module body (not inside a method).
+///
+/// # Example
+/// ```ruby
+/// class Foo
+///   @class_ivar = 1  # ClassInstanceVariableDefinition
+///
+///   def initialize
+///     @instance_ivar = 2  # InstanceVariableDefinition
+///   end
+/// end
+/// ```
+#[derive(Debug)]
+pub struct ClassInstanceVariableDefinition {
+    str_id: StringId,
+    uri_id: UriId,
+    offset: Offset,
+    comments: Vec<Comment>,
+    /// The class/module definition where this was found
+    owner_id: Option<DefinitionId>,
+}
+
+impl ClassInstanceVariableDefinition {
     #[must_use]
     pub const fn new(
         str_id: StringId,

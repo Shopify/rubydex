@@ -9,6 +9,7 @@ static VALUE mSaturn;
 VALUE cComment;
 VALUE cDefinition;
 VALUE cClassDefinition;
+VALUE cSingletonClassDefinition;
 VALUE cModuleDefinition;
 VALUE cConstantDefinition;
 VALUE cMethodDefinition;
@@ -17,6 +18,7 @@ VALUE cAttrReaderDefinition;
 VALUE cAttrWriterDefinition;
 VALUE cGlobalVariableDefinition;
 VALUE cInstanceVariableDefinition;
+VALUE cClassInstanceVariableDefinition;
 VALUE cClassVariableDefinition;
 
 // Keep this in sync with definition.rs
@@ -24,6 +26,8 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
     switch (kind) {
     case DefinitionKind_Class:
         return cClassDefinition;
+    case DefinitionKind_SingletonClass:
+        return cSingletonClassDefinition;
     case DefinitionKind_Module:
         return cModuleDefinition;
     case DefinitionKind_Constant:
@@ -40,6 +44,8 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
         return cGlobalVariableDefinition;
     case DefinitionKind_InstanceVariable:
         return cInstanceVariableDefinition;
+    case DefinitionKind_ClassInstanceVariable:
+        return cClassInstanceVariableDefinition;
     case DefinitionKind_ClassVariable:
         return cClassVariableDefinition;
     default:
@@ -134,6 +140,10 @@ void initialize_definition(VALUE mod) {
     rb_define_alloc_func(cClassDefinition, sr_handle_alloc);
     rb_define_method(cClassDefinition, "initialize", sr_handle_initialize, 2);
 
+    cSingletonClassDefinition = rb_define_class_under(mSaturn, "SingletonClassDefinition", cDefinition);
+    rb_define_alloc_func(cSingletonClassDefinition, sr_handle_alloc);
+    rb_define_method(cSingletonClassDefinition, "initialize", sr_handle_initialize, 2);
+
     cModuleDefinition = rb_define_class_under(mSaturn, "ModuleDefinition", cDefinition);
     rb_define_alloc_func(cModuleDefinition, sr_handle_alloc);
     rb_define_method(cModuleDefinition, "initialize", sr_handle_initialize, 2);
@@ -165,6 +175,10 @@ void initialize_definition(VALUE mod) {
     cInstanceVariableDefinition = rb_define_class_under(mSaturn, "InstanceVariableDefinition", cDefinition);
     rb_define_alloc_func(cInstanceVariableDefinition, sr_handle_alloc);
     rb_define_method(cInstanceVariableDefinition, "initialize", sr_handle_initialize, 2);
+
+    cClassInstanceVariableDefinition = rb_define_class_under(mSaturn, "ClassInstanceVariableDefinition", cDefinition);
+    rb_define_alloc_func(cClassInstanceVariableDefinition, sr_handle_alloc);
+    rb_define_method(cClassInstanceVariableDefinition, "initialize", sr_handle_initialize, 2);
 
     cClassVariableDefinition = rb_define_class_under(mSaturn, "ClassVariableDefinition", cDefinition);
     rb_define_alloc_func(cClassVariableDefinition, sr_handle_alloc);

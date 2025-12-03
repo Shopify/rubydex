@@ -5,9 +5,10 @@ use crate::errors::Errors;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
-    AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodDefinition, Mixin,
-    ModuleDefinition, Parameter, ParameterStruct,
+    AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition,
+    ClassInstanceVariableDefinition, ClassVariableDefinition, ConstantDefinition, Definition, GlobalVariableDefinition,
+    InstanceVariableDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct,
+    SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -18,6 +19,13 @@ use crate::offset::Offset;
 use ruby_prism::{ParseResult, Visit};
 
 pub type IndexerParts = (LocalGraph, Vec<Errors>);
+
+#[derive(Clone, Copy)]
+enum MixinType {
+    Include,
+    Prepend,
+    Extend,
+}
 
 /// The indexer for the definitions found in the Ruby source code.
 ///
@@ -30,6 +38,7 @@ pub struct RubyIndexer<'a> {
     errors: Vec<Errors>,
     comments: Vec<CommentGroup>,
     definitions_stack: Vec<DefinitionId>,
+    owner_stack: Vec<Option<DefinitionId>>,
 }
 
 impl<'a> RubyIndexer<'a> {
@@ -45,6 +54,7 @@ impl<'a> RubyIndexer<'a> {
             errors: Vec::new(),
             comments: Vec::new(),
             definitions_stack: Vec::new(),
+            owner_stack: Vec::new(),
         }
     }
 
@@ -257,6 +267,24 @@ impl<'a> RubyIndexer<'a> {
         parameters
     }
 
+    fn current_owner(&self) -> Option<DefinitionId> {
+        self.owner_stack.last().and_then(|owner| *owner)
+    }
+
+    /// Gets the `NameId` of the current class/module/singleton block.
+    /// Used to resolve `self` to a concrete `NameId` during indexing.
+    fn current_nesting_name_id(&self) -> Option<NameId> {
+        let parent_nesting_id = self.parent_nesting_id()?;
+        let definition = self.local_graph.definitions().get(parent_nesting_id)?;
+
+        match definition {
+            Definition::Class(class_def) => Some(*class_def.name_id()),
+            Definition::Module(module_def) => Some(*module_def.name_id()),
+            Definition::SingletonClass(block_def) => Some(*block_def.name_id()),
+            _ => None,
+        }
+    }
+
     // Runs the given closure if the given call `node` is invoked directly on `self` for each one of its string or
     // symbol arguments
     fn each_string_or_symbol_arg<F>(node: &ruby_prism::CallNode, mut f: F)
@@ -397,6 +425,121 @@ impl<'a> RubyIndexer<'a> {
         definition_id
     }
 
+    /// Instance variables in class/module body or singleton methods belong to the singleton class.
+    /// Instance variables in regular instance method bodies belong to instances of the class.
+    fn add_instance_variable_definition(&mut self, location: &ruby_prism::Location) -> DefinitionId {
+        let name = Self::location_to_string(location);
+        let str_id = self.local_graph.intern_string(name);
+        let offset = Offset::from_prism_location(location);
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let uri_id = self.uri_id;
+
+        // Determine definition type:
+        // 1. Inside a method body whose owner is a SingletonClass → ClassInstanceVariableDefinition
+        // 2. Inside a method body whose owner is a Class/Module → InstanceVariableDefinition
+        // 3. In class/module/singleton body (not in method) → ClassInstanceVariableDefinition
+        // 4. At top level → InstanceVariableDefinition with no owner
+        let (definition, owner_id) = if let Some(method_owner_id) = self.current_owner() {
+            // Inside a method body - check what owns the method
+            let method_owner = self.local_graph.definitions().get(&method_owner_id).unwrap();
+            match method_owner {
+                Definition::SingletonClass(_) => {
+                    let def = Definition::ClassInstanceVariable(Box::new(ClassInstanceVariableDefinition::new(
+                        str_id,
+                        uri_id,
+                        offset,
+                        comments,
+                        Some(method_owner_id),
+                    )));
+                    (def, Some(method_owner_id))
+                }
+                Definition::Class(_) | Definition::Module(_) => {
+                    let def = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                        str_id,
+                        uri_id,
+                        offset,
+                        comments,
+                        Some(method_owner_id),
+                    )));
+                    (def, Some(method_owner_id))
+                }
+                _ => {
+                    panic!("unexpected method owner type: {:?}", method_owner.kind());
+                }
+            }
+        } else if let Some(&nesting_id) = self.parent_nesting_id() {
+            let def = Definition::ClassInstanceVariable(Box::new(ClassInstanceVariableDefinition::new(
+                str_id,
+                uri_id,
+                offset,
+                comments,
+                Some(nesting_id),
+            )));
+            (def, Some(nesting_id))
+        } else {
+            let def = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                str_id, uri_id, offset, comments, None,
+            )));
+            (def, None)
+        };
+
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(owner_id) = owner_id
+            && let Some(owner) = self.local_graph.get_definition_mut(owner_id)
+        {
+            owner.add_member(definition_id);
+        }
+
+        definition_id
+    }
+
+    /// Class variables bypass singleton blocks - they always belong to the base class/module.
+    fn add_class_variable_definition(&mut self, location: &ruby_prism::Location) -> DefinitionId {
+        let mut owner_id = self
+            .current_owner()
+            .or_else(|| self.parent_nesting_id().copied())
+            .expect("class variable must be defined within a class or module");
+
+        loop {
+            let definition = self
+                .local_graph
+                .definitions()
+                .get(&owner_id)
+                .expect("owner definition must exist");
+            match definition {
+                Definition::Class(_) | Definition::Module(_) => break,
+                Definition::SingletonClass(block) => {
+                    owner_id = block
+                        .owner_id()
+                        .expect("singleton block must have an owner for class variable lookup");
+                }
+                _ => panic!("class variable defined in unexpected scope: {:?}", definition.kind()),
+            }
+        }
+
+        let name = Self::location_to_string(location);
+        let str_id = self.local_graph.intern_string(name);
+        let offset = Offset::from_prism_location(location);
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let uri_id = self.uri_id;
+
+        let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+            str_id,
+            uri_id,
+            offset,
+            comments,
+            Some(owner_id),
+        )));
+        let definition_id = self.local_graph.add_definition(definition);
+
+        if let Some(owner) = self.local_graph.get_definition_mut(owner_id) {
+            owner.add_member(definition_id);
+        }
+
+        definition_id
+    }
+
     fn add_constant_definition(&mut self, node: &ruby_prism::Node, also_add_reference: bool) -> Option<DefinitionId> {
         let name_id = self.index_constant_reference(node, also_add_reference)?;
 
@@ -427,54 +570,41 @@ impl<'a> RubyIndexer<'a> {
         Some(definition_id)
     }
 
-    /// Returns the `NameId` of the current nesting scope (class or module), if any.
-    fn current_nesting_name_id(&self) -> Option<NameId> {
-        self.parent_nesting_id().map(|definition_id| {
-            let definition = self
-                .local_graph
-                .definitions()
-                .get(definition_id)
-                .expect("Definition must exist");
+    fn handle_mixin(&mut self, node: &ruby_prism::CallNode, mixin_type: MixinType) {
+        let Some(arguments) = node.arguments() else {
+            return;
+        };
+
+        // Collect all arguments as constant references. Ignore anything that isn't a constant
+        let reference_ids: Vec<_> = arguments
+            .arguments()
+            .iter()
+            .filter_map(|arg| self.index_constant_reference(&arg, true))
+            .collect();
+
+        if reference_ids.is_empty() {
+            return;
+        }
+
+        let Some(owner_id) = self.parent_nesting_id().copied() else {
+            return;
+        };
+        let Some(definition) = self.local_graph.get_definition_mut(owner_id) else {
+            return;
+        };
+
+        for id in reference_ids {
+            let mixin = match mixin_type {
+                MixinType::Include => Mixin::Include(id),
+                MixinType::Prepend => Mixin::Prepend(id),
+                MixinType::Extend => Mixin::Extend(id),
+            };
 
             match definition {
-                Definition::Class(class_def) => *class_def.name_id(),
-                Definition::Module(module_def) => *module_def.name_id(),
-                _ => panic!("Only classes and modules can be nesting scopes"),
-            }
-        })
-    }
-
-    fn handle_mixin(&mut self, node: &ruby_prism::CallNode, prepend: bool) {
-        if let Some(arguments) = node.arguments() {
-            // Collect all arguments as constant references. Ignore anything that isn't a constant
-            let reference_ids = arguments
-                .arguments()
-                .iter()
-                .filter_map(|arg| self.index_constant_reference(&arg, true))
-                .collect::<Vec<_>>();
-
-            if let Some(owner_id) = self.definitions_stack.last()
-                && let Some(current_owner) = self.local_graph.get_definition_mut(*owner_id)
-            {
-                for id in reference_ids {
-                    match current_owner {
-                        Definition::Class(class_def) => {
-                            if prepend {
-                                class_def.add_mixin(Mixin::Prepend(id));
-                            } else {
-                                class_def.add_mixin(Mixin::Include(id));
-                            }
-                        }
-                        Definition::Module(module_def) => {
-                            if prepend {
-                                module_def.add_mixin(Mixin::Prepend(id));
-                            } else {
-                                module_def.add_mixin(Mixin::Include(id));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                Definition::Class(class_def) => class_def.add_mixin(mixin),
+                Definition::Module(module_def) => module_def.add_mixin(mixin),
+                Definition::SingletonClass(block_def) => block_def.add_mixin(mixin),
+                _ => {}
             }
         }
     }
@@ -612,6 +742,83 @@ impl Visit<'_> for RubyIndexer<'_> {
         }
     }
 
+    fn visit_singleton_class_node(&mut self, node: &ruby_prism::SingletonClassNode) {
+        let expression = node.expression();
+
+        // Determine the attached_target for the singleton class
+        let attached_target = if expression.as_self_node().is_some() {
+            // `class << self` - resolve self to current class/module's NameId
+            self.current_nesting_name_id()
+        } else if matches!(
+            expression,
+            ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }
+        ) {
+            // `class << Foo` or `class << Foo::Bar` - use the constant's NameId
+            self.index_constant_reference(&expression, true)
+        } else {
+            // Dynamic expression (e.g., `class << some_var`) - skip creating definition
+            self.visit(&expression);
+            None
+        };
+
+        // Create SingletonClassDefinition if we have an attached_target
+        let block_id = if let Some(attached_target) = attached_target {
+            let offset = Offset::from_prism_location(&node.location());
+            let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+            let owner_id = self.parent_nesting_id().copied();
+
+            let singleton_class_name = {
+                let name = self
+                    .local_graph
+                    .names()
+                    .get(&attached_target)
+                    .expect("Attached target name should exist");
+                let target_str = self
+                    .local_graph
+                    .strings()
+                    .get(name.str())
+                    .expect("Attached target string should exist");
+                format!("<{target_str}>")
+            };
+
+            let string_id = self.local_graph.intern_string(singleton_class_name);
+            let name_id = self
+                .local_graph
+                .add_name(Name::new(string_id, Some(attached_target), None));
+
+            let definition = Definition::SingletonClass(Box::new(SingletonClassDefinition::new(
+                name_id,
+                attached_target,
+                self.uri_id,
+                offset,
+                comments,
+                owner_id,
+            )));
+
+            let definition_id = self.local_graph.add_definition(definition);
+
+            if let Some(owner_id) = owner_id
+                && let Some(owner) = self.local_graph.get_definition_mut(owner_id)
+            {
+                owner.add_member(definition_id);
+            }
+
+            Some(definition_id)
+        } else {
+            None
+        };
+
+        if let Some(body) = node.body() {
+            if let Some(block_id) = block_id {
+                self.definitions_stack.push(block_id);
+                self.visit(&body);
+                self.definitions_stack.pop();
+            } else {
+                self.visit(&body);
+            }
+        }
+    }
+
     fn visit_constant_and_write_node(&mut self, node: &ruby_prism::ConstantAndWriteNode) {
         self.index_constant_reference(&node.as_node(), true);
         self.visit(&node.value());
@@ -675,24 +882,10 @@ impl Visit<'_> for RubyIndexer<'_> {
                     );
                 }
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
-                    self.add_definition_from_location(
-                        &left.location(),
-                        |str_id, offset, comments, owner_id, uri_id| {
-                            Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                                str_id, uri_id, offset, comments, owner_id,
-                            )))
-                        },
-                    );
+                    self.add_instance_variable_definition(&left.location());
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
-                    self.add_definition_from_location(
-                        &left.location(),
-                        |str_id, offset, comments, owner_id, uri_id| {
-                            Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                                str_id, uri_id, offset, comments, owner_id,
-                            )))
-                        },
-                    );
+                    self.add_class_variable_definition(&left.location());
                 }
                 ruby_prism::Node::CallTargetNode { .. } => {
                     let call_target_node = left.as_call_target_node().unwrap();
@@ -715,9 +908,24 @@ impl Visit<'_> for RubyIndexer<'_> {
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
         let owner_id = self.parent_nesting_id().copied();
         let parameters = self.collect_parameters(node);
-        let is_singleton = node
-            .receiver()
-            .is_some_and(|receiver| receiver.as_self_node().is_some());
+
+        // Determine the receiver for singleton methods
+        let (receiver, owner_id) = if let Some(recv_node) = node.receiver() {
+            match recv_node {
+                // def self.foo - receiver is the current class/module's NameId
+                ruby_prism::Node::SelfNode { .. } => (self.current_nesting_name_id(), owner_id),
+                // def Foo.bar or def Foo::Bar.baz - receiver is the constant's NameId
+                // In this case, the parent nesting is NOT the owner of the method, so we set owner_id to None
+                ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {
+                    let name_id = self.index_constant_reference(&recv_node, true);
+                    (name_id, None)
+                }
+                // Dynamic receiver (def foo.bar) - skip
+                _ => (None, None),
+            }
+        } else {
+            (None, owner_id)
+        };
 
         let method = Definition::Method(Box::new(MethodDefinition::new(
             str_id,
@@ -726,7 +934,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
             owner_id,
             parameters,
-            is_singleton,
+            receiver,
         )));
 
         let definition_id = self.local_graph.add_definition(method);
@@ -736,7 +944,11 @@ impl Visit<'_> for RubyIndexer<'_> {
         }
 
         if let Some(body) = node.body() {
+            // Push the class/module's id as the current owner for ivars inside the method body
+            // Instance variables belong to the class/module, not the method
+            self.owner_stack.push(owner_id);
             self.visit(&body);
+            self.owner_stack.pop();
         }
     }
 
@@ -842,7 +1054,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             "include" => {
                 let receiver = node.receiver();
                 if receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some()) {
-                    self.handle_mixin(node, false);
+                    self.handle_mixin(node, MixinType::Include);
                 } else {
                     self.visit_call_node_parts(node);
                 }
@@ -850,7 +1062,15 @@ impl Visit<'_> for RubyIndexer<'_> {
             "prepend" => {
                 let receiver = node.receiver();
                 if receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some()) {
-                    self.handle_mixin(node, true);
+                    self.handle_mixin(node, MixinType::Prepend);
+                } else {
+                    self.visit_call_node_parts(node);
+                }
+            }
+            "extend" => {
+                let receiver = node.receiver();
+                if receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some()) {
+                    self.handle_mixin(node, MixinType::Extend);
                 } else {
                     self.visit_call_node_parts(node);
                 }
@@ -923,20 +1143,12 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
-            Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                str_id, uri_id, offset, comments, owner_id,
-            )))
-        });
+        self.add_instance_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
     fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
-            Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                str_id, uri_id, offset, comments, owner_id,
-            )))
-        });
+        self.add_class_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
@@ -977,7 +1189,9 @@ impl Visit<'_> for RubyIndexer<'_> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        model::definitions::{Definition, Mixin, Parameter},
+        model::definitions::{
+            ClassInstanceVariableDefinition, Definition, MethodDefinition, Mixin, Parameter, SingletonClassDefinition,
+        },
         test_utils::LocalGraphTest,
     };
 
@@ -995,6 +1209,81 @@ mod tests {
         }};
     }
 
+    fn singleton_class_definition<'a>(
+        context: &'a LocalGraphTest,
+        expected_attached_target: &str,
+    ) -> &'a SingletonClassDefinition {
+        context
+            .graph()
+            .definitions()
+            .values()
+            .find_map(|definition| match definition {
+                Definition::SingletonClass(singleton) => {
+                    let name = context.graph().names().get(singleton.attached_target()).unwrap();
+                    let actual_name = context.graph().strings().get(name.str()).unwrap();
+                    if actual_name == expected_attached_target {
+                        Some(singleton.as_ref())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!("singleton class definition with attached_target '{expected_attached_target}' not found")
+            })
+    }
+
+    fn method_has_receiver(context: &LocalGraphTest, method: &MethodDefinition, expected_receiver: &str) -> bool {
+        if let Some(receiver_name_id) = method.receiver() {
+            let name = context.graph().names().get(receiver_name_id).unwrap();
+            let actual_name = context.graph().strings().get(name.str()).unwrap();
+            actual_name == expected_receiver
+        } else {
+            false
+        }
+    }
+
+    fn method_definition<'a>(context: &'a LocalGraphTest, expected_name: &str) -> &'a MethodDefinition {
+        context
+            .graph()
+            .definitions()
+            .values()
+            .find_map(|definition| match definition {
+                Definition::Method(method) => {
+                    let actual_name = context.graph().strings().get(method.str_id()).unwrap();
+                    if actual_name == expected_name {
+                        Some(method.as_ref())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("method definition '{expected_name}' not found"))
+    }
+
+    fn class_instance_variable_definition<'a>(
+        context: &'a LocalGraphTest,
+        expected_name: &str,
+    ) -> &'a ClassInstanceVariableDefinition {
+        context
+            .graph()
+            .definitions()
+            .values()
+            .find_map(|definition| match definition {
+                Definition::ClassInstanceVariable(def) => {
+                    let actual_name = context.graph().strings().get(def.str_id()).unwrap();
+                    if actual_name == expected_name {
+                        Some(def.as_ref())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("class instance variable definition '{expected_name}' not found"))
+    }
     macro_rules! assert_name_eq {
         ($context:expr, $expect_name_string:expr, $def:expr) => {{
             let actual_name = $context.graph().strings().get($def.str_id()).unwrap();
@@ -1010,7 +1299,7 @@ mod tests {
     /// - `assert_name_id_to_string_eq!(ctx, "Foo::Bar::Baz", def)` - asserts the full path `Foo::Bar::Baz`
     /// - `assert_name_id_to_string_eq!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
     macro_rules! assert_name_id_to_string_eq {
-        ($context:expr, $expect_path:expr, $def:expr) => {{
+        ($context:expr, $expect_path:expr, $name_id:expr) => {{
             let segments: Vec<&str> = $expect_path.split("::").collect();
             assert!(!segments.is_empty(), "expected path must have at least one segment");
 
@@ -1018,7 +1307,7 @@ mod tests {
             let expected_name = segments.last().unwrap();
             let expected_parents: Vec<&str> = segments[..segments.len() - 1].iter().rev().copied().collect();
 
-            let name = $context.graph().names().get($def.name_id()).unwrap();
+            let name = $context.graph().names().get($name_id).unwrap();
             let actual_name = $context.graph().strings().get(name.str()).unwrap();
             assert_eq!(
                 *expected_name, actual_name,
@@ -1118,7 +1407,7 @@ mod tests {
                 .iter()
                 .filter_map(|mixin| {
                     if let Mixin::Include(name_id) = mixin {
-                        let name = $context.graph().names().get(name_id).unwrap();
+                        let name = $context.graph().names().get(&name_id).unwrap();
                         Some($context.graph().strings().get(name.str()).unwrap().as_str())
                     } else {
                         None
@@ -1156,6 +1445,25 @@ mod tests {
         }};
     }
 
+    macro_rules! assert_extends_eq {
+        ($context:expr, $def:expr, $expected_names:expr) => {{
+            let actual_names = $def
+                .mixins()
+                .iter()
+                .filter_map(|mixin| {
+                    if let Mixin::Extend(name_id) = mixin {
+                        let name = $context.graph().names().get(&name_id).unwrap();
+                        Some($context.graph().strings().get(name.str()).unwrap().as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!($expected_names, actual_names);
+        }};
+    }
+
     fn index_source(source: &str) -> LocalGraphTest {
         LocalGraphTest::new("file:///foo.rb", source)
     }
@@ -1171,7 +1479,7 @@ mod tests {
         // We still index the definition, even though it has errors
         assert_eq!(context.graph().definitions().len(), 1);
         assert_definition_at!(&context, "1:1-2:1", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo", def);
+            assert_name_id_to_string_eq!(&context, "Foo", def.name_id());
         });
 
         assert_eq!(
@@ -1222,14 +1530,14 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo", def);
+            assert_name_id_to_string_eq!(&context, "Foo", def.name_id());
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Bar", def);
+            assert_name_id_to_string_eq!(&context, "Bar", def.name_id());
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -1240,7 +1548,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:19", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Baz", def);
+            assert_name_id_to_string_eq!(&context, "Baz", def.name_id());
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -1266,14 +1574,14 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
+            assert_name_id_to_string_eq!(&context, "Foo::Bar", def.name_id());
             assert!(def.superclass_ref().is_none());
             assert!(def.owner_id().is_none());
             assert_eq!(1, def.members().len());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Baz::Qux", def);
+            assert_name_id_to_string_eq!(&context, "Baz::Qux", def.name_id());
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -1284,7 +1592,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:23", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Quuux", def);
+            assert_name_id_to_string_eq!(&context, "Quuux", def.name_id());
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -1292,6 +1600,23 @@ mod tests {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
+        });
+    }
+
+    #[test]
+    fn index_def_self_in_class_sets_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar; end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+            let method = method_definition(&context, "bar");
+            assert_eq!(method.owner_id(), &Some(class_def.id()));
+            assert!(method_has_receiver(&context, method, "Foo"));
         });
     }
 
@@ -1321,13 +1646,13 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo", def);
+            assert_name_id_to_string_eq!(&context, "Foo", def.name_id());
             assert_eq!(1, def.members().len());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Bar", def);
+            assert_name_id_to_string_eq!(&context, "Bar", def.name_id());
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -1337,12 +1662,30 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:20", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Baz", def);
+            assert_name_id_to_string_eq!(&context, "Baz", def.name_id());
+            assert!(def.members().is_empty());
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
+        });
+    }
+
+    #[test]
+    fn index_def_self_in_module_sets_receiver() {
+        let context = index_source({
+            "
+            module Foo
+              def self.bar; end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-3:4", Module, |module_def| {
+            let method = method_definition(&context, "bar");
+            assert_eq!(method.owner_id(), &Some(module_def.id()));
+            assert!(method_has_receiver(&context, method, "Foo"));
         });
     }
 
@@ -1361,13 +1704,13 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
+            assert_name_id_to_string_eq!(&context, "Foo::Bar", def.name_id());
             assert_eq!(1, def.members().len());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Baz::Qux", def);
+            assert_name_id_to_string_eq!(&context, "Baz::Qux", def.name_id());
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -1377,7 +1720,8 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:24", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Quuux", def);
+            assert_name_id_to_string_eq!(&context, "Quuux", def.name_id());
+            assert!(def.members().is_empty());
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1412,12 +1756,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def.name_id());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def.name_id());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1442,12 +1786,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert_name_id_to_string_eq!(&context, "FOO::BAR", def.name_id());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert_name_id_to_string_eq!(&context, "FOO::BAR", def.name_id());
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1456,7 +1800,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "5:3-5:8", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAZ", def.name_id());
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1480,12 +1824,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def.name_id());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAZ", def.name_id());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1512,12 +1856,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert_name_id_to_string_eq!(&context, "FOO::BAR", def.name_id());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert_name_id_to_string_eq!(&context, "FOO::BAR", def.name_id());
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1526,7 +1870,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "5:3-5:8", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAZ", def.name_id());
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1552,16 +1896,16 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def.name_id());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAR::BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAR::BAZ", def.name_id());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_name_id_to_string_eq!(&context, "FOO", def.name_id());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1570,7 +1914,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAR::BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAR::BAZ", def.name_id());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1579,7 +1923,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAZ", def);
+            assert_name_id_to_string_eq!(&context, "BAZ", def.name_id());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1598,22 +1942,24 @@ mod tests {
               def bar; end
               def self.baz; end
             end
+
+            class Bar
+              def Foo.quz; end
+            end
             "
         });
 
-        assert_eq!(context.graph().definitions().len(), 4);
+        assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:1-1:13", Method, |def| {
             assert_name_eq!(&context, "foo", def);
             assert_eq!(def.parameters().len(), 0);
-            assert!(!def.is_singleton());
             assert!(def.owner_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:15", Method, |def| {
             assert_name_eq!(&context, "bar", def);
             assert_eq!(def.parameters().len(), 0);
-            assert!(!def.is_singleton());
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
@@ -1624,11 +1970,406 @@ mod tests {
         assert_definition_at!(&context, "5:3-5:20", Method, |def| {
             assert_name_eq!(&context, "baz", def);
             assert_eq!(def.parameters().len(), 0);
-            assert!(def.is_singleton());
+            assert_definition_at!(&context, "3:1-6:4", Class, |class_def| {
+                assert_eq!(class_def.id(), def.owner_id().unwrap());
+            });
+            assert!(method_has_receiver(&context, def, "Foo"));
+        });
 
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
-                assert_eq!(parent_nesting.members()[1], def.id());
+        assert_definition_at!(&context, "9:3-9:19", Method, |def| {
+            assert_name_eq!(&context, "quz", def);
+            assert_eq!(def.parameters().len(), 0);
+            assert!(def.owner_id().is_none());
+            assert!(method_has_receiver(&context, def, "Foo"));
+        });
+    }
+
+    #[test]
+    fn def_self_method_has_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar; end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+            let method = method_definition(&context, "bar");
+            assert_eq!(method.owner_id(), &Some(class_def.id()));
+            assert!(method_has_receiver(&context, method, "Foo"));
+        });
+    }
+
+    #[test]
+    fn index_class_self_block_creates_singleton_class() {
+        let context = index_source({
+            "
+            class Bar; end
+
+            class Foo
+              class << self
+                def baz; end
+
+                class << Bar
+                  def self.qux; end
+                end
+
+                class << self
+                  def quz; end
+                end
+              end
+            end
+            "
+        });
+
+        // class Bar
+        assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
+            assert_name_id_to_string_eq!(&context, "Bar", bar_class.name_id());
+        });
+
+        // class Foo
+        assert_definition_at!(&context, "3:1-15:4", Class, |foo_class| {
+            assert_name_id_to_string_eq!(&context, "Foo", foo_class.name_id());
+
+            // class << self (inside Foo)
+            assert_definition_at!(&context, "4:3-14:6", SingletonClass, |foo_singleton| {
+                assert_name_id_to_string_eq!(&context, "Foo::<Foo>", foo_singleton.name_id());
+                assert_name_id_to_string_eq!(&context, "Foo", foo_singleton.attached_target());
+                assert_eq!(foo_singleton.owner_id(), &Some(foo_class.id()));
+
+                // def baz (inside class << self)
+                assert_definition_at!(&context, "5:5-5:17", Method, |baz_method| {
+                    assert_eq!(baz_method.owner_id(), &Some(foo_singleton.id()));
+                });
+
+                // class << Bar (inside class << self of Foo)
+                assert_definition_at!(&context, "7:5-9:8", SingletonClass, |bar_singleton| {
+                    assert_name_id_to_string_eq!(&context, "Bar::<Bar>", bar_singleton.name_id());
+                    assert_name_id_to_string_eq!(&context, "Bar", bar_singleton.attached_target());
+                    assert_eq!(bar_singleton.owner_id(), &Some(foo_singleton.id()));
+
+                    // def self.qux (inside class << Bar)
+                    assert_definition_at!(&context, "8:7-8:24", Method, |qux_method| {
+                        assert_eq!(qux_method.owner_id(), &Some(bar_singleton.id()));
+                    });
+                });
+
+                // class << self (nested inside outer class << self)
+                assert_definition_at!(&context, "11:5-13:8", SingletonClass, |nested_singleton| {
+                    assert_name_id_to_string_eq!(&context, "Foo::<Foo>::<<Foo>>", nested_singleton.name_id());
+                    assert_name_id_to_string_eq!(&context, "Foo::<Foo>", nested_singleton.attached_target());
+                    assert_eq!(nested_singleton.owner_id(), &Some(foo_singleton.id()));
+
+                    // def quz (inside nested class << self)
+                    assert_definition_at!(&context, "12:7-12:19", Method, |quz_method| {
+                        assert_eq!(quz_method.owner_id(), &Some(nested_singleton.id()));
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn class_shovel_on_constant_creates_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              def self.foo; end
+            end
+
+            class << Foo
+              def bar
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+            let foo_method = method_definition(&context, "foo");
+            assert_eq!(foo_method.owner_id(), &Some(class_def.id()));
+            assert!(method_has_receiver(&context, foo_method, "Foo"));
+        });
+
+        let block = singleton_class_definition(&context, "Foo");
+        let bar_method = method_definition(&context, "bar");
+        assert_eq!(bar_method.owner_id(), &Some(block.id()));
+        assert!(bar_method.receiver().is_none());
+    }
+
+    #[test]
+    fn def_with_constant_receiver_sets_receiver() {
+        let context = index_source({
+            "
+            def Foo.bar; end
+            "
+        });
+
+        let method = method_definition(&context, "bar");
+        assert_eq!(method.owner_id(), &None);
+        assert!(method_has_receiver(&context, method, "Foo"));
+    }
+
+    #[test]
+    fn def_with_constant_receiver_in_class() {
+        let context = index_source({
+            "
+            class Foo
+              def self.existing; end
+            end
+
+            def Foo.bar; end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+            let existing_method = method_definition(&context, "existing");
+            assert_eq!(existing_method.owner_id(), &Some(class_def.id()));
+            assert!(method_has_receiver(&context, existing_method, "Foo"));
+        });
+
+        let bar_method = method_definition(&context, "bar");
+        assert_eq!(bar_method.owner_id(), &None);
+        assert!(method_has_receiver(&context, bar_method, "Foo"));
+    }
+
+    #[test]
+    fn compact_namespace_creates_singleton_class() {
+        let context = index_source({
+            "
+            class Foo::Bar
+              class << self
+                def baz; end
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_name_id_to_string_eq!(&context, "Foo::Bar", class_def.name_id());
+            let block = singleton_class_definition(&context, "Bar");
+            assert_eq!(block.owner_id(), &Some(class_def.id()));
+            let method = method_definition(&context, "baz");
+            assert_eq!(Some(block.id()), method.owner_id().clone());
+        });
+
+        assert_constant_references_eq!(&context, vec!["Foo"]);
+    }
+
+    #[test]
+    fn nested_class_shovel_self_creates_nested_blocks() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                def on_foo_singleton; end
+
+                class << self
+                  def on_singleton_singleton; end
+                end
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-9:4", Class, |class_def| {
+            let on_foo_singleton = method_definition(&context, "on_foo_singleton");
+            let on_singleton_singleton = method_definition(&context, "on_singleton_singleton");
+
+            assert_ne!(on_foo_singleton.owner_id(), on_singleton_singleton.owner_id());
+
+            if let Some(outer_block_id) = on_foo_singleton.owner_id() {
+                let outer_block = context.graph().definitions().get(outer_block_id).unwrap();
+                assert_eq!(outer_block.kind(), "SingletonClass");
+                assert_eq!(outer_block.owner_id(), &Some(class_def.id()));
+            }
+        });
+    }
+
+    #[test]
+    fn singleton_methods_in_nested_class() {
+        let context = index_source({
+            "
+            class Foo
+              def self.foo_method; end
+
+              class Bar
+                def self.bar_method; end
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-7:4", Class, |foo_def| {
+            assert_definition_at!(&context, "4:3-6:6", Class, |bar_def| {
+                let foo_method = method_definition(&context, "foo_method");
+                assert_eq!(foo_method.owner_id(), &Some(foo_def.id()));
+                assert!(method_has_receiver(&context, foo_method, "Foo"));
+
+                let bar_method = method_definition(&context, "bar_method");
+                assert_eq!(bar_method.owner_id(), &Some(bar_def.id()));
+                assert!(method_has_receiver(&context, bar_method, "Bar"));
+            });
+        });
+    }
+
+    #[test]
+    fn extend_stored_on_class_with_mixin_extend() {
+        let context = index_source({
+            "
+            class Foo
+              extend Bar
+              extend Baz
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
+            assert_extends_eq!(&context, class_def, vec!["Bar", "Baz"]);
+        });
+    }
+
+    #[test]
+    fn instance_variable_in_class_body_creates_class_instance_variable() {
+        let context = index_source({
+            "
+            class Foo
+              @bar = 1
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+            let class_ivar = class_instance_variable_definition(&context, "@bar");
+            assert_eq!(class_ivar.owner_id(), &Some(class_def.id()));
+        });
+    }
+
+    #[test]
+    fn instance_variable_in_singleton_method_owned_by_class() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar
+                @baz = 1
+              end
+            end
+            "
+        });
+
+        let method = method_definition(&context, "bar");
+        assert!(method_has_receiver(&context, method, "Foo"));
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
+                assert_name_eq!(&context, "@baz", def);
+                assert_eq!(Some(class_def.id()), def.owner_id().clone());
+            });
+        });
+    }
+
+    #[test]
+    fn instance_variable_in_singleton_block_method_creates_class_instance_variable() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                def bar
+                  @baz = 1
+                end
+              end
+            end
+            "
+        });
+
+        let singleton_class = singleton_class_definition(&context, "Foo");
+        let method = method_definition(&context, "bar");
+        assert_eq!(method.owner_id(), &Some(singleton_class.id()));
+
+        let class_ivar = class_instance_variable_definition(&context, "@baz");
+        assert_eq!(class_ivar.owner_id(), &Some(singleton_class.id()));
+    }
+
+    #[test]
+    fn constant_in_class_shovel_self_owned_by_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                A = 1
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            let block = singleton_class_definition(&context, "Foo");
+            assert_eq!(block.owner_id(), &Some(class_def.id()));
+            assert_definition_at!(&context, "3:5-3:6", Constant, |def| {
+                assert_name_id_to_string_eq!(&context, "A", def.name_id());
+                assert_eq!(Some(block.id()), def.owner_id().clone());
+            });
+        });
+    }
+
+    #[test]
+    fn class_variable_in_class_shovel_self_belongs_to_class() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                @@var = 1
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
+                assert_name_eq!(&context, "@@var", def);
+                assert_eq!(Some(class_def.id()), def.owner_id().clone());
+            });
+        });
+    }
+
+    #[test]
+    fn class_variable_in_nested_singleton_belongs_to_class() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                class << self
+                  @@var = 1
+                end
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-7:4", Class, |class_def| {
+            assert_definition_at!(&context, "4:7-4:12", ClassVariable, |def| {
+                assert_name_eq!(&context, "@@var", def);
+                assert_eq!(Some(class_def.id()), def.owner_id().clone());
+            });
+        });
+    }
+
+    #[test]
+    fn class_variable_in_singleton_method_belongs_to_class() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar
+                @@var = 1
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
+                assert_name_eq!(&context, "@@var", def);
+                assert_eq!(Some(class_def.id()), def.owner_id().clone());
             });
         });
     }
@@ -1924,31 +2665,53 @@ mod tests {
             assert!(def.owner_id().is_none());
         });
 
-        assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@bar", def);
+        assert_definition_at!(&context, "3:1-6:4", Class, |class_def| {
+            assert_definition_at!(&context, "4:3-4:7", ClassInstanceVariable, |def| {
+                assert_name_eq!(&context, "@bar", def);
+                assert_eq!(Some(class_def.id()), def.owner_id().clone());
+            });
 
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
-                assert_eq!(parent_nesting.members()[0], def.id());
+            assert_definition_at!(&context, "5:3-5:7", ClassInstanceVariable, |def| {
+                assert_name_eq!(&context, "@baz", def);
+                assert_eq!(Some(class_def.id()), def.owner_id().clone());
+            });
+
+            assert_definition_at!(&context, "5:9-5:13", ClassInstanceVariable, |def| {
+                assert_name_eq!(&context, "@qux", def);
+                assert_eq!(Some(class_def.id()), def.owner_id().clone());
             });
         });
+    }
 
-        assert_definition_at!(&context, "5:3-5:7", InstanceVariable, |def| {
+    #[test]
+    fn instance_variable_inside_instance_method_keeps_class_owner() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                @baz = 1
+              end
+            end
+            "
+        });
+
+        let class_owner_id = context
+            .graph()
+            .definitions()
+            .values()
+            .find_map(|definition| match definition {
+                Definition::Class(class_def) => {
+                    let name = context.graph().names().get(class_def.name_id()).unwrap();
+                    let str_name = context.graph().strings().get(name.str()).unwrap();
+                    if str_name == "Foo" { Some(class_def.id()) } else { None }
+                }
+                _ => None,
+            })
+            .expect("class Foo definition");
+
+        assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
             assert_name_eq!(&context, "@baz", def);
-
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
-                assert_eq!(parent_nesting.members()[1], def.id());
-            });
-        });
-
-        assert_definition_at!(&context, "5:9-5:13", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@qux", def);
-
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
-                assert_eq!(parent_nesting.members()[2], def.id());
-            });
+            assert_eq!(Some(class_owner_id), def.owner_id().clone());
         });
     }
 
@@ -1956,46 +2719,81 @@ mod tests {
     fn index_class_variable_definition() {
         let context = index_source({
             "
-            @@foo = 1
-
             class Foo
               @@bar = 2
               @@baz, @@qux = 3, 4
             end
             "
         });
+        assert_eq!(context.graph().definitions().len(), 4);
 
-        assert_eq!(context.graph().definitions().len(), 5);
-
-        assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
-            assert_name_eq!(&context, "@@foo", def);
-            assert!(def.owner_id().is_none());
-        });
-
-        assert_definition_at!(&context, "4:3-4:8", ClassVariable, |def| {
+        assert_definition_at!(&context, "2:3-2:8", ClassVariable, |def| {
             assert_name_eq!(&context, "@@bar", def);
 
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+            assert_definition_at!(&context, "1:1-4:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
 
-        assert_definition_at!(&context, "5:3-5:8", ClassVariable, |def| {
+        assert_definition_at!(&context, "3:3-3:8", ClassVariable, |def| {
             assert_name_eq!(&context, "@@baz", def);
 
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+            assert_definition_at!(&context, "1:1-4:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
 
-        assert_definition_at!(&context, "5:10-5:15", ClassVariable, |def| {
+        assert_definition_at!(&context, "3:10-3:15", ClassVariable, |def| {
             assert_name_eq!(&context, "@@qux", def);
 
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+            assert_definition_at!(&context, "1:1-4:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_definition_in_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                @@bar = 2
+                class << self
+                  @@baz = 3
+                end
+              end
+            end
+            "
+        });
+        assert_eq!(context.graph().definitions().len(), 5);
+
+        assert_definition_at!(&context, "2:3-7:6", SingletonClass, |singleton_class| {
+            assert_name_id_to_string_eq!(&context, "Foo::<Foo>", singleton_class.name_id());
+            assert_name_id_to_string_eq!(&context, "Foo", singleton_class.attached_target());
+        });
+
+        assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
+            assert_name_eq!(&context, "@@bar", def);
+
+            assert_definition_at!(&context, "1:1-8:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+            });
+        });
+
+        assert_definition_at!(&context, "4:5-6:8", SingletonClass, |singleton_class| {
+            assert_name_id_to_string_eq!(&context, "Foo::<Foo>::<<Foo>>", singleton_class.name_id());
+            assert_name_id_to_string_eq!(&context, "Foo::<Foo>", singleton_class.attached_target());
+        });
+
+        assert_definition_at!(&context, "5:7-5:12", ClassVariable, |def| {
+            assert_name_eq!(&context, "@@baz", def);
+
+            assert_definition_at!(&context, "1:1-8:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
             });
         });
     }
@@ -2036,12 +2834,12 @@ mod tests {
         });
 
         assert_definition_at!(&context, "2:1-2:18", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Single", def);
+            assert_name_id_to_string_eq!(&context, "Single", def.name_id());
             assert_comments_eq!(&context, def, vec!["# Single comment"]);
         });
 
         assert_definition_at!(&context, "7:1-7:18", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Multi", def);
+            assert_name_id_to_string_eq!(&context, "Multi", def.name_id());
             assert_comments_eq!(
                 &context,
                 def,
@@ -2054,12 +2852,12 @@ mod tests {
         });
 
         assert_definition_at!(&context, "12:1-12:28", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "EmptyCommentLine", def);
+            assert_name_id_to_string_eq!(&context, "EmptyCommentLine", def.name_id());
             assert_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
         });
 
         assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "NoGap", def);
+            assert_name_id_to_string_eq!(&context, "NoGap", def.name_id());
             assert_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
         });
 
@@ -2069,12 +2867,12 @@ mod tests {
         });
 
         assert_definition_at!(&context, "23:1-23:21", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "BlankLine", def);
+            assert_name_id_to_string_eq!(&context, "BlankLine", def.name_id());
             assert_comments_eq!(&context, def, vec!["# Comment with blank line"]);
         });
 
         assert_definition_at!(&context, "28:1-28:21", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "NoComment", def);
+            assert_name_id_to_string_eq!(&context, "NoComment", def.name_id());
             assert!(def.comments().is_empty());
         });
     }
@@ -2099,22 +2897,22 @@ mod tests {
         });
 
         assert_definition_at!(&context, "2:1-12:4", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Outer", def);
+            assert_name_id_to_string_eq!(&context, "Outer", def.name_id());
             assert_comments_eq!(&context, def, vec!["# Outer class"]);
         });
 
         assert_definition_at!(&context, "4:3-7:6", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Inner", def);
+            assert_name_id_to_string_eq!(&context, "Inner", def.name_id());
             assert_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
         });
 
         assert_definition_at!(&context, "6:5-6:20", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Deep", def);
+            assert_name_id_to_string_eq!(&context, "Deep", def.name_id());
             assert_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
         });
 
         assert_definition_at!(&context, "11:3-11:26", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "AnotherInner", def);
+            assert_name_id_to_string_eq!(&context, "AnotherInner", def.name_id());
             assert_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
         });
     }
