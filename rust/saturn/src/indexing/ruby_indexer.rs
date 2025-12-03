@@ -13,6 +13,7 @@ use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
 use crate::model::name::Name;
 use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::visibility::Visibility;
 use crate::offset::Offset;
 
 use ruby_prism::{ParseResult, Visit};
@@ -37,6 +38,7 @@ pub struct RubyIndexer<'a> {
     errors: Vec<Errors>,
     comments: Vec<CommentGroup>,
     definitions_stack: Vec<DefinitionId>,
+    visibility_stack: Vec<Visibility>,
 }
 
 impl<'a> RubyIndexer<'a> {
@@ -52,6 +54,7 @@ impl<'a> RubyIndexer<'a> {
             errors: Vec::new(),
             comments: Vec::new(),
             definitions_stack: Vec::new(),
+            visibility_stack: vec![Visibility::Private],
         }
     }
 
@@ -513,6 +516,11 @@ impl<'a> RubyIndexer<'a> {
         let parent_id = self.parent_nesting_id()?;
         self.local_graph.get_definition_mut(*parent_id)
     }
+
+    #[must_use]
+    fn current_visibility(&self) -> &Visibility {
+        self.visibility_stack.last().unwrap()
+    }
 }
 
 struct CommentGroup {
@@ -581,11 +589,13 @@ impl Visit<'_> for RubyIndexer<'_> {
             }
 
             self.definitions_stack.push(definition_id);
+            self.visibility_stack.push(Visibility::Public);
 
             if let Some(body) = node.body() {
                 self.visit(&body);
             }
 
+            self.visibility_stack.pop();
             self.definitions_stack.pop();
         }
     }
@@ -611,11 +621,13 @@ impl Visit<'_> for RubyIndexer<'_> {
             }
 
             self.definitions_stack.push(definition_id);
+            self.visibility_stack.push(Visibility::Public);
 
             if let Some(body) = node.body() {
                 self.visit(&body);
             }
 
+            self.visibility_stack.pop();
             self.definitions_stack.pop();
         }
     }
@@ -818,6 +830,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             lexical_nesting_id,
             parameters,
             node.receiver().is_some(),
+            visibility,
         )));
 
         let definition_id = self.local_graph.add_definition(method);
@@ -952,6 +965,19 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.handle_mixin(node, MixinType::Extend);
                 } else {
                     self.visit_call_node_parts(node);
+                }
+            }
+            "private" | "protected" | "public" => {
+                if let Some(_receiver) = node.receiver() {
+                    self.visit_call_node_parts(node);
+                    return;
+                }
+
+                self.visibility_stack.push(Visibility::from_string(message.as_str()));
+
+                if let Some(arguments) = node.arguments() {
+                    self.visit_arguments_node(&arguments);
+                    self.visibility_stack.pop();
                 }
             }
             _ => {
@@ -1122,7 +1148,10 @@ impl Visit<'_> for RubyIndexer<'_> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        model::definitions::{Definition, Mixin, Parameter},
+        model::{
+            definitions::{Definition, Mixin, Parameter},
+            visibility::Visibility,
+        },
         test_utils::LocalGraphTest,
     };
 
@@ -2061,6 +2090,83 @@ mod tests {
             assert_parameter!(&def.parameters()[0], Forward, |param| {
                 assert_string_eq!(context, param.str(), "...");
             });
+        });
+    }
+
+    #[test]
+    fn index_def_node_with_visibility_top_level() {
+        let context = index_source({
+            "
+            def m1; end
+
+            protected def m2; end
+
+            public
+
+            def m3; end
+            "
+        });
+
+        assert_definition_at!(&context, "1:1-1:12", Method, |def| {
+            assert_name_eq!(&context, "m1", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "3:11-3:22", Method, |def| {
+            assert_name_eq!(&context, "m2", def);
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+
+        assert_definition_at!(&context, "7:1-7:12", Method, |def| {
+            assert_name_eq!(&context, "m3", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_def_node_with_visibility_nested() {
+        let context = index_source({
+            "
+            protected
+
+            class Foo
+              def m1; end
+
+              private
+
+              module Bar
+                def m2; end
+
+                private
+
+                def m3; end
+
+                protected
+              end
+
+              def m4; end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "4:3-4:14", Method, |def| {
+            assert_name_eq!(&context, "m1", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "9:5-9:16", Method, |def| {
+            assert_name_eq!(&context, "m2", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "13:5-13:16", Method, |def| {
+            assert_name_eq!(&context, "m3", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "18:3-18:14", Method, |def| {
+            assert_name_eq!(&context, "m4", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
         });
     }
 
