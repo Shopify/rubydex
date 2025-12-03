@@ -384,10 +384,10 @@ impl<'a> RubyIndexer<'a> {
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(location);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let owner_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_nesting_id().copied();
         let uri_id = self.uri_id;
 
-        let definition = builder(str_id, offset, comments, owner_id, uri_id);
+        let definition = builder(str_id, offset, comments, lexical_nesting_id, uri_id);
         let definition_id = self.local_graph.add_definition(definition);
 
         if let Some(parent_nesting) = self.parent_nesting() {
@@ -409,14 +409,14 @@ impl<'a> RubyIndexer<'a> {
 
         let offset = Offset::from_prism_location(&location);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let owner_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_nesting_id().copied();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
             name_id,
             self.uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
         )));
         let definition_id = self.local_graph.add_definition(definition);
 
@@ -453,8 +453,8 @@ impl<'a> RubyIndexer<'a> {
                 .filter_map(|arg| self.index_constant_reference(&arg, true))
                 .collect::<Vec<_>>();
 
-            if let Some(owner_id) = self.definitions_stack.last()
-                && let Some(current_owner) = self.local_graph.get_definition_mut(*owner_id)
+            if let Some(lexical_nesting_id) = self.definitions_stack.last()
+                && let Some(current_owner) = self.local_graph.get_definition_mut(*lexical_nesting_id)
             {
                 for id in reference_ids {
                     match current_owner {
@@ -553,7 +553,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let owner_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_nesting_id().copied();
         let superclass = node.superclass().and_then(|n| self.index_constant_reference(&n, true));
 
         if let Some(name_id) = self.index_constant_reference(&node.constant_path(), false) {
@@ -562,7 +562,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 self.uri_id,
                 offset,
                 comments,
-                owner_id,
+                lexical_nesting_id,
                 superclass,
             )));
 
@@ -585,7 +585,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let owner_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_nesting_id().copied();
 
         if let Some(constant_ref_id) = self.index_constant_reference(&node.constant_path(), false) {
             let definition = Definition::Module(Box::new(ModuleDefinition::new(
@@ -593,7 +593,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 self.uri_id,
                 offset,
                 comments,
-                owner_id,
+                lexical_nesting_id,
             )));
 
             let definition_id = self.local_graph.add_definition(definition);
@@ -667,9 +667,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     self.add_definition_from_location(
                         &left.location(),
-                        |str_id, offset, comments, owner_id, uri_id| {
+                        |str_id, offset, comments, lexical_nesting_id, uri_id| {
                             Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                                str_id, uri_id, offset, comments, owner_id,
+                                str_id,
+                                uri_id,
+                                offset,
+                                comments,
+                                lexical_nesting_id,
                             )))
                         },
                     );
@@ -677,9 +681,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
                     self.add_definition_from_location(
                         &left.location(),
-                        |str_id, offset, comments, owner_id, uri_id| {
+                        |str_id, offset, comments, lexical_nesting_id, uri_id| {
                             Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                                str_id, uri_id, offset, comments, owner_id,
+                                str_id,
+                                uri_id,
+                                offset,
+                                comments,
+                                lexical_nesting_id,
                             )))
                         },
                     );
@@ -687,9 +695,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
                     self.add_definition_from_location(
                         &left.location(),
-                        |str_id, offset, comments, owner_id, uri_id| {
+                        |str_id, offset, comments, lexical_nesting_id, uri_id| {
                             Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                                str_id, uri_id, offset, comments, owner_id,
+                                str_id,
+                                uri_id,
+                                offset,
+                                comments,
+                                lexical_nesting_id,
                             )))
                         },
                     );
@@ -713,7 +725,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let owner_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_nesting_id().copied();
         let parameters = self.collect_parameters(node);
         let is_singleton = node
             .receiver()
@@ -724,7 +736,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
             parameters,
             is_singleton,
         )));
@@ -751,7 +763,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
             Self::each_string_or_symbol_arg(call, |name, location| {
                 let str_id = self.local_graph.intern_string(name);
-                let owner_id = self.parent_nesting_id().copied();
+                let lexical_nesting_id = self.parent_nesting_id().copied();
                 let offset = Offset::from_prism_location(&location);
                 let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
@@ -761,21 +773,21 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.uri_id,
                         offset,
                         comments,
-                        owner_id,
+                        lexical_nesting_id,
                     ))),
                     AttrKind::Reader => Definition::AttrReader(Box::new(AttrReaderDefinition::new(
                         str_id,
                         self.uri_id,
                         offset,
                         comments,
-                        owner_id,
+                        lexical_nesting_id,
                     ))),
                     AttrKind::Writer => Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
                         str_id,
                         self.uri_id,
                         offset,
                         comments,
-                        owner_id,
+                        lexical_nesting_id,
                     ))),
                 };
 
@@ -914,29 +926,50 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
-            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                str_id, uri_id, offset, comments, owner_id,
-            )))
-        });
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, lexical_nesting_id, uri_id| {
+                Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                    str_id,
+                    uri_id,
+                    offset,
+                    comments,
+                    lexical_nesting_id,
+                )))
+            },
+        );
         self.visit(&node.value());
     }
 
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
-            Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                str_id, uri_id, offset, comments, owner_id,
-            )))
-        });
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, lexical_nesting_id, uri_id| {
+                Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                    str_id,
+                    uri_id,
+                    offset,
+                    comments,
+                    lexical_nesting_id,
+                )))
+            },
+        );
         self.visit(&node.value());
     }
 
     fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, owner_id, uri_id| {
-            Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                str_id, uri_id, offset, comments, owner_id,
-            )))
-        });
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, lexical_nesting_id, uri_id| {
+                Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                    str_id,
+                    uri_id,
+                    offset,
+                    comments,
+                    lexical_nesting_id,
+                )))
+            },
+        );
         self.visit(&node.value());
     }
 
@@ -1225,7 +1258,7 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "Foo", def);
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
@@ -1234,7 +1267,7 @@ mod tests {
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1245,7 +1278,7 @@ mod tests {
             assert!(def.members().is_empty());
 
             assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1268,7 +1301,7 @@ mod tests {
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
             assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
             assert!(def.superclass_ref().is_none());
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
             assert_eq!(1, def.members().len());
         });
 
@@ -1278,7 +1311,7 @@ mod tests {
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1289,7 +1322,7 @@ mod tests {
             assert!(def.members().is_empty());
 
             assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1323,7 +1356,7 @@ mod tests {
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
             assert_name_id_to_string_eq!(&context, "Foo", def);
             assert_eq!(1, def.members().len());
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
@@ -1331,7 +1364,7 @@ mod tests {
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1340,7 +1373,7 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "Baz", def);
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1363,7 +1396,7 @@ mod tests {
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
             assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
             assert_eq!(1, def.members().len());
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
@@ -1371,7 +1404,7 @@ mod tests {
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1380,7 +1413,7 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "Quuux", def);
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1413,14 +1446,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1443,14 +1476,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1459,7 +1492,7 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1481,14 +1514,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1513,14 +1546,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1529,7 +1562,7 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1553,7 +1586,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
@@ -1564,7 +1597,7 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "FOO", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1573,7 +1606,7 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "BAR::BAZ", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1582,7 +1615,7 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
             });
         });
@@ -1607,7 +1640,7 @@ mod tests {
             assert_name_eq!(&context, "foo", def);
             assert_eq!(def.parameters().len(), 0);
             assert!(!def.is_singleton());
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:15", Method, |def| {
@@ -1616,7 +1649,7 @@ mod tests {
             assert!(!def.is_singleton());
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1627,7 +1660,7 @@ mod tests {
             assert!(def.is_singleton());
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1712,14 +1745,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
             assert_name_eq!(&context, "foo", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
             assert_name_eq!(&context, "bar", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1728,7 +1761,7 @@ mod tests {
             assert_name_eq!(&context, "baz", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1750,14 +1783,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
             assert_name_eq!(&context, "foo", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
             assert_name_eq!(&context, "bar", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1766,7 +1799,7 @@ mod tests {
             assert_name_eq!(&context, "baz", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1788,14 +1821,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
             assert_name_eq!(&context, "foo", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
             assert_name_eq!(&context, "bar", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1804,7 +1837,7 @@ mod tests {
             assert_name_eq!(&context, "baz", def);
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1828,19 +1861,19 @@ mod tests {
 
         assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
             assert_name_eq!(&context, "a1", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "1:13-1:15", AttrReader, |def| {
             assert_name_eq!(&context, "a2", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
             assert_name_eq!(&context, "a3", def);
 
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1849,7 +1882,7 @@ mod tests {
             assert_name_eq!(&context, "a4", def);
 
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1858,7 +1891,7 @@ mod tests {
             assert_name_eq!(&context, "a5", def);
 
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
             });
         });
@@ -1881,24 +1914,24 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
             assert_name_eq!(&context, "$foo", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:1-2:5", GlobalVariable, |def| {
             assert_name_eq!(&context, "$bar", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:7-2:11", GlobalVariable, |def| {
             assert_name_eq!(&context, "$baz", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "5:3-5:7", GlobalVariable, |def| {
             assert_name_eq!(&context, "$qux", def);
 
             assert_definition_at!(&context, "4:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1921,14 +1954,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
             assert_name_eq!(&context, "@foo", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
             assert_name_eq!(&context, "@bar", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1937,7 +1970,7 @@ mod tests {
             assert_name_eq!(&context, "@baz", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1946,7 +1979,7 @@ mod tests {
             assert_name_eq!(&context, "@qux", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
             });
         });
@@ -1969,14 +2002,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
             assert_name_eq!(&context, "@@foo", def);
-            assert!(def.owner_id().is_none());
+            assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:8", ClassVariable, |def| {
             assert_name_eq!(&context, "@@bar", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
         });
@@ -1985,7 +2018,7 @@ mod tests {
             assert_name_eq!(&context, "@@baz", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[1], def.id());
             });
         });
@@ -1994,7 +2027,7 @@ mod tests {
             assert_name_eq!(&context, "@@qux", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.owner_id().unwrap());
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
             });
         });

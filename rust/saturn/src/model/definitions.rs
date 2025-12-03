@@ -86,8 +86,8 @@ impl Definition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        all_definitions!(self, it => &it.owner_id())
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        all_definitions!(self, it => &it.lexical_nesting_id())
     }
 
     #[must_use]
@@ -150,7 +150,7 @@ pub struct ClassDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
     members: Vec<DefinitionId>,
     superclass_ref: Option<NameId>,
     mixins: Vec<Mixin>,
@@ -163,7 +163,7 @@ impl ClassDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
         superclass_ref: Option<NameId>,
     ) -> Self {
         Self {
@@ -171,7 +171,7 @@ impl ClassDefinition {
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
             superclass_ref,
             members: Vec::new(),
             mixins: Vec::new(),
@@ -204,8 +204,8 @@ impl ClassDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 
     #[must_use]
@@ -245,7 +245,7 @@ pub struct ModuleDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
     members: Vec<DefinitionId>,
     mixins: Vec<Mixin>,
 }
@@ -257,14 +257,14 @@ impl ModuleDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
             members: Vec::new(),
             mixins: Vec::new(),
         }
@@ -296,8 +296,8 @@ impl ModuleDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 
     #[must_use]
@@ -331,7 +331,7 @@ pub struct ConstantDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
 }
 
 impl ConstantDefinition {
@@ -341,14 +341,14 @@ impl ConstantDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
         }
     }
 
@@ -378,8 +378,8 @@ impl ConstantDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 }
 
@@ -396,7 +396,7 @@ pub struct MethodDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
     is_singleton: bool,
 }
@@ -408,7 +408,7 @@ impl MethodDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
         is_singleton: bool,
     ) -> Self {
@@ -417,7 +417,7 @@ impl MethodDefinition {
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
             parameters,
             is_singleton,
         }
@@ -449,8 +449,8 @@ impl MethodDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 
     #[must_use]
@@ -512,7 +512,7 @@ pub struct AttrAccessorDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
 }
 
 impl AttrAccessorDefinition {
@@ -522,14 +522,14 @@ impl AttrAccessorDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
         }
     }
 
@@ -559,8 +559,8 @@ impl AttrAccessorDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 }
 
@@ -576,7 +576,7 @@ pub struct AttrReaderDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
 }
 
 impl AttrReaderDefinition {
@@ -586,14 +586,14 @@ impl AttrReaderDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
         }
     }
 
@@ -623,8 +623,8 @@ impl AttrReaderDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 }
 
@@ -640,7 +640,7 @@ pub struct AttrWriterDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
 }
 
 impl AttrWriterDefinition {
@@ -650,14 +650,14 @@ impl AttrWriterDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
         }
     }
 
@@ -687,8 +687,8 @@ impl AttrWriterDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 }
 
@@ -704,7 +704,7 @@ pub struct GlobalVariableDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
 }
 
 impl GlobalVariableDefinition {
@@ -714,14 +714,14 @@ impl GlobalVariableDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
         }
     }
 
@@ -751,8 +751,8 @@ impl GlobalVariableDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 }
 
@@ -768,7 +768,7 @@ pub struct InstanceVariableDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
 }
 
 impl InstanceVariableDefinition {
@@ -778,14 +778,14 @@ impl InstanceVariableDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
         }
     }
 
@@ -815,8 +815,8 @@ impl InstanceVariableDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 }
 
@@ -832,7 +832,7 @@ pub struct ClassVariableDefinition {
     uri_id: UriId,
     offset: Offset,
     comments: Vec<Comment>,
-    owner_id: Option<DefinitionId>,
+    lexical_nesting_id: Option<DefinitionId>,
 }
 
 impl ClassVariableDefinition {
@@ -842,14 +842,14 @@ impl ClassVariableDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        owner_id: Option<DefinitionId>,
+        lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
             comments,
-            owner_id,
+            lexical_nesting_id,
         }
     }
 
@@ -879,7 +879,7 @@ impl ClassVariableDefinition {
     }
 
     #[must_use]
-    pub fn owner_id(&self) -> &Option<DefinitionId> {
-        &self.owner_id
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
     }
 }

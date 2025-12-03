@@ -109,8 +109,8 @@ pub fn resolve_all(graph: &mut Graph) {
     for id in other_ids {
         let definition = graph.definitions().get(&id).unwrap();
         let owner_id = *definition
-            .owner_id()
-            .and_then(|oid| graph.definitions_to_declarations().get(&oid))
+            .lexical_nesting_id()
+            .and_then(|lexical_nesting_id| graph.definitions_to_declarations().get(&lexical_nesting_id))
             .unwrap_or(&OBJECT_ID);
 
         let owner = graph.declarations().get(&owner_id).unwrap();
