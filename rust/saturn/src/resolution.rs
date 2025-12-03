@@ -123,7 +123,7 @@ pub fn resolve_all(graph: &mut Graph) {
             Definition::GlobalVariable(it) => it.str_id(),
             Definition::InstanceVariable(it) => it.str_id(),
             Definition::ClassVariable(it) => it.str_id(),
-            Definition::Class(_) | Definition::Module(_) | Definition::Constant(_) => {
+            Definition::Class(_) | Definition::Module(_) | Definition::Constant(_) | Definition::SingletonClass(_) => {
                 panic!("Unexpected definition type. This shouldn't happen")
             }
         };

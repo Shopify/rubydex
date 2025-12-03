@@ -109,6 +109,10 @@ impl Graph {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
             }
+            Definition::SingletonClass(it) => {
+                let name = self.names.get(it.name_id()).unwrap();
+                name.str()
+            }
             Definition::Module(it) => {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
