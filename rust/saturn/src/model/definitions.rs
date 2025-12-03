@@ -29,6 +29,7 @@ use crate::{
     model::{
         comment::Comment,
         ids::{DefinitionId, NameId, StringId, UriId},
+        visibility::Visibility,
     },
     offset::Offset,
 };
@@ -504,9 +505,11 @@ pub struct MethodDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
     is_singleton: bool,
+    visibility: Visibility,
 }
 
 impl MethodDefinition {
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub const fn new(
         str_id: StringId,
@@ -516,6 +519,7 @@ impl MethodDefinition {
         lexical_nesting_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
         is_singleton: bool,
+        visibility: Visibility,
     ) -> Self {
         Self {
             str_id,
@@ -525,6 +529,7 @@ impl MethodDefinition {
             lexical_nesting_id,
             parameters,
             is_singleton,
+            visibility,
         }
     }
 
@@ -566,6 +571,11 @@ impl MethodDefinition {
     #[must_use]
     pub fn is_singleton(&self) -> bool {
         self.is_singleton
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 }
 
