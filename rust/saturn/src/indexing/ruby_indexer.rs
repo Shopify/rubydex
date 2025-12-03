@@ -821,6 +821,13 @@ impl Visit<'_> for RubyIndexer<'_> {
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
         let lexical_nesting_id = self.parent_nesting_id().copied();
         let parameters = self.collect_parameters(node);
+        let is_singleton = node.receiver().is_some();
+
+        let visibility = if is_singleton {
+            Visibility::Public
+        } else {
+            *self.current_visibility()
+        };
 
         let method = Definition::Method(Box::new(MethodDefinition::new(
             str_id,
@@ -829,7 +836,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
             lexical_nesting_id,
             parameters,
-            node.receiver().is_some(),
+            is_singleton,
             visibility,
         )));
 
@@ -2170,6 +2177,40 @@ mod tests {
         assert_definition_at!(&context, "18:3-18:14", Method, |def| {
             assert_name_eq!(&context, "m4", def);
             assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_def_node_singleton_visibility() {
+        let context = index_source({
+            "
+            protected
+
+            def self.m1; end
+
+            protected def self.m2; end
+
+            class Foo
+              private
+
+              def self.m3; end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "3:1-3:17", Method, |def| {
+            assert_name_eq!(&context, "m1", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "5:11-5:27", Method, |def| {
+            assert_name_eq!(&context, "m2", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "10:3-10:19", Method, |def| {
+            assert_name_eq!(&context, "m3", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
 
