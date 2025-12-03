@@ -1,8 +1,9 @@
 //! This file provides the C API for Definition accessors
 
 use crate::graph_api::{GraphPointer, with_graph};
-use crate::location_api::{Location, create_location_for_uri_and_offset};
+use crate::location_api::{Location, location_to_ffi};
 use libc::c_char;
+use saturn::location;
 use saturn::model::definitions::Definition;
 use saturn::model::ids::DefinitionId;
 use std::ffi::CString;
@@ -202,9 +203,13 @@ pub unsafe extern "C" fn sat_definition_comments(pointer: GraphPointer, definiti
         let mut entries = defn
             .comments()
             .iter()
-            .map(|c| CommentEntry {
-                string: CString::new(c.string().as_str()).unwrap().into_raw().cast_const(),
-                location: create_location_for_uri_and_offset(&uri, c.offset()),
+            .map(|c| {
+                let location = location::Location::from_uri_and_offset(uri.clone(), c.offset());
+
+                CommentEntry {
+                    string: CString::new(c.string().as_str()).unwrap().into_raw().cast_const(),
+                    location: location_to_ffi(&location),
+                }
             })
             .collect::<Vec<CommentEntry>>()
             .into_boxed_slice();
@@ -277,7 +282,8 @@ pub unsafe extern "C" fn sat_definition_location(pointer: GraphPointer, definiti
             panic!("Document not found: {uri_id:?}");
         };
 
-        create_location_for_uri_and_offset(&uri, defn.offset())
+        let location = location::Location::from_uri_and_offset(uri, defn.offset());
+        location_to_ffi(&location)
     })
 }
 
