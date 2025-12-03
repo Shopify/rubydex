@@ -66,6 +66,7 @@ pub fn resolve_all(graph: &mut Graph) {
                     Definition::Class(class) => *class.name_id(),
                     Definition::Module(module) => *module.name_id(),
                     Definition::Constant(constant) => *constant.name_id(),
+                    Definition::SingletonClass(singleton) => *singleton.name_id(),
                     _ => panic!("Expected constant definitions"),
                 };
 
@@ -340,6 +341,9 @@ fn sorted_units(graph: &Graph) -> (VecDeque<Unit>, Vec<DefinitionId>) {
                 constants.push((Unit::Definition(*id), names.get(def.name_id()).unwrap()));
             }
             Definition::Constant(def) => {
+                constants.push((Unit::Definition(*id), names.get(def.name_id()).unwrap()));
+            }
+            Definition::SingletonClass(def) => {
                 constants.push((Unit::Definition(*id), names.get(def.name_id()).unwrap()));
             }
             _ => {
@@ -717,5 +721,100 @@ mod tests {
                 .map(|n| context.graph.strings().get(n.str()).unwrap().as_str())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn resolution_for_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+                def bar; end
+                BAZ = 123
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo, &["<Foo>"]);
+        assert_owner(foo, "Object");
+
+        let singleton = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>"))
+            .unwrap();
+        assert_members(singleton, &["bar", "BAZ"]);
+        assert_owner(singleton, "Foo");
+    }
+
+    #[test]
+    fn resolution_for_nested_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+                class << self
+                  def baz; end
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo, &["<Foo>"]);
+
+        let singleton = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>"))
+            .unwrap();
+        assert_members(singleton, &["<<Foo>>"]);
+
+        let nested_singleton = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>::<<Foo>>"))
+            .unwrap();
+        assert_members(nested_singleton, &["baz"]);
+        assert_owner(nested_singleton, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn resolution_for_singleton_class_of_external_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar
+              class << Foo
+                def baz; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo, &["<Foo>"]);
+        assert_owner(foo, "Object");
+
+        let bar = context.graph.declarations().get(&DeclarationId::from("Bar")).unwrap();
+        assert_members(bar, &[]);
+        assert_owner(bar, "Object");
+
+        let singleton = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>"))
+            .unwrap();
+        assert_members(singleton, &["baz"]);
+        assert_owner(singleton, "Foo");
     }
 }
