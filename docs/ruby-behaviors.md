@@ -648,12 +648,95 @@ class Foo; end
 
 # file: foo_singleton.rb
 class << Foo
-  def support!
-    puts "supporting #{self}"
+  def bar!
+    puts "bar"
   end
 end
 
-Foo.support!
+# file: my_class.rb
+class MyClass
+  # This also reopens Foo's singleton class
+  class << Foo
+    def baz!
+      puts "baz"
+    end
+  end
+end
+
+Foo.bar!
+Foo.baz!
 ```
 
-Attempting to reopen the singleton before the constant exists raises `NameError`.
+### Class Variables and Singleton Classes
+
+Class variables (`@@var`) **bypass singleton classes entirely**.
+They always belong to the base class or module, regardless of where they are defined:
+
+```ruby
+class Foo
+  @@in_class_body = 1
+
+  class << self
+    @@in_singleton_scope = 2
+
+    def set_var
+      @@in_method = 3
+    end
+  end
+end
+
+Foo.set_var
+
+# All class variables belong to Foo, not its singleton class
+Foo.class_variables
+# => [:@@in_class_body, :@@in_singleton_scope, :@@in_method]
+
+Foo.singleton_class.class_variables
+# => [:@@in_class_body, :@@in_singleton_scope, :@@in_method]  # inherited view
+
+# The singleton class itself owns no class variables
+Foo.singleton_class.class_variables(false)
+# => []
+```
+
+This is fundamentally different from instance variables (`@var`), which **do** belong to the singleton class when
+defined in class scope:
+
+```ruby
+class Foo
+  @class_ivar = 1  # belongs to Foo's singleton class
+  @@class_var = 2  # belongs to Foo itself
+end
+```
+
+Top-level class variable access (`@@foo = 1` outside any class) raises `RuntimeError: class variable access from toplevel`.
+
+### Nested Singleton Classes
+
+`class << self` can be nested. Each nesting opens the singleton class of the current `self`:
+
+```ruby
+class Foo
+  class << self
+    # self is now Foo.singleton_class
+    def on_foo_singleton; end
+
+    class << self
+      # self is now Foo.singleton_class.singleton_class
+      def on_singleton_singleton; end
+    end
+  end
+end
+
+# on_foo_singleton is callable on Foo
+Foo.on_foo_singleton
+
+# on_singleton_singleton is NOT callable on Foo
+Foo.on_singleton_singleton
+# => NoMethodError
+
+# It's callable on Foo's singleton class
+Foo.singleton_class.on_singleton_singleton
+```
+
+The ownership chain is: `Foo` → `Foo.singleton_class` → `Foo.singleton_class.singleton_class`.
