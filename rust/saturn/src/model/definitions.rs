@@ -628,6 +628,7 @@ pub struct AttrAccessorDefinition {
     offset: Offset,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
+    visibility: Visibility,
 }
 
 impl AttrAccessorDefinition {
@@ -638,6 +639,7 @@ impl AttrAccessorDefinition {
         offset: Offset,
         comments: Vec<Comment>,
         lexical_nesting_id: Option<DefinitionId>,
+        visibility: Visibility,
     ) -> Self {
         Self {
             str_id,
@@ -645,6 +647,7 @@ impl AttrAccessorDefinition {
             offset,
             comments,
             lexical_nesting_id,
+            visibility,
         }
     }
 
@@ -676,6 +679,11 @@ impl AttrAccessorDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 }
 
@@ -692,6 +700,7 @@ pub struct AttrReaderDefinition {
     offset: Offset,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
+    visibility: Visibility,
 }
 
 impl AttrReaderDefinition {
@@ -702,6 +711,7 @@ impl AttrReaderDefinition {
         offset: Offset,
         comments: Vec<Comment>,
         lexical_nesting_id: Option<DefinitionId>,
+        visibility: Visibility,
     ) -> Self {
         Self {
             str_id,
@@ -709,6 +719,7 @@ impl AttrReaderDefinition {
             offset,
             comments,
             lexical_nesting_id,
+            visibility,
         }
     }
 
@@ -740,6 +751,11 @@ impl AttrReaderDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 }
 
@@ -756,6 +772,7 @@ pub struct AttrWriterDefinition {
     offset: Offset,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
+    visibility: Visibility,
 }
 
 impl AttrWriterDefinition {
@@ -766,6 +783,7 @@ impl AttrWriterDefinition {
         offset: Offset,
         comments: Vec<Comment>,
         lexical_nesting_id: Option<DefinitionId>,
+        visibility: Visibility,
     ) -> Self {
         Self {
             str_id,
@@ -773,6 +791,7 @@ impl AttrWriterDefinition {
             offset,
             comments,
             lexical_nesting_id,
+            visibility,
         }
     }
 
@@ -804,6 +823,11 @@ impl AttrWriterDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 }
 
