@@ -14,6 +14,7 @@ type LocalGraphParts = (
     IdentityHashMap<NameId, NameRef>,
     IdentityHashMap<ReferenceId, ConstantReference>,
     IdentityHashMap<ReferenceId, MethodRef>,
+    Vec<Diagnostic>,
 );
 
 #[derive(Debug)]
@@ -142,6 +143,7 @@ impl LocalGraph {
             self.names,
             self.constant_references,
             self.method_references,
+            self.diagnostics,
         )
     }
 }

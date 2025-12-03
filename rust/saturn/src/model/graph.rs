@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
+use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
@@ -35,6 +36,8 @@ pub struct Graph {
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
+
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl Graph {
@@ -49,6 +52,7 @@ impl Graph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -155,6 +159,11 @@ impl Graph {
     }
 
     #[must_use]
+    pub fn diagnostics(&self) -> &Vec<Diagnostic> {
+        &self.diagnostics
+    }
+
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
         let declaration_id = DeclarationId::from(name);
         let declaration = self.declarations.get(&declaration_id)?;
@@ -242,7 +251,7 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references) =
+        let (uri_id, document, definitions, strings, names, constant_references, method_references, diagnostics) =
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
@@ -251,6 +260,7 @@ impl Graph {
         self.names.extend(names);
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
+        self.diagnostics.extend(diagnostics);
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
@@ -658,5 +668,47 @@ mod tests {
 
         let foo = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
         assert!(!foo.members().contains_key(&StringId::from("Bar")));
+    }
+
+    #[test]
+    fn diagnostics_are_collected() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo1.rb", {
+            r"
+            class Foo
+            "
+        });
+
+        context.index_uri("file:///foo2.rb", {
+            r"
+            foo = 42
+            "
+        });
+
+        let mut diagnostics = context
+            .graph
+            .diagnostics()
+            .iter()
+            .map(|d| {
+                format!(
+                    "{}: {} ({})",
+                    d.severity().as_str(),
+                    d.message(),
+                    context.graph.documents().get(d.uri_id()).unwrap().uri()
+                )
+            })
+            .collect::<Vec<_>>();
+
+        diagnostics.sort();
+
+        assert_eq!(
+            vec![
+                "Error: expected an `end` to close the `class` statement (file:///foo1.rb)",
+                "Error: unexpected end-of-input, assuming it is closing the parent top level context (file:///foo1.rb)",
+                "Warning: assigned but unused variable - foo (file:///foo2.rb)",
+            ],
+            diagnostics,
+        );
     }
 }
