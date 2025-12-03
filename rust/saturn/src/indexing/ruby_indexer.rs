@@ -866,6 +866,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         offset,
                         comments,
                         lexical_nesting_id,
+                        *self.current_visibility(),
                     ))),
                     AttrKind::Reader => Definition::AttrReader(Box::new(AttrReaderDefinition::new(
                         str_id,
@@ -873,6 +874,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         offset,
                         comments,
                         lexical_nesting_id,
+                        *self.current_visibility(),
                     ))),
                     AttrKind::Writer => Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
                         str_id,
@@ -880,6 +882,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         offset,
                         comments,
                         lexical_nesting_id,
+                        *self.current_visibility(),
                     ))),
                 };
 
@@ -2337,6 +2340,83 @@ mod tests {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
             });
+        });
+    }
+
+    #[test]
+    fn index_attr_accessor_with_visibility_top_level() {
+        let context = index_source({
+            "
+            attr_accessor :foo
+
+            protected attr_reader :bar
+
+            public
+
+            attr_writer :baz
+            "
+        });
+
+        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
+            assert_name_eq!(&context, "foo", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "3:24-3:27", AttrReader, |def| {
+            assert_name_eq!(&context, "bar", def);
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+
+        assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
+            assert_name_eq!(&context, "baz", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_attr_accessor_with_visibility_nested() {
+        let context = index_source({
+            "
+            protected
+
+            class Foo
+              attr_accessor :foo
+
+              private
+
+              module Bar
+                attr_accessor :bar
+
+                private
+
+                attr_reader :baz
+
+                protected
+              end
+
+              attr_writer :qux
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
+            assert_name_eq!(&context, "foo", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "9:20-9:23", AttrAccessor, |def| {
+            assert_name_eq!(&context, "bar", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "13:18-13:21", AttrReader, |def| {
+            assert_name_eq!(&context, "baz", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
+            assert_name_eq!(&context, "qux", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
         });
     }
 
