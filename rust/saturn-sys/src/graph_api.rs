@@ -4,10 +4,9 @@
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::utils;
 use libc::{c_char, c_void};
-use saturn::indexing;
 use saturn::model::graph::Graph;
 use saturn::model::ids::DeclarationId;
-use saturn::resolve as resolver;
+use saturn::{indexing, resolution};
 use std::ffi::CString;
 use std::{mem, ptr};
 
@@ -80,7 +79,7 @@ pub unsafe extern "C" fn sat_index_all(
 #[unsafe(no_mangle)]
 pub extern "C" fn sat_graph_resolve(pointer: GraphPointer) {
     with_graph(pointer, |graph| {
-        resolver::resolve(graph);
+        resolution::resolve_all(graph);
     });
 }
 

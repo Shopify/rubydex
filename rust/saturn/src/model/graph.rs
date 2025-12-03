@@ -40,14 +40,6 @@ pub struct Graph {
 impl Graph {
     #[must_use]
     pub fn new() -> Self {
-        // let mut declarations = IdentityHashMap::default();
-        // Insert the magic top level self <main> object into the graph, so that we can associate global variables or
-        // definitions made at the top level with it
-        // let main_id = DeclarationId::from("<main>");
-        // declarations.insert(main_id, Declaration::new(String::from("<main>"), main_id));
-
-        //declarations.insert(object_id, Declaration::new(String::from("Object"), object_id));
-
         Self {
             declarations: IdentityHashMap::default(),
             definitions: IdentityHashMap::default(),
@@ -60,24 +52,33 @@ impl Graph {
         }
     }
 
+    // TODO: remove this method once we have proper synchronization. This is a hack
+    #[must_use]
+    pub(crate) fn declarations_mut(&mut self) -> &mut IdentityHashMap<DeclarationId, Declaration> {
+        &mut self.declarations
+    }
+
     // Returns an immutable reference to the declarations map
     #[must_use]
     pub fn declarations(&self) -> &IdentityHashMap<DeclarationId, Declaration> {
         &self.declarations
     }
 
-    pub fn add_declaration(&mut self, fully_qualified_name: String, definition_id: DefinitionId) -> DeclarationId {
+    pub fn add_declaration(
+        &mut self,
+        fully_qualified_name: String,
+        definition_id: DefinitionId,
+        owner_id: DeclarationId,
+    ) -> DeclarationId {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
         let declaration = self
             .declarations
             .entry(declaration_id)
-            .or_insert_with(|| Declaration::new(fully_qualified_name));
+            .or_insert_with(|| Declaration::new(fully_qualified_name, owner_id));
 
         declaration.add_definition(definition_id);
-
         self.definitions_to_declarations.insert(definition_id, declaration_id);
-
         declaration_id
     }
 
@@ -195,13 +196,12 @@ impl Graph {
     /// ```
     pub fn add_member(
         &mut self,
-        declaration_id: &DeclarationId,
+        owner_id: &DeclarationId,
         member_declaration_id: DeclarationId,
-        member_name: &str,
+        member_str_id: StringId,
     ) {
-        if let Some(declaration) = self.declarations.get_mut(declaration_id) {
-            let string_id = StringId::from(member_name);
-            declaration.add_member(string_id, member_declaration_id);
+        if let Some(declaration) = self.declarations.get_mut(owner_id) {
+            declaration.add_member(member_str_id, member_declaration_id);
         }
     }
 
@@ -467,7 +467,8 @@ mod tests {
 
         assert!(context.graph.documents.is_empty());
         assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
+        // Object is left
+        assert_eq!(context.graph.declarations.len(), 1);
 
         context.graph.assert_integrity();
     }
@@ -482,7 +483,8 @@ mod tests {
         context.resolve();
 
         assert!(context.graph.definitions.is_empty());
-        assert!(context.graph.declarations.is_empty());
+        // Object is left
+        assert_eq!(context.graph.declarations.len(), 1);
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(context.graph.documents.len(), 1);
 

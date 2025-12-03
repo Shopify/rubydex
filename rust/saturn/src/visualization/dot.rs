@@ -150,6 +150,7 @@ mod tests {
             r#"digraph {{
     rankdir=TB;
 
+    "Name:Object" [label="Object",shape=hexagon];
     "Name:TestClass" [label="TestClass",shape=hexagon];
     "Name:TestClass" -> "def_{class_def_id}" [dir=both];
     "Name:TestModule" [label="TestModule",shape=hexagon];

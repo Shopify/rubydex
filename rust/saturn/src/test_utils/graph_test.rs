@@ -6,7 +6,7 @@ use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
 use crate::offset::Offset;
 use crate::position::Position;
-use crate::resolve;
+use crate::resolution;
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -50,7 +50,7 @@ impl GraphTest {
     }
 
     pub fn resolve(&mut self) {
-        resolve::resolve(&mut self.graph);
+        resolution::resolve_all(&mut self.graph);
     }
 
     /// Parses a location string like `<file:///foo.rb:3:0-3:5>` into `(uri, start_offset, end_offset)`

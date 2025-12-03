@@ -112,6 +112,14 @@ impl NameRef {
             NameRef::Resolved(_) => None,
         }
     }
+
+    #[must_use]
+    pub fn nesting(&self) -> &Option<NameId> {
+        match self {
+            NameRef::Unresolved(name) => name.nesting(),
+            NameRef::Resolved(resolved_name) => resolved_name.name.nesting(),
+        }
+    }
 }
 
 #[cfg(test)]
