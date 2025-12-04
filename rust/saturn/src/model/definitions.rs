@@ -36,6 +36,7 @@ use crate::{
 #[derive(Debug)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
+    SingletonClass(Box<SingletonClassDefinition>),
     Module(Box<ModuleDefinition>),
     Constant(Box<ConstantDefinition>),
     Method(Box<MethodDefinition>),
@@ -51,6 +52,7 @@ macro_rules! all_definitions {
     ($value:expr, $var:ident => $expr:expr) => {
         match $value {
             Definition::Class($var) => $expr,
+            Definition::SingletonClass($var) => $expr,
             Definition::Module($var) => $expr,
             Definition::Constant($var) => $expr,
             Definition::GlobalVariable($var) => $expr,
@@ -94,6 +96,7 @@ impl Definition {
     pub fn kind(&self) -> &'static str {
         match self {
             Definition::Class(_) => "Class",
+            Definition::SingletonClass(_) => "SingletonClass",
             Definition::Module(_) => "Module",
             Definition::Constant(_) => "Constant",
             Definition::Method(_) => "Method",
@@ -108,22 +111,24 @@ impl Definition {
 
     /// # Panics
     ///
-    /// Panics if the definition is not a nesting definition (class or module)
+    /// Panics if the definition is not a nesting definition (class, module, or singleton class)
     pub fn add_member(&mut self, member_id: DefinitionId) {
         match self {
             Definition::Class(class) => class.add_member(member_id),
+            Definition::SingletonClass(singleton_class) => singleton_class.add_member(member_id),
             Definition::Module(module) => module.add_member(member_id),
             _ => panic!("Cannot add a member to a non-nesting definition"),
         }
     }
 }
 
-/// Represents either an included or a prepended module. Note that `extend` is modeled as an include on the singleton
-/// class
+/// Represents a mixin: include, prepend, or extend.
+/// During resolution, `Extend` mixins are attached to the singleton class.
 #[derive(Debug)]
 pub enum Mixin {
     Include(NameId),
     Prepend(NameId),
+    Extend(NameId),
 }
 
 // Deref implementation to conveniently extract the reference ID with a dereference
@@ -132,7 +137,7 @@ impl Deref for Mixin {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Mixin::Include(id) | Mixin::Prepend(id) => id,
+            Mixin::Include(id) | Mixin::Prepend(id) | Mixin::Extend(id) => id,
         }
     }
 }
@@ -154,6 +159,106 @@ pub struct ClassDefinition {
     members: Vec<DefinitionId>,
     superclass_ref: Option<NameId>,
     mixins: Vec<Mixin>,
+}
+
+/// A singleton class definition created from `class << X` syntax.
+/// This is created only when `class << X` syntax is encountered, NOT for `def self.foo`.
+/// Methods with receivers (like `def self.foo`) have their `receiver` field set instead.
+///
+/// # Examples
+/// ```ruby
+/// class Foo
+///   class << self     # attached_target = NameId("Foo")
+///     def bar; end
+///   end
+/// end
+///
+/// class << Foo        # attached_target = NameId("Foo")
+///   def baz; end
+/// end
+/// ```
+#[derive(Debug)]
+pub struct SingletonClassDefinition {
+    /// The name of this singleton class (e.g., `<Foo>` for `class << self` inside `class Foo`)
+    name_id: NameId,
+    uri_id: UriId,
+    offset: Offset,
+    comments: Vec<Comment>,
+    /// The definition where `class << X` was found (lexical owner)
+    lexical_nesting_id: Option<DefinitionId>,
+    /// Members defined directly in this singleton class
+    members: Vec<DefinitionId>,
+    /// Mixins declared in this singleton class
+    mixins: Vec<Mixin>,
+}
+
+impl SingletonClassDefinition {
+    #[must_use]
+    pub const fn new(
+        name_id: NameId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Vec<Comment>,
+        lexical_nesting_id: Option<DefinitionId>,
+    ) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+            comments,
+            lexical_nesting_id,
+            members: Vec::new(),
+            mixins: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+    }
+
+    #[must_use]
+    pub fn name_id(&self) -> &NameId {
+        &self.name_id
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &[DefinitionId] {
+        &self.members
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
+    }
+
+    pub fn add_member(&mut self, member_id: DefinitionId) {
+        self.members.push(member_id);
+    }
+
+    pub fn add_mixin(&mut self, mixin: Mixin) {
+        self.mixins.push(mixin);
+    }
 }
 
 impl ClassDefinition {

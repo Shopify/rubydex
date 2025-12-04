@@ -9,6 +9,7 @@ static VALUE mSaturn;
 VALUE cComment;
 VALUE cDefinition;
 VALUE cClassDefinition;
+VALUE cSingletonClassDefinition;
 VALUE cModuleDefinition;
 VALUE cConstantDefinition;
 VALUE cMethodDefinition;
@@ -24,6 +25,8 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
     switch (kind) {
     case DefinitionKind_Class:
         return cClassDefinition;
+    case DefinitionKind_SingletonClass:
+        return cSingletonClassDefinition;
     case DefinitionKind_Module:
         return cModuleDefinition;
     case DefinitionKind_Constant:
@@ -133,6 +136,10 @@ void initialize_definition(VALUE mod) {
     cClassDefinition = rb_define_class_under(mSaturn, "ClassDefinition", cDefinition);
     rb_define_alloc_func(cClassDefinition, sr_handle_alloc);
     rb_define_method(cClassDefinition, "initialize", sr_handle_initialize, 2);
+
+    cSingletonClassDefinition = rb_define_class_under(mSaturn, "SingletonClassDefinition", cDefinition);
+    rb_define_alloc_func(cSingletonClassDefinition, sr_handle_alloc);
+    rb_define_method(cSingletonClassDefinition, "initialize", sr_handle_initialize, 2);
 
     cModuleDefinition = rb_define_class_under(mSaturn, "ModuleDefinition", cDefinition);
     rb_define_alloc_func(cModuleDefinition, sr_handle_alloc);

@@ -6,6 +6,7 @@
 
 extern VALUE cDefinition;
 extern VALUE cClassDefinition;
+extern VALUE cSingletonClassDefinition;
 extern VALUE cModuleDefinition;
 extern VALUE cConstantDefinition;
 extern VALUE cMethodDefinition;
