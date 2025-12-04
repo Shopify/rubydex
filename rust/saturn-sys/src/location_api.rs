@@ -2,6 +2,7 @@
 
 use libc::c_char;
 use line_index::LineIndex;
+use saturn::offset::Offset;
 use std::ffi::CString;
 use std::fs;
 use url::Url;
@@ -35,13 +36,13 @@ fn file_path_from_uri(uri: &str) -> Option<String> {
 /// - If the file cannot be read.
 /// - If the offset cannot be converted to a position.
 #[must_use]
-pub(crate) fn create_location_for_uri_and_offset(uri: &str, start: u32, end: u32) -> *mut Location {
+pub(crate) fn create_location_for_uri_and_offset(uri: &str, offset: &Offset) -> *mut Location {
     let path_str = file_path_from_uri(uri).unwrap_or_else(|| panic!("Failed to convert URI to file path: {uri}"));
     let source = fs::read_to_string(&path_str).unwrap_or_else(|_| panic!("Failed to read file at path {path_str}"));
 
     let line_index = LineIndex::new(&source);
-    let start_pos = line_index.line_col(start.into());
-    let end_pos = line_index.line_col(end.into());
+    let start_pos = line_index.line_col(offset.start().into());
+    let end_pos = line_index.line_col(offset.end().into());
 
     let loc = Location {
         uri: CString::new(uri).unwrap().into_raw().cast_const(),
