@@ -504,8 +504,8 @@ pub struct MethodDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
-    is_singleton: bool,
     visibility: Visibility,
+    receiver: Option<NameId>,
 }
 
 impl MethodDefinition {
@@ -518,8 +518,8 @@ impl MethodDefinition {
         comments: Vec<Comment>,
         lexical_nesting_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
-        is_singleton: bool,
         visibility: Visibility,
+        receiver: Option<NameId>,
     ) -> Self {
         Self {
             str_id,
@@ -528,8 +528,8 @@ impl MethodDefinition {
             comments,
             lexical_nesting_id,
             parameters,
-            is_singleton,
             visibility,
+            receiver,
         }
     }
 
@@ -569,8 +569,8 @@ impl MethodDefinition {
     }
 
     #[must_use]
-    pub fn is_singleton(&self) -> bool {
-        self.is_singleton
+    pub fn receiver(&self) -> &Option<NameId> {
+        &self.receiver
     }
 
     #[must_use]

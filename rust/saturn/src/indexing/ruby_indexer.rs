@@ -831,6 +831,25 @@ impl Visit<'_> for RubyIndexer<'_> {
             *self.current_visibility()
         };
 
+        let receiver = if let Some(recv_node) = node.receiver() {
+            match recv_node {
+                // def self.foo - receiver is the current class/module's NameId
+                ruby_prism::Node::SelfNode { .. } => self.current_nesting_name_id(),
+                // def Foo.bar or def Foo::Bar.baz - receiver is the constant's NameId
+                ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {
+                    self.index_constant_reference(&recv_node, true)
+                }
+                // Dynamic receiver (def foo.bar) - visit and then skip
+                // We still want to visit because it could be a variable reference
+                _ => {
+                    self.visit(&recv_node);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
         let method = Definition::Method(Box::new(MethodDefinition::new(
             str_id,
             self.uri_id,
@@ -838,8 +857,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
             lexical_nesting_id,
             parameters,
-            is_singleton,
             visibility,
+            receiver,
         )));
 
         let definition_id = self.local_graph.add_definition(method);
@@ -1368,6 +1387,18 @@ mod tests {
         }};
     }
 
+    macro_rules! assert_method_has_receiver {
+        ($context:expr, $method:expr, $expected_receiver:expr) => {{
+            if let Some(receiver_name_id) = $method.receiver() {
+                let name = $context.graph().names().get(receiver_name_id).unwrap();
+                let actual_name = $context.graph().strings().get(name.str()).unwrap();
+                assert_eq!($expected_receiver, actual_name);
+            } else {
+                panic!("expected method to have receiver, got None");
+            }
+        }};
+    }
+
     macro_rules! assert_includes_eq {
         ($context:expr, $def:expr, $expected_names:expr) => {{
             let actual_names = $def
@@ -1886,41 +1917,50 @@ mod tests {
         assert_definition_at!(&context, "1:1-1:13", Method, |def| {
             assert_name_eq!(&context, "foo", def);
             assert_eq!(def.parameters().len(), 0);
-            assert!(!def.is_singleton());
+            assert!(def.receiver().is_none());
             assert!(def.lexical_nesting_id().is_none());
         });
 
-        assert_definition_at!(&context, "4:3-4:15", Method, |def| {
-            assert_name_eq!(&context, "bar", def);
-            assert_eq!(def.parameters().len(), 0);
-            assert!(!def.is_singleton());
+        assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:15", Method, |bar_def| {
+                assert_name_eq!(&context, "bar", bar_def);
+                assert_eq!(bar_def.parameters().len(), 0);
+                assert!(bar_def.receiver().is_none());
+                assert_eq!(foo_class_def.id(), bar_def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[0], bar_def.id());
+            });
 
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[0], def.id());
+            assert_definition_at!(&context, "5:3-5:20", Method, |baz_def| {
+                assert_name_eq!(&context, "baz", baz_def);
+                assert_eq!(baz_def.parameters().len(), 0);
+                assert_method_has_receiver!(&context, baz_def, "Foo");
+                assert_eq!(foo_class_def.id(), baz_def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[1], baz_def.id());
             });
         });
 
-        assert_definition_at!(&context, "5:3-5:20", Method, |def| {
-            assert_name_eq!(&context, "baz", def);
-            assert_eq!(def.parameters().len(), 0);
-            assert_definition_at!(&context, "3:1-6:4", Class, |class_def| {
-                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
-            });
-            assert!(def.is_singleton());
-        });
+        assert_definition_at!(&context, "8:1-10:4", Class, |bar_class_def| {
+            assert_name_id_to_string_eq!(&context, "Bar", bar_class_def);
 
-        assert_definition_at!(&context, "9:3-9:19", Method, |quz_def| {
-            assert_name_eq!(&context, "quz", quz_def);
-            assert_eq!(quz_def.parameters().len(), 0);
-            assert!(quz_def.is_singleton());
-
-            // TODO: This is wrong and we will fix this when we properly support method def receiver
-            assert_definition_at!(&context, "8:1-10:4", Class, |class_def| {
-                assert_name_id_to_string_eq!(&context, "Bar", class_def);
-                assert_eq!(class_def.id(), quz_def.lexical_nesting_id().unwrap());
+            assert_definition_at!(&context, "9:3-9:19", Method, |quz_def| {
+                assert_name_eq!(&context, "quz", quz_def);
+                assert_eq!(quz_def.parameters().len(), 0);
+                assert_method_has_receiver!(&context, quz_def, "Foo");
+                assert_eq!(bar_class_def.id(), quz_def.lexical_nesting_id().unwrap());
             });
         });
+    }
+
+    #[test]
+    fn do_not_index_def_node_with_dynamic_receiver() {
+        let context = index_source({
+            "
+            def foo.bar; end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 0);
+        assert_method_references_eq!(&context, vec!["foo"]);
     }
 
     #[test]
@@ -1972,6 +2012,7 @@ mod tests {
                     // def self.qux (inside class << Bar)
                     assert_definition_at!(&context, "8:7-8:24", Method, |qux_method| {
                         assert_eq!(qux_method.lexical_nesting_id(), &Some(bar_singleton.id()));
+                        assert_method_has_receiver!(&context, qux_method, "<Bar>");
                     });
                 });
 
