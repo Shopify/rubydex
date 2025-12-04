@@ -1045,43 +1045,18 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode) {
-        let location = &node.name_loc();
-        let name = Self::location_to_string(location);
-        let str_id = self.local_graph.intern_string(name);
-        let offset = Offset::from_prism_location(location);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let mut lexical_nesting_id = self.parent_nesting_id().copied();
-
-        // Class variables belong to the enclosing class/module, not singleton classes.
-        // Traverse up through singleton classes to find the actual class/module owner.
-        while let Some(current_lexical_nesting_id) = lexical_nesting_id {
-            if let Some(definition) = self.local_graph.get_definition_mut(current_lexical_nesting_id)
-                && matches!(definition, Definition::SingletonClass(_))
-                && let Some(definition_lexical_nesting_id) = definition.lexical_nesting_id()
-            {
-                lexical_nesting_id = Some(*definition_lexical_nesting_id);
-            } else {
-                break;
-            }
-        }
-
-        let uri_id = self.uri_id;
-
-        let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-            str_id,
-            uri_id,
-            offset,
-            comments,
-            lexical_nesting_id,
-        )));
-        let definition_id = self.local_graph.add_definition(definition);
-
-        if let Some(lexical_nesting_id) = lexical_nesting_id
-            && let Some(parent_nesting) = self.local_graph.get_definition_mut(lexical_nesting_id)
-        {
-            parent_nesting.add_member(definition_id);
-        }
-
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, lexical_nesting_id, uri_id| {
+                Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+                    str_id,
+                    uri_id,
+                    offset,
+                    comments,
+                    lexical_nesting_id,
+                )))
+            },
+        );
         self.visit(&node.value());
     }
 
@@ -1953,10 +1928,12 @@ mod tests {
             "
         });
 
-        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+        // During indexing, lexical_nesting_id is the actual enclosing scope (singleton class).
+        // The resolution phase handles bypassing singleton classes for class variable ownership.
+        assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
             assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
                 assert_name_eq!(&context, "@@var", def);
-                assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
+                assert_eq!(Some(singleton_class.id()), *def.lexical_nesting_id());
             });
         });
     }
@@ -1975,10 +1952,12 @@ mod tests {
             "
         });
 
-        assert_definition_at!(&context, "1:1-7:4", Class, |class_def| {
+        // During indexing, lexical_nesting_id is the actual enclosing scope (innermost singleton class).
+        // The resolution phase handles bypassing singleton classes for class variable ownership.
+        assert_definition_at!(&context, "3:5-5:8", SingletonClass, |nested_singleton| {
             assert_definition_at!(&context, "4:7-4:12", ClassVariable, |def| {
                 assert_name_eq!(&context, "@@var", def);
-                assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
+                assert_eq!(Some(nested_singleton.id()), *def.lexical_nesting_id());
             });
         });
     }
