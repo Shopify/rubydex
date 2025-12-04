@@ -33,7 +33,7 @@ class GraphTest < Minitest::Test
 
     assert_diagnostics(
       [
-        { severity: :error, path: "not_found.rb", message: "Path 'not_found.rb' does not exist" },
+        { code: 1000, severity: :error, path: "not_found.rb", message: "Path 'not_found.rb' does not exist" },
       ],
       graph.diagnostics,
     )
@@ -48,8 +48,8 @@ class GraphTest < Minitest::Test
 
       assert_diagnostics(
         [
-          { severity: :error, path: "file.rb", message: "expected an `end` to close the `class` statement" },
-          { severity: :error, path: "file.rb", message: "unexpected end-of-input, assuming it is closing the parent top level context" },
+          { code: 2000, severity: :error, path: "file.rb", message: "expected an `end` to close the `class` statement" },
+          { code: 2000, severity: :error, path: "file.rb", message: "unexpected end-of-input, assuming it is closing the parent top level context" },
         ],
         graph.diagnostics,
       )
@@ -162,7 +162,7 @@ class GraphTest < Minitest::Test
     assert_equal(
       expected,
       actual.sort_by { |d| [d.location, d.message] }
-        .map { |d| { severity: d.severity, path: File.basename(d.location.path), message: d.message } },
+        .map { |d| { code: d.code, severity: d.severity, path: File.basename(d.location.path), message: d.message } },
     )
   end
 end
