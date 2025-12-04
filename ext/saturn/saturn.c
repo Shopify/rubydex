@@ -1,5 +1,6 @@
 #include "declaration.h"
 #include "definition.h"
+#include "diagnostic.h"
 #include "document.h"
 #include "graph.h"
 #include "location.h"
@@ -16,5 +17,6 @@ void Init_saturn(void) {
     initialize_document(mSaturn);
     initialize_definition(mSaturn);
     initialize_location(mSaturn);
+    initialize_diagnostic(mSaturn);
     initialize_reference(mSaturn);
 }

@@ -28,6 +28,7 @@ impl From<&Severity> for DiagnosticSeverity {
 pub struct DiagnosticEntry {
     pub message: *const c_char,
     pub severity: DiagnosticSeverity,
+    pub code: u16,
     pub location: *mut Location,
 }
 
@@ -70,6 +71,7 @@ pub unsafe extern "C" fn sat_graph_diagnostics(pointer: GraphPointer) -> *mut Di
                 DiagnosticEntry {
                     message: CString::new(diagnostic.message()).unwrap().into_raw().cast_const(),
                     severity: DiagnosticSeverity::from(diagnostic.severity()),
+                    code: diagnostic.code(),
                     location,
                 }
             })

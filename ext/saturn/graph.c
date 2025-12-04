@@ -1,6 +1,8 @@
 #include "graph.h"
 #include "declaration.h"
+#include "diagnostic.h"
 #include "document.h"
+#include "location.h"
 #include "reference.h"
 #include "rustbindings.h"
 #include "utils.h"
@@ -274,6 +276,41 @@ static VALUE sr_graph_resolve(VALUE self) {
     return self;
 }
 
+// Graph#diagnostics -> Array[Saturn::Diagnostic]
+static VALUE sr_graph_diagnostics(VALUE self) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    DiagnosticArray *array = sat_graph_diagnostics(graph);
+    if (array == NULL || array->len == 0) {
+        if (array != NULL) {
+            sat_diagnostics_free(array);
+        }
+        return rb_ary_new();
+    }
+
+    VALUE diagnostics = rb_ary_new_capa((long)array->len);
+    for (size_t i = 0; i < array->len; i++) {
+        DiagnosticEntry entry = array->items[i];
+        VALUE message = entry.message == NULL ? Qnil : rb_utf8_str_new_cstr(entry.message);
+        VALUE severity = severity_symbol(entry.severity);
+        VALUE code = UINT2NUM(entry.code);
+        VALUE location = build_location_value(entry.location);
+
+        VALUE kwargs = rb_hash_new();
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("message")), message);
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("severity")), severity);
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("code")), code);
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("location")), location);
+
+        VALUE diagnostic = rb_class_new_instance_kw(1, &kwargs, cDiagnostic, RB_PASS_KEYWORDS);
+        rb_ary_push(diagnostics, diagnostic);
+    }
+
+    sat_diagnostics_free(array);
+    return diagnostics;
+}
+
 void initialize_graph(VALUE mSaturn) {
     cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
 
@@ -284,5 +321,6 @@ void initialize_graph(VALUE mSaturn) {
     rb_define_method(cGraph, "documents", sr_graph_documents, 0);
     rb_define_method(cGraph, "constant_references", sr_graph_constant_references, 0);
     rb_define_method(cGraph, "method_references", sr_graph_method_references, 0);
+    rb_define_method(cGraph, "diagnostics", sr_graph_diagnostics, 0);
     rb_define_method(cGraph, "[]", sr_graph_aref, 1);
 }
