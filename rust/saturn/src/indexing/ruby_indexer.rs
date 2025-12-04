@@ -639,6 +639,10 @@ impl Visit<'_> for RubyIndexer<'_> {
             None
         };
 
+        if attached_target.is_none() {
+            return;
+        }
+
         // Create SingletonClassDefinition if we have an attached_target
         let definition_id = if let Some(attached_target) = attached_target {
             let offset = Offset::from_prism_location(&node.location());
@@ -1914,6 +1918,19 @@ mod tests {
                 });
             });
         });
+    }
+
+    #[test]
+    fn do_not_index_singleton_class_with_dynamic_expression() {
+        let context = index_source({
+            "
+            class << foo
+              def bar; end
+            end
+            "
+        });
+
+        assert_eq!(context.graph().definitions().len(), 0);
     }
 
     #[test]
