@@ -109,9 +109,24 @@ pub fn resolve_all(graph: &mut Graph) {
     // created
     for id in other_ids {
         let definition = graph.definitions().get(&id).unwrap();
-        let owner_id = *definition
-            .lexical_nesting_id()
-            .and_then(|lexical_nesting_id| graph.definitions_to_declarations().get(&lexical_nesting_id))
+        let mut lexical_nesting_id = *definition.lexical_nesting_id();
+
+        // Class variables bypass singleton classes entirely - they always belong to the base
+        // class or module, regardless of where they are defined. See ruby-behaviors.md for details.
+        if matches!(definition, Definition::ClassVariable(_)) {
+            while let Some(current_nesting_id) = lexical_nesting_id {
+                if let Some(nesting_def) = graph.definitions().get(&current_nesting_id)
+                    && matches!(nesting_def, Definition::SingletonClass(_))
+                {
+                    lexical_nesting_id = *nesting_def.lexical_nesting_id();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        let owner_id = *lexical_nesting_id
+            .and_then(|id| graph.definitions_to_declarations().get(&id))
             .unwrap_or(&OBJECT_ID);
 
         let owner = graph.declarations().get(&owner_id).unwrap();
@@ -795,6 +810,8 @@ mod tests {
             class Bar
               class << Foo
                 def baz; end
+
+                class Baz; end
               end
             end
             "
@@ -814,7 +831,30 @@ mod tests {
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>"))
             .unwrap();
-        assert_members(singleton, &["baz"]);
+        assert_members(singleton, &["baz", "Baz"]);
         assert_owner(singleton, "Foo");
+    }
+
+    #[test]
+    fn resolution_for_class_variable_in_nested_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+                @@bar = 123
+
+                class << self
+                  @@baz = 456
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo, &["<Foo>", "@@bar", "@@baz"]);
+        assert_owner(foo, "Object");
     }
 }
