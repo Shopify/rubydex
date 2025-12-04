@@ -15,6 +15,7 @@ end
 
 require "saturn/location"
 require "saturn/comment"
+require "saturn/diagnostic"
 require "saturn/graph"
 
 module Saturn
