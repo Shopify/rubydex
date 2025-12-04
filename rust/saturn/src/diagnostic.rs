@@ -1,7 +1,57 @@
 use crate::{model::ids::UriId, offset::Offset};
 
+macro_rules! codes {
+    (
+        $(
+            ($code:expr, $variant:ident, $severity:expr)
+        );* $(;)?
+    ) => {
+        #[derive(Debug)]
+        pub enum Code {
+            $(
+                $variant,
+            )*
+        }
+
+        impl Code {
+            #[must_use]
+            pub fn code(&self) -> u32 {
+                match self {
+                    $(
+                        Code::$variant => $code,
+                    )*
+                }
+            }
+
+            #[must_use]
+            pub fn severity(&self) -> Severity {
+                match self {
+                    $(
+                        Code::$variant => $severity,
+                    )*
+                }
+            }
+        }
+    };
+}
+
+codes! {
+    // 1000 - Files listing errors
+    (1000, PathError, Severity::Error);
+    (1001, FileReadError, Severity::Error);
+
+    // 2000 - Parsing errors
+    (2000, ParseError, Severity::Error);
+    (2001, ParseWarning, Severity::Warning);
+
+    // 3000 - Indexing errors
+
+    // 4000 - Resolution errors
+}
+
 #[derive(Debug)]
 pub struct Diagnostic {
+    code: u32,
     uri_id: UriId,
     offset: Offset,
     message: String,
@@ -10,8 +60,9 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     #[must_use]
-    pub fn new(uri_id: UriId, offset: Offset, message: String, severity: Severity) -> Self {
+    pub fn new(code: u32, uri_id: UriId, offset: Offset, message: String, severity: Severity) -> Self {
         Self {
+            code,
             uri_id,
             offset,
             message,
@@ -37,6 +88,11 @@ impl Diagnostic {
     #[must_use]
     pub fn severity(&self) -> &Severity {
         &self.severity
+    }
+
+    #[must_use]
+    pub fn code(&self) -> u32 {
+        self.code
     }
 }
 

@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::diagnostic::{Diagnostic, Severity};
+use crate::diagnostic::{Code, Diagnostic};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
@@ -179,13 +179,13 @@ impl Graph {
     /// # Panics
     ///
     /// This will panic if the URI ID is not found in the documents map
-    pub fn add_diagnostic(&mut self, uri_id: UriId, offset: Offset, message: String, severity: Severity) {
+    pub fn add_diagnostic(&mut self, code: &Code, uri_id: UriId, offset: Offset, message: String) {
         assert!(
             self.documents.contains_key(&uri_id),
             "URI ID not found in documents: {uri_id}"
         );
 
-        let diagnostic = Diagnostic::new(uri_id, offset, message, severity);
+        let diagnostic = Diagnostic::new(code.code(), uri_id, offset, message, code.severity());
         self.diagnostics.push(diagnostic);
     }
 

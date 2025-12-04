@@ -1,6 +1,6 @@
 //! Visit the Ruby AST and create the definitions.
 
-use crate::diagnostic::Severity;
+use crate::diagnostic::Code;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
@@ -60,17 +60,17 @@ impl<'a> RubyIndexer<'a> {
 
         for error in result.errors() {
             self.local_graph.add_diagnostic(
+                &Code::ParseError,
                 Offset::from_prism_location(&error.location()),
                 error.message().to_string(),
-                Severity::Error,
             );
         }
 
         for warning in result.warnings() {
             self.local_graph.add_diagnostic(
+                &Code::ParseWarning,
                 Offset::from_prism_location(&warning.location()),
                 warning.message().to_string(),
-                Severity::Warning,
             );
         }
 

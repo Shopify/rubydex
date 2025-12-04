@@ -1,5 +1,5 @@
 use crate::{
-    diagnostic::Severity,
+    diagnostic::Code,
     indexing::{local_graph::LocalGraph, ruby_indexer::RubyIndexer},
     model::{document::Document, graph::Graph, ids::UriId},
     offset::Offset,
@@ -42,9 +42,9 @@ pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) {
         let error = source.unwrap_err();
         let mut empty_graph = LocalGraph::new(uri_id, Document::new(uri));
         empty_graph.add_diagnostic(
+            &Code::FileReadError,
             Offset::new(0, 0),
             format!("Failed to read {file_path}: {error}"),
-            Severity::Error,
         );
         empty_graph
     };
@@ -114,10 +114,10 @@ pub fn collect_file_paths(graph: &mut Graph, paths: Vec<String>) -> Vec<String> 
                             Err(e) => {
                                 let uri_id = graph.add_document(format!("file:///{path}"));
                                 graph.add_diagnostic(
+                                    &Code::PathError,
                                     uri_id,
                                     Offset::none(),
                                     format!("Failed to read glob entry in '{path}': {e}"),
-                                    Severity::Error,
                                 );
                             }
                         }
@@ -126,10 +126,10 @@ pub fn collect_file_paths(graph: &mut Graph, paths: Vec<String>) -> Vec<String> 
                 Err(e) => {
                     let uri_id = graph.add_document(format!("file:///{path}"));
                     graph.add_diagnostic(
+                        &Code::PathError,
                         uri_id,
                         Offset::none(),
                         format!("Failed to read glob pattern '{path}/**/*.rb': {e}"),
-                        Severity::Error,
                     );
                 }
             }
@@ -145,10 +145,10 @@ pub fn collect_file_paths(graph: &mut Graph, paths: Vec<String>) -> Vec<String> 
 
         let uri_id = graph.add_document(format!("file:///{path}"));
         graph.add_diagnostic(
+            &Code::PathError,
             uri_id,
             Offset::none(),
             format!("Path '{path}' does not exist"),
-            Severity::Error,
         );
     }
 
