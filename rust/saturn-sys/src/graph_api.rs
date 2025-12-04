@@ -6,7 +6,6 @@ use libc::{c_char, c_void};
 use saturn::model::graph::Graph;
 use saturn::model::ids::DeclarationId;
 use saturn::{indexing, resolution};
-use std::ffi::CString;
 use std::{mem, ptr};
 
 pub type GraphPointer = *mut c_void;
@@ -46,32 +45,13 @@ where
 /// This function is unsafe because it dereferences raw pointers coming from C. The caller has to ensure that the Ruby
 /// VM will not free the pointers related to the string array while they are in use by Rust
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_index_all(
-    pointer: GraphPointer,
-    file_paths: *const *const c_char,
-    count: usize,
-) -> *const c_char {
+pub unsafe extern "C" fn sat_index_all(pointer: GraphPointer, file_paths: *const *const c_char, count: usize) {
     let file_paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(file_paths, count).unwrap() };
-    let mut all_errors = Vec::new();
-
-    let (documents, document_errors) = indexing::collect_file_paths(file_paths);
-    all_errors.extend(document_errors);
 
     with_graph(pointer, |graph| {
-        if let Err(errors) = indexing::index_in_parallel(graph, documents) {
-            all_errors.extend(errors.0);
-        }
-
-        if all_errors.is_empty() {
-            return ptr::null();
-        }
-
-        let concatenated_errors = all_errors.into_iter().map(|e| e.to_string()).collect::<Vec<_>>();
-        CString::new(concatenated_errors.join("\n"))
-            .unwrap()
-            .into_raw()
-            .cast_const()
-    })
+        let documents = indexing::collect_file_paths(graph, file_paths);
+        indexing::index_in_parallel(graph, documents);
+    });
 }
 
 /// Runs the resolver to compute declarations, ownership and related structures

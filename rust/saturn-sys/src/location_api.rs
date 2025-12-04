@@ -37,6 +37,18 @@ fn file_path_from_uri(uri: &str) -> Option<String> {
 /// - If the offset cannot be converted to a position.
 #[must_use]
 pub(crate) fn create_location_for_uri_and_offset(uri: &str, offset: &Offset) -> *mut Location {
+    if !offset.is_valid() {
+        let loc = Location {
+            uri: CString::new(uri).unwrap().into_raw().cast_const(),
+            start_line: 0,
+            end_line: 0,
+            start_column: 0,
+            end_column: 0,
+        };
+
+        return Box::into_raw(Box::new(loc));
+    }
+
     let path_str = file_path_from_uri(uri).unwrap_or_else(|| panic!("Failed to convert URI to file path: {uri}"));
     let source = fs::read_to_string(&path_str).unwrap_or_else(|_| panic!("Failed to read file at path {path_str}"));
 
