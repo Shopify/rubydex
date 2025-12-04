@@ -108,46 +108,111 @@ pub fn resolve_all(graph: &mut Graph) {
     // Handle other definitions that don't require resolution, but need to have their declarations and membership
     // created
     for id in other_ids {
-        let definition = graph.definitions().get(&id).unwrap();
-        let mut lexical_nesting_id = *definition.lexical_nesting_id();
-
-        // Class variables bypass singleton classes entirely - they always belong to the base
-        // class or module, regardless of where they are defined. See ruby-behaviors.md for details.
-        if matches!(definition, Definition::ClassVariable(_)) {
-            while let Some(current_nesting_id) = lexical_nesting_id {
-                if let Some(nesting_def) = graph.definitions().get(&current_nesting_id)
-                    && matches!(nesting_def, Definition::SingletonClass(_))
-                {
-                    lexical_nesting_id = *nesting_def.lexical_nesting_id();
-                } else {
-                    break;
-                }
-            }
-        }
-
-        let owner_id = *lexical_nesting_id
-            .and_then(|id| graph.definitions_to_declarations().get(&id))
-            .unwrap_or(&OBJECT_ID);
-
-        let owner = graph.declarations().get(&owner_id).unwrap();
-
-        let str_id = *match definition {
-            Definition::Method(it) => it.str_id(),
-            Definition::AttrAccessor(it) => it.str_id(),
-            Definition::AttrReader(it) => it.str_id(),
-            Definition::AttrWriter(it) => it.str_id(),
-            Definition::GlobalVariable(it) => it.str_id(),
-            Definition::InstanceVariable(it) => it.str_id(),
-            Definition::ClassVariable(it) => it.str_id(),
-            Definition::Class(_) | Definition::Module(_) | Definition::Constant(_) | Definition::SingletonClass(_) => {
-                panic!("Unexpected definition type. This shouldn't happen")
-            }
+        // Extract resolution strategy from definition (releases borrow before graph mutations)
+        let (str_id, strategy) = {
+            let definition = graph.definitions().get(&id).unwrap();
+            extract_owner_strategy(definition)
         };
 
+        let owner_id = match strategy {
+            OwnerResolution::MethodWithReceiver(receiver_name_id) => match resolve_constant(graph, receiver_name_id) {
+                Outcome::Resolved(receiver_decl_id) => get_or_create_singleton_class(graph, receiver_decl_id),
+                Outcome::Unresolved | Outcome::Retry => continue,
+            },
+            OwnerResolution::ClassVariable(lexical_nesting_id) => {
+                resolve_class_variable_owner(graph, lexical_nesting_id)
+            }
+            OwnerResolution::LexicalNesting(lexical_nesting_id) => resolve_lexical_owner(graph, lexical_nesting_id),
+        };
+
+        let owner = graph.declarations().get(&owner_id).unwrap();
         let name_str = graph.strings().get(&str_id).unwrap();
         let declaration_id = graph.add_declaration(format!("{}::{name_str}", owner.name()), id, owner_id);
         graph.add_member(&owner_id, declaration_id, str_id);
     }
+}
+
+/// Strategy for determining a definition's owner declaration
+enum OwnerResolution {
+    /// Method with explicit receiver - resolve receiver and use its singleton class
+    MethodWithReceiver(NameId),
+    /// Class variable - bypass singleton classes to find base class/module
+    ClassVariable(Option<DefinitionId>),
+    /// Standard definition - use lexical nesting directly
+    LexicalNesting(Option<DefinitionId>),
+}
+
+/// Extracts the name and owner resolution strategy from a definition.
+/// This is a pure extraction that doesn't mutate the graph.
+fn extract_owner_strategy(definition: &Definition) -> (StringId, OwnerResolution) {
+    match definition {
+        Definition::Method(method) => {
+            let str_id = *method.str_id();
+            if let Some(receiver) = method.receiver() {
+                (str_id, OwnerResolution::MethodWithReceiver(*receiver))
+            } else {
+                (str_id, OwnerResolution::LexicalNesting(*method.lexical_nesting_id()))
+            }
+        }
+        Definition::ClassVariable(cv) => (*cv.str_id(), OwnerResolution::ClassVariable(*cv.lexical_nesting_id())),
+        Definition::AttrAccessor(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
+        Definition::AttrReader(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
+        Definition::AttrWriter(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
+        Definition::GlobalVariable(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
+        Definition::InstanceVariable(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
+        Definition::Class(_) | Definition::Module(_) | Definition::Constant(_) | Definition::SingletonClass(_) => {
+            panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
+        }
+    }
+}
+
+/// Resolves owner for class variables, bypassing singleton classes.
+fn resolve_class_variable_owner(graph: &Graph, lexical_nesting_id: Option<DefinitionId>) -> DeclarationId {
+    let mut current_nesting = lexical_nesting_id;
+    while let Some(nesting_id) = current_nesting {
+        if let Some(nesting_def) = graph.definitions().get(&nesting_id)
+            && matches!(nesting_def, Definition::SingletonClass(_))
+        {
+            current_nesting = *nesting_def.lexical_nesting_id();
+        } else {
+            break;
+        }
+    }
+    *current_nesting
+        .and_then(|id| graph.definitions_to_declarations().get(&id))
+        .unwrap_or(&OBJECT_ID)
+}
+
+/// Resolves owner from lexical nesting.
+fn resolve_lexical_owner(graph: &Graph, lexical_nesting_id: Option<DefinitionId>) -> DeclarationId {
+    *lexical_nesting_id
+        .and_then(|id| graph.definitions_to_declarations().get(&id))
+        .unwrap_or(&OBJECT_ID)
+}
+
+/// Gets or creates a singleton class declaration for a given class/module declaration.
+/// For class `Foo`, this returns the declaration for `Foo::<Foo>`.
+fn get_or_create_singleton_class(graph: &mut Graph, owner_decl_id: DeclarationId) -> DeclarationId {
+    let owner_decl = graph.declarations().get(&owner_decl_id).unwrap();
+    let short_name = owner_decl.unqualified_name();
+    let singleton_short_name = format!("<{short_name}>");
+    let singleton_str_id = StringId::from(singleton_short_name.as_str());
+
+    if let Some(existing_id) = owner_decl.members().get(&singleton_str_id).copied() {
+        return existing_id;
+    }
+
+    let singleton_full_name = format!("{}::{}", owner_decl.name(), singleton_short_name);
+    let singleton_decl_id = DeclarationId::from(&singleton_full_name);
+
+    graph
+        .declarations_mut()
+        .entry(singleton_decl_id)
+        .or_insert_with(|| Declaration::new(singleton_full_name, owner_decl_id));
+
+    graph.add_member(&owner_decl_id, singleton_decl_id, singleton_str_id);
+
+    singleton_decl_id
 }
 
 // Handles the resolution of the namespace name, the creation of the declaration and membership
@@ -856,5 +921,52 @@ mod tests {
         let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["<Foo>", "@@bar", "@@baz"]);
         assert_owner(foo, "Object");
+    }
+
+    #[test]
+    fn resolution_for_method_with_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.bar; end
+
+              class << self
+                def self.nested_bar; end
+              end
+            end
+
+            class Bar
+              def Foo.baz; end
+
+              def self.qux; end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo_singleton = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>"))
+            .unwrap();
+        assert_members(foo_singleton, &["bar", "baz"]);
+        assert_owner(foo_singleton, "Foo");
+
+        let nested_foo_singleton = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>::<<Foo>>"))
+            .unwrap();
+        assert_members(nested_foo_singleton, &["nested_bar"]);
+        assert_owner(nested_foo_singleton, "Foo::<Foo>");
+
+        let bar_singleton = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Bar::<Bar>"))
+            .unwrap();
+        assert_members(bar_singleton, &["qux"]);
+        assert_owner(bar_singleton, "Bar");
     }
 }
