@@ -14,7 +14,6 @@ use std::sync::{
 use std::{fs, path::Path};
 use std::{sync::mpsc, thread};
 use url::Url;
-use xxhash_rust::xxh3::xxh3_64;
 
 pub mod local_graph;
 pub mod nesting_stack;
@@ -57,13 +56,6 @@ fn read_document_source(file_path: &String) -> (String, Vec<Errors>) {
     });
 
     (source, errors)
-}
-
-#[must_use]
-pub fn calculate_content_hash(source: &[u8]) -> u16 {
-    // Explicitly take only the lower 16 bits of the hash
-    // This is intentional as this is only used for document staleness check
-    (xxh3_64(source) & 0xFFFF) as u16
 }
 
 fn uri_from_file_path(path: &str) -> Result<String, Errors> {
