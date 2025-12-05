@@ -8,13 +8,14 @@ use crate::model::ids::UriId;
 use crate::offset::Offset;
 use crate::position::Position;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test_utils"))]
 pub struct LocalGraphTest {
     uri: String,
     source: String,
     graph: LocalGraph,
 }
 
+#[cfg(any(test, feature = "test_utils"))]
 impl LocalGraphTest {
     #[must_use]
     pub fn new(uri: &str, source: &str) -> Self {
