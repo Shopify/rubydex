@@ -76,5 +76,3 @@ When necessary, commands can be executed for the Rust code.
 - `cargo test test_name`: runs a specific tests example
 - `bundle exec rake lint_rust`: lints the Rust code
 - `bundle exec rake format_rust`: auto formats the Rust code
-
-Note: Due to a bug, the indexer requires absolute paths or shell-expanded variables (e.g., `$HOME/path`). Tilde (`~`) is not automatically expanded by Rust. The SQLite database file (`graph.db`) will be automatically created in the target directory.
