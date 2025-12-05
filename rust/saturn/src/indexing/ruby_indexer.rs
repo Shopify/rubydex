@@ -1032,6 +1032,54 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.visit(&node.value());
     }
 
+    fn visit_instance_variable_and_write_node(&mut self, node: &ruby_prism::InstanceVariableAndWriteNode) {
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, lexical_nesting_id, uri_id| {
+                Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                    str_id,
+                    uri_id,
+                    offset,
+                    comments,
+                    lexical_nesting_id,
+                )))
+            },
+        );
+        self.visit(&node.value());
+    }
+
+    fn visit_instance_variable_operator_write_node(&mut self, node: &ruby_prism::InstanceVariableOperatorWriteNode) {
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, lexical_nesting_id, uri_id| {
+                Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                    str_id,
+                    uri_id,
+                    offset,
+                    comments,
+                    lexical_nesting_id,
+                )))
+            },
+        );
+        self.visit(&node.value());
+    }
+
+    fn visit_instance_variable_or_write_node(&mut self, node: &ruby_prism::InstanceVariableOrWriteNode) {
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, lexical_nesting_id, uri_id| {
+                Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+                    str_id,
+                    uri_id,
+                    offset,
+                    comments,
+                    lexical_nesting_id,
+                )))
+            },
+        );
+        self.visit(&node.value());
+    }
+
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
         self.add_definition_from_location(
             &node.name_loc(),
@@ -2280,22 +2328,76 @@ mod tests {
               @bar = 2
               @baz, @qux = 3, 4
             end
+
+            @bar &= 5
+            @baz &&= 6
+            @qux ||= 7
+
+            class Bar
+              @foo &= 8
+              @bar &&= 9
+              @baz ||= 10
+            end
             "
         });
-
-        assert_eq!(context.graph().definitions().len(), 5);
 
         assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
             assert_name_eq!(&context, "@foo", def);
             assert!(def.lexical_nesting_id().is_none());
         });
 
-        assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@bar", def);
+        assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
+                assert_name_eq!(&context, "@bar", def);
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[0], def.id());
+            });
 
-            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[0], def.id());
+            assert_definition_at!(&context, "5:3-5:7", InstanceVariable, |def| {
+                assert_name_eq!(&context, "@baz", def);
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "5:9-5:13", InstanceVariable, |def| {
+                assert_name_eq!(&context, "@qux", def);
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[2], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "8:1-8:5", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@bar", def);
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "9:1-9:5", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@baz", def);
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "10:1-10:5", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@qux", def);
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "12:1-16:4", Class, |bar_class_def| {
+            assert_definition_at!(&context, "13:3-13:7", InstanceVariable, |def| {
+                assert_name_eq!(&context, "@foo", def);
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "14:3-14:7", InstanceVariable, |def| {
+                assert_name_eq!(&context, "@bar", def);
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "15:3-15:7", InstanceVariable, |def| {
+                assert_name_eq!(&context, "@baz", def);
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[2], def.id());
             });
         });
     }
