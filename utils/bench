@@ -15,8 +15,7 @@
 # What this script does:
 # 1. Generate the corpus if it doesn't exist (for predefined sizes only)
 # 2. Build saturn_cli in release mode
-# 3. Clear any existing database
-# 4. Benchmark the indexer (measuring memory usage and execution time)
+# 3. Benchmark the indexer (measuring memory usage and execution time)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
