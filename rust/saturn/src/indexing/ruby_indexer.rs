@@ -680,60 +680,49 @@ impl Visit<'_> for RubyIndexer<'_> {
             None
         };
 
-        if attached_target.is_none() {
+        let Some(attached_target) = attached_target else {
             return;
-        }
-
-        // Create SingletonClassDefinition if we have an attached_target
-        let definition_id = if let Some(attached_target) = attached_target {
-            let offset = Offset::from_prism_location(&node.location());
-            let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-            let lexical_nesting_id = self.parent_nesting_id().copied();
-
-            let singleton_class_name = {
-                let name = self
-                    .local_graph
-                    .names()
-                    .get(&attached_target)
-                    .expect("Attached target name should exist");
-                let target_str = self
-                    .local_graph
-                    .strings()
-                    .get(name.str())
-                    .expect("Attached target string should exist");
-                format!("<{target_str}>")
-            };
-
-            let string_id = self.local_graph.intern_string(singleton_class_name);
-            let name_id = self
-                .local_graph
-                .add_name(Name::new(string_id, Some(attached_target), None));
-
-            let definition = Definition::SingletonClass(Box::new(SingletonClassDefinition::new(
-                name_id,
-                self.uri_id,
-                offset,
-                comments,
-                lexical_nesting_id,
-            )));
-
-            let definition_id = self.local_graph.add_definition(definition);
-
-            self.add_member_to_current_nesting(definition_id);
-
-            Some(definition_id)
-        } else {
-            None
         };
 
+        let offset = Offset::from_prism_location(&node.location());
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let lexical_nesting_id = self.parent_nesting_id().copied();
+
+        let singleton_class_name = {
+            let name = self
+                .local_graph
+                .names()
+                .get(&attached_target)
+                .expect("Attached target name should exist");
+            let target_str = self
+                .local_graph
+                .strings()
+                .get(name.str())
+                .expect("Attached target string should exist");
+            format!("<{target_str}>")
+        };
+
+        let string_id = self.local_graph.intern_string(singleton_class_name);
+        let name_id = self
+            .local_graph
+            .add_name(Name::new(string_id, Some(attached_target), None));
+
+        let definition = Definition::SingletonClass(Box::new(SingletonClassDefinition::new(
+            name_id,
+            self.uri_id,
+            offset,
+            comments,
+            lexical_nesting_id,
+        )));
+
+        let definition_id = self.local_graph.add_definition(definition);
+
+        self.add_member_to_current_nesting(definition_id);
+
         if let Some(body) = node.body() {
-            if let Some(definition_id) = definition_id {
-                self.definitions_stack.push(definition_id);
-                self.visit(&body);
-                self.definitions_stack.pop();
-            } else {
-                self.visit(&body);
-            }
+            self.definitions_stack.push(definition_id);
+            self.visit(&body);
+            self.definitions_stack.pop();
         }
     }
 
