@@ -729,6 +729,7 @@ dependencies = [
  "predicates",
  "regex",
  "ruby-prism",
+ "saturn",
  "tempfile",
  "url",
  "xxhash-rust",

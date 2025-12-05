@@ -9,6 +9,25 @@ pub struct Context {
     absolute_path: PathBuf,
 }
 
+/// Executes a closure with a new temporary context, ensuring cleanup afterwards.
+///
+/// # Examples
+///
+/// ```
+/// use saturn::test_utils::with_context;
+///
+/// with_context(|context| {
+///     context.touch("foo.rb");
+/// });
+/// ```
+pub fn with_context<F, R>(f: F) -> R
+where
+    F: FnOnce(&Context) -> R,
+{
+    let context = Context::new();
+    f(&context)
+}
+
 impl Context {
     /// Creates a new test context in a temporary directory
     ///
@@ -191,5 +210,17 @@ mod tests {
                 "
             }),
         );
+    }
+
+    #[test]
+    fn with_context_creates_and_cleans_up_temp_dir() {
+        let root = with_context(|context| {
+            let root = context.absolute_path();
+            assert!(root.exists());
+            context.touch("foo.rb");
+            root
+        });
+
+        assert!(!root.exists());
     }
 }
