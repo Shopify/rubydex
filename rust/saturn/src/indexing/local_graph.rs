@@ -1,10 +1,11 @@
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Severity};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef};
 use crate::model::references::{ConstantReference, MethodRef};
+use crate::offset::Offset;
 
 type LocalGraphParts = (
     UriId,
@@ -127,7 +128,8 @@ impl LocalGraph {
         &self.diagnostics
     }
 
-    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+    pub fn add_diagnostic(&mut self, offset: Offset, message: String, severity: Severity) {
+        let diagnostic = Diagnostic::new(self.uri_id, offset, message, severity);
         self.diagnostics.push(diagnostic);
     }
 
