@@ -275,7 +275,7 @@ impl<'a> RubyIndexer<'a> {
             Definition::Class(class_def) => Some(*class_def.name_id()),
             Definition::Module(module_def) => Some(*module_def.name_id()),
             Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
-            _ => None,
+            _ => panic!("current nesting is not a class/module/singleton class"),
         }
     }
 
