@@ -1,7 +1,7 @@
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use regex::Regex;
-use saturn::test_utils::with_context;
+use saturn::test_utils::{normalize_indentation, with_context};
 use std::process::Command;
 
 #[test]
@@ -71,21 +71,24 @@ fn visualize_simple_class() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let normalized = normalize_visualization_output(&stdout);
 
-        let expected = r#"digraph {
-    rankdir=TB;
+        let expected = normalize_indentation({
+            r#"
+            digraph {
+                rankdir=TB;
 
-    "Name:Object" [label="Object",shape=hexagon];
-    "Name:SimpleClass" [label="SimpleClass",shape=hexagon];
-    "Name:SimpleClass" -> "def_<ID>" [dir=both];
+                "Name:Object" [label="Object",shape=hexagon];
+                "Name:SimpleClass" [label="SimpleClass",shape=hexagon];
+                "Name:SimpleClass" -> "def_<ID>" [dir=both];
 
-    "def_<ID>" [label="Class(SimpleClass)",shape=ellipse];
+                "def_<ID>" [label="Class(SimpleClass)",shape=ellipse];
 
-    "file://<PATH>/simple.rb" [label="simple.rb",shape=box];
-    "def_<ID>" -> "file://<PATH>/simple.rb";
+                "file://<PATH>/simple.rb" [label="simple.rb",shape=box];
+                "def_<ID>" -> "file://<PATH>/simple.rb";
 
-}
+            }
 
-"#;
+            "#
+        });
 
         assert_eq!(normalized, expected);
     });
