@@ -9,3 +9,4 @@ pub mod ids;
 pub mod integrity;
 pub mod name;
 pub mod references;
+pub mod visibility;

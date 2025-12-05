@@ -29,6 +29,7 @@ use crate::{
     model::{
         comment::Comment,
         ids::{DefinitionId, NameId, StringId, UriId},
+        visibility::Visibility,
     },
     offset::Offset,
 };
@@ -504,9 +505,11 @@ pub struct MethodDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
     is_singleton: bool,
+    visibility: Visibility,
 }
 
 impl MethodDefinition {
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub const fn new(
         str_id: StringId,
@@ -516,6 +519,7 @@ impl MethodDefinition {
         lexical_nesting_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
         is_singleton: bool,
+        visibility: Visibility,
     ) -> Self {
         Self {
             str_id,
@@ -525,6 +529,7 @@ impl MethodDefinition {
             lexical_nesting_id,
             parameters,
             is_singleton,
+            visibility,
         }
     }
 
@@ -566,6 +571,11 @@ impl MethodDefinition {
     #[must_use]
     pub fn is_singleton(&self) -> bool {
         self.is_singleton
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 }
 
@@ -618,6 +628,7 @@ pub struct AttrAccessorDefinition {
     offset: Offset,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
+    visibility: Visibility,
 }
 
 impl AttrAccessorDefinition {
@@ -628,6 +639,7 @@ impl AttrAccessorDefinition {
         offset: Offset,
         comments: Vec<Comment>,
         lexical_nesting_id: Option<DefinitionId>,
+        visibility: Visibility,
     ) -> Self {
         Self {
             str_id,
@@ -635,6 +647,7 @@ impl AttrAccessorDefinition {
             offset,
             comments,
             lexical_nesting_id,
+            visibility,
         }
     }
 
@@ -666,6 +679,11 @@ impl AttrAccessorDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 }
 
@@ -682,6 +700,7 @@ pub struct AttrReaderDefinition {
     offset: Offset,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
+    visibility: Visibility,
 }
 
 impl AttrReaderDefinition {
@@ -692,6 +711,7 @@ impl AttrReaderDefinition {
         offset: Offset,
         comments: Vec<Comment>,
         lexical_nesting_id: Option<DefinitionId>,
+        visibility: Visibility,
     ) -> Self {
         Self {
             str_id,
@@ -699,6 +719,7 @@ impl AttrReaderDefinition {
             offset,
             comments,
             lexical_nesting_id,
+            visibility,
         }
     }
 
@@ -730,6 +751,11 @@ impl AttrReaderDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 }
 
@@ -746,6 +772,7 @@ pub struct AttrWriterDefinition {
     offset: Offset,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
+    visibility: Visibility,
 }
 
 impl AttrWriterDefinition {
@@ -756,6 +783,7 @@ impl AttrWriterDefinition {
         offset: Offset,
         comments: Vec<Comment>,
         lexical_nesting_id: Option<DefinitionId>,
+        visibility: Visibility,
     ) -> Self {
         Self {
             str_id,
@@ -763,6 +791,7 @@ impl AttrWriterDefinition {
             offset,
             comments,
             lexical_nesting_id,
+            visibility,
         }
     }
 
@@ -794,6 +823,11 @@ impl AttrWriterDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
     }
 }
 
