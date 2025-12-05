@@ -3,6 +3,7 @@ mod graph_test;
 mod local_graph_test;
 
 pub use context::Context;
+pub use context::with_context;
 pub use graph_test::GraphTest;
 pub use local_graph_test::LocalGraphTest;
 
