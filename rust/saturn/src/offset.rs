@@ -4,6 +4,8 @@
 //! within a file. It can be used to track positions in source code and convert
 //! between byte offsets and line/column positions.
 
+pub const INVALID_OFFSET: u32 = u32::MAX;
+
 /// Represents a byte offset range within a specific file.
 ///
 /// An `Offset` tracks a contiguous span of bytes from `start` to `end` within a file. This is useful for
@@ -26,6 +28,18 @@ impl Offset {
     #[must_use]
     pub const fn new(start: u32, end: u32) -> Self {
         Self { start, end }
+    }
+
+    /// Creates an invalid `Offset` with both start and end set to `INVALID_OFFSET`.
+    ///
+    /// This is useful for representing the absence of an offset, such as when a file is not found or if the
+    /// error cannot be converted to an offset inside the file.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            start: INVALID_OFFSET,
+            end: INVALID_OFFSET,
+        }
     }
 
     /// # Panics
@@ -53,5 +67,10 @@ impl Offset {
     #[must_use]
     pub fn end(&self) -> u32 {
         self.end
+    }
+
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.start != INVALID_OFFSET && self.end != INVALID_OFFSET
     }
 }

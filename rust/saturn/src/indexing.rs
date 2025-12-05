@@ -1,10 +1,8 @@
 use crate::{
-    errors::{Errors, MultipleErrors},
-    indexing::{
-        local_graph::LocalGraph,
-        ruby_indexer::{IndexerParts, RubyIndexer},
-    },
+    diagnostic::Severity,
+    indexing::{local_graph::LocalGraph, ruby_indexer::RubyIndexer},
     model::{document::Document, graph::Graph, ids::UriId},
+    offset::Offset,
 };
 use glob::glob;
 use std::sync::{
@@ -28,50 +26,45 @@ pub mod ruby_indexer;
 /// # Panics
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
-pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
-    let index_document = |file_path: &String| -> IndexerParts {
+pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) {
+    let index_document = |file_path: &String| -> LocalGraph {
         let uri = uri_from_file_path(file_path).unwrap();
         let uri_id = UriId::from(&uri);
 
-        let (source, errors) = read_document_source(file_path);
-        if !errors.is_empty() {
-            return (LocalGraph::new(uri_id, Document::new(uri)), errors);
+        let source = fs::read_to_string(file_path);
+
+        if let Ok(source) = source {
+            let mut ruby_indexer = RubyIndexer::new(uri, &source);
+            ruby_indexer.index();
+            return ruby_indexer.local_graph();
         }
 
-        let mut ruby_indexer = RubyIndexer::new(uri, &source);
-        ruby_indexer.index();
-        ruby_indexer.into_parts()
+        let error = source.unwrap_err();
+        let mut empty_graph = LocalGraph::new(uri_id, Document::new(uri));
+        empty_graph.add_diagnostic(
+            Offset::new(0, 0),
+            format!("Failed to read {file_path}: {error}"),
+            Severity::Error,
+        );
+        empty_graph
     };
 
-    with_parallel_workers(graph, file_paths, index_document)
+    with_parallel_workers(graph, file_paths, index_document);
 }
 
-/// Reads the source content from a document, either from memory or disk
-fn read_document_source(file_path: &String) -> (String, Vec<Errors>) {
-    let mut errors = Vec::new();
-
-    let source = fs::read_to_string(file_path).unwrap_or_else(|e| {
-        errors.push(Errors::FileReadError(format!("Failed to read {file_path}: {e}")));
-        String::new()
-    });
-
-    (source, errors)
-}
-
-fn uri_from_file_path(path: &str) -> Result<String, Errors> {
+fn uri_from_file_path(path: &str) -> Result<String, String> {
     // Resolve the path to an absolute path
-    let path =
-        fs::canonicalize(path).map_err(|_e| Errors::FileReadError(format!("Failed to canonicalize path '{path}'")))?;
+    let path = fs::canonicalize(path).map_err(|_e| format!("Failed to canonicalize path '{path}'"))?;
     Ok(Url::from_file_path(&path)
-        .map_err(|_e| Errors::InvalidUri(format!("Couldn't build URI from path '{:?}'", &path.display())))?
+        .map_err(|_e| format!("Couldn't build URI from path '{:?}'", &path.display()))?
         .to_string())
 }
 
-fn with_parallel_workers<F>(graph: &mut Graph, file_paths: Vec<String>, worker_fn: F) -> Result<(), MultipleErrors>
+fn with_parallel_workers<F>(graph: &mut Graph, file_paths: Vec<String>, worker_fn: F)
 where
-    F: Fn(&String) -> IndexerParts + Send + Clone + 'static,
+    F: Fn(&String) -> LocalGraph + Send + Clone + 'static,
 {
-    let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
+    let (tx, rx): (Sender<LocalGraph>, Receiver<LocalGraph>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let mut threads = Vec::with_capacity(num_threads);
     let document_queue = Arc::new(Mutex::new(file_paths));
@@ -95,17 +88,8 @@ where
 
     drop(tx);
 
-    let mut all_errors = Vec::new();
-    for result in rx {
-        let (local_graph, errors) = result;
+    for local_graph in rx {
         graph.update(local_graph);
-        all_errors.extend(errors);
-    }
-
-    if all_errors.is_empty() {
-        Ok(())
-    } else {
-        Err(MultipleErrors(all_errors))
     }
 }
 
@@ -115,8 +99,7 @@ where
 ///
 /// Panics if there's a bug in how we're handling the arc mutex, like trying to acquire locks twice
 #[must_use]
-pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
-    let mut errors = Vec::new();
+pub fn collect_file_paths(graph: &mut Graph, paths: Vec<String>) -> Vec<String> {
     let mut file_paths = Vec::new();
 
     for path in paths {
@@ -128,16 +111,26 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
                     for entry in entries {
                         match entry {
                             Ok(path) => file_paths.push(path.to_string_lossy().into_owned()),
-                            Err(e) => errors.push(Errors::FileReadError(format!(
-                                "Failed to read glob entry in '{path}': {e}"
-                            ))),
+                            Err(e) => {
+                                let uri_id = graph.add_document(format!("file:///{path}"));
+                                graph.add_diagnostic(
+                                    uri_id,
+                                    Offset::none(),
+                                    format!("Failed to read glob entry in '{path}': {e}"),
+                                    Severity::Error,
+                                );
+                            }
                         }
                     }
                 }
                 Err(e) => {
-                    errors.push(Errors::FileReadError(format!(
-                        "Failed to read glob pattern '{path}/**/*.rb': {e}"
-                    )));
+                    let uri_id = graph.add_document(format!("file:///{path}"));
+                    graph.add_diagnostic(
+                        uri_id,
+                        Offset::none(),
+                        format!("Failed to read glob pattern '{path}/**/*.rb': {e}"),
+                        Severity::Error,
+                    );
                 }
             }
 
@@ -150,10 +143,16 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
             continue;
         }
 
-        errors.push(Errors::FileReadError(format!("Path '{path}' does not exist")));
+        let uri_id = graph.add_document(format!("file:///{path}"));
+        graph.add_diagnostic(
+            uri_id,
+            Offset::none(),
+            format!("Path '{path}' does not exist"),
+            Severity::Error,
+        );
     }
 
-    (file_paths, errors)
+    file_paths
 }
 
 #[cfg(test)]
@@ -163,8 +162,9 @@ mod tests {
     use super::*;
     use crate::test_utils::Context;
 
-    fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<Errors>) {
-        let (file_paths, errors) = collect_file_paths(
+    fn collect_document_paths(graph: &mut Graph, context: &Context, paths: &[&str]) -> Vec<String> {
+        let file_paths = collect_file_paths(
+            graph,
             paths
                 .iter()
                 .map(|p| context.absolute_path_to(p).to_string_lossy().into_owned())
@@ -178,20 +178,23 @@ mod tests {
 
         paths.sort();
 
-        (paths, errors)
+        paths
     }
 
     #[test]
     fn collect_all_documents() {
         let context = Context::new();
+
         let baz = Path::new("bar").join("baz.rb");
         let qux = Path::new("bar").join("qux.rb");
         let bar = Path::new("foo").join("bar.rb");
+
         context.touch(&baz);
         context.touch(&qux);
         context.touch(&bar);
 
-        let (paths, errors) = collect_document_paths(&context, &["foo", "bar"]);
+        let mut graph = Graph::new();
+        let paths = collect_document_paths(&mut graph, &context, &["foo", "bar"]);
 
         assert_eq!(
             paths,
@@ -201,7 +204,7 @@ mod tests {
                 bar.to_str().unwrap().to_string()
             ]
         );
-        assert!(errors.is_empty());
+        assert!(graph.diagnostics().is_empty());
     }
 
     #[test]
@@ -214,35 +217,40 @@ mod tests {
         context.touch(&baz);
         context.touch(&qux);
         context.touch(&bar);
-        let (paths, errors) = collect_document_paths(&context, &["bar"]);
+
+        let mut graph = Graph::new();
+        let paths = collect_document_paths(&mut graph, &context, &["bar"]);
 
         assert_eq!(
             paths,
             vec![baz.to_str().unwrap().to_string(), qux.to_str().unwrap().to_string()]
         );
-        assert!(errors.is_empty());
+        assert!(graph.diagnostics().is_empty());
     }
 
     #[test]
     fn collect_non_existing_paths() {
         let context = Context::new();
 
-        let (documents, errors) = collect_file_paths(vec![
-            context
-                .absolute_path_to("non_existing_path")
-                .to_string_lossy()
-                .into_owned(),
-        ]);
-
-        assert!(documents.is_empty());
+        let mut graph = Graph::new();
+        let _paths = collect_file_paths(
+            &mut graph,
+            vec![
+                context
+                    .absolute_path_to("non_existing_path")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+        );
 
         assert_eq!(
-            errors
+            graph
+                .diagnostics()
                 .iter()
-                .map(std::string::ToString::to_string)
+                .map(|d| d.message().to_string())
                 .collect::<Vec<String>>(),
             vec![format!(
-                "File read error: Path '{}' does not exist",
+                "Path '{}' does not exist",
                 context.absolute_path_to("non_existing_path").display()
             )]
         );
@@ -266,9 +274,9 @@ mod tests {
         let relative_to_pwd = &dots.join(absolute_path);
 
         let mut graph = Graph::new();
-        let errors = index_in_parallel(&mut graph, vec![relative_to_pwd.to_str().unwrap().to_string()]);
+        index_in_parallel(&mut graph, vec![relative_to_pwd.to_str().unwrap().to_string()]);
 
-        assert!(errors.is_ok());
+        assert!(graph.diagnostics().is_empty());
         assert_eq!(graph.documents().len(), 1);
     }
 }

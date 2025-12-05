@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Severity};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
@@ -11,6 +11,7 @@ use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, String
 use crate::model::name::{NameRef, ResolvedName};
 // use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ConstantReference, MethodRef};
+use crate::offset::Offset;
 use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
@@ -145,6 +146,12 @@ impl Graph {
         &self.documents
     }
 
+    pub fn add_document(&mut self, uri: String) -> UriId {
+        let uri_id = UriId::from(&uri);
+        self.documents.insert(uri_id, Document::new(uri));
+        uri_id
+    }
+
     #[must_use]
     pub fn definitions_to_declarations(&self) -> &IdentityHashMap<DefinitionId, DeclarationId> {
         &self.definitions_to_declarations
@@ -165,6 +172,21 @@ impl Graph {
     #[must_use]
     pub fn diagnostics(&self) -> &Vec<Diagnostic> {
         &self.diagnostics
+    }
+
+    /// Adds a diagnostic to the graph.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if the URI ID is not found in the documents map
+    pub fn add_diagnostic(&mut self, uri_id: UriId, offset: Offset, message: String, severity: Severity) {
+        assert!(
+            self.documents.contains_key(&uri_id),
+            "URI ID not found in documents: {uri_id}"
+        );
+
+        let diagnostic = Diagnostic::new(uri_id, offset, message, severity);
+        self.diagnostics.push(diagnostic);
     }
 
     #[must_use]

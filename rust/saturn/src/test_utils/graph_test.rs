@@ -28,7 +28,7 @@ impl GraphTest {
     fn index_source(uri: &str, source: &str) -> LocalGraph {
         let mut indexer = RubyIndexer::new(uri.to_string(), source);
         indexer.index();
-        indexer.into_parts().0
+        indexer.local_graph()
     }
 
     pub fn index_uri(&mut self, uri: &str, source: &str) {

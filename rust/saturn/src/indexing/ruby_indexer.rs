@@ -1,7 +1,6 @@
 //! Visit the Ruby AST and create the definitions.
 
 use crate::diagnostic::Severity;
-use crate::errors::Errors;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
@@ -16,8 +15,6 @@ use crate::model::references::{ConstantReference, MethodRef};
 use crate::offset::Offset;
 
 use ruby_prism::{ParseResult, Visit};
-
-pub type IndexerParts = (LocalGraph, Vec<Errors>);
 
 #[derive(Clone, Copy)]
 enum MixinType {
@@ -34,7 +31,6 @@ pub struct RubyIndexer<'a> {
     uri_id: UriId,
     local_graph: LocalGraph,
     source: &'a str,
-    errors: Vec<Errors>,
     comments: Vec<CommentGroup>,
     definitions_stack: Vec<DefinitionId>,
 }
@@ -49,15 +45,14 @@ impl<'a> RubyIndexer<'a> {
             uri_id,
             local_graph,
             source,
-            errors: Vec::new(),
             comments: Vec::new(),
             definitions_stack: Vec::new(),
         }
     }
 
     #[must_use]
-    pub fn into_parts(self) -> IndexerParts {
-        (self.local_graph, self.errors)
+    pub fn local_graph(self) -> LocalGraph {
+        self.local_graph
     }
 
     pub fn index(&mut self) {

@@ -1,9 +1,8 @@
-use std::{error::Error, mem};
+use std::mem;
 
 use clap::Parser;
 
 use saturn::{
-    errors::MultipleErrors,
     indexing::{self},
     model::graph::Graph,
     resolution,
@@ -34,7 +33,7 @@ struct Args {
     stats: bool,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
     let args = Args::parse();
 
     if args.stats {
@@ -42,13 +41,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut graph = Graph::new();
-    let (file_paths, errors) = time_it!(listing, { indexing::collect_file_paths(vec![args.dir]) });
+    let file_paths = time_it!(listing, { indexing::collect_file_paths(&mut graph, vec![args.dir]) });
 
-    if !errors.is_empty() {
-        return Err(Box::new(MultipleErrors(errors)));
-    }
-
-    time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
+    time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) });
 
     time_it!(resolution, {
         resolution::resolve_all(&mut graph);
@@ -94,6 +89,4 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Forget the graph so we don't have to wait for deallocation and let the system reclaim the memory at exit
     mem::forget(graph);
-
-    Ok(())
 }
