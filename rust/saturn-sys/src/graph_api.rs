@@ -1,6 +1,5 @@
 //! This file provides the C API for the Graph object
 
-// use crate::location_api::create_location_for_uri_and_offset; // no longer used here
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::utils;
 use libc::{c_char, c_void};

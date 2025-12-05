@@ -158,7 +158,7 @@ pub unsafe extern "C" fn sat_constant_reference_location(pointer: GraphPointer, 
             .expect("Document should exist")
             .uri()
             .to_string();
-        create_location_for_uri_and_offset(&uri, reference.offset().start(), reference.offset().end())
+        create_location_for_uri_and_offset(&uri, reference.offset())
     })
 }
 
@@ -184,6 +184,6 @@ pub unsafe extern "C" fn sat_method_reference_location(pointer: GraphPointer, re
             .expect("Document should exist")
             .uri()
             .to_string();
-        create_location_for_uri_and_offset(&uri, reference.offset().start(), reference.offset().end())
+        create_location_for_uri_and_offset(&uri, reference.offset())
     })
 }
