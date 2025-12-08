@@ -3,11 +3,12 @@ mod graph_test;
 mod local_graph_test;
 
 pub use context::Context;
+pub use context::with_context;
 pub use graph_test::GraphTest;
 pub use local_graph_test::LocalGraphTest;
 
 #[must_use]
-pub(crate) fn normalize_indentation(input: &str) -> String {
+pub fn normalize_indentation(input: &str) -> String {
     let input = if let Some(rest) = input.strip_prefix('\n') {
         match rest.chars().next() {
             Some(' ' | '\t') => rest,

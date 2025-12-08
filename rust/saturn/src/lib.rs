@@ -8,5 +8,5 @@ pub mod resolution;
 pub mod stats;
 pub mod visualization;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;
