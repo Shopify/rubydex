@@ -1085,6 +1085,44 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.visit(&node.value());
     }
 
+    fn visit_global_variable_and_write_node(&mut self, node: &ruby_prism::GlobalVariableAndWriteNode<'_>) {
+        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, nesting_id, uri_id| {
+            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                str_id, uri_id, offset, comments, nesting_id,
+            )))
+        });
+        self.visit(&node.value());
+    }
+
+    fn visit_global_variable_or_write_node(&mut self, node: &ruby_prism::GlobalVariableOrWriteNode<'_>) {
+        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, nesting_id, uri_id| {
+            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                str_id, uri_id, offset, comments, nesting_id,
+            )))
+        });
+        self.visit(&node.value());
+    }
+
+    fn visit_global_variable_operator_write_node(&mut self, node: &ruby_prism::GlobalVariableOperatorWriteNode<'_>) {
+        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, nesting_id, uri_id| {
+            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                str_id, uri_id, offset, comments, nesting_id,
+            )))
+        });
+        self.visit(&node.value());
+    }
+
+    fn visit_alias_global_variable_node(&mut self, node: &ruby_prism::AliasGlobalVariableNode<'_>) {
+        self.add_definition_from_location(
+            &node.new_name().location(),
+            |str_id, offset, comments, nesting_id, uri_id| {
+                Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                    str_id, uri_id, offset, comments, nesting_id,
+                )))
+            },
+        );
+    }
+
     fn visit_instance_variable_and_write_node(&mut self, node: &ruby_prism::InstanceVariableAndWriteNode) {
         self.add_definition_from_location(
             &node.name_loc(),
@@ -2602,10 +2640,15 @@ mod tests {
             class Foo
               $qux = 2
             end
+
+            $one &= 1
+            $two &&= 1
+            $three ||= 1
+            alias $new, $one
             "
         });
 
-        assert_eq!(context.graph().definitions().len(), 5);
+        assert_eq!(context.graph().definitions().len(), 9);
 
         assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
             assert_name_eq!(&context, "$foo", def);
@@ -2629,6 +2672,26 @@ mod tests {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
             });
+        });
+
+        assert_definition_at!(&context, "8:1-8:5", GlobalVariable, |def| {
+            assert_name_eq!(&context, "$one", def);
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "9:1-9:5", GlobalVariable, |def| {
+            assert_name_eq!(&context, "$two", def);
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "10:1-10:7", GlobalVariable, |def| {
+            assert_name_eq!(&context, "$three", def);
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "11:7-11:11", GlobalVariable, |def| {
+            assert_name_eq!(&context, "$new", def);
+            assert!(def.lexical_nesting_id().is_none());
         });
     }
 
