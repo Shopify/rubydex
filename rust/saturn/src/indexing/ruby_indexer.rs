@@ -2143,22 +2143,6 @@ mod tests {
     }
 
     #[test]
-    fn index_mixin_extend_definition_on_class() {
-        let context = index_source({
-            "
-            class Foo
-              extend Bar
-              extend Baz
-            end
-            "
-        });
-
-        assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
-            assert_extends_eq!(&context, class_def, vec!["Bar", "Baz"]);
-        });
-    }
-
-    #[test]
     fn index_constant_in_singleton_class_definition() {
         let context = index_source({
             "
@@ -3573,6 +3557,24 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
             assert_prepends_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_extends_in_class() {
+        let context = index_source({
+            "
+            class Foo
+              extend Bar
+              extend Baz
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
+            assert_extends_eq!(&context, class_def, vec!["Bar", "Baz"]);
         });
     }
 }
