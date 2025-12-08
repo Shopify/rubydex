@@ -2644,7 +2644,7 @@ mod tests {
             $one &= 1
             $two &&= 1
             $three ||= 1
-            alias $new, $one
+            alias $new $one
             "
         });
 
