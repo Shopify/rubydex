@@ -68,22 +68,13 @@ impl Graph {
         &self.declarations
     }
 
-    pub fn add_declaration(
-        &mut self,
-        fully_qualified_name: String,
-        definition_id: DefinitionId,
-        owner_id: DeclarationId,
-    ) -> DeclarationId {
-        let declaration_id = DeclarationId::from(&fully_qualified_name);
-
-        let declaration = self
-            .declarations
-            .entry(declaration_id)
-            .or_insert_with(|| Declaration::new(fully_qualified_name, owner_id));
-
+    pub fn add_declaration<F>(&mut self, declaration_id: DeclarationId, definition_id: DefinitionId, constructor: F)
+    where
+        F: FnOnce() -> Declaration,
+    {
+        let declaration = self.declarations.entry(declaration_id).or_insert_with(constructor);
         declaration.add_definition(definition_id);
         self.definitions_to_declarations.insert(definition_id, declaration_id);
-        declaration_id
     }
 
     pub fn clear_declarations(&mut self) {
@@ -207,6 +198,10 @@ impl Graph {
     ///   NameId(baz) => DeclarationId(baz)
     /// }
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Will panic if the declaration ID passed doesn't belong to a namespace declaration
     pub fn add_member(
         &mut self,
         owner_id: &DeclarationId,
@@ -214,7 +209,12 @@ impl Graph {
         member_str_id: StringId,
     ) {
         if let Some(declaration) = self.declarations.get_mut(owner_id) {
-            declaration.add_member(member_str_id, member_declaration_id);
+            match declaration {
+                Declaration::Class(it) => it.add_member(member_str_id, member_declaration_id),
+                Declaration::Module(it) => it.add_member(member_str_id, member_declaration_id),
+                Declaration::SingletonClass(it) => it.add_member(member_str_id, member_declaration_id),
+                _ => panic!("Tried to add member to a declaration that isn't a namespace"),
+            }
         }
     }
 
@@ -658,8 +658,11 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
-        assert!(foo.members().contains_key(&StringId::from("Bar")));
+        if let Declaration::Module(foo) = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap() {
+            assert!(foo.members().contains_key(&StringId::from("Bar")));
+        } else {
+            panic!("Expected Foo to be a module");
+        }
 
         // Delete `Bar`
         context.index_uri("file:///foo2.rb", {
@@ -670,8 +673,11 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
-        assert!(!foo.members().contains_key(&StringId::from("Bar")));
+        if let Declaration::Module(foo) = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap() {
+            assert!(!foo.members().contains_key(&StringId::from("Bar")));
+        } else {
+            panic!("Expected Foo to be a module");
+        }
     }
 
     #[test]

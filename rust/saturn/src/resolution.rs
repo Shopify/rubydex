@@ -4,7 +4,10 @@ use std::{
 };
 
 use crate::model::{
-    declaration::Declaration,
+    declaration::{
+        ClassDeclaration, ClassVariableDeclaration, ConstantDeclaration, Declaration, GlobalVariableDeclaration,
+        InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration, SingletonClassDeclaration,
+    },
     definitions::Definition,
     graph::{Graph, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
@@ -62,9 +65,10 @@ pub fn resolve_all(graph: &mut Graph) {
     // amount of work
     graph.clear_declarations();
     // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
-    graph
-        .declarations_mut()
-        .insert(*OBJECT_ID, Declaration::new("Object".to_string(), *OBJECT_ID));
+    graph.declarations_mut().insert(
+        *OBJECT_ID,
+        Declaration::Class(Box::new(ClassDeclaration::new("Object".to_string(), *OBJECT_ID))),
+    );
 
     let (mut unit_queue, other_ids) = sorted_units(graph);
 
@@ -83,15 +87,31 @@ pub fn resolve_all(graph: &mut Graph) {
 
             match unit_id {
                 Unit::Definition(id) => {
-                    let name_id = match graph.definitions().get(&id).unwrap() {
-                        Definition::Class(class) => *class.name_id(),
-                        Definition::Module(module) => *module.name_id(),
-                        Definition::Constant(constant) => *constant.name_id(),
-                        Definition::SingletonClass(singleton) => *singleton.name_id(),
+                    let outcome = match graph.definitions().get(&id).unwrap() {
+                        Definition::Class(class) => {
+                            handle_constant_declaration(graph, *class.name_id(), id, |name, owner_id| {
+                                Declaration::Class(Box::new(ClassDeclaration::new(name, owner_id)))
+                            })
+                        }
+                        Definition::Module(module) => {
+                            handle_constant_declaration(graph, *module.name_id(), id, |name, owner_id| {
+                                Declaration::Module(Box::new(ModuleDeclaration::new(name, owner_id)))
+                            })
+                        }
+                        Definition::Constant(constant) => {
+                            handle_constant_declaration(graph, *constant.name_id(), id, |name, owner_id| {
+                                Declaration::Constant(Box::new(ConstantDeclaration::new(name, owner_id)))
+                            })
+                        }
+                        Definition::SingletonClass(singleton) => {
+                            handle_constant_declaration(graph, *singleton.name_id(), id, |name, owner_id| {
+                                Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(name, owner_id)))
+                            })
+                        }
                         _ => panic!("Expected constant definitions"),
                     };
 
-                    match handle_constant_declaration(graph, name_id, id) {
+                    match outcome {
                         Outcome::Retry => {
                             // There might be dependencies we haven't figured out yet, so we need to retry
                             unit_queue.push_back(unit_id);
@@ -127,69 +147,112 @@ pub fn resolve_all(graph: &mut Graph) {
         }
     }
 
-    // Handle other definitions that don't require resolution, but need to have their declarations and membership
-    // created
+    handle_remaining_definitions(graph, other_ids);
+}
+
+/// Handle other definitions that don't require resolution, but need to have their declarations and membership created
+fn handle_remaining_definitions(
+    graph: &mut Graph,
+    other_ids: Vec<crate::model::id::Id<crate::model::ids::DefinitionMarker>>,
+) {
     for id in other_ids {
-        // Extract resolution strategy from definition (releases borrow before graph mutations)
-        let (str_id, strategy) = {
-            let definition = graph.definitions().get(&id).unwrap();
-            extract_owner_strategy(definition)
-        };
+        match graph.definitions().get(&id).unwrap() {
+            Definition::Method(method_definition) => {
+                let str_id = *method_definition.str_id();
+                let owner_id = if let Some(receiver) = method_definition.receiver() {
+                    let receiver_decl_id = match graph.names().get(receiver).unwrap() {
+                        NameRef::Resolved(resolved) => *resolved.declaration_id(),
+                        NameRef::Unresolved(_) => {
+                            // Error diagnostic: if we couldn't resolve the constant being used, then we don't know
+                            // where this method is being defined. For example:
+                            //
+                            // def Foo.bar; end
+                            //
+                            // where Foo is undefined
+                            continue;
+                        }
+                    };
 
-        let owner_id = match strategy {
-            OwnerResolution::MethodWithReceiver(receiver_name_id) => match resolve_constant(graph, receiver_name_id) {
-                Outcome::Resolved(receiver_decl_id) => get_or_create_singleton_class(graph, receiver_decl_id),
-                Outcome::Unresolved | Outcome::Retry => continue,
-            },
-            OwnerResolution::ClassVariable(lexical_nesting_id) => {
-                resolve_class_variable_owner(graph, lexical_nesting_id)
+                    get_or_create_singleton_class(graph, receiver_decl_id)
+                } else {
+                    resolve_lexical_owner(graph, *method_definition.lexical_nesting_id())
+                };
+
+                create_declaration(graph, str_id, id, owner_id, |name| {
+                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                });
             }
-            OwnerResolution::LexicalNesting(lexical_nesting_id) => resolve_lexical_owner(graph, lexical_nesting_id),
-        };
+            Definition::AttrAccessor(attr) => {
+                let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
 
-        let owner = graph.declarations().get(&owner_id).unwrap();
-        let name_str = graph.strings().get(&str_id).unwrap();
-        let declaration_id = graph.add_declaration(format!("{}::{name_str}", owner.name()), id, owner_id);
-        graph.add_member(&owner_id, declaration_id, str_id);
+                create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
+                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                });
+            }
+            Definition::AttrReader(attr) => {
+                let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
+
+                create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
+                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                });
+            }
+            Definition::AttrWriter(attr) => {
+                let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
+
+                create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
+                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                });
+            }
+            Definition::GlobalVariable(var) => {
+                let owner_id = *OBJECT_ID;
+                create_declaration(graph, *var.str_id(), id, owner_id, |name| {
+                    Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, owner_id)))
+                });
+            }
+            Definition::InstanceVariable(var) => {
+                let owner_id = resolve_lexical_owner(graph, *var.lexical_nesting_id());
+
+                create_declaration(graph, *var.str_id(), id, owner_id, |name| {
+                    Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
+                });
+            }
+            Definition::ClassVariable(var) => {
+                // TODO: add diagnostic on the else branch. Defining class variables at the top level crashes
+                if let Some(owner_id) = resolve_class_variable_owner(graph, *var.lexical_nesting_id()) {
+                    create_declaration(graph, *var.str_id(), id, owner_id, |name| {
+                        Declaration::ClassVariable(Box::new(ClassVariableDeclaration::new(name, owner_id)))
+                    });
+                }
+            }
+            Definition::Class(_) | Definition::SingletonClass(_) | Definition::Module(_) | Definition::Constant(_) => {
+                panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
+            }
+        }
     }
 }
 
-/// Strategy for determining a definition's owner declaration
-enum OwnerResolution {
-    /// Method with explicit receiver - resolve receiver and use its singleton class
-    MethodWithReceiver(NameId),
-    /// Class variable - bypass singleton classes to find base class/module
-    ClassVariable(Option<DefinitionId>),
-    /// Standard definition - use lexical nesting directly
-    LexicalNesting(Option<DefinitionId>),
-}
+fn create_declaration<F>(
+    graph: &mut Graph,
+    str_id: StringId,
+    definition_id: DefinitionId,
+    owner_id: DeclarationId,
+    declaration_builder: F,
+) where
+    F: FnOnce(String) -> Declaration,
+{
+    let owner = graph.declarations().get(&owner_id).unwrap();
+    let name_str = graph.strings().get(&str_id).unwrap();
+    let fully_qualified_name = format!("{}::{name_str}", owner.name());
+    let declaration_id = DeclarationId::from(&fully_qualified_name);
 
-/// Extracts the name and owner resolution strategy from a definition.
-/// This is a pure extraction that doesn't mutate the graph.
-fn extract_owner_strategy(definition: &Definition) -> (StringId, OwnerResolution) {
-    match definition {
-        Definition::Method(method) => {
-            let str_id = *method.str_id();
-            if let Some(receiver) = method.receiver() {
-                (str_id, OwnerResolution::MethodWithReceiver(*receiver))
-            } else {
-                (str_id, OwnerResolution::LexicalNesting(*method.lexical_nesting_id()))
-            }
-        }
-        Definition::ClassVariable(cv) => (*cv.str_id(), OwnerResolution::ClassVariable(*cv.lexical_nesting_id())),
-        Definition::AttrAccessor(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
-        Definition::AttrReader(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
-        Definition::AttrWriter(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
-        Definition::GlobalVariable(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
-        Definition::InstanceVariable(it) => (*it.str_id(), OwnerResolution::LexicalNesting(*it.lexical_nesting_id())),
-        Definition::Class(_) | Definition::Module(_) | Definition::Constant(_) | Definition::SingletonClass(_) => {
-            panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
-        }
-    }
+    graph.add_declaration(declaration_id, definition_id, || {
+        declaration_builder(fully_qualified_name)
+    });
+    graph.add_member(&owner_id, declaration_id, str_id);
 }
 
 /// Resolves owner for class variables, bypassing singleton classes.
-fn resolve_class_variable_owner(graph: &Graph, lexical_nesting_id: Option<DefinitionId>) -> DeclarationId {
+fn resolve_class_variable_owner(graph: &Graph, lexical_nesting_id: Option<DefinitionId>) -> Option<DeclarationId> {
     let mut current_nesting = lexical_nesting_id;
     while let Some(nesting_id) = current_nesting {
         if let Some(nesting_def) = graph.definitions().get(&nesting_id)
@@ -200,9 +263,7 @@ fn resolve_class_variable_owner(graph: &Graph, lexical_nesting_id: Option<Defini
             break;
         }
     }
-    *current_nesting
-        .and_then(|id| graph.definitions_to_declarations().get(&id))
-        .unwrap_or(&OBJECT_ID)
+    current_nesting.and_then(|id| graph.definitions_to_declarations().get(&id).copied())
 }
 
 /// Resolves owner from lexical nesting.
@@ -220,17 +281,19 @@ fn get_or_create_singleton_class(graph: &mut Graph, owner_decl_id: DeclarationId
     let singleton_short_name = format!("<{short_name}>");
     let singleton_str_id = StringId::from(singleton_short_name.as_str());
 
-    if let Some(existing_id) = owner_decl.members().get(&singleton_str_id).copied() {
+    if let Some(existing_id) = members_of(owner_decl).get(&singleton_str_id).copied() {
         return existing_id;
     }
 
     let singleton_full_name = format!("{}::{}", owner_decl.name(), singleton_short_name);
     let singleton_decl_id = DeclarationId::from(&singleton_full_name);
 
-    graph
-        .declarations_mut()
-        .entry(singleton_decl_id)
-        .or_insert_with(|| Declaration::new(singleton_full_name, owner_decl_id));
+    graph.declarations_mut().entry(singleton_decl_id).or_insert_with(|| {
+        Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(
+            singleton_full_name,
+            owner_decl_id,
+        )))
+    });
 
     graph.add_member(&owner_decl_id, singleton_decl_id, singleton_str_id);
 
@@ -274,11 +337,11 @@ pub fn linearize_ancestors<S: BuildHasher>(
     // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
     // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
     if let Some(descendant) = descendant_id {
-        declaration.add_descendant(descendant);
+        add_descendant(declaration, descendant);
     }
 
     // Return the cached ancestors if we already computed them
-    if let Some(cached) = declaration.ancestors() {
+    if let Some(cached) = current_ancestors(declaration) {
         return AncestorOutcome::Resolved(cached.to_vec());
     }
 
@@ -308,7 +371,7 @@ pub fn linearize_ancestors<S: BuildHasher>(
         }
     }
 
-    declaration.set_ancestors(ancestors.clone());
+    set_ancestors(declaration, ancestors.clone());
     if cyclic {
         AncestorOutcome::Cyclic(ancestors)
     } else {
@@ -317,7 +380,15 @@ pub fn linearize_ancestors<S: BuildHasher>(
 }
 
 // Handles the resolution of the namespace name, the creation of the declaration and membership
-fn handle_constant_declaration(graph: &mut Graph, name_id: NameId, definition_id: DefinitionId) -> Outcome {
+fn handle_constant_declaration<F>(
+    graph: &mut Graph,
+    name_id: NameId,
+    definition_id: DefinitionId,
+    declaration_builder: F,
+) -> Outcome
+where
+    F: FnOnce(String, DeclarationId) -> Declaration,
+{
     let name_ref = graph.names().get(&name_id).unwrap();
     let str_id = *name_ref.str();
 
@@ -335,7 +406,10 @@ fn handle_constant_declaration(graph: &mut Graph, name_id: NameId, definition_id
                 fully_qualified_name.insert_str(0, owner.name());
             }
 
-            let declaration_id = graph.add_declaration(fully_qualified_name, definition_id, owner_id);
+            let declaration_id = DeclarationId::from(&fully_qualified_name);
+            graph.add_declaration(declaration_id, definition_id, || {
+                declaration_builder(fully_qualified_name, owner_id)
+            });
             graph.add_member(&owner_id, declaration_id, str_id);
             graph.record_resolved_name(name_id, declaration_id);
             Outcome::Resolved(declaration_id)
@@ -386,7 +460,7 @@ fn resolve_constant(graph: &mut Graph, name_id: NameId) -> Outcome {
                     let declaration = graph.declarations().get(parent_scope.declaration_id()).unwrap();
 
                     // TODO: we can't just look inside members here, we need to search inheritance too
-                    if let Some(member_id) = declaration.members().get(name.str()).copied() {
+                    if let Some(member_id) = members_of(declaration).get(name.str()).copied() {
                         graph.record_resolved_name(name_id, member_id);
                         return Outcome::Resolved(member_id);
                     }
@@ -438,7 +512,7 @@ fn search_ancestors(graph: &Graph, nesting_name_id: NameId, str_id: StringId) ->
                 .iter()
                 .find_map(|ancestor_id| {
                     let declaration = graph.declarations().get(ancestor_id).unwrap();
-                    declaration.get_member(&str_id).map(|id| Outcome::Resolved(*id))
+                    get_member(declaration, str_id).map(|id| Outcome::Resolved(*id))
                 })
                 .unwrap_or(Outcome::Unresolved),
             AncestorOutcome::Retry => Outcome::Retry,
@@ -454,7 +528,7 @@ fn search_lexical_scopes(graph: &Graph, name: &Name, str_id: StringId) -> Outcom
     while let Some(nesting_id) = current_name.nesting() {
         if let NameRef::Resolved(nesting_name_ref) = graph.names().get(nesting_id).unwrap() {
             if let Some(declaration) = graph.declarations().get(nesting_name_ref.declaration_id())
-                && let Some(member) = declaration.members().get(&str_id)
+                && let Some(member) = members_of(declaration).get(&str_id)
             {
                 return Outcome::Resolved(*member);
             }
@@ -472,9 +546,18 @@ fn search_lexical_scopes(graph: &Graph, name: &Name, str_id: StringId) -> Outcom
 fn search_top_level(graph: &Graph, str_id: StringId) -> Outcome {
     let object = graph.declarations().get(&OBJECT_ID).unwrap();
 
-    match object.members().get(&str_id) {
+    match members_of(object).get(&str_id) {
         Some(member_id) => Outcome::Resolved(*member_id),
         None => Outcome::Unresolved,
+    }
+}
+
+fn members_of(decl: &Declaration) -> &IdentityHashMap<StringId, DeclarationId> {
+    match decl {
+        Declaration::Class(it) => it.members(),
+        Declaration::SingletonClass(it) => it.members(),
+        Declaration::Module(it) => it.members(),
+        _ => panic!("Tried to get members for a declaration that isn't a namespace"),
     }
 }
 
@@ -561,10 +644,7 @@ fn sorted_units(graph: &Graph) -> (VecDeque<Unit>, Vec<DefinitionId>) {
     constants.sort_by(|(_, name_a), (_, name_b)| name_depth(name_a, names).cmp(&name_depth(name_b, names)));
 
     others.shrink_to_fit();
-    (
-        VecDeque::from(constants.into_iter().map(|(id, _)| id).collect::<Vec<_>>()),
-        others,
-    )
+    (constants.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>(), others)
 }
 
 fn linearize_parent_class<S: BuildHasher>(
@@ -598,6 +678,42 @@ fn linearize_parent_class<S: BuildHasher>(
     // mismatch error. TODO: We should add a diagnostic here
     let picked_parent = explicit_parents.first().copied().unwrap_or(*OBJECT_ID);
     linearize_ancestors(graph, picked_parent, descendant_id, seen_ids)
+}
+
+fn add_descendant(declaration: &Declaration, descendant_id: DeclarationId) {
+    match declaration {
+        Declaration::Class(class) => class.add_descendant(descendant_id),
+        Declaration::Module(module) => module.add_descendant(descendant_id),
+        Declaration::SingletonClass(singleton) => singleton.add_descendant(descendant_id),
+        _ => panic!("Tried to add descendant for a declaration that isn't a namespace"),
+    }
+}
+
+fn current_ancestors(declaration: &Declaration) -> Option<&[DeclarationId]> {
+    match declaration {
+        Declaration::Class(class) => class.ancestors(),
+        Declaration::Module(module) => module.ancestors(),
+        Declaration::SingletonClass(singleton) => singleton.ancestors(),
+        _ => panic!("Tried to get ancestors for a declaration that isn't a namespace"),
+    }
+}
+
+fn set_ancestors(declaration: &Declaration, ancestors: Vec<DeclarationId>) {
+    match declaration {
+        Declaration::Class(class) => class.set_ancestors(ancestors),
+        Declaration::Module(module) => module.set_ancestors(ancestors),
+        Declaration::SingletonClass(singleton) => singleton.set_ancestors(ancestors),
+        _ => panic!("Tried to set ancestors for a declaration that isn't a namespace"),
+    }
+}
+
+fn get_member(declaration: &Declaration, str_id: StringId) -> Option<&DeclarationId> {
+    match declaration {
+        Declaration::Class(class) => class.get_member(&str_id),
+        Declaration::Module(module) => module.get_member(&str_id),
+        Declaration::SingletonClass(singleton) => singleton.get_member(&str_id),
+        _ => panic!("Tried to get member for a declaration that isn't a namespace"),
+    }
 }
 
 #[cfg(test)]
@@ -696,7 +812,12 @@ mod tests {
                 .get(&DeclarationId::from($parent))
                 .unwrap();
 
-            let actual = parent.descendants().iter().cloned().collect::<Vec<_>>();
+            let actual = match parent {
+                Declaration::Class(class) => class.descendants().iter().cloned().collect::<Vec<_>>(),
+                Declaration::Module(module) => module.descendants().iter().cloned().collect::<Vec<_>>(),
+                Declaration::SingletonClass(singleton) => singleton.descendants().iter().cloned().collect::<Vec<_>>(),
+                _ => panic!("Tried to get descendants for a declaration that isn't a namespace"),
+            };
 
             for descendant in &$descendants {
                 let descendant_id = DeclarationId::from(*descendant);
@@ -711,9 +832,16 @@ mod tests {
     }
 
     fn assert_members(decl: &Declaration, members: &[&str]) {
+        let actual_members = match decl {
+            Declaration::Class(class) => class.members(),
+            Declaration::Module(module) => module.members(),
+            Declaration::SingletonClass(singleton) => singleton.members(),
+            _ => panic!("Tried to assert members for a declaration that isn't a namespace"),
+        };
+
         for member in members {
             assert!(
-                decl.members().contains_key(&StringId::from(*member)),
+                actual_members.contains_key(&StringId::from(*member)),
                 "Expected member '{member}' not found"
             );
         }
@@ -1122,6 +1250,20 @@ mod tests {
         let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["<Foo>", "@@bar", "@@baz"]);
         assert_owner(foo, "Object");
+    }
+
+    #[test]
+    fn resolution_for_class_variable_at_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            @@var = 123
+            "
+        });
+        context.resolve();
+
+        // TODO: this should push an error diagnostic
+        assert_eq!(1, context.graph.declarations().len());
     }
 
     #[test]
