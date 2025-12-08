@@ -238,7 +238,7 @@ fn get_or_create_singleton_class(graph: &mut Graph, owner_decl_id: DeclarationId
 #[must_use]
 pub fn ancestors_of(graph: &Graph, declaration_id: DeclarationId) -> AncestorOutcome {
     let mut seen_ids = IdentityHashSet::default();
-    linearize_ancestors(graph, declaration_id, &mut seen_ids)
+    linearize_ancestors(graph, declaration_id, None, &mut seen_ids)
 }
 
 /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
@@ -250,6 +250,7 @@ pub fn ancestors_of(graph: &Graph, declaration_id: DeclarationId) -> AncestorOut
 pub fn linearize_ancestors<S: BuildHasher>(
     graph: &Graph,
     declaration_id: DeclarationId,
+    descendant_id: Option<DeclarationId>,
     seen_ids: &mut HashSet<DeclarationId, S>,
 ) -> AncestorOutcome {
     if !seen_ids.insert(declaration_id) {
@@ -262,6 +263,12 @@ pub fn linearize_ancestors<S: BuildHasher>(
 
     let mut cyclic = false;
     let declaration = graph.declarations().get(&declaration_id).unwrap();
+
+    // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
+    // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
+    if let Some(descendant) = descendant_id {
+        declaration.add_descendant(descendant);
+    }
 
     // Return the cached ancestors if we already computed them
     if let Some(cached) = declaration.ancestors() {
@@ -280,7 +287,7 @@ pub fn linearize_ancestors<S: BuildHasher>(
     // TODO: this check is against `Object` for now to avoid infinite recursion. After RBS indexing, we need to change
     // this to `BasicObject` since it's the only class that cannot have a parent
     if declaration_id != *OBJECT_ID {
-        match linearize_parent_class(graph, &definitions, seen_ids) {
+        match linearize_parent_class(graph, &definitions, Some(declaration_id), seen_ids) {
             AncestorOutcome::Resolved(ids) => {
                 ancestors.extend(ids);
             }
@@ -556,6 +563,7 @@ fn sorted_units(graph: &Graph) -> (VecDeque<Unit>, Vec<DefinitionId>) {
 fn linearize_parent_class<S: BuildHasher>(
     graph: &Graph,
     definitions: &[&Definition],
+    descendant_id: Option<DeclarationId>,
     seen_ids: &mut HashSet<DeclarationId, S>,
 ) -> AncestorOutcome {
     let mut explicit_parents = Vec::new();
@@ -582,7 +590,7 @@ fn linearize_parent_class<S: BuildHasher>(
     // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
     // mismatch error. TODO: We should add a diagnostic here
     let picked_parent = explicit_parents.first().copied().unwrap_or(*OBJECT_ID);
-    linearize_ancestors(graph, picked_parent, seen_ids)
+    linearize_ancestors(graph, picked_parent, descendant_id, seen_ids)
 }
 
 #[cfg(test)]
@@ -669,6 +677,28 @@ mod tests {
                 AncestorOutcome::Retry => {
                     panic!("Expected ancestors to be resolved");
                 }
+            }
+        };
+    }
+
+    macro_rules! assert_descendants {
+        ($context:expr, $parent:expr, $descendants:expr) => {
+            let parent = $context
+                .graph
+                .declarations()
+                .get(&DeclarationId::from($parent))
+                .unwrap();
+
+            let actual = parent.descendants().iter().cloned().collect::<Vec<_>>();
+
+            for descendant in &$descendants {
+                let descendant_id = DeclarationId::from(*descendant);
+                assert!(
+                    actual.contains(&descendant_id),
+                    "Expected '{}' to be a descendant of '{}'",
+                    $context.graph.declarations().get(&descendant_id).unwrap().name(),
+                    parent.name()
+                );
             }
         };
     }
@@ -1147,6 +1177,32 @@ mod tests {
         });
         context.resolve();
         assert_ancestors_eq!(context, "Qux", ["Qux", "Baz", "Bar", "Foo", "Object"]);
+    }
+
+    #[test]
+    fn descendants_are_tracked_for_parent_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 123
+            end
+
+            class Bar < Foo; end
+
+            class Baz < Bar
+              CONST
+            end
+
+            class Qux < Bar
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_descendants!(context, "Foo", ["Bar"]);
+        assert_descendants!(context, "Bar", ["Baz", "Qux"]);
     }
 
     #[test]
