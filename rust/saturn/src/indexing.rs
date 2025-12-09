@@ -40,7 +40,7 @@ pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(
 
         let mut ruby_indexer = RubyIndexer::new(uri, &source);
         ruby_indexer.index();
-        ruby_indexer.into_parts()
+        (ruby_indexer.local_graph(), Vec::new())
     };
 
     with_parallel_workers(graph, file_paths, index_document)
