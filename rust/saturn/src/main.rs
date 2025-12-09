@@ -4,7 +4,7 @@ use clap::Parser;
 
 use saturn::{
     errors::MultipleErrors,
-    indexing::{self},
+    indexing, listing,
     model::graph::Graph,
     resolution,
     stats::{
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut graph = Graph::new();
-    let (file_paths, errors) = time_it!(listing, { indexing::collect_file_paths(vec![args.dir]) });
+    let (file_paths, errors) = time_it!(listing, { listing::collect_file_paths(vec![args.dir]) });
 
     if !errors.is_empty() {
         return Err(Box::new(MultipleErrors(errors)));
