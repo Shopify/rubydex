@@ -16,7 +16,6 @@ use std::{sync::mpsc, thread};
 use url::Url;
 
 pub mod local_graph;
-pub mod nesting_stack;
 pub mod ruby_indexer;
 
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
