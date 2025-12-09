@@ -109,18 +109,6 @@ impl Definition {
             Definition::ClassVariable(_) => "ClassVariable",
         }
     }
-
-    /// # Panics
-    ///
-    /// Panics if the definition is not a nesting definition (class, module, or singleton class)
-    pub fn add_member(&mut self, member_id: DefinitionId) {
-        match self {
-            Definition::Class(class) => class.add_member(member_id),
-            Definition::SingletonClass(singleton_class) => singleton_class.add_member(member_id),
-            Definition::Module(module) => module.add_member(member_id),
-            _ => panic!("Cannot add a member to a non-nesting definition"),
-        }
-    }
 }
 
 /// Represents a mixin: include, prepend, or extend.

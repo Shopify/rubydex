@@ -412,9 +412,7 @@ impl<'a> RubyIndexer<'a> {
         let definition = builder(str_id, offset, comments, lexical_nesting_id, uri_id);
         let definition_id = self.local_graph.add_definition(definition);
 
-        if let Some(parent_nesting) = self.parent_nesting() {
-            parent_nesting.add_member(definition_id);
-        }
+        self.add_member_to_current_nesting(definition_id);
 
         definition_id
     }
@@ -442,11 +440,27 @@ impl<'a> RubyIndexer<'a> {
         )));
         let definition_id = self.local_graph.add_definition(definition);
 
-        if let Some(parent_nesting) = self.parent_nesting() {
-            parent_nesting.add_member(definition_id);
-        }
+        self.add_member_to_current_nesting(definition_id);
 
         Some(definition_id)
+    }
+
+    /// Adds a member to the current nesting definition.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the definition is not a nesting definition (class, module, or singleton class)
+    fn add_member_to_current_nesting(&mut self, member_id: DefinitionId) {
+        let Some(parent_nesting) = self.parent_nesting() else {
+            return;
+        };
+
+        match parent_nesting {
+            Definition::Class(class) => class.add_member(member_id),
+            Definition::SingletonClass(singleton_class) => singleton_class.add_member(member_id),
+            Definition::Module(module) => module.add_member(member_id),
+            _ => panic!("Cannot add a member to a non-nesting definition (current nesting is a {parent_nesting:?})",),
+        }
     }
 
     fn handle_mixin(&mut self, node: &ruby_prism::CallNode, mixin_type: MixinType) {
@@ -582,9 +596,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             let definition_id = self.local_graph.add_definition(definition);
 
-            if let Some(parent_nesting) = self.parent_nesting() {
-                parent_nesting.add_member(definition_id);
-            }
+            self.add_member_to_current_nesting(definition_id);
 
             self.definitions_stack.push(definition_id);
             self.visibility_stack.push(Visibility::Public);
@@ -614,9 +626,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             let definition_id = self.local_graph.add_definition(definition);
 
-            if let Some(parent_nesting) = self.parent_nesting() {
-                parent_nesting.add_member(definition_id);
-            }
+            self.add_member_to_current_nesting(definition_id);
 
             self.definitions_stack.push(definition_id);
             self.visibility_stack.push(Visibility::Public);
@@ -688,9 +698,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             let definition_id = self.local_graph.add_definition(definition);
 
-            if let Some(parent_nesting) = self.parent_nesting() {
-                parent_nesting.add_member(definition_id);
-            }
+            self.add_member_to_current_nesting(definition_id);
 
             Some(definition_id)
         } else {
@@ -863,9 +871,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let definition_id = self.local_graph.add_definition(method);
 
-        if let Some(parent_nesting) = self.parent_nesting() {
-            parent_nesting.add_member(definition_id);
-        }
+        self.add_member_to_current_nesting(definition_id);
 
         if let Some(body) = node.body() {
             self.visit(&body);
@@ -916,9 +922,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
                 let definition_id = self.local_graph.add_definition(definition);
 
-                if let Some(parent_nesting) = self.parent_nesting() {
-                    parent_nesting.add_member(definition_id);
-                }
+                self.add_member_to_current_nesting(definition_id);
             });
         };
 
