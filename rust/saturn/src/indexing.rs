@@ -32,29 +32,19 @@ pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(
         let uri = uri_from_file_path(file_path).unwrap();
         let uri_id = UriId::from(&uri);
 
-        let (source, errors) = read_document_source(file_path);
-        if !errors.is_empty() {
-            return (LocalGraph::new(uri_id, Document::new(uri)), errors);
-        }
+        let source = fs::read_to_string(file_path)
+            .map_err(|e| Errors::FileReadError(format!("Failed to read {file_path}: {e}")));
 
-        let mut ruby_indexer = RubyIndexer::new(uri, &source);
-        ruby_indexer.index();
-        (ruby_indexer.local_graph(), Vec::new())
+        if let Ok(source) = source {
+            let mut ruby_indexer = RubyIndexer::new(uri, &source);
+            ruby_indexer.index();
+            (ruby_indexer.local_graph(), Vec::new())
+        } else {
+            (LocalGraph::new(uri_id, Document::new(uri)), vec![source.unwrap_err()])
+        }
     };
 
     with_parallel_workers(graph, file_paths, index_document)
-}
-
-/// Reads the source content from a document, either from memory or disk
-fn read_document_source(file_path: &String) -> (String, Vec<Errors>) {
-    let mut errors = Vec::new();
-
-    let source = fs::read_to_string(file_path).unwrap_or_else(|e| {
-        errors.push(Errors::FileReadError(format!("Failed to read {file_path}: {e}")));
-        String::new()
-    });
-
-    (source, errors)
 }
 
 fn uri_from_file_path(path: &str) -> Result<String, Errors> {
