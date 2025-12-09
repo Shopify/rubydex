@@ -463,6 +463,24 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
+    /// Returns the name ID of this definition
+    ///
+    /// # Panics
+    ///
+    /// Panics if the definition is not a nesting definition (class, module, or singleton class)
+    #[must_use]
+    fn parent_nesting_name_id(&mut self) -> Option<NameId> {
+        let parent_nesting = self.parent_nesting()?;
+
+        match parent_nesting {
+            Definition::Class(class) => Some(*class.name_id()),
+            Definition::SingletonClass(singleton_class) => Some(*singleton_class.name_id()),
+            Definition::Module(module) => Some(*module.name_id()),
+            Definition::Constant(constant) => Some(*constant.name_id()),
+            _ => panic!("Cannot get name ID of definition: {parent_nesting:?}"),
+        }
+    }
+
     fn handle_mixin(&mut self, node: &ruby_prism::CallNode, mixin_type: MixinType) {
         let Some(arguments) = node.arguments() else {
             return;
@@ -472,7 +490,15 @@ impl<'a> RubyIndexer<'a> {
         let reference_ids: Vec<_> = arguments
             .arguments()
             .iter()
-            .filter_map(|arg| self.index_constant_reference(&arg, true))
+            .filter_map(|arg| {
+                if arg.as_self_node().is_some() {
+                    // FIXME: Ideally we would want to save the mixin as `self` but we can only save mixins with a name.
+                    // We'll just use the parent nesting name id for now.
+                    self.parent_nesting_name_id()
+                } else {
+                    self.index_constant_reference(&arg, true)
+                }
+            })
             .collect();
 
         if reference_ids.is_empty() {
@@ -2143,22 +2169,6 @@ mod tests {
     }
 
     #[test]
-    fn index_mixin_extend_definition_on_class() {
-        let context = index_source({
-            "
-            class Foo
-              extend Bar
-              extend Baz
-            end
-            "
-        });
-
-        assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
-            assert_extends_eq!(&context, class_def, vec!["Bar", "Baz"]);
-        });
-    }
-
-    #[test]
     fn index_constant_in_singleton_class_definition() {
         let context = index_source({
             "
@@ -3574,5 +3584,59 @@ mod tests {
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
             assert_prepends_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
         });
+    }
+
+    #[test]
+    fn index_extends_in_class() {
+        let context = index_source({
+            "
+            class Foo
+              extend Bar
+              extend Baz
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
+            assert_extends_eq!(&context, class_def, vec!["Bar", "Baz"]);
+        });
+    }
+
+    #[test]
+    fn index_mixins_self() {
+        let context = index_source({
+            "
+            module Foo
+              include self
+              prepend self
+              extend self
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Module, |def| {
+            assert_includes_eq!(&context, def, vec!["Foo"]);
+            assert_prepends_eq!(&context, def, vec!["Foo"]);
+            assert_extends_eq!(&context, def, vec!["Foo"]);
+        });
+    }
+
+    #[test]
+    fn index_mixins_self_at_top_level() {
+        let context = index_source({
+            "
+            include self
+            prepend self
+            extend self
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_eq!(context.graph().definitions().len(), 0);
     }
 }
