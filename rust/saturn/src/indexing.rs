@@ -1,10 +1,7 @@
 use crate::{
     errors::{Errors, MultipleErrors},
-    indexing::{
-        local_graph::LocalGraph,
-        ruby_indexer::{IndexerParts, RubyIndexer},
-    },
-    model::{document::Document, graph::Graph, ids::UriId},
+    indexing::{local_graph::LocalGraph, ruby_indexer::RubyIndexer},
+    model::graph::Graph,
 };
 use glob::glob;
 use std::sync::{
@@ -18,6 +15,8 @@ use url::Url;
 pub mod local_graph;
 pub mod ruby_indexer;
 
+type LocalGraphResult = Result<LocalGraph, Errors>;
+
 /// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
 ///
 /// # Errors
@@ -28,20 +27,14 @@ pub mod ruby_indexer;
 /// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
 /// should not be any code that tries to lock the same mutex multiple times in the same thread
 pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
-    let index_document = |file_path: &String| -> IndexerParts {
-        let uri = uri_from_file_path(file_path).unwrap();
-        let uri_id = UriId::from(&uri);
-
+    let index_document = |file_path: &String| -> LocalGraphResult {
         let source = fs::read_to_string(file_path)
-            .map_err(|e| Errors::FileReadError(format!("Failed to read {file_path}: {e}")));
+            .map_err(|e| Errors::FileReadError(format!("Failed to read {file_path}: {e}")))?;
 
-        if let Ok(source) = source {
-            let mut ruby_indexer = RubyIndexer::new(uri, &source);
-            ruby_indexer.index();
-            (ruby_indexer.local_graph(), Vec::new())
-        } else {
-            (LocalGraph::new(uri_id, Document::new(uri)), vec![source.unwrap_err()])
-        }
+        let uri = uri_from_file_path(file_path).unwrap();
+        let mut ruby_indexer = RubyIndexer::new(uri, &source);
+        ruby_indexer.index();
+        Ok(ruby_indexer.local_graph())
     };
 
     with_parallel_workers(graph, file_paths, index_document)
@@ -58,9 +51,9 @@ fn uri_from_file_path(path: &str) -> Result<String, Errors> {
 
 fn with_parallel_workers<F>(graph: &mut Graph, file_paths: Vec<String>, worker_fn: F) -> Result<(), MultipleErrors>
 where
-    F: Fn(&String) -> IndexerParts + Send + Clone + 'static,
+    F: Fn(&String) -> Result<LocalGraph, Errors> + Send + Clone + 'static,
 {
-    let (tx, rx): (Sender<IndexerParts>, Receiver<IndexerParts>) = mpsc::channel();
+    let (tx, rx): (Sender<LocalGraphResult>, Receiver<LocalGraphResult>) = mpsc::channel();
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let mut threads = Vec::with_capacity(num_threads);
     let document_queue = Arc::new(Mutex::new(file_paths));
@@ -86,9 +79,14 @@ where
 
     let mut all_errors = Vec::new();
     for result in rx {
-        let (local_graph, errors) = result;
-        graph.update(local_graph);
-        all_errors.extend(errors);
+        match result {
+            Ok(local_graph) => {
+                graph.update(local_graph);
+            }
+            Err(e) => {
+                all_errors.push(e);
+            }
+        }
     }
 
     if all_errors.is_empty() {
