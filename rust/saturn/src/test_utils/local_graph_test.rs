@@ -24,7 +24,7 @@ impl LocalGraphTest {
 
         let mut indexer = RubyIndexer::new(uri.clone(), &source);
         indexer.index();
-        let graph = indexer.into_parts().0;
+        let graph = indexer.local_graph();
 
         Self { uri, source, graph }
     }
