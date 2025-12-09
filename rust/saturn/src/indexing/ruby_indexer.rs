@@ -1,7 +1,6 @@
 //! Visit the Ruby AST and create the definitions.
 
 use crate::diagnostic::Severity;
-use crate::errors::Errors;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
@@ -17,8 +16,6 @@ use crate::model::visibility::Visibility;
 use crate::offset::Offset;
 
 use ruby_prism::{ParseResult, Visit};
-
-pub type IndexerParts = (LocalGraph, Vec<Errors>);
 
 #[derive(Clone, Copy)]
 enum MixinType {
