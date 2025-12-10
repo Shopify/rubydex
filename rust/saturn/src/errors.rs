@@ -5,7 +5,15 @@ pub struct MultipleErrors(pub Vec<Errors>);
 
 impl std::fmt::Display for MultipleErrors {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Multiple errors: {:?}", self.0)
+        write!(
+            f,
+            "{}",
+            self.0
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
     }
 }
 
