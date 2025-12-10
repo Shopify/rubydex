@@ -1,7 +1,7 @@
-use std::cell::OnceCell;
+use std::cell::{OnceCell, Ref, RefCell};
 
 use crate::model::{
-    identity_maps::IdentityHashMap,
+    identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, ReferenceId, StringId},
 };
 
@@ -24,6 +24,7 @@ pub struct Declaration {
     /// The ID of the owner of this declaration
     owner_id: DeclarationId,
     ancestors: OnceCell<Vec<DeclarationId>>,
+    descendants: RefCell<IdentityHashSet<DeclarationId>>,
 }
 
 impl Declaration {
@@ -36,6 +37,7 @@ impl Declaration {
             references: Vec::new(),
             owner_id,
             ancestors: OnceCell::new(),
+            descendants: RefCell::new(IdentityHashSet::default()),
         }
     }
 
@@ -125,6 +127,14 @@ impl Declaration {
     #[must_use]
     pub fn ancestors(&self) -> Option<&[DeclarationId]> {
         self.ancestors.get().map(Vec::as_slice)
+    }
+
+    pub fn add_descendant(&self, descendant_id: DeclarationId) {
+        self.descendants.borrow_mut().insert(descendant_id);
+    }
+
+    pub fn descendants(&self) -> Ref<'_, IdentityHashSet<DeclarationId>> {
+        self.descendants.borrow()
     }
 
     // This will change once we fix fully qualified names to not use `::` as separators for everything. Also, we may
