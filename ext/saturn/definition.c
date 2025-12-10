@@ -19,6 +19,7 @@ VALUE cAttrWriterDefinition;
 VALUE cGlobalVariableDefinition;
 VALUE cInstanceVariableDefinition;
 VALUE cClassVariableDefinition;
+VALUE cMethodAliasDefinition;
 
 // Keep this in sync with definition.rs
 VALUE definition_class_for_kind(DefinitionKind kind) {
@@ -45,6 +46,8 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
         return cInstanceVariableDefinition;
     case DefinitionKind_ClassVariable:
         return cClassVariableDefinition;
+    case DefinitionKind_MethodAlias:
+        return cMethodAliasDefinition;
     default:
         rb_raise(rb_eRuntimeError, "Unknown DefinitionKind: %d", kind);
     }
@@ -176,4 +179,8 @@ void initialize_definition(VALUE mod) {
     cClassVariableDefinition = rb_define_class_under(mSaturn, "ClassVariableDefinition", cDefinition);
     rb_define_alloc_func(cClassVariableDefinition, sr_handle_alloc);
     rb_define_method(cClassVariableDefinition, "initialize", sr_handle_initialize, 2);
+
+    cMethodAliasDefinition = rb_define_class_under(mSaturn, "MethodAliasDefinition", cDefinition);
+    rb_define_alloc_func(cMethodAliasDefinition, sr_handle_alloc);
+    rb_define_method(cMethodAliasDefinition, "initialize", sr_handle_initialize, 2);
 }

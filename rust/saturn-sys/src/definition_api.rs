@@ -23,6 +23,7 @@ pub enum DefinitionKind {
     GlobalVariable = 8,
     InstanceVariable = 9,
     ClassVariable = 10,
+    MethodAlias = 11,
 }
 
 pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
@@ -38,6 +39,7 @@ pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
         Definition::GlobalVariable(_) => DefinitionKind::GlobalVariable,
         Definition::InstanceVariable(_) => DefinitionKind::InstanceVariable,
         Definition::ClassVariable(_) => DefinitionKind::ClassVariable,
+        Definition::MethodAlias(_) => DefinitionKind::MethodAlias,
     }
 }
 
