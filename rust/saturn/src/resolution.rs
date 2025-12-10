@@ -10,7 +10,7 @@ use crate::model::{
         GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
         SingletonClassDeclaration,
     },
-    definitions::Definition,
+    definitions::{Definition, Mixin},
     graph::{Graph, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
@@ -18,16 +18,22 @@ use crate::model::{
 };
 
 pub enum Unit {
+    /// A definition that defines a constant and might require resolution
     Definition(DefinitionId),
+    /// A constant reference that needs to be resolved
     Reference(ReferenceId),
+    /// A list of ancestors that have been partially linearized and need to be retried
+    Ancestors(DeclarationId),
 }
 
 enum Outcome {
-    /// The constant was successfully resolved to the given declaration ID
-    Resolved(DeclarationId),
+    /// The constant was successfully resolved to the given declaration ID. The second optional tuple element is a
+    /// declaration that still needs to have its ancestors linearized
+    Resolved(DeclarationId, Option<DeclarationId>),
     /// We had everything we needed to resolved this constant, but we couldn't find it. This means it's not defined (or
-    /// defined in a way that static analysis won't discover it)
-    Unresolved,
+    /// defined in a way that static analysis won't discover it). Failing to resolve a constant may also uncovered
+    /// ancestors that require linearization, which is the second element
+    Unresolved(Option<DeclarationId>),
     /// We couldn't resolve this constant right now because certain dependencies were missing. For example, a constant
     /// reference involved in computing ancestors (like an include) was found, but wasn't resolved yet. We need to place
     /// this back in the queue to retry once we have progressed further
@@ -36,7 +42,7 @@ enum Outcome {
 
 impl Outcome {
     fn is_resolved_or_retry(&self) -> bool {
-        matches!(self, Outcome::Resolved(_) | Outcome::Retry)
+        matches!(self, Outcome::Resolved(_, _) | Outcome::Retry)
     }
 }
 
@@ -82,6 +88,9 @@ pub fn resolve_all(graph: &mut Graph) {
                 Unit::Reference(id) => {
                     handle_reference_unit(graph, &mut unit_queue, &mut made_progress, unit_id, id);
                 }
+                Unit::Ancestors(id) => {
+                    handle_ancestor_unit(graph, &mut unit_queue, &mut made_progress, id);
+                }
             }
         }
 
@@ -126,10 +135,18 @@ fn handle_definition_unit(
             // There might be dependencies we haven't figured out yet, so we need to retry
             unit_queue.push_back(unit_id);
         }
-        Outcome::Unresolved => {
+        Outcome::Unresolved(None) => {
             // We couldn't resolve this name. Emit a diagnostic
         }
-        Outcome::Resolved(_) => *made_progress = true,
+        Outcome::Unresolved(Some(id_needing_linearization)) => {
+            unit_queue.push_back(unit_id);
+            unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+        }
+        Outcome::Resolved(_, None) => *made_progress = true,
+        Outcome::Resolved(_, Some(id_needing_linearization)) => {
+            unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+            *made_progress = true;
+        }
     }
 }
 
@@ -148,13 +165,81 @@ fn handle_reference_unit(
             // There might be dependencies we haven't figured out yet, so we need to retry
             unit_queue.push_back(unit_id);
         }
-        Outcome::Unresolved => {
+        Outcome::Unresolved(None) => {
             // We couldn't resolve this name. Emit a diagnostic
         }
-        Outcome::Resolved(declaration_id) => {
+        Outcome::Unresolved(Some(id_needing_linearization)) => {
+            unit_queue.push_back(unit_id);
+            unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+        }
+        Outcome::Resolved(declaration_id, None) => {
             graph.record_resolved_reference(id, declaration_id);
             *made_progress = true;
         }
+        Outcome::Resolved(resolved_id, Some(id_needing_linearization)) => {
+            graph.record_resolved_reference(id, resolved_id);
+            *made_progress = true;
+            unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+        }
+    }
+}
+
+/// Handles a unit of work for linearizing ancestors of a declaration
+fn handle_ancestor_unit(
+    graph: &mut Graph,
+    unit_queue: &mut VecDeque<Unit>,
+    made_progress: &mut bool,
+    id: DeclarationId,
+) {
+    let declaration = graph.declarations().get(&id).unwrap();
+
+    // Collect all partial entries in this ancestor chain. These are the ones that we want to try linearizing again. We
+    // do collect the list ahead of time to release the borrow on ancestors, otherwise cyclic references would try to
+    // borrow twice and panic
+    let partial_ancestors = match &*current_ancestors(declaration) {
+        Ancestors::Partial(ancestors) => ancestors
+            .iter()
+            .enumerate()
+            .filter_map(|(index, ancestor)| {
+                if let Ancestor::Partial(name_id) = ancestor
+                    && let NameRef::Resolved(name) = graph.names().get(name_id).unwrap()
+                {
+                    Some((index, *name.declaration_id()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>(),
+        _ => {
+            // It's possible to enqueue two retries for the same declaration. If the first retry succeeds in fully
+            // linearizing the ancestors, then we can discard the second retry
+            return;
+        }
+    };
+
+    // Try to linearize each partial entry in the list
+    let mut mark_complete = true;
+
+    for (index, ancestor_id) in partial_ancestors.into_iter().rev() {
+        let mut seen_ids = IdentityHashSet::default();
+
+        match linearize_ancestors(graph, ancestor_id, Some(id), &mut seen_ids) {
+            Some(Ancestors::Complete(ids) | Ancestors::Cyclic(ids) | Ancestors::Partial(ids)) => {
+                // We succeeded this time. Substitute the unresolved entry for its linearization
+                insert_linearized_ancestors(declaration, index, ids);
+                *made_progress = true;
+            }
+            None => {
+                // We still couldn't linearize ancestors, but there's a chance that this will succeed next time. We
+                // re-enqueue for another try, but we don't consider it as making progress
+                unit_queue.push_back(Unit::Ancestors(ancestor_id));
+                mark_complete = false;
+            }
+        }
+    }
+
+    if mark_complete {
+        complete_ancestors(declaration);
     }
 }
 
@@ -410,7 +495,11 @@ fn get_or_create_singleton_class(graph: &mut Graph, owner_decl_id: DeclarationId
     let singleton_short_name = format!("<{short_name}>");
     let singleton_str_id = StringId::from(singleton_short_name.as_str());
 
-    if let Some(existing_id) = members_of(owner_decl).get(&singleton_str_id).copied() {
+    // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
+    // and `Module.new`, which now seem like constants, but are actually namespaces
+    if !matches!(owner_decl, Declaration::Constant(_))
+        && let Some(existing_id) = members_of(owner_decl).get(&singleton_str_id).copied()
+    {
         return existing_id;
     }
 
@@ -445,6 +534,7 @@ pub fn ancestors_of(graph: &Graph, declaration_id: DeclarationId) -> Option<Ance
 /// # Panics
 ///
 /// Can panic if there's inconsistent data in the graph
+#[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn linearize_ancestors<S: BuildHasher>(
     graph: &Graph,
@@ -452,8 +542,15 @@ pub fn linearize_ancestors<S: BuildHasher>(
     descendant_id: Option<DeclarationId>,
     seen_ids: &mut HashSet<DeclarationId, S>,
 ) -> Option<Ancestors> {
-    let mut cyclic = false;
     let declaration = graph.declarations().get(&declaration_id).unwrap();
+    let mut cyclic = false;
+    let mut partial = false;
+
+    // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
+    // `Module.new`, which now seem like constants, but are actually namespaces
+    if matches!(declaration, Declaration::Constant(_)) {
+        return Some(Ancestors::Complete(vec![]));
+    }
 
     // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
     // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
@@ -465,7 +562,18 @@ pub fn linearize_ancestors<S: BuildHasher>(
     // again
     {
         let cached = current_ancestors(declaration);
+
         if matches!(*cached, Ancestors::Complete(_) | Ancestors::Cyclic(_)) {
+            // Propagate descendant to all cached ancestors for transitive descendant tracking
+            if let Some(descendant) = descendant_id {
+                for ancestor in cached.iter() {
+                    if let Ancestor::Complete(ancestor_id) = ancestor
+                        && let Some(ancestor_decl) = graph.declarations().get(ancestor_id)
+                    {
+                        add_descendant(ancestor_decl, descendant);
+                    }
+                }
+            }
             return Some(cached.clone());
         }
     }
@@ -491,6 +599,62 @@ pub fn linearize_ancestors<S: BuildHasher>(
         .filter_map(|def_id| graph.definitions().get(def_id))
         .collect::<Vec<_>>();
 
+    let mut prepended = Vec::new();
+
+    // Collect all mixins into their respective operations so that they can be processed in the right order
+    for def in &definitions {
+        let mixins: &[Mixin] = match def {
+            Definition::Class(class) => class.mixins(),
+            Definition::SingletonClass(class) => class.mixins(),
+            Definition::Module(module) => module.mixins(),
+            _ => continue,
+        };
+
+        for mixin in mixins {
+            match mixin {
+                Mixin::Prepend(name_id) => {
+                    if !prepended.contains(&name_id) {
+                        prepended.push(name_id);
+                    }
+                }
+                Mixin::Include(_) | Mixin::Extend(_) => {
+                    // todo
+                }
+            }
+        }
+    }
+
+    for prepended_name in prepended.iter().rev() {
+        match graph.names().get(prepended_name).unwrap() {
+            NameRef::Resolved(resolved) => {
+                let mixin_decl_id = *resolved.declaration_id();
+
+                match linearize_ancestors(graph, mixin_decl_id, Some(declaration_id), seen_ids) {
+                    Some(Ancestors::Complete(ids)) => {
+                        ancestors.extend(ids);
+                    }
+                    Some(Ancestors::Cyclic(ids)) => {
+                        ancestors.extend(ids);
+                        cyclic = true;
+                    }
+                    Some(Ancestors::Partial(ids)) => {
+                        ancestors.extend(ids);
+                        partial = true;
+                    }
+                    None => {
+                        return None;
+                    }
+                }
+            }
+            NameRef::Unresolved(_) => {
+                // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
+                // later
+                partial = true;
+                ancestors.push(Ancestor::Partial(**prepended_name));
+            }
+        }
+    }
+
     ancestors.push(Ancestor::Complete(declaration_id));
 
     // TODO: this check is against `Object` for now to avoid infinite recursion. After RBS indexing, we need to change
@@ -501,8 +665,12 @@ pub fn linearize_ancestors<S: BuildHasher>(
                 ancestors.extend(ids);
             }
             Some(Ancestors::Cyclic(ids)) => {
-                cyclic = true;
                 ancestors.extend(ids);
+                cyclic = true;
+            }
+            Some(Ancestors::Partial(ids)) => {
+                ancestors.extend(ids);
+                partial = true;
             }
             None => {
                 return None;
@@ -512,6 +680,8 @@ pub fn linearize_ancestors<S: BuildHasher>(
 
     let result = if cyclic {
         Ancestors::Cyclic(ancestors)
+    } else if partial {
+        Ancestors::Partial(ancestors)
     } else {
         Ancestors::Complete(ancestors)
     };
@@ -535,7 +705,7 @@ where
     // The name of the declaration is determined by the name of its owner, which may or may not require resolution
     // depending on whether the name has a parent scope
     match name_owner_id(graph, name_id) {
-        Outcome::Resolved(owner_id) => {
+        Outcome::Resolved(owner_id, id_needing_linearization) => {
             let owner = graph.declarations().get(&owner_id).unwrap();
 
             let mut fully_qualified_name = graph.strings().get(&str_id).unwrap().clone();
@@ -552,7 +722,7 @@ where
             });
             graph.add_member(&owner_id, declaration_id, str_id);
             graph.record_resolved_name(name_id, declaration_id);
-            Outcome::Resolved(declaration_id)
+            Outcome::Resolved(declaration_id, id_needing_linearization)
         }
         other => other,
     }
@@ -571,7 +741,7 @@ fn name_owner_id(graph: &mut Graph, name_id: NameId) -> Outcome {
         let nesting_name_ref = graph.names().get(nesting_id).unwrap();
 
         match nesting_name_ref {
-            NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id()),
+            NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
             NameRef::Unresolved(_) => {
                 // The only case where we wouldn't have the nesting resolved at this point is if it's available through
                 // inheritance or if it doesn't exist, so we need to retry later
@@ -580,7 +750,7 @@ fn name_owner_id(graph: &mut Graph, name_id: NameId) -> Outcome {
         }
     } else {
         // Any constants at the top level are owned by Object
-        Outcome::Resolved(*OBJECT_ID)
+        Outcome::Resolved(*OBJECT_ID, None)
     }
 }
 
@@ -599,10 +769,16 @@ fn resolve_constant(graph: &mut Graph, name_id: NameId) -> Outcome {
                 if let NameRef::Resolved(parent_scope) = graph.names().get(parent_scope_id).unwrap() {
                     let declaration = graph.declarations().get(parent_scope.declaration_id()).unwrap();
 
+                    // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
+                    // `Module.new`, which now seem like constants, but are actually namespaces
+                    if matches!(declaration, Declaration::Constant(_)) {
+                        return Outcome::Unresolved(None);
+                    }
+
                     // TODO: we can't just look inside members here, we need to search inheritance too
                     if let Some(member_id) = members_of(declaration).get(name.str()).copied() {
                         graph.record_resolved_name(name_id, member_id);
-                        return Outcome::Resolved(member_id);
+                        return Outcome::Resolved(member_id, None);
                     }
                 }
 
@@ -612,18 +788,19 @@ fn resolve_constant(graph: &mut Graph, name_id: NameId) -> Outcome {
             // Otherwise, it's a simple constant read and we can resolve it directly
             let result = run_resolution(graph, name);
 
-            if let Outcome::Resolved(declaration_id) = result {
+            if let Outcome::Resolved(declaration_id, _) = result {
                 graph.record_resolved_name(name_id, declaration_id);
             }
 
             result
         }
-        NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id()),
+        NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
     }
 }
 
 fn run_resolution(graph: &Graph, name: &Name) -> Outcome {
     let str_id = *name.str();
+    let mut missing_linearization_id = None;
 
     if let Some(nesting) = name.nesting() {
         let scope_outcome = search_lexical_scopes(graph, name, str_id);
@@ -635,32 +812,63 @@ fn run_resolution(graph: &Graph, name: &Name) -> Outcome {
 
         // Search inheritance chain
         let ancestor_outcome = search_ancestors(graph, *nesting, str_id);
-        if ancestor_outcome.is_resolved_or_retry() {
-            return ancestor_outcome;
+        match ancestor_outcome {
+            Outcome::Resolved(_, _) | Outcome::Retry => return ancestor_outcome,
+            Outcome::Unresolved(Some(needs_linearization_id)) => {
+                missing_linearization_id = Some(needs_linearization_id);
+            }
+            Outcome::Unresolved(None) => {}
         }
     }
 
     // If it's a top level reference starting with `::` or if we didn't find the constant anywhere else, the
     // fallback is the top level
-    search_top_level(graph, str_id)
+    let outcome = search_top_level(graph, str_id);
+
+    if let Some(linearization_id) = missing_linearization_id {
+        match outcome {
+            Outcome::Resolved(id, _) => Outcome::Resolved(id, Some(linearization_id)),
+            Outcome::Unresolved(_) => Outcome::Unresolved(Some(linearization_id)),
+            Outcome::Retry => {
+                panic!("Retry shouldn't happen when searching the top level")
+            }
+        }
+    } else {
+        outcome
+    }
 }
 
 fn search_ancestors(graph: &Graph, nesting_name_id: NameId, str_id: StringId) -> Outcome {
     match graph.names().get(&nesting_name_id).unwrap() {
-        NameRef::Resolved(nesting_name_ref) => match ancestors_of(graph, *nesting_name_ref.declaration_id()) {
-            Some(Ancestors::Complete(ids) | Ancestors::Cyclic(ids)) => ids
-                .iter()
-                .find_map(|ancestor_id| {
-                    if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        let declaration = graph.declarations().get(ancestor_id).unwrap();
-                        get_member(declaration, str_id).map(|id| Outcome::Resolved(*id))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(Outcome::Unresolved),
-            None => Outcome::Retry,
-        },
+        NameRef::Resolved(nesting_name_ref) => {
+            let nesting_id = *nesting_name_ref.declaration_id();
+
+            match ancestors_of(graph, nesting_id) {
+                Some(Ancestors::Complete(ids) | Ancestors::Cyclic(ids)) => ids
+                    .iter()
+                    .find_map(|ancestor_id| {
+                        if let Ancestor::Complete(ancestor_id) = ancestor_id {
+                            let declaration = graph.declarations().get(ancestor_id).unwrap();
+                            get_member(declaration, str_id).map(|id| Outcome::Resolved(*id, None))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(Outcome::Unresolved(None)),
+                Some(Ancestors::Partial(ids)) => ids
+                    .iter()
+                    .find_map(|ancestor_id| {
+                        if let Ancestor::Complete(ancestor_id) = ancestor_id {
+                            let declaration = graph.declarations().get(ancestor_id).unwrap();
+                            get_member(declaration, str_id).map(|id| Outcome::Resolved(*id, Some(nesting_id)))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(Outcome::Unresolved(Some(nesting_id))),
+                None => Outcome::Retry,
+            }
+        }
         NameRef::Unresolved(_) => Outcome::Retry,
     }
 }
@@ -672,9 +880,10 @@ fn search_lexical_scopes(graph: &Graph, name: &Name, str_id: StringId) -> Outcom
     while let Some(nesting_id) = current_name.nesting() {
         if let NameRef::Resolved(nesting_name_ref) = graph.names().get(nesting_id).unwrap() {
             if let Some(declaration) = graph.declarations().get(nesting_name_ref.declaration_id())
+            && !matches!(declaration, Declaration::Constant(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
                 && let Some(member) = members_of(declaration).get(&str_id)
             {
-                return Outcome::Resolved(*member);
+                return Outcome::Resolved(*member, None);
             }
 
             current_name = nesting_name_ref.name();
@@ -683,7 +892,7 @@ fn search_lexical_scopes(graph: &Graph, name: &Name, str_id: StringId) -> Outcom
         }
     }
 
-    Outcome::Unresolved
+    Outcome::Unresolved(None)
 }
 
 /// Look for the constant at the top level (member of Object)
@@ -691,8 +900,8 @@ fn search_top_level(graph: &Graph, str_id: StringId) -> Outcome {
     let object = graph.declarations().get(&OBJECT_ID).unwrap();
 
     match members_of(object).get(&str_id) {
-        Some(member_id) => Outcome::Resolved(*member_id),
-        None => Outcome::Unresolved,
+        Some(member_id) => Outcome::Resolved(*member_id, None),
+        None => Outcome::Unresolved(None),
     }
 }
 
@@ -860,6 +1069,24 @@ fn get_member(declaration: &Declaration, str_id: StringId) -> Option<&Declaratio
     }
 }
 
+fn insert_linearized_ancestors(declaration: &Declaration, index: usize, ancestors: Vec<Ancestor>) {
+    match declaration {
+        Declaration::Class(class) => class.insert_linearized_ancestors(index, ancestors),
+        Declaration::Module(module) => module.insert_linearized_ancestors(index, ancestors),
+        Declaration::SingletonClass(singleton) => singleton.insert_linearized_ancestors(index, ancestors),
+        _ => panic!("Tried to insert linearized ancestors for a declaration that isn't a namespace"),
+    }
+}
+
+fn complete_ancestors(declaration: &Declaration) {
+    match declaration {
+        Declaration::Class(class) => class.complete_ancestors(),
+        Declaration::Module(module) => module.complete_ancestors(),
+        Declaration::SingletonClass(singleton) => singleton.complete_ancestors(),
+        _ => panic!("Tried to complete ancestors on a declaration that isn't a namespace"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -947,7 +1174,7 @@ mod tests {
                             .join(", ")
                     );
                 }
-                None => {
+                None | Some(Ancestors::Partial(_)) => {
                     panic!("Expected ancestors to be resolved");
                 }
             }
@@ -1769,5 +1996,282 @@ mod tests {
             .get(&DeclarationId::from("Object"))
             .unwrap();
         assert_members(foo_class, &["$bar", "$foo"]);
+    }
+
+    #[test]
+    fn linearizing_parent_classes_with_parent_scope() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar
+              end
+            end
+            class Baz < Foo::Bar
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Baz", ["Baz", "Foo::Bar", "Object"]);
+    }
+
+    #[test]
+    fn resolving_constant_references_involved_in_ancestors() {
+        let mut context = GraphTest::new();
+
+        // To linearize the ancestors of `Bar`, we need to resolve `Foo` first. However, during that resolution, we need
+        // to check `Bar`'s ancestor chain before checking the top level (which is where we'll find `Foo`). In these
+        // scenarios, we need to realize the dependency and skip ancestors
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              prepend Foo
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
+    }
+
+    #[test]
+    fn resolving_prepend_using_inherited_constant() {
+        let mut context = GraphTest::new();
+        // Prepending `Foo` makes `Bar` available, which we can then prepend as well. This requires resolving constants
+        // with partially linearized ancestors
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+            end
+            class Baz
+              prepend Foo
+              prepend Bar
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Baz", ["Foo::Bar", "Foo", "Baz", "Object"]);
+    }
+
+    #[test]
+    fn linearizing_prepended_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              prepend Foo
+            end
+            class Baz
+              prepend Bar
+            end
+            class Qux < Baz; end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Foo", ["Foo"]);
+        assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
+        assert_ancestors_eq!(context, "Qux", ["Qux", "Foo", "Bar", "Baz", "Object"]);
+    }
+
+    #[test]
+    fn prepend_on_dynamic_namespace_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module B; end
+            A = Struct.new do
+              prepend B
+            end
+
+            C = Class.new do
+              prepend B
+            end
+
+            D = Module.new do
+              prepend B
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "B", ["B"]);
+        assert_ancestors_eq!(context, "A", Vec::<&str>::new());
+        assert_ancestors_eq!(context, "C", Vec::<&str>::new());
+        assert_ancestors_eq!(context, "D", Vec::<&str>::new());
+    }
+
+    #[test]
+    fn prepends_track_descendants() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              prepend Foo
+            end
+            class Baz
+              prepend Bar
+            end
+            "
+        });
+        context.resolve();
+        assert_descendants!(context, "Foo", ["Bar", "Baz"]);
+        assert_descendants!(context, "Bar", ["Baz"]);
+    }
+
+    #[test]
+    fn cyclic_prepend() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              prepend Foo
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Foo", ["Foo"]);
+    }
+
+    #[test]
+    fn duplicate_prepends() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+            end
+
+            module Bar
+              prepend Foo
+              prepend Foo
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
+    }
+
+    #[test]
+    fn indirect_duplicate_prepends() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+
+            module B
+              prepend A
+            end
+
+            module C
+              prepend A
+            end
+
+            module Foo
+              prepend B
+              prepend C
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "A", ["A"]);
+        assert_ancestors_eq!(context, "B", ["A", "B"]);
+        assert_ancestors_eq!(context, "C", ["A", "C"]);
+
+        // TODO: incorrect, but it's easier to handle duplicates considering includes. The second A shouldn't be there
+        assert_ancestors_eq!(context, "Foo", ["A", "C", "A", "B", "Foo"]);
+    }
+
+    #[test]
+    fn prepends_involving_parent_scopes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              module B
+                module C; end
+              end
+            end
+
+            module D
+              prepend A::B::C
+            end
+
+            module Foo
+              prepend D
+              prepend A::B::C
+            end
+
+            module Bar
+              prepend A::B::C
+              prepend D
+            end
+            "
+        });
+        context.resolve();
+
+        // TODO: incorrect, but it's easier to handle duplicates considering includes. Both should be `A::B::C, D, itself`
+        assert_ancestors_eq!(context, "Foo", ["A::B::C", "A::B::C", "D", "Foo"]);
+        assert_ancestors_eq!(context, "Bar", ["A::B::C", "D", "A::B::C", "Bar"]);
+    }
+
+    #[test]
+    fn duplicate_prepends_in_parents() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+
+            module B
+              prepend A
+            end
+
+            class Parent
+              prepend B
+            end
+
+            class Child < Parent
+              prepend B
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Child", ["A", "B", "Child", "A", "B", "Parent", "Object"]);
+    }
+
+    #[test]
+    fn prepended_modules_involved_in_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+            end
+
+            module Baz
+              prepend Foo
+
+              class Bar::Qux
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let bar = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::Bar"))
+            .unwrap();
+        assert_members(bar, &["Qux"]);
+        assert_owner(bar, "Foo");
+
+        let qux = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Foo::Bar::Qux"))
+            .unwrap();
+        assert_members(qux, &[]);
+        assert_owner(qux, "Foo::Bar");
     }
 }
