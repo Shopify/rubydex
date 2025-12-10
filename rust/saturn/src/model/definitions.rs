@@ -303,8 +303,8 @@ impl ClassDefinition {
     }
 
     #[must_use]
-    pub fn superclass_ref(&self) -> &Option<NameId> {
-        &self.superclass_ref
+    pub fn superclass_ref(&self) -> Option<NameId> {
+        self.superclass_ref
     }
 
     #[must_use]
