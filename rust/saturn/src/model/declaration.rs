@@ -17,19 +17,25 @@ pub enum Ancestors {
     Complete(Vec<Ancestor>),
     /// A cyclic linearization of ancestors (e.g.: a module that includes itself)
     Cyclic(Vec<Ancestor>),
+    /// A partial linearization of ancestors with some parts unresolved
+    Partial(Vec<Ancestor>),
 }
 
 impl Ancestors {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         match self {
-            Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) => ancestors.is_empty(),
+            Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {
+                ancestors.is_empty()
+            }
         }
     }
 
     pub fn iter(&self) -> std::slice::Iter<'_, Ancestor> {
         match self {
-            Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) => ancestors.iter(),
+            Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {
+                ancestors.iter()
+            }
         }
     }
 }
@@ -46,7 +52,9 @@ impl<'a> IntoIterator for &'a Ancestors {
 impl AsRef<[Ancestor]> for Ancestors {
     fn as_ref(&self) -> &[Ancestor] {
         match self {
-            Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) => ancestors.as_ref(),
+            Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {
+                ancestors.as_ref()
+            }
         }
     }
 }
@@ -100,7 +108,7 @@ macro_rules! namespace_declaration {
                     members: IdentityHashMap::default(),
                     references: Vec::new(),
                     owner_id,
-                    ancestors: RefCell::new(Ancestors::Complete(Vec::new())),
+                    ancestors: RefCell::new(Ancestors::Partial(Vec::new())),
                     descendants: RefCell::new(IdentityHashSet::default()),
                 }
             }
@@ -134,6 +142,33 @@ macro_rules! namespace_declaration {
 
             pub fn set_ancestors(&self, ancestors: Ancestors) {
                 *self.ancestors.borrow_mut() = ancestors;
+            }
+
+            /// Inserts a partial linearization of ancestors at the given index. This is used to replace unresolved name
+            /// IDs with their actual linearization once we have resolved them
+            pub fn insert_linearized_ancestors(&self, index: usize, ancestors: Vec<Ancestor>) {
+                match *self.ancestors.borrow_mut() {
+                    Ancestors::Cyclic(ref mut current_ancestors) | Ancestors::Partial(ref mut current_ancestors) => {
+                        current_ancestors.splice(index..index + 1, ancestors);
+                    }
+                    Ancestors::Complete(_) => {
+                        panic!("Tried to insert linearized ancestors into a declaration that already has a complete linearization");
+                    }
+                }
+            }
+
+            /// Marks that ancestor linearization has been completed for a list that was originally a partial
+            /// linearization. In practice, turns `Ancestors::Partial` into `Ancestors::Complete`
+            pub fn complete_ancestors(&self) {
+                let mut ancestors = self.ancestors.borrow_mut();
+                let old = std::mem::replace(&mut *ancestors, Ancestors::Complete(vec![]));
+
+                *ancestors = match old {
+                    Ancestors::Partial(list) | Ancestors::Cyclic(list) => Ancestors::Complete(list),
+                    Ancestors::Complete(_) => {
+                        panic!("Tried to mark already completed ancestors as completed");
+                    }
+                };
             }
 
             #[must_use]
@@ -338,5 +373,40 @@ mod tests {
             DeclarationId::from("Foo::Bar"),
         )));
         assert_eq!(decl.unqualified_name(), "baz");
+    }
+
+    #[test]
+    fn inserting_partial_linearizations() {
+        let Declaration::Class(decl) = Declaration::Class(Box::new(ClassDeclaration::new(
+            "Foo".to_string(),
+            DeclarationId::from("Foo"),
+        ))) else {
+            panic!("Expected a class declaration");
+        };
+
+        let name_id = NameId::from("Bar");
+        decl.set_ancestors(Ancestors::Partial(vec![
+            Ancestor::Complete(DeclarationId::from("Foo")),
+            Ancestor::Partial(name_id),
+            Ancestor::Complete(DeclarationId::from("Object")),
+        ]));
+
+        decl.insert_linearized_ancestors(
+            1,
+            vec![
+                Ancestor::Complete(DeclarationId::from("Bar")),
+                Ancestor::Complete(DeclarationId::from("Baz")),
+            ],
+        );
+
+        assert_eq!(
+            &[
+                Ancestor::Complete(DeclarationId::from("Foo")),
+                Ancestor::Complete(DeclarationId::from("Bar")),
+                Ancestor::Complete(DeclarationId::from("Baz")),
+                Ancestor::Complete(DeclarationId::from("Object")),
+            ],
+            decl.ancestors().as_ref(),
+        );
     }
 }

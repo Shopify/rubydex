@@ -215,6 +215,9 @@ impl Graph {
                 Declaration::Class(it) => it.add_member(member_str_id, member_declaration_id),
                 Declaration::Module(it) => it.add_member(member_str_id, member_declaration_id),
                 Declaration::SingletonClass(it) => it.add_member(member_str_id, member_declaration_id),
+                Declaration::Constant(_) => {
+                    // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
+                }
                 _ => panic!("Tried to add member to a declaration that isn't a namespace"),
             }
         }
