@@ -66,57 +66,64 @@ pub fn resolve_all(graph: &mut Graph) {
         .declarations_mut()
         .insert(*OBJECT_ID, Declaration::new("Object".to_string(), *OBJECT_ID));
 
-    let (mut constant_queue, other_ids) = sorted_units(graph);
-    // Flag to indicate whether we successfully resolved something in the last resolution iteration, thus making
-    // progress. If nothing got resolved, then we stop because trying again would likely not successfully resolve
-    // anything new
-    let mut making_progress = true;
+    let (mut unit_queue, other_ids) = sorted_units(graph);
 
-    // First, handle all constants, ensuring that we create declarations, members, owners and resolve any name
-    // references that are necessary along the way
-    while making_progress && let Some(unit_id) = constant_queue.pop_front() {
-        match unit_id {
-            Unit::Definition(id) => {
-                let name_id = match graph.definitions().get(&id).unwrap() {
-                    Definition::Class(class) => *class.name_id(),
-                    Definition::Module(module) => *module.name_id(),
-                    Definition::Constant(constant) => *constant.name_id(),
-                    Definition::SingletonClass(singleton) => *singleton.name_id(),
-                    _ => panic!("Expected constant definitions"),
-                };
+    loop {
+        // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
+        // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
+        // to be done
+        let mut made_progress = false;
 
-                match handle_constant_declaration(graph, name_id, id) {
-                    Outcome::Retry => {
-                        // There might be dependencies we haven't figured out yet, so we need to retry
-                        constant_queue.push_back(unit_id);
-                        making_progress = false;
-                    }
-                    Outcome::Unresolved => {
-                        // We couldn't resolve this name. Emit a diagnostic
-                        making_progress = false;
-                    }
-                    Outcome::Resolved(_) => making_progress = true,
-                }
-            }
-            Unit::Reference(id) => {
-                let constant_ref = graph.constant_references().get(&id).unwrap();
+        // Loop through the current length of the queue, which won't change during this pass. Retries pushed to the back
+        // are only processed in the next pass, so that we can assess whether we made any progress
+        for _ in 0..unit_queue.len() {
+            let Some(unit_id) = unit_queue.pop_front() else {
+                break;
+            };
 
-                match resolve_constant(graph, *constant_ref.name_id()) {
-                    Outcome::Retry => {
-                        // There might be dependencies we haven't figured out yet, so we need to retry
-                        constant_queue.push_back(unit_id);
-                        making_progress = false;
-                    }
-                    Outcome::Unresolved => {
-                        // We couldn't resolve this name. Emit a diagnostic
-                        making_progress = false;
-                    }
-                    Outcome::Resolved(declaration_id) => {
-                        graph.record_resolved_reference(id, declaration_id);
-                        making_progress = true;
+            match unit_id {
+                Unit::Definition(id) => {
+                    let name_id = match graph.definitions().get(&id).unwrap() {
+                        Definition::Class(class) => *class.name_id(),
+                        Definition::Module(module) => *module.name_id(),
+                        Definition::Constant(constant) => *constant.name_id(),
+                        Definition::SingletonClass(singleton) => *singleton.name_id(),
+                        _ => panic!("Expected constant definitions"),
+                    };
+
+                    match handle_constant_declaration(graph, name_id, id) {
+                        Outcome::Retry => {
+                            // There might be dependencies we haven't figured out yet, so we need to retry
+                            unit_queue.push_back(unit_id);
+                        }
+                        Outcome::Unresolved => {
+                            // We couldn't resolve this name. Emit a diagnostic
+                        }
+                        Outcome::Resolved(_) => made_progress = true,
                     }
                 }
+                Unit::Reference(id) => {
+                    let constant_ref = graph.constant_references().get(&id).unwrap();
+
+                    match resolve_constant(graph, *constant_ref.name_id()) {
+                        Outcome::Retry => {
+                            // There might be dependencies we haven't figured out yet, so we need to retry
+                            unit_queue.push_back(unit_id);
+                        }
+                        Outcome::Unresolved => {
+                            // We couldn't resolve this name. Emit a diagnostic
+                        }
+                        Outcome::Resolved(declaration_id) => {
+                            graph.record_resolved_reference(id, declaration_id);
+                            made_progress = true;
+                        }
+                    }
+                }
             }
+        }
+
+        if !made_progress || unit_queue.is_empty() {
+            break;
         }
     }
 
@@ -1254,5 +1261,26 @@ mod tests {
             ancestors_of(&context.graph, DeclarationId::from("Bar")),
             AncestorOutcome::Retry
         ));
+    }
+
+    #[test]
+    fn resolving_inherited_constant_dependent_on_complex_parent() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar
+                class Baz
+                  CONST = 123
+                end
+              end
+            end
+            class Qux < Foo::Bar::Baz
+              CONST
+            end
+            "
+        });
+        context.resolve();
+        assert_constant_reference_to!(context, "Foo::Bar::Baz::CONST", "file:///foo.rb:8:2-8:7");
     }
 }
