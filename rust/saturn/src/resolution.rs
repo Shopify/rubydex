@@ -596,6 +596,7 @@ fn linearize_parent_class<S: BuildHasher>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::location::Location;
     use crate::model::ids::UriId;
     use crate::test_utils::GraphTest;
 
@@ -608,10 +609,11 @@ mod tests {
     /// 4. Asserts the end offset matches
     ///
     /// Location format: "uri:start_line:start_column-end_line:end_column"
-    /// Example: `<file:///foo.rb:3:0-3:5>`
+    /// Example: `file:///foo.rb:3:1-3:6`
     macro_rules! assert_constant_reference_to {
         ($context:expr, $declaration_name:expr, $location:expr) => {
-            let (uri, start, end) = $context.parse_location($location);
+            let location = Location::from_string($location);
+            let offset = location.to_offset($context.get_source(location.uri()).unwrap());
 
             let declaration = $context
                 .graph
@@ -639,17 +641,19 @@ mod tests {
                         None
                     }
                 })
-                .find(|c| c.uri_id() == UriId::from(&uri) && c.offset().start() == start)
+                .find(|c| c.uri_id() == UriId::from(location.uri()) && c.offset() == &offset)
                 .expect(&format!(
                     "Declaration '{}' does not have a reference at {} starting at offset {}",
-                    $declaration_name, $location, start
+                    $declaration_name,
+                    $location,
+                    offset.start()
                 ));
 
             $context.assert_offset_matches(
-                &uri,
+                location.uri(),
                 constant.offset(),
-                start,
-                end,
+                offset.start(),
+                offset.end(),
                 &format!("reference to '{}'", $declaration_name),
                 $location,
             );
@@ -740,9 +744,9 @@ mod tests {
         });
         context.resolve();
 
-        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:2:2-2:5");
-        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:3:0-3:3");
-        assert_constant_reference_to!(context, "Bar", "file:///foo.rb:1:4-1:7");
+        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:3:3-3:6");
+        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:4:1-4:4");
+        assert_constant_reference_to!(context, "Bar", "file:///foo.rb:2:5-2:8");
     }
 
     #[test]
@@ -762,8 +766,8 @@ mod tests {
         });
         context.resolve();
 
-        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:4:4-4:9");
-        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:5:9-5:14");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:5:5-5:10");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:6:10-6:15");
     }
 
     #[test]
@@ -781,7 +785,8 @@ mod tests {
             "
         });
         context.resolve();
-        assert_constant_reference_to!(context, "Baz", "file:///bar.rb:4:4-4:7");
+
+        assert_constant_reference_to!(context, "Baz", "file:///bar.rb:5:5-5:8");
     }
 
     #[test]
@@ -797,7 +802,8 @@ mod tests {
             "
         });
         context.resolve();
-        assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:4:5-4:8");
+
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:5:6-5:9");
     }
 
     #[test]

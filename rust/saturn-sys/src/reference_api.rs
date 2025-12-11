@@ -3,8 +3,9 @@
 use std::ffi::CString;
 
 use crate::graph_api::{GraphPointer, with_graph};
-use crate::location_api::{Location, create_location_for_uri_and_offset};
+use crate::location_api::{Location, location_to_ffi};
 use libc::c_char;
+use saturn::location;
 use saturn::model::ids::ReferenceId;
 
 /// Kind of reference for FFI dispatch
@@ -158,7 +159,8 @@ pub unsafe extern "C" fn sat_constant_reference_location(pointer: GraphPointer, 
             .expect("Document should exist")
             .uri()
             .to_string();
-        create_location_for_uri_and_offset(&uri, reference.offset())
+        let location = location::Location::from_uri_and_offset(uri, reference.offset());
+        location_to_ffi(&location)
     })
 }
 
@@ -184,6 +186,7 @@ pub unsafe extern "C" fn sat_method_reference_location(pointer: GraphPointer, re
             .expect("Document should exist")
             .uri()
             .to_string();
-        create_location_for_uri_and_offset(&uri, reference.offset())
+        let location = location::Location::from_uri_and_offset(uri, reference.offset());
+        location_to_ffi(&location)
     })
 }

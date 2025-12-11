@@ -1,11 +1,8 @@
 //! Location-related C API and structs
 
 use libc::c_char;
-use line_index::LineIndex;
-use saturn::offset::Offset;
+use saturn::location;
 use std::ffi::CString;
-use std::fs;
-use url::Url;
 
 /// C-compatible struct representing a definition location with offsets and line/column positions.
 #[repr(C)]
@@ -18,48 +15,29 @@ pub struct Location {
     pub end_column: u32,
 }
 
-#[must_use]
-fn file_path_from_uri(uri: &str) -> Option<String> {
-    Url::parse(uri)
-        .ok()?
-        .to_file_path()
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
-}
-
-/// Helper to create a location for a given URI and byte-offset range.
-/// Allocates and returns a pointer to `Location`. Caller must free with `sat_location_free`.
+/// Converts a `Location` struct to a pointer to a FFI `Location` struct.
 ///
 /// # Panics
 ///
-/// - If the URI cannot be converted to a file path.
-/// - If the file cannot be read.
-/// - If the offset cannot be converted to a position.
+/// - If the URI cannot be converted to a C string.
 #[must_use]
-pub(crate) fn create_location_for_uri_and_offset(uri: &str, offset: &Offset) -> *mut Location {
-    let path_str = file_path_from_uri(uri).unwrap_or_else(|| panic!("Failed to convert URI to file path: {uri}"));
-    let source = fs::read_to_string(&path_str).unwrap_or_else(|_| panic!("Failed to read file at path {path_str}"));
-
-    let line_index = LineIndex::new(&source);
-    let start_pos = line_index.line_col(offset.start().into());
-    let end_pos = line_index.line_col(offset.end().into());
-
-    let loc = Location {
-        uri: CString::new(uri).unwrap().into_raw().cast_const(),
-        start_line: start_pos.line + 1,
-        end_line: end_pos.line + 1,
-        start_column: start_pos.col + 1,
-        end_column: end_pos.col + 1,
+pub fn location_to_ffi(location: &location::Location) -> *mut Location {
+    let ffi_location = Location {
+        uri: CString::new(location.uri()).unwrap().into_raw().cast_const(),
+        start_line: location.line_start(),
+        end_line: location.line_end(),
+        start_column: location.column_start(),
+        end_column: location.column_end(),
     };
 
-    Box::into_raw(Box::new(loc))
+    Box::into_raw(Box::new(ffi_location))
 }
 
 /// Frees a `Location` struct and its owned inner strings.
 ///
 /// # Safety
 ///
-/// - `ptr` must be a valid pointer previously returned by `create_location_for_uri_and_offset`.
+/// - `ptr` must be a valid pointer previously returned by `location_to_ffi`.
 /// - `ptr` must not be used after being freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sat_location_free(ptr: *mut Location) {
