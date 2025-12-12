@@ -1,6 +1,7 @@
 pub mod diagnostic;
 pub mod errors;
 pub mod indexing;
+pub mod listing;
 pub mod model;
 pub mod offset;
 pub mod position;
