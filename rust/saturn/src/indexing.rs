@@ -4,6 +4,7 @@ use crate::{
     model::graph::Graph,
 };
 use glob::glob;
+use ignore::{WalkBuilder, WalkState};
 use std::sync::{
     Arc, Mutex,
     mpsc::{Receiver, Sender},
@@ -143,15 +144,105 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
     (file_paths, errors)
 }
 
+/// Collect Ruby files using the `ignore` crate so we honor `.gitignore` and OS-specific
+/// defaults while walking the directory tree.
+#[must_use]
+pub fn collect_file_paths_ignore(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
+    let mut errors = Vec::new();
+    let mut file_paths = Vec::new();
+
+    for path in paths {
+        let path_obj = Path::new(&path);
+
+        if !path_obj.exists() {
+            errors.push(Errors::FileReadError(format!("Path '{path}' does not exist")));
+            continue;
+        }
+
+        if path_obj.is_file() {
+            if path_obj.extension().unwrap_or_default() == "rb" {
+                file_paths.push(path);
+            }
+            continue;
+        }
+
+        // Directory case: walk with ignore so we respect VCS and OS ignore rules.
+        let walk_files = Arc::new(Mutex::new(Vec::new()));
+        let walk_errors = Arc::new(Mutex::new(Vec::new()));
+        let path_label = path.clone();
+        let walk_files_for_closure = Arc::clone(&walk_files);
+        let walk_errors_for_closure = Arc::clone(&walk_errors);
+
+        WalkBuilder::new(&path)
+            .standard_filters(true)
+            .build_parallel()
+            .run(move || {
+                let files_ref = Arc::clone(&walk_files_for_closure);
+                let errors_ref = Arc::clone(&walk_errors_for_closure);
+                let path_label = path_label.clone();
+                Box::new(move |entry| {
+                    match entry {
+                        Ok(dir_entry) => {
+                            if dir_entry.file_type().is_some_and(|ft| ft.is_file())
+                                && dir_entry.path().extension().unwrap_or_default() == "rb"
+                            {
+                                files_ref
+                                    .lock()
+                                    .unwrap()
+                                    .push(dir_entry.path().to_string_lossy().into_owned());
+                            }
+                        }
+                        Err(e) => errors_ref.lock().unwrap().push(Errors::FileReadError(format!(
+                            "Failed to read entry while walking '{path_label}': {e}"
+                        ))),
+                    }
+                    WalkState::Continue
+                })
+            });
+
+        let mut collected_files = Arc::try_unwrap(walk_files)
+            .expect("walk_files still has outstanding references")
+            .into_inner()
+            .unwrap();
+        let mut collected_errors = Arc::try_unwrap(walk_errors)
+            .expect("walk_errors still has outstanding references")
+            .into_inner()
+            .unwrap();
+
+        file_paths.append(&mut collected_files);
+        errors.append(&mut collected_errors);
+    }
+
+    (file_paths, errors)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::test_utils::Context;
 
     fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<Errors>) {
         let (file_paths, errors) = collect_file_paths(
+            paths
+                .iter()
+                .map(|p| context.absolute_path_to(p).to_string_lossy().into_owned())
+                .collect(),
+        );
+
+        let mut paths: Vec<String> = file_paths
+            .iter()
+            .map(|path| context.relative_path_to(path).to_string_lossy().into_owned())
+            .collect();
+
+        paths.sort();
+
+        (paths, errors)
+    }
+
+    fn collect_document_paths_ignore(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<Errors>) {
+        let (file_paths, errors) = collect_file_paths_ignore(
             paths
                 .iter()
                 .map(|p| context.absolute_path_to(p).to_string_lossy().into_owned())
@@ -215,6 +306,54 @@ mod tests {
         let context = Context::new();
 
         let (documents, errors) = collect_file_paths(vec![
+            context
+                .absolute_path_to("non_existing_path")
+                .to_string_lossy()
+                .into_owned(),
+        ]);
+
+        assert!(documents.is_empty());
+
+        assert_eq!(
+            errors
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<String>>(),
+            vec![format!(
+                "File read error: Path '{}' does not exist",
+                context.absolute_path_to("non_existing_path").display()
+            )]
+        );
+    }
+
+    #[test]
+    fn collect_all_documents_ignore() {
+        let context = Context::new();
+        let baz = Path::new("bar").join("baz.rb");
+        let qux = Path::new("bar").join("qux.rb");
+        let bar = Path::new("foo").join("bar.rb");
+        context.touch(&baz);
+        context.touch(&qux);
+        context.touch(&bar);
+
+        let (paths, errors) = collect_document_paths_ignore(&context, &["foo", "bar"]);
+
+        assert_eq!(
+            paths,
+            vec![
+                baz.to_str().unwrap().to_string(),
+                qux.to_str().unwrap().to_string(),
+                bar.to_str().unwrap().to_string()
+            ]
+        );
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn collect_non_existing_paths_ignore() {
+        let context = Context::new();
+
+        let (documents, errors) = collect_file_paths_ignore(vec![
             context
                 .absolute_path_to("non_existing_path")
                 .to_string_lossy()

@@ -24,6 +24,8 @@ bytecount = "0.6.9"
 libc = "0.2"
 line-index = "0.1.2"
 tempfile = { version = "3.0", optional = true }
+ignore = "0.4"
+crossbeam-deque = "0.8"
 
 [dev-dependencies]
 saturn = { path = ".", features = ["test_utils"] }

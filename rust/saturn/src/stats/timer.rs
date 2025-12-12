@@ -119,7 +119,9 @@ macro_rules! make_timer {
 
 make_timer! {
     setup, "Initialization";
-    listing, "Listing";
+    listing1, "Listing (old)";
+    listing2, "Listing (new)";
+    listing3, "Listing (ignore)";
     indexing, "Indexing";
     resolution, "Resolution";
     querying, "Querying";

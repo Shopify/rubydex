@@ -1,11 +1,18 @@
-use std::error::Error;
+use std::{
+    error::Error,
+    // mem,
+    path::PathBuf,
+    sync::{Arc, Mutex, mpsc},
+};
 
 use clap::Parser;
 
 use saturn::{
-    errors::MultipleErrors,
-    indexing::{self},
-    // model::graph::Graph,
+    // errors::MultipleErrors,
+    // indexing::{self},
+    // indexing,
+    job_queue::{FileDiscoveryJob, JobQueue},
+    model::graph::Graph,
     // resolution,
     stats::{
         memory::MemoryStats,
@@ -34,29 +41,36 @@ struct Args {
     stats: bool,
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    if args.stats {
-        Timer::set_global_timer(Timer::new());
-    }
+    Timer::set_global_timer(Timer::new());
 
-    println!("Collecting file paths...");
+    println!("Collecting and indexing files...");
 
-    // let mut graph = Graph::new();
-    let (_file_paths, errors) = time_it!(listing, { indexing::collect_file_paths(vec![args.dir]) });
+    let _graph = time_it!(listing2, {
+        let queue = Arc::new(JobQueue::new());
+        let errors_arc = Arc::new(Mutex::new(Vec::new()));
+        let (graph_tx, graph_rx) = mpsc::channel();
 
-    if !errors.is_empty() {
-        return Err(Box::new(MultipleErrors(errors)));
-    }
+        queue.push(Box::new(FileDiscoveryJob::new(
+            PathBuf::from(args.dir.clone()),
+            Arc::clone(&queue),
+            graph_tx.clone(),
+            Arc::clone(&errors_arc),
+        )));
 
-    // println!("Indexing files...");
+        drop(graph_tx);
 
-    // time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
+        JobQueue::run(&queue);
 
-    // time_it!(resolution, {
-    //     resolution::resolve_all(&mut graph);
-    // });
+        let mut graph = Graph::new();
+        for local_graph in graph_rx {
+            graph.update(local_graph);
+        }
+        graph
+    });
 
     // Run integrity checks if requested
     // if args.check_integrity {
