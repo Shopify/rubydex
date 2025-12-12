@@ -20,6 +20,7 @@ VALUE cGlobalVariableDefinition;
 VALUE cInstanceVariableDefinition;
 VALUE cClassVariableDefinition;
 VALUE cMethodAliasDefinition;
+VALUE cGlobalVariableAliasDefinition;
 
 // Keep this in sync with definition.rs
 VALUE definition_class_for_kind(DefinitionKind kind) {
@@ -48,6 +49,8 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
         return cClassVariableDefinition;
     case DefinitionKind_MethodAlias:
         return cMethodAliasDefinition;
+    case DefinitionKind_GlobalVariableAlias:
+        return cGlobalVariableAliasDefinition;
     default:
         rb_raise(rb_eRuntimeError, "Unknown DefinitionKind: %d", kind);
     }
@@ -183,4 +186,8 @@ void initialize_definition(VALUE mod) {
     cMethodAliasDefinition = rb_define_class_under(mSaturn, "MethodAliasDefinition", cDefinition);
     rb_define_alloc_func(cMethodAliasDefinition, sr_handle_alloc);
     rb_define_method(cMethodAliasDefinition, "initialize", sr_handle_initialize, 2);
+
+    cGlobalVariableAliasDefinition = rb_define_class_under(mSaturn, "GlobalVariableAliasDefinition", cDefinition);
+    rb_define_alloc_func(cGlobalVariableAliasDefinition, sr_handle_alloc);
+    rb_define_method(cGlobalVariableAliasDefinition, "initialize", sr_handle_initialize, 2);
 }
