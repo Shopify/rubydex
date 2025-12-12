@@ -1,14 +1,13 @@
-use crate::errors::Errors;
+use crate::errors::{Errors, MultipleErrors};
 use glob::glob;
 use std::path::Path;
 
 /// Recursively collects all Ruby files for the given workspace and dependencies, returning a vector of document instances
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if there's a bug in how we're handling the arc mutex, like trying to acquire locks twice
-#[must_use]
-pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
+/// Returns a `MultipleErrors` if any of the paths do not exist
+pub fn collect_file_paths(paths: Vec<String>) -> Result<Vec<String>, MultipleErrors> {
     let mut errors = Vec::new();
     let mut file_paths = Vec::new();
 
@@ -46,7 +45,11 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
         errors.push(Errors::FileReadError(format!("Path '{path}' does not exist")));
     }
 
-    (file_paths, errors)
+    if errors.is_empty() {
+        Ok(file_paths)
+    } else {
+        Err(MultipleErrors(errors))
+    }
 }
 
 #[cfg(test)]
@@ -54,22 +57,22 @@ mod tests {
     use super::*;
     use crate::test_utils::Context;
 
-    fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<Errors>) {
-        let (file_paths, errors) = collect_file_paths(
+    fn collect_document_paths(context: &Context, paths: &[&str]) -> Result<Vec<String>, MultipleErrors> {
+        let result = collect_file_paths(
             paths
                 .iter()
                 .map(|p| context.absolute_path_to(p).to_string_lossy().into_owned())
                 .collect(),
-        );
+        )?;
 
-        let mut paths: Vec<String> = file_paths
+        let mut paths: Vec<String> = result
             .iter()
             .map(|path| context.relative_path_to(path).to_string_lossy().into_owned())
             .collect();
 
         paths.sort();
 
-        (paths, errors)
+        Ok(paths)
     }
 
     #[test]
@@ -82,17 +85,16 @@ mod tests {
         context.touch(&qux);
         context.touch(&bar);
 
-        let (paths, errors) = collect_document_paths(&context, &["foo", "bar"]);
+        let result = collect_document_paths(&context, &["foo", "bar"]);
 
         assert_eq!(
-            paths,
+            result.unwrap(),
             vec![
                 baz.to_str().unwrap().to_string(),
                 qux.to_str().unwrap().to_string(),
                 bar.to_str().unwrap().to_string()
             ]
         );
-        assert!(errors.is_empty());
     }
 
     #[test]
@@ -105,37 +107,32 @@ mod tests {
         context.touch(&baz);
         context.touch(&qux);
         context.touch(&bar);
-        let (paths, errors) = collect_document_paths(&context, &["bar"]);
+
+        let result = collect_document_paths(&context, &["bar"]);
 
         assert_eq!(
-            paths,
+            result.unwrap(),
             vec![baz.to_str().unwrap().to_string(), qux.to_str().unwrap().to_string()]
         );
-        assert!(errors.is_empty());
     }
 
     #[test]
     fn collect_non_existing_paths() {
         let context = Context::new();
 
-        let (documents, errors) = collect_file_paths(vec![
+        let result = collect_file_paths(vec![
             context
                 .absolute_path_to("non_existing_path")
                 .to_string_lossy()
                 .into_owned(),
         ]);
 
-        assert!(documents.is_empty());
-
         assert_eq!(
-            errors
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect::<Vec<String>>(),
-            vec![format!(
+            result.unwrap_err().to_string(),
+            format!(
                 "File read error: Path '{}' does not exist",
                 context.absolute_path_to("non_existing_path").display()
-            )]
+            )
         );
     }
 }
