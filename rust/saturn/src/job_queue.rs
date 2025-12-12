@@ -18,8 +18,17 @@ use crate::{
     indexing::{local_graph::LocalGraph, ruby_indexer::RubyIndexer},
 };
 
+/// Work-stealing queue that balances jobs across worker threads.
+///
+/// Jobs are pushed onto the global `injector`, then workers move them into their
+/// own local queues. Work stealing lets idle workers drain the global injector
+/// first and then steal from peers, keeping the CPU busy without coarse locks.
+/// `in_flight` tracks outstanding jobs so threads can tell when all work
+/// (including work spawned by other jobs) has finished.
 pub struct JobQueue {
+    /// Global queue feeding newly discovered jobs to workers.
     injector: Injector<Box<dyn Job + Send + 'static>>,
+    /// Count of jobs that have been queued but not yet completed.
     in_flight: AtomicUsize,
 }
 
@@ -42,8 +51,8 @@ impl JobQueue {
         self.injector.push(job);
     }
 
-    /// Run jobs until the queue is empty. Accepts the shared queue so jobs can enqueue
-    /// more work while the runner is processing.
+    /// Run jobs until the queue is empty. Accepts the shared queue so jobs can
+    /// enqueue more work while the runner is processing.
     ///
     /// # Panics
     ///
@@ -56,6 +65,9 @@ impl JobQueue {
         Self::run_with_workers(queue, worker_count);
     }
 
+    /// Spin up `worker_count` threads, each with its own local queue, and block
+    /// until all threads finish. Workers steal from each other and from the
+    /// global injector to keep the work balanced.
     fn run_with_workers(queue: &Arc<JobQueue>, worker_count: usize) {
         let mut handles = Vec::with_capacity(worker_count);
         let mut workers = Vec::with_capacity(worker_count);
@@ -81,6 +93,11 @@ impl JobQueue {
     }
 
     #[allow(clippy::needless_pass_by_value)] // workers own their queues; threads take ownership
+    /// Drain work for a single worker.
+    ///
+    /// The worker prefers its local queue, then the global injector, then other
+    /// workers. If no job is immediately available, it backs off briefly and
+    /// exits once `in_flight` reaches zero (meaning no pending work anywhere).
     fn worker_loop(
         &self,
         local: Worker<Box<dyn Job + Send + 'static>>,
@@ -107,6 +124,11 @@ impl JobQueue {
         }
     }
 
+    /// Find the next job for a worker.
+    ///
+    /// Priority: pop from the worker's local queue, steal a batch from the
+    /// global injector, then try stealing from peer workers. Returning `None`
+    /// signals the caller to back off or eventually exit if no jobs remain.
     fn steal_job(
         local: &Worker<Box<dyn Job + Send + 'static>>,
         stealers: &[Stealer<Box<dyn Job + Send + 'static>>],
