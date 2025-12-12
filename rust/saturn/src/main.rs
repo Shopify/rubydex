@@ -1,17 +1,17 @@
-use std::{error::Error, mem};
+use std::error::Error;
 
 use clap::Parser;
 
 use saturn::{
     errors::MultipleErrors,
     indexing::{self},
-    model::graph::Graph,
+    // model::graph::Graph,
     // resolution,
     stats::{
         memory::MemoryStats,
         timer::{Timer, time_it},
     },
-    visualization::dot,
+    // visualization::dot,
 };
 
 #[derive(Parser, Debug)]
@@ -43,16 +43,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Collecting file paths...");
 
-    let mut graph = Graph::new();
-    let (file_paths, errors) = time_it!(listing, { indexing::collect_file_paths(vec![args.dir]) });
+    // let mut graph = Graph::new();
+    let (_file_paths, errors) = time_it!(listing, { indexing::collect_file_paths(vec![args.dir]) });
 
     if !errors.is_empty() {
         return Err(Box::new(MultipleErrors(errors)));
     }
 
-    println!("Indexing files...");
+    // println!("Indexing files...");
 
-    time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
+    // time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
 
     // time_it!(resolution, {
     //     resolution::resolve_all(&mut graph);
@@ -75,29 +75,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     //     });
     // }
 
-    if args.stats {
-        time_it!(querying, {
-            graph.print_query_statistics();
-        });
-    }
+    // if args.stats {
+    //     time_it!(querying, {
+    //         graph.print_query_statistics();
+    //     });
+    // }
 
     if args.stats {
         Timer::print_breakdown();
         MemoryStats::print_memory_usage();
     }
 
-    // Generate visualization or print statistics
-    if args.visualize {
-        println!("{}", dot::generate(&graph));
-    } else {
-        println!("Indexed {} files", graph.documents().len());
-        println!("Found {} names", graph.declarations().len());
-        println!("Found {} definitions", graph.definitions().len());
-        println!("Found {} URIs", graph.documents().len());
-    }
+    // // Generate visualization or print statistics
+    // if args.visualize {
+    //     println!("{}", dot::generate(&graph));
+    // } else {
+    //     println!("Indexed {} files", graph.documents().len());
+    //     println!("Found {} names", graph.declarations().len());
+    //     println!("Found {} definitions", graph.definitions().len());
+    //     println!("Found {} URIs", graph.documents().len());
+    // }
 
-    // Forget the graph so we don't have to wait for deallocation and let the system reclaim the memory at exit
-    mem::forget(graph);
+    // // Forget the graph so we don't have to wait for deallocation and let the system reclaim the memory at exit
+    // mem::forget(graph);
 
     Ok(())
 }
