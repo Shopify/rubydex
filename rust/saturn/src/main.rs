@@ -6,7 +6,7 @@ use saturn::{
     errors::MultipleErrors,
     indexing::{self},
     model::graph::Graph,
-    resolution,
+    // resolution,
     stats::{
         memory::MemoryStats,
         timer::{Timer, time_it},
@@ -41,6 +41,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         Timer::set_global_timer(Timer::new());
     }
 
+    println!("Collecting file paths...");
+
     let mut graph = Graph::new();
     let (file_paths, errors) = time_it!(listing, { indexing::collect_file_paths(vec![args.dir]) });
 
@@ -48,11 +50,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err(Box::new(MultipleErrors(errors)));
     }
 
+    println!("Indexing files...");
+
     time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
 
-    time_it!(resolution, {
-        resolution::resolve_all(&mut graph);
-    });
+    // time_it!(resolution, {
+    //     resolution::resolve_all(&mut graph);
+    // });
 
     // Run integrity checks if requested
     // if args.check_integrity {
