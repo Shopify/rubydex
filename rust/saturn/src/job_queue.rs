@@ -2,12 +2,13 @@ use std::panic::{self, AssertUnwindSafe};
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
     sync::atomic::{AtomicUsize, Ordering},
     sync::mpsc::Sender as GraphSender,
-    sync::{Arc, Mutex},
     thread,
 };
 
+use crossbeam_channel::Sender;
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use crossbeam_utils::Backoff;
 use url::Url;
@@ -35,7 +36,7 @@ impl JobQueue {
     ///
     /// # Panics
     ///
-    /// Panics if locking the queue's mutex fails.
+    /// Panics if job execution unwinds.
     pub fn push(&self, job: Box<dyn Job + Send + 'static>) {
         self.in_flight.fetch_add(1, Ordering::Relaxed);
         self.injector.push(job);
@@ -46,7 +47,7 @@ impl JobQueue {
     ///
     /// # Panics
     ///
-    /// Panics if locking the queue's mutex fails.
+    /// Panics if job execution unwinds.
     pub fn run(queue: &Arc<JobQueue>) {
         let worker_count = thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
@@ -151,8 +152,8 @@ pub struct FileDiscoveryJob {
     path: PathBuf,
     queue: Arc<JobQueue>,
     // graph_tx: GraphSender<LocalGraph>,
-    files: Arc<Mutex<Vec<PathBuf>>>,
-    errors: Arc<Mutex<Vec<Errors>>>,
+    files_tx: Sender<PathBuf>,
+    errors_tx: Sender<Errors>,
 }
 
 // ------------------------------------------------------------
@@ -165,15 +166,15 @@ impl FileDiscoveryJob {
         path: PathBuf,
         queue: Arc<JobQueue>,
         // graph_tx: GraphSender<LocalGraph>,
-        files: Arc<Mutex<Vec<PathBuf>>>,
-        errors: Arc<Mutex<Vec<Errors>>>,
+        files_tx: Sender<PathBuf>,
+        errors_tx: Sender<Errors>,
     ) -> Self {
         Self {
             path,
             queue,
             // graph_tx,
-            files,
-            errors,
+            files_tx,
+            errors_tx,
         }
     }
 }
@@ -183,18 +184,22 @@ impl Job for FileDiscoveryJob {
         if self.path.is_dir() {
             for entry in self.path.read_dir().unwrap() {
                 let Ok(entry) = entry else {
-                    self.errors.lock().unwrap().push(Errors::FileReadError(format!(
-                        "Unable to read entry under '{}'",
-                        self.path.display()
-                    )));
+                    self.errors_tx
+                        .send(Errors::FileReadError(format!(
+                            "Unable to read entry under '{}'",
+                            self.path.display()
+                        )))
+                        .expect("error receiver dropped before run completion");
                     continue;
                 };
 
                 let Ok(file_type) = entry.file_type() else {
-                    self.errors.lock().unwrap().push(Errors::FileReadError(format!(
-                        "Unable to read metadata for '{}'",
-                        entry.path().display()
-                    )));
+                    self.errors_tx
+                        .send(Errors::FileReadError(format!(
+                            "Unable to read metadata for '{}'",
+                            entry.path().display()
+                        )))
+                        .expect("error receiver dropped before run completion");
                     continue;
                 };
 
@@ -205,8 +210,8 @@ impl Job for FileDiscoveryJob {
                         subpath,
                         Arc::clone(&self.queue),
                         // self.graph_tx.clone(),
-                        Arc::clone(&self.files),
-                        Arc::clone(&self.errors),
+                        self.files_tx.clone(),
+                        self.errors_tx.clone(),
                     )));
                 } else if file_type.is_file() {
                     if subpath.extension().is_some_and(|ext| ext == "rb") {
@@ -215,13 +220,17 @@ impl Job for FileDiscoveryJob {
                         //     self.graph_tx.clone(),
                         //     Arc::clone(&self.errors),
                         // )));
-                        self.files.lock().unwrap().push(subpath);
+                        self.files_tx
+                            .send(subpath)
+                            .expect("file receiver dropped before run completion");
                     }
                 } else {
-                    self.errors.lock().unwrap().push(Errors::FileReadError(format!(
-                        "Path '{}' is not a file or directory",
-                        subpath.display()
-                    )));
+                    self.errors_tx
+                        .send(Errors::FileReadError(format!(
+                            "Path '{}' is not a file or directory",
+                            subpath.display()
+                        )))
+                        .expect("error receiver dropped before run completion");
                 }
             }
         } else if self.path.is_file() {
@@ -232,13 +241,17 @@ impl Job for FileDiscoveryJob {
                 //     Arc::clone(&self.files),
                 //     Arc::clone(&self.errors),
                 // )));
-                self.files.lock().unwrap().push(self.path.clone());
+                self.files_tx
+                    .send(self.path.clone())
+                    .expect("file receiver dropped before run completion");
             }
         } else {
-            self.errors.lock().unwrap().push(Errors::FileReadError(format!(
-                "Path '{}' is not a file or directory",
-                self.path.display()
-            )));
+            self.errors_tx
+                .send(Errors::FileReadError(format!(
+                    "Path '{}' is not a file or directory",
+                    self.path.display()
+                )))
+                .expect("error receiver dropped before run completion");
         }
     }
 }
@@ -250,20 +263,26 @@ impl Job for FileDiscoveryJob {
 pub struct IndexingJob {
     path: PathBuf,
     graph_tx: GraphSender<LocalGraph>,
-    errors: Arc<Mutex<Vec<Errors>>>,
+    errors_tx: Sender<Errors>,
 }
 
 impl IndexingJob {
     #[must_use]
-    pub fn new(path: PathBuf, graph_tx: GraphSender<LocalGraph>, errors: Arc<Mutex<Vec<Errors>>>) -> Self {
-        Self { path, graph_tx, errors }
+    pub fn new(path: PathBuf, graph_tx: GraphSender<LocalGraph>, errors_tx: Sender<Errors>) -> Self {
+        Self {
+            path,
+            graph_tx,
+            errors_tx,
+        }
     }
 }
 
 impl Job for IndexingJob {
     fn run(&self) {
         if let Err(err) = self.index_file() {
-            self.errors.lock().unwrap().push(err);
+            self.errors_tx
+                .send(err)
+                .expect("error receiver dropped before run completion");
         }
     }
 }

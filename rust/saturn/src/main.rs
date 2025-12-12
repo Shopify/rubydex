@@ -2,14 +2,11 @@ use std::{
     error::Error,
     // mem,
     path::PathBuf,
-    sync::{
-        Arc,
-        Mutex,
-        // mpsc
-    },
+    sync::Arc,
 };
 
 use clap::Parser;
+use crossbeam_channel::unbounded;
 
 use saturn::{
     // errors::MultipleErrors,
@@ -55,16 +52,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     time_it!(listing2, {
         let queue = Arc::new(JobQueue::new());
-        let errors_arc = Arc::new(Mutex::new(Vec::new()));
-        let files_arc = Arc::new(Mutex::new(Vec::new()));
+        let (errors_tx, errors_rx) = unbounded();
+        let (files_tx, files_rx) = unbounded();
         // let (graph_tx, graph_rx) = mpsc::channel();
 
         queue.push(Box::new(FileDiscoveryJob::new(
             PathBuf::from(args.dir.clone()),
             Arc::clone(&queue),
             // graph_tx.clone(),
-            Arc::clone(&files_arc),
-            Arc::clone(&errors_arc),
+            files_tx.clone(),
+            errors_tx.clone(),
         )));
 
         // drop(graph_tx);
@@ -77,7 +74,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         // }
         // graph
 
-        let files = files_arc.lock().unwrap();
+        drop(files_tx);
+        drop(errors_tx);
+
+        let files: Vec<PathBuf> = files_rx.iter().collect();
+        let errors: Vec<_> = errors_rx.iter().collect();
+
+        if !errors.is_empty() {
+            eprintln!("Encountered {} errors while discovering files", errors.len());
+        }
+
         println!("Found {} files", files.len());
     });
 
