@@ -15,6 +15,7 @@ use crossbeam_utils::Backoff;
 /// first and then steal from peers, keeping the CPU busy without coarse locks.
 /// `in_flight` tracks outstanding jobs so threads can tell when all work
 /// (including work spawned by other jobs) has finished.
+#[derive(Default)]
 pub struct JobQueue {
     /// Global queue feeding newly discovered jobs to workers.
     injector: Injector<Box<dyn Job + Send + 'static>>,
@@ -157,12 +158,6 @@ impl JobQueue {
 
         // No jobs available from any source.
         None
-    }
-}
-
-impl Default for JobQueue {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
