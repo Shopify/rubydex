@@ -2,7 +2,11 @@ use std::{
     error::Error,
     // mem,
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc,
+        Mutex,
+        // mpsc
+    },
 };
 
 use clap::Parser;
@@ -12,7 +16,7 @@ use saturn::{
     // indexing::{self},
     // indexing,
     job_queue::{FileDiscoveryJob, JobQueue},
-    model::graph::Graph,
+    // model::graph::Graph,
     // resolution,
     stats::{
         memory::MemoryStats,
@@ -49,27 +53,32 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Collecting and indexing files...");
 
-    let _graph = time_it!(listing2, {
+    time_it!(listing2, {
         let queue = Arc::new(JobQueue::new());
         let errors_arc = Arc::new(Mutex::new(Vec::new()));
-        let (graph_tx, graph_rx) = mpsc::channel();
+        let files_arc = Arc::new(Mutex::new(Vec::new()));
+        // let (graph_tx, graph_rx) = mpsc::channel();
 
         queue.push(Box::new(FileDiscoveryJob::new(
             PathBuf::from(args.dir.clone()),
             Arc::clone(&queue),
-            graph_tx.clone(),
+            // graph_tx.clone(),
+            Arc::clone(&files_arc),
             Arc::clone(&errors_arc),
         )));
 
-        drop(graph_tx);
+        // drop(graph_tx);
 
         JobQueue::run(&queue);
 
-        let mut graph = Graph::new();
-        for local_graph in graph_rx {
-            graph.update(local_graph);
-        }
-        graph
+        // let mut graph = Graph::new();
+        // for local_graph in graph_rx {
+        //     graph.update(local_graph);
+        // }
+        // graph
+
+        let files = files_arc.lock().unwrap();
+        println!("Found {} files", files.len());
     });
 
     // Run integrity checks if requested

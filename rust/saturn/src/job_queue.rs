@@ -157,7 +157,8 @@ pub trait Job: Send {
 pub struct FileDiscoveryJob {
     path: PathBuf,
     queue: Arc<JobQueue>,
-    graph_tx: GraphSender<LocalGraph>,
+    // graph_tx: GraphSender<LocalGraph>,
+    files: Arc<Mutex<Vec<PathBuf>>>,
     errors: Arc<Mutex<Vec<Errors>>>,
 }
 
@@ -170,13 +171,15 @@ impl FileDiscoveryJob {
     pub fn new(
         path: PathBuf,
         queue: Arc<JobQueue>,
-        graph_tx: GraphSender<LocalGraph>,
+        // graph_tx: GraphSender<LocalGraph>,
+        files: Arc<Mutex<Vec<PathBuf>>>,
         errors: Arc<Mutex<Vec<Errors>>>,
     ) -> Self {
         Self {
             path,
             queue,
-            graph_tx,
+            // graph_tx,
+            files,
             errors,
         }
     }
@@ -208,16 +211,18 @@ impl Job for FileDiscoveryJob {
                     self.queue.push(Box::new(FileDiscoveryJob::new(
                         subpath,
                         Arc::clone(&self.queue),
-                        self.graph_tx.clone(),
+                        // self.graph_tx.clone(),
+                        Arc::clone(&self.files),
                         Arc::clone(&self.errors),
                     )));
                 } else if file_type.is_file() {
                     if subpath.extension().is_some_and(|ext| ext == "rb") {
-                        self.queue.push(Box::new(IndexingJob::new(
-                            subpath,
-                            self.graph_tx.clone(),
-                            Arc::clone(&self.errors),
-                        )));
+                        // self.queue.push(Box::new(IndexingJob::new(
+                        //     subpath,
+                        //     self.graph_tx.clone(),
+                        //     Arc::clone(&self.errors),
+                        // )));
+                        self.files.lock().unwrap().push(subpath);
                     }
                 } else {
                     self.errors.lock().unwrap().push(Errors::FileReadError(format!(
@@ -228,11 +233,13 @@ impl Job for FileDiscoveryJob {
             }
         } else if self.path.is_file() {
             if self.path.extension().is_some_and(|ext| ext == "rb") {
-                self.queue.push(Box::new(IndexingJob::new(
-                    self.path.clone(),
-                    self.graph_tx.clone(),
-                    Arc::clone(&self.errors),
-                )));
+                // self.queue.push(Box::new(IndexingJob::new(
+                //     self.path.clone(),
+                //     self.graph_tx.clone(),
+                //     Arc::clone(&self.files),
+                //     Arc::clone(&self.errors),
+                // )));
+                self.files.lock().unwrap().push(self.path.clone());
             }
         } else {
             self.errors.lock().unwrap().push(Errors::FileReadError(format!(
