@@ -6,10 +6,10 @@ use std::{
     sync::mpsc::Sender as GraphSender,
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
 };
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
+use crossbeam_utils::Backoff;
 use url::Url;
 
 use crate::{
@@ -85,24 +85,17 @@ impl JobQueue {
         local: Worker<Box<dyn Job + Send + 'static>>,
         stealers: Arc<Vec<Stealer<Box<dyn Job + Send + 'static>>>>,
     ) {
-        let mut backoff = 0u32;
+        let backoff = Backoff::new();
         loop {
             let Some(job) = Self::steal_job(&local, &stealers, &self.injector) else {
                 if self.in_flight.load(Ordering::Acquire) == 0 {
                     break;
                 }
-                // Prefer to stay hot for short bursts; back off if we remain idle.
-                if backoff < 4 {
-                    thread::yield_now();
-                } else {
-                    let sleep_micros = 5u64.saturating_mul(1 << backoff.min(10));
-                    thread::park_timeout(Duration::from_micros(sleep_micros));
-                }
-                backoff = (backoff + 1).min(10);
+                backoff.snooze();
                 continue;
             };
 
-            backoff = 0;
+            backoff.reset();
             let result = panic::catch_unwind(AssertUnwindSafe(|| job.run()));
 
             self.in_flight.fetch_sub(1, Ordering::Relaxed);

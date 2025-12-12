@@ -787,6 +787,7 @@ dependencies = [
  "bytecount",
  "clap",
  "crossbeam-deque",
+ "crossbeam-utils",
  "glob",
  "ignore",
  "libc",
