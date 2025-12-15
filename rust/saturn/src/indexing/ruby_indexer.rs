@@ -261,18 +261,28 @@ impl<'a> RubyIndexer<'a> {
         parameters
     }
 
-    /// Gets the `NameId` of the current class/module/singleton block.
+    /// Gets the `NameId` of the current owner (class/module/singleton class).
     /// Used to resolve `self` to a concrete `NameId` during indexing.
-    fn current_nesting_name_id(&self) -> Option<NameId> {
-        let parent_nesting_id = self.parent_nesting_id()?;
-        let definition = self.local_graph.definitions().get(parent_nesting_id)?;
-
-        match definition {
-            Definition::Class(class_def) => Some(*class_def.name_id()),
-            Definition::Module(module_def) => Some(*module_def.name_id()),
-            Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
-            _ => panic!("current nesting is not a class/module/singleton class"),
+    ///
+    /// Iterates through the definitions stack in reverse to find the first class/module/singleton
+    /// class, skipping methods.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the definition is not a class, module, or singleton class
+    fn current_owner_name_id(&self) -> Option<NameId> {
+        for &id in self.definitions_stack.iter().rev() {
+            if let Some(definition) = self.local_graph.definitions().get(&id) {
+                match definition {
+                    Definition::Class(class_def) => return Some(*class_def.name_id()),
+                    Definition::Module(module_def) => return Some(*module_def.name_id()),
+                    Definition::SingletonClass(singleton_class_def) => return Some(*singleton_class_def.name_id()),
+                    Definition::Method(_) => {}
+                    _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
+                }
+            }
         }
+        None
     }
 
     // Runs the given closure if the given call `node` is invoked directly on `self` for each one of its string or
@@ -377,7 +387,7 @@ impl<'a> RubyIndexer<'a> {
         let nesting = if top_level_ref {
             None
         } else {
-            self.current_nesting_name_id()
+            self.current_owner_name_id()
         };
 
         let string_id = self.local_graph.intern_string(name);
@@ -414,8 +424,29 @@ impl<'a> RubyIndexer<'a> {
         let definition = builder(str_id, offset, comments, lexical_nesting_id, uri_id);
         let definition_id = self.local_graph.add_definition(definition);
 
-        self.add_member_to_current_nesting(definition_id);
+        self.add_member_to_current_owner(definition_id);
 
+        definition_id
+    }
+
+    fn add_instance_variable_definition(&mut self, location: &ruby_prism::Location) -> DefinitionId {
+        let name = Self::location_to_string(location);
+        let str_id = self.local_graph.intern_string(name);
+        let offset = Offset::from_prism_location(location);
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let uri_id = self.uri_id;
+
+        let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
+            str_id,
+            uri_id,
+            offset,
+            comments,
+            lexical_nesting_id,
+        )));
+
+        let definition_id = self.local_graph.add_definition(definition);
+        self.add_member_to_current_owner(definition_id);
         definition_id
     }
 
@@ -442,44 +473,39 @@ impl<'a> RubyIndexer<'a> {
         )));
         let definition_id = self.local_graph.add_definition(definition);
 
-        self.add_member_to_current_nesting(definition_id);
+        self.add_member_to_current_owner(definition_id);
 
         Some(definition_id)
     }
 
-    /// Adds a member to the current nesting definition.
+    /// Adds a member to the current owner (class, module, or singleton class).
     ///
-    /// # Panics
-    ///
-    /// Panics if the definition is not a nesting definition (class, module, or singleton class)
-    fn add_member_to_current_nesting(&mut self, member_id: DefinitionId) {
-        let Some(parent_nesting) = self.parent_nesting() else {
+    /// Iterates through the definitions stack in reverse to find the first class/module/singleton
+    /// class, skipping methods, and adds the member to it.
+    fn add_member_to_current_owner(&mut self, member_id: DefinitionId) {
+        let owner_id = self.definitions_stack.iter().rev().find(|&&id| {
+            self.local_graph.definitions().get(&id).is_some_and(|def| {
+                matches!(
+                    def,
+                    Definition::Class(_) | Definition::SingletonClass(_) | Definition::Module(_)
+                )
+            })
+        });
+
+        let Some(&owner_id) = owner_id else {
             return;
         };
 
-        match parent_nesting {
+        let owner = self
+            .local_graph
+            .get_definition_mut(owner_id)
+            .expect("owner definition should exist");
+
+        match owner {
             Definition::Class(class) => class.add_member(member_id),
             Definition::SingletonClass(singleton_class) => singleton_class.add_member(member_id),
             Definition::Module(module) => module.add_member(member_id),
-            _ => panic!("Cannot add a member to a non-nesting definition (current nesting is a {parent_nesting:?})",),
-        }
-    }
-
-    /// Returns the name ID of this definition
-    ///
-    /// # Panics
-    ///
-    /// Panics if the definition is not a nesting definition (class, module, or singleton class)
-    #[must_use]
-    fn parent_nesting_name_id(&mut self) -> Option<NameId> {
-        let parent_nesting = self.parent_nesting()?;
-
-        match parent_nesting {
-            Definition::Class(class) => Some(*class.name_id()),
-            Definition::SingletonClass(singleton_class) => Some(*singleton_class.name_id()),
-            Definition::Module(module) => Some(*module.name_id()),
-            Definition::Constant(constant) => Some(*constant.name_id()),
-            _ => panic!("Cannot get name ID of definition: {parent_nesting:?}"),
+            _ => unreachable!("find above only matches class/module/singleton"),
         }
     }
 
@@ -507,8 +533,8 @@ impl<'a> RubyIndexer<'a> {
                     }
 
                     // FIXME: Ideally we would want to save the mixin as `self` but we can only save mixins with a name.
-                    // We'll just use the parent nesting name id for now.
-                    self.parent_nesting_name_id()
+                    // We'll just use the current owner name id for now (what `self` resolves to).
+                    self.current_owner_name_id()
                 } else if let Some(constant_ref_id) = self.index_constant_reference(&arg, true) {
                     Some(constant_ref_id)
                 } else {
@@ -568,12 +594,6 @@ impl<'a> RubyIndexer<'a> {
     #[must_use]
     fn parent_nesting_id(&self) -> Option<&DefinitionId> {
         self.definitions_stack.last()
-    }
-
-    #[must_use]
-    fn parent_nesting(&mut self) -> Option<&mut Definition> {
-        let parent_id = self.parent_nesting_id()?;
-        self.local_graph.get_definition_mut(*parent_id)
     }
 
     #[must_use]
@@ -653,7 +673,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             let definition_id = self.local_graph.add_definition(definition);
 
-            self.add_member_to_current_nesting(definition_id);
+            self.add_member_to_current_owner(definition_id);
 
             self.definitions_stack.push(definition_id);
             self.visibility_stack.push(Visibility::Public);
@@ -683,7 +703,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             let definition_id = self.local_graph.add_definition(definition);
 
-            self.add_member_to_current_nesting(definition_id);
+            self.add_member_to_current_owner(definition_id);
 
             self.definitions_stack.push(definition_id);
             self.visibility_stack.push(Visibility::Public);
@@ -703,7 +723,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         // Determine the attached_target for the singleton class
         let attached_target = if expression.as_self_node().is_some() {
             // `class << self` - resolve self to current class/module's NameId
-            self.current_nesting_name_id()
+            self.current_owner_name_id()
         } else if matches!(
             expression,
             ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }
@@ -759,7 +779,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let definition_id = self.local_graph.add_definition(definition);
 
-        self.add_member_to_current_nesting(definition_id);
+        self.add_member_to_current_owner(definition_id);
 
         if let Some(body) = node.body() {
             self.definitions_stack.push(definition_id);
@@ -835,18 +855,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     );
                 }
                 ruby_prism::Node::InstanceVariableTargetNode { .. } => {
-                    self.add_definition_from_location(
-                        &left.location(),
-                        |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                            Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                                str_id,
-                                uri_id,
-                                offset,
-                                comments,
-                                lexical_nesting_id,
-                            )))
-                        },
-                    );
+                    self.add_instance_variable_definition(&left.location());
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
                     self.add_definition_from_location(
@@ -894,7 +903,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let receiver = if let Some(recv_node) = node.receiver() {
             match recv_node {
                 // def self.foo - receiver is the current class/module's NameId
-                ruby_prism::Node::SelfNode { .. } => self.current_nesting_name_id(),
+                ruby_prism::Node::SelfNode { .. } => self.current_owner_name_id(),
                 // def Foo.bar or def Foo::Bar.baz - receiver is the constant's NameId
                 ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {
                     self.index_constant_reference(&recv_node, true)
@@ -929,10 +938,12 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let definition_id = self.local_graph.add_definition(method);
 
-        self.add_member_to_current_nesting(definition_id);
+        self.add_member_to_current_owner(definition_id);
 
         if let Some(body) = node.body() {
+            self.definitions_stack.push(definition_id);
             self.visit(&body);
+            self.definitions_stack.pop();
         }
     }
 
@@ -980,7 +991,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
                 let definition_id = self.local_graph.add_definition(definition);
 
-                self.add_member_to_current_nesting(definition_id);
+                self.add_member_to_current_owner(definition_id);
             });
         };
 
@@ -1056,7 +1067,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
                 let definition_id = self.local_graph.add_definition(definition);
 
-                self.add_member_to_current_nesting(definition_id);
+                self.add_member_to_current_owner(definition_id);
             }
             "include" => {
                 let receiver = node.receiver();
@@ -1197,66 +1208,22 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_instance_variable_and_write_node(&mut self, node: &ruby_prism::InstanceVariableAndWriteNode) {
-        self.add_definition_from_location(
-            &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                    str_id,
-                    uri_id,
-                    offset,
-                    comments,
-                    lexical_nesting_id,
-                )))
-            },
-        );
+        self.add_instance_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
     fn visit_instance_variable_operator_write_node(&mut self, node: &ruby_prism::InstanceVariableOperatorWriteNode) {
-        self.add_definition_from_location(
-            &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                    str_id,
-                    uri_id,
-                    offset,
-                    comments,
-                    lexical_nesting_id,
-                )))
-            },
-        );
+        self.add_instance_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
     fn visit_instance_variable_or_write_node(&mut self, node: &ruby_prism::InstanceVariableOrWriteNode) {
-        self.add_definition_from_location(
-            &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                    str_id,
-                    uri_id,
-                    offset,
-                    comments,
-                    lexical_nesting_id,
-                )))
-            },
-        );
+        self.add_instance_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
-        self.add_definition_from_location(
-            &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
-                    str_id,
-                    uri_id,
-                    offset,
-                    comments,
-                    lexical_nesting_id,
-                )))
-            },
-        );
+        self.add_instance_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
@@ -1367,7 +1334,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let definition_id = self.local_graph.add_definition(definition);
 
-        self.add_member_to_current_nesting(definition_id);
+        self.add_member_to_current_owner(definition_id);
 
         let old_name = Self::location_to_string(&node.old_name().location());
         self.index_method_reference(old_name, &node.old_name().location());
@@ -1390,7 +1357,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let definition_id = self.local_graph.add_definition(definition);
 
-        self.add_member_to_current_nesting(definition_id);
+        self.add_member_to_current_owner(definition_id);
     }
 
     fn visit_and_node(&mut self, node: &ruby_prism::AndNode) {
@@ -2365,10 +2332,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+        // Class variables inside methods have lexical_nesting_id pointing to the method
+        // (the resolution phase handles determining the correct owner)
+        assert_definition_at!(&context, "2:3-4:6", Method, |method_def| {
             assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
                 assert_name_eq!(&context, "@@var", def);
-                assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
+                assert_eq!(Some(method_def.id()), def.lexical_nesting_id().clone());
             });
         });
     }
@@ -3788,6 +3757,102 @@ mod tests {
         );
 
         assert_eq!(context.graph().definitions().len(), 0);
+    }
+
+    #[test]
+    fn index_class_instance_variable() {
+        let context = index_source({
+            "
+            class Foo
+              @foo = 0
+
+              class << self
+                @bar = 1
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "2:3-2:7", InstanceVariable, |foo_var_def| {
+                assert_name_eq!(&context, "@foo", foo_var_def);
+                assert_eq!(foo_class_def.id(), foo_var_def.lexical_nesting_id().unwrap());
+            });
+
+            assert_definition_at!(&context, "4:3-6:6", SingletonClass, |foo_singleton_def| {
+                assert_definition_at!(&context, "5:5-5:9", InstanceVariable, |bar_var_def| {
+                    assert_name_eq!(&context, "@bar", bar_var_def);
+                    assert_eq!(foo_singleton_def.id(), bar_var_def.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_inside_methods_stay_instance_variable() {
+        let context = index_source({
+            "
+            class Foo
+              def initialize
+                @bar = 1
+              end
+
+              def self.class_method
+                @baz = 2
+              end
+
+              class << self
+                def singleton_method
+                  @qux = 3
+                end
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@bar", def);
+        });
+
+        assert_definition_at!(&context, "7:5-7:9", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@baz", def);
+        });
+
+        assert_definition_at!(&context, "12:7-12:11", InstanceVariable, |def| {
+            assert_name_eq!(&context, "@qux", def);
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_in_method_with_non_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def String.bar
+                @var = 123
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        // The instance variable is associated with the singleton class of String.
+        // During indexing, we can't know what String resolves to because we haven't
+        // resolved constants yet. The lexical nesting is the method definition.
+        assert_definition_at!(&context, "1:1-5:4", Class, |_foo_class_def| {
+            assert_definition_at!(&context, "2:3-4:6", Method, |method_def| {
+                assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |var_def| {
+                    assert_name_eq!(&context, "@var", var_def);
+                    // The lexical nesting of the ivar is the method
+                    assert_eq!(method_def.id(), var_def.lexical_nesting_id().unwrap());
+                });
+            });
+        });
     }
 
     #[test]
