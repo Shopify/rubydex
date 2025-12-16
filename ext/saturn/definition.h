@@ -16,6 +16,7 @@ extern VALUE cAttrWriterDefinition;
 extern VALUE cGlobalVariableDefinition;
 extern VALUE cInstanceVariableDefinition;
 extern VALUE cClassVariableDefinition;
+extern VALUE cMethodAliasDefinition;
 
 void initialize_definition(VALUE mSaturn);
 

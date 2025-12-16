@@ -47,6 +47,7 @@ pub enum Definition {
     GlobalVariable(Box<GlobalVariableDefinition>),
     InstanceVariable(Box<InstanceVariableDefinition>),
     ClassVariable(Box<ClassVariableDefinition>),
+    MethodAlias(Box<MethodAliasDefinition>),
 }
 
 macro_rules! all_definitions {
@@ -63,6 +64,7 @@ macro_rules! all_definitions {
             Definition::AttrReader($var) => $expr,
             Definition::AttrWriter($var) => $expr,
             Definition::Method($var) => $expr,
+            Definition::MethodAlias($var) => $expr,
         }
     };
 }
@@ -107,6 +109,7 @@ impl Definition {
             Definition::GlobalVariable(_) => "GlobalVariable",
             Definition::InstanceVariable(_) => "InstanceVariable",
             Definition::ClassVariable(_) => "ClassVariable",
+            Definition::MethodAlias(_) => "AliasMethod",
         }
     }
 }
@@ -988,6 +991,78 @@ impl ClassVariableDefinition {
     #[must_use]
     pub fn str_id(&self) -> &StringId {
         &self.str_id
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+}
+
+#[derive(Debug)]
+pub struct MethodAliasDefinition {
+    new_name_str_id: StringId,
+    old_name_str_id: StringId,
+    uri_id: UriId,
+    offset: Offset,
+    comments: Vec<Comment>,
+    lexical_nesting_id: Option<DefinitionId>,
+}
+
+impl MethodAliasDefinition {
+    #[must_use]
+    pub const fn new(
+        new_name_str_id: StringId,
+        old_name_str_id: StringId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Vec<Comment>,
+        lexical_nesting_id: Option<DefinitionId>,
+    ) -> Self {
+        Self {
+            new_name_str_id,
+            old_name_str_id,
+            uri_id,
+            offset,
+            comments,
+            lexical_nesting_id,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!(
+            "{}{}{}{}",
+            *self.uri_id,
+            self.offset.start(),
+            *self.new_name_str_id,
+            *self.old_name_str_id,
+        ))
+    }
+
+    #[must_use]
+    pub fn new_name_str_id(&self) -> &StringId {
+        &self.new_name_str_id
+    }
+
+    #[must_use]
+    pub fn old_name_str_id(&self) -> &StringId {
+        &self.old_name_str_id
     }
 
     #[must_use]
