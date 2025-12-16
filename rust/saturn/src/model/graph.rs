@@ -120,6 +120,7 @@ impl Graph {
             Definition::AttrWriter(it) => it.str_id(),
             Definition::Method(it) => it.str_id(),
             Definition::MethodAlias(it) => it.new_name_str_id(),
+            Definition::GlobalVariableAlias(it) => it.new_name_str_id(),
         };
 
         *id

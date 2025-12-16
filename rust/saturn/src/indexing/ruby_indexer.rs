@@ -5,8 +5,9 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantDefinition, Definition, GlobalVariableDefinition, InstanceVariableDefinition, MethodAliasDefinition,
-    MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct, SingletonClassDefinition,
+    ConstantDefinition, Definition, GlobalVariableAliasDefinition, GlobalVariableDefinition,
+    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter,
+    ParameterStruct, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -1126,17 +1127,6 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.visit(&node.value());
     }
 
-    fn visit_alias_global_variable_node(&mut self, node: &ruby_prism::AliasGlobalVariableNode<'_>) {
-        self.add_definition_from_location(
-            &node.new_name().location(),
-            |str_id, offset, comments, nesting_id, uri_id| {
-                Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                    str_id, uri_id, offset, comments, nesting_id,
-                )))
-            },
-        );
-    }
-
     fn visit_instance_variable_and_write_node(&mut self, node: &ruby_prism::InstanceVariableAndWriteNode) {
         self.add_definition_from_location(
             &node.name_loc(),
@@ -1289,7 +1279,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let definition = Definition::MethodAlias(Box::new(MethodAliasDefinition::new(
             self.local_graph.intern_string(new_name),
-            self.local_graph.intern_string(old_name.clone()),
+            self.local_graph.intern_string(old_name),
             self.uri_id,
             offset,
             comments,
@@ -1299,7 +1289,29 @@ impl Visit<'_> for RubyIndexer<'_> {
         let definition_id = self.local_graph.add_definition(definition);
 
         self.add_member_to_current_nesting(definition_id);
+
+        let old_name = Self::location_to_string(&node.old_name().location());
         self.index_method_reference(old_name, &node.old_name().location());
+    }
+
+    fn visit_alias_global_variable_node(&mut self, node: &ruby_prism::AliasGlobalVariableNode<'_>) {
+        let new_name = Self::location_to_string(&node.new_name().location());
+        let old_name = Self::location_to_string(&node.old_name().location());
+        let offset = Offset::from_prism_location(&node.location());
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+
+        let definition = Definition::GlobalVariableAlias(Box::new(GlobalVariableAliasDefinition::new(
+            self.local_graph.intern_string(new_name),
+            self.local_graph.intern_string(old_name),
+            self.uri_id,
+            offset,
+            comments,
+            self.parent_nesting_id().copied(),
+        )));
+
+        let definition_id = self.local_graph.add_definition(definition);
+
+        self.add_member_to_current_nesting(definition_id);
     }
 
     fn visit_and_node(&mut self, node: &ruby_prism::AndNode) {
@@ -2730,12 +2742,11 @@ mod tests {
             $one &= 1
             $two &&= 1
             $three ||= 1
-            alias $new $one
             "
         });
 
         assert_no_diagnostics!(&context);
-        assert_eq!(context.graph().definitions().len(), 9);
+        assert_eq!(context.graph().definitions().len(), 8);
 
         assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
             assert_name_eq!(&context, "$foo", def);
@@ -2773,11 +2784,6 @@ mod tests {
 
         assert_definition_at!(&context, "10:1-10:7", GlobalVariable, |def| {
             assert_name_eq!(&context, "$three", def);
-            assert!(def.lexical_nesting_id().is_none());
-        });
-
-        assert_definition_at!(&context, "11:7-11:11", GlobalVariable, |def| {
-            assert_name_eq!(&context, "$new", def);
             assert!(def.lexical_nesting_id().is_none());
         });
     }
@@ -3701,6 +3707,41 @@ mod tests {
             assert_eq!(old_name, ":qux");
 
             assert!(def.lexical_nesting_id().is_none());
+        });
+    }
+
+    #[test]
+    fn index_alias_global_variables() {
+        let context = index_source({
+            "
+            alias $foo $bar
+
+            class Foo
+              alias $baz $qux
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:16", GlobalVariableAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name, "$foo");
+            assert_eq!(old_name, "$bar");
+
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "3:1-5:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:18", GlobalVariableAlias, |def| {
+                let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+                let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+                assert_eq!(new_name, "$baz");
+                assert_eq!(old_name, "$qux");
+
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+            });
         });
     }
 }

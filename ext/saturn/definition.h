@@ -17,6 +17,7 @@ extern VALUE cGlobalVariableDefinition;
 extern VALUE cInstanceVariableDefinition;
 extern VALUE cClassVariableDefinition;
 extern VALUE cMethodAliasDefinition;
+extern VALUE cGlobalVariableAliasDefinition;
 
 void initialize_definition(VALUE mSaturn);
 

@@ -24,6 +24,7 @@ class DefinitionTest < Minitest::Test
     assert_raises(NoMethodError) { Saturn::InstanceVariableDefinition.new }
     assert_raises(NoMethodError) { Saturn::ClassVariableDefinition.new }
     assert_raises(NoMethodError) { Saturn::MethodAliasDefinition.new }
+    assert_raises(NoMethodError) { Saturn::GlobalVariableAliasDefinition.new }
   end
 
   def test_definition_subclass_mapping
@@ -41,6 +42,7 @@ class DefinitionTest < Minitest::Test
         $g = 1
         @i = 1
         alias foo bar
+        alias $baz $qux
       RUBY
 
       graph = Saturn::Graph.new
@@ -62,6 +64,7 @@ class DefinitionTest < Minitest::Test
       assert_instance_of(Saturn::GlobalVariableDefinition, defs[8])
       assert_instance_of(Saturn::InstanceVariableDefinition, defs[9])
       assert_instance_of(Saturn::MethodAliasDefinition, defs[10])
+      assert_instance_of(Saturn::GlobalVariableAliasDefinition, defs[11])
     end
   end
 
