@@ -52,14 +52,20 @@ pub unsafe extern "C" fn sat_index_all(
     count: usize,
 ) -> *const c_char {
     let file_paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(file_paths, count).unwrap() };
-    let result = listing::collect_file_paths(file_paths);
+    let (file_paths, errors) = listing::collect_file_paths(file_paths);
 
-    if let Err(errors) = result {
-        return CString::new(errors.to_string()).unwrap().into_raw().cast_const();
+    if !errors.is_empty() {
+        let error_messages = errors
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        return CString::new(error_messages).unwrap().into_raw().cast_const();
     }
 
     with_graph(pointer, |graph| {
-        if let Err(errors) = indexing::index_in_parallel(graph, result.unwrap()) {
+        if let Err(errors) = indexing::index_in_parallel(graph, file_paths) {
             return CString::new(errors.to_string()).unwrap().into_raw().cast_const();
         }
 
