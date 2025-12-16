@@ -12,13 +12,13 @@ use std::{
 pub struct FileDiscoveryJob {
     path: PathBuf,
     queue: Arc<JobQueue>,
-    paths_tx: Sender<String>,
+    paths_tx: Sender<PathBuf>,
     errors_tx: Sender<Errors>,
 }
 
 impl FileDiscoveryJob {
     #[must_use]
-    pub fn new(path: PathBuf, queue: Arc<JobQueue>, paths_tx: Sender<String>, errors_tx: Sender<Errors>) -> Self {
+    pub fn new(path: PathBuf, queue: Arc<JobQueue>, paths_tx: Sender<PathBuf>, errors_tx: Sender<Errors>) -> Self {
         Self {
             path,
             queue,
@@ -32,12 +32,12 @@ impl FileDiscoveryJob {
     fn handle_file(&self, path: &Path) {
         if path.extension().is_some_and(|ext| ext == "rb") {
             self.paths_tx
-                .send(path.to_string_lossy().to_string())
+                .send(path.to_path_buf())
                 .expect("file receiver dropped before run completion");
         }
     }
 
-    fn handle_symlink(&self, path: &Path) {
+    fn handle_symlink(&self, path: &PathBuf) {
         let Ok(canonicalized) = fs::canonicalize(path) else {
             self.send_error(Errors::FileReadError(format!(
                 "Failed to canonicalize symlink: `{}`",
@@ -127,7 +127,7 @@ impl Job for FileDiscoveryJob {
 ///
 /// Panics if the errors receiver is dropped before the run completion
 #[must_use]
-pub fn collect_file_paths(paths: Vec<String>) -> (Vec<String>, Vec<Errors>) {
+pub fn collect_file_paths(paths: Vec<String>) -> (Vec<PathBuf>, Vec<Errors>) {
     let queue = Arc::new(JobQueue::new());
     let (files_tx, files_rx) = unbounded();
     let (errors_tx, errors_rx) = unbounded();
