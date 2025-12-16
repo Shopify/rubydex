@@ -119,6 +119,7 @@ impl Graph {
             Definition::AttrReader(it) => it.str_id(),
             Definition::AttrWriter(it) => it.str_id(),
             Definition::Method(it) => it.str_id(),
+            Definition::MethodAlias(it) => it.new_name_str_id(),
         };
 
         *id

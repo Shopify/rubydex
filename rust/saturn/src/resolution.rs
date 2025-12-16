@@ -227,6 +227,13 @@ fn handle_remaining_definitions(
             Definition::Class(_) | Definition::SingletonClass(_) | Definition::Module(_) | Definition::Constant(_) => {
                 panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
             }
+            Definition::MethodAlias(alias) => {
+                let owner_id = resolve_lexical_owner(graph, *alias.lexical_nesting_id());
+
+                create_declaration(graph, *alias.new_name_str_id(), id, owner_id, |name| {
+                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                });
+            }
         }
     }
 }
@@ -1424,5 +1431,23 @@ mod tests {
         });
         context.resolve();
         assert_constant_reference_to!(context, "Foo::Bar::Baz::CONST", "file:///foo.rb:8:2-8:7");
+    }
+
+    #[test]
+    fn resolving_method_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def foo; end
+
+              alias bar foo
+            end
+            "
+        });
+        context.resolve();
+
+        let foo_class = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo_class, &["foo", "bar"]);
     }
 }
