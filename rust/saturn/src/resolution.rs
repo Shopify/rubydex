@@ -234,6 +234,13 @@ fn handle_remaining_definitions(
                     Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                 });
             }
+            Definition::GlobalVariableAlias(alias) => {
+                let owner_id = resolve_lexical_owner(graph, *alias.lexical_nesting_id());
+
+                create_declaration(graph, *alias.new_name_str_id(), id, owner_id, |name| {
+                    Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, owner_id)))
+                });
+            }
         }
     }
 }
@@ -1449,5 +1456,24 @@ mod tests {
 
         let foo_class = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo_class, &["foo", "bar"]);
+    }
+
+    #[test]
+    fn resolving_global_variable_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            $foo = 123
+            alias $bar $foo
+            "
+        });
+        context.resolve();
+
+        let foo_class = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from("Object"))
+            .unwrap();
+        assert_members(foo_class, &["$bar", "$foo"]);
     }
 }

@@ -3724,7 +3724,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_definition_at!(&context, "1:1-1:16", AliasGlobalVariable, |def| {
+        assert_definition_at!(&context, "1:1-1:16", GlobalVariableAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
             assert_eq!(new_name, "$foo");
@@ -3734,7 +3734,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:1-5:4", Class, |foo_class_def| {
-            assert_definition_at!(&context, "4:3-4:18", AliasGlobalVariable, |def| {
+            assert_definition_at!(&context, "4:3-4:18", GlobalVariableAlias, |def| {
                 let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
                 let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
                 assert_eq!(new_name, "$baz");
