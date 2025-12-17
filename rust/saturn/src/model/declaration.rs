@@ -1,9 +1,55 @@
-use std::cell::{OnceCell, Ref, RefCell};
+use std::cell::{Ref, RefCell};
 
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, ReferenceId, StringId},
+    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ancestor {
+    Complete(DeclarationId),
+    Partial(NameId),
+}
+
+#[derive(Debug, Clone)]
+pub enum Ancestors {
+    /// A complete linearization of ancestors with all parts resolved
+    Complete(Vec<Ancestor>),
+    /// A cyclic linearization of ancestors (e.g.: a module that includes itself)
+    Cyclic(Vec<Ancestor>),
+}
+
+impl Ancestors {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) => ancestors.is_empty(),
+        }
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Ancestor> {
+        match self {
+            Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) => ancestors.iter(),
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Ancestors {
+    type Item = &'a Ancestor;
+    type IntoIter = std::slice::Iter<'a, Ancestor>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl AsRef<[Ancestor]> for Ancestors {
+    fn as_ref(&self) -> &[Ancestor] {
+        match self {
+            Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) => ancestors.as_ref(),
+        }
+    }
+}
 
 macro_rules! all_declarations {
     ($value:expr, $var:ident => $expr:expr) => {
@@ -40,7 +86,7 @@ macro_rules! namespace_declaration {
             members: IdentityHashMap<StringId, DeclarationId>,
             /// The linearized ancestor chain for this declaration. These are the other declarations that this
             /// declaration inherits from
-            ancestors: OnceCell<Vec<DeclarationId>>,
+            ancestors: RefCell<Ancestors>,
             /// The set of declarations that inherit from this declaration
             descendants: RefCell<IdentityHashSet<DeclarationId>>,
         }
@@ -54,7 +100,7 @@ macro_rules! namespace_declaration {
                     members: IdentityHashMap::default(),
                     references: Vec::new(),
                     owner_id,
-                    ancestors: OnceCell::new(),
+                    ancestors: RefCell::new(Ancestors::Complete(Vec::new())),
                     descendants: RefCell::new(IdentityHashSet::default()),
                 }
             }
@@ -86,18 +132,13 @@ macro_rules! namespace_declaration {
                 self.members.get(string_id)
             }
 
-            /// # Panics
-            ///
-            /// Will panic if invoked twice without clearing ancestors
-            pub fn set_ancestors(&self, ancestors: Vec<DeclarationId>) {
-                self.ancestors
-                    .set(ancestors)
-                    .expect("ancestors should only be set once per declaration");
+            pub fn set_ancestors(&self, ancestors: Ancestors) {
+                *self.ancestors.borrow_mut() = ancestors;
             }
 
             #[must_use]
-            pub fn ancestors(&self) -> Option<&[DeclarationId]> {
-                self.ancestors.get().map(Vec::as_slice)
+            pub fn ancestors(&self) -> Ref<'_, Ancestors> {
+                self.ancestors.borrow()
             }
 
             pub fn add_descendant(&self, descendant_id: DeclarationId) {
