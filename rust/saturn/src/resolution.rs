@@ -87,57 +87,10 @@ pub fn resolve_all(graph: &mut Graph) {
 
             match unit_id {
                 Unit::Definition(id) => {
-                    let outcome = match graph.definitions().get(&id).unwrap() {
-                        Definition::Class(class) => {
-                            handle_constant_declaration(graph, *class.name_id(), id, |name, owner_id| {
-                                Declaration::Class(Box::new(ClassDeclaration::new(name, owner_id)))
-                            })
-                        }
-                        Definition::Module(module) => {
-                            handle_constant_declaration(graph, *module.name_id(), id, |name, owner_id| {
-                                Declaration::Module(Box::new(ModuleDeclaration::new(name, owner_id)))
-                            })
-                        }
-                        Definition::Constant(constant) => {
-                            handle_constant_declaration(graph, *constant.name_id(), id, |name, owner_id| {
-                                Declaration::Constant(Box::new(ConstantDeclaration::new(name, owner_id)))
-                            })
-                        }
-                        Definition::SingletonClass(singleton) => {
-                            handle_constant_declaration(graph, *singleton.name_id(), id, |name, owner_id| {
-                                Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(name, owner_id)))
-                            })
-                        }
-                        _ => panic!("Expected constant definitions"),
-                    };
-
-                    match outcome {
-                        Outcome::Retry => {
-                            // There might be dependencies we haven't figured out yet, so we need to retry
-                            unit_queue.push_back(unit_id);
-                        }
-                        Outcome::Unresolved => {
-                            // We couldn't resolve this name. Emit a diagnostic
-                        }
-                        Outcome::Resolved(_) => made_progress = true,
-                    }
+                    handle_definition_unit(graph, &mut unit_queue, &mut made_progress, unit_id, id);
                 }
                 Unit::Reference(id) => {
-                    let constant_ref = graph.constant_references().get(&id).unwrap();
-
-                    match resolve_constant(graph, *constant_ref.name_id()) {
-                        Outcome::Retry => {
-                            // There might be dependencies we haven't figured out yet, so we need to retry
-                            unit_queue.push_back(unit_id);
-                        }
-                        Outcome::Unresolved => {
-                            // We couldn't resolve this name. Emit a diagnostic
-                        }
-                        Outcome::Resolved(declaration_id) => {
-                            graph.record_resolved_reference(id, declaration_id);
-                            made_progress = true;
-                        }
-                    }
+                    handle_reference_unit(graph, &mut unit_queue, &mut made_progress, unit_id, id);
                 }
             }
         }
@@ -148,6 +101,71 @@ pub fn resolve_all(graph: &mut Graph) {
     }
 
     handle_remaining_definitions(graph, other_ids);
+}
+
+/// Handles a unit of work for resolving a constant definition
+fn handle_definition_unit(
+    graph: &mut Graph,
+    unit_queue: &mut VecDeque<Unit>,
+    made_progress: &mut bool,
+    unit_id: Unit,
+    id: DefinitionId,
+) {
+    let outcome = match graph.definitions().get(&id).unwrap() {
+        Definition::Class(class) => handle_constant_declaration(graph, *class.name_id(), id, |name, owner_id| {
+            Declaration::Class(Box::new(ClassDeclaration::new(name, owner_id)))
+        }),
+        Definition::Module(module) => handle_constant_declaration(graph, *module.name_id(), id, |name, owner_id| {
+            Declaration::Module(Box::new(ModuleDeclaration::new(name, owner_id)))
+        }),
+        Definition::Constant(constant) => {
+            handle_constant_declaration(graph, *constant.name_id(), id, |name, owner_id| {
+                Declaration::Constant(Box::new(ConstantDeclaration::new(name, owner_id)))
+            })
+        }
+        Definition::SingletonClass(singleton) => {
+            handle_constant_declaration(graph, *singleton.name_id(), id, |name, owner_id| {
+                Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(name, owner_id)))
+            })
+        }
+        _ => panic!("Expected constant definitions"),
+    };
+
+    match outcome {
+        Outcome::Retry => {
+            // There might be dependencies we haven't figured out yet, so we need to retry
+            unit_queue.push_back(unit_id);
+        }
+        Outcome::Unresolved => {
+            // We couldn't resolve this name. Emit a diagnostic
+        }
+        Outcome::Resolved(_) => *made_progress = true,
+    }
+}
+
+/// Handles a unit of work for resolving a constant reference
+fn handle_reference_unit(
+    graph: &mut Graph,
+    unit_queue: &mut VecDeque<Unit>,
+    made_progress: &mut bool,
+    unit_id: Unit,
+    id: ReferenceId,
+) {
+    let constant_ref = graph.constant_references().get(&id).unwrap();
+
+    match resolve_constant(graph, *constant_ref.name_id()) {
+        Outcome::Retry => {
+            // There might be dependencies we haven't figured out yet, so we need to retry
+            unit_queue.push_back(unit_id);
+        }
+        Outcome::Unresolved => {
+            // We couldn't resolve this name. Emit a diagnostic
+        }
+        Outcome::Resolved(declaration_id) => {
+            graph.record_resolved_reference(id, declaration_id);
+            *made_progress = true;
+        }
+    }
 }
 
 /// Handle other definitions that don't require resolution, but need to have their declarations and membership created
