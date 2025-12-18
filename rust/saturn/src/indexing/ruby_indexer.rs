@@ -3120,7 +3120,7 @@ mod tests {
     #[test]
     fn index_unresolved_constant_references() {
         let context = index_source({
-            "
+            r##"
             puts C1
             puts C2::C3::C4
             puts foo::IGNORED0
@@ -3136,12 +3136,12 @@ mod tests {
             C17::C18 += 42
             C19::C20 ||= 42
             C21::C22 &&= 42
-            puts \"#{C23}\"
+            puts "#{C23}"
 
             ::IGNORED2 = 42 # IGNORED2 is an assignment
-            puts \"IGNORED3\"
+            puts "IGNORED3"
             puts :IGNORED4
-            "
+            "##
         });
 
         assert_diagnostics_eq!(&context, vec!["Warning: assigned but unused variable - foo (5:1-5:4)"]);
@@ -3745,9 +3745,9 @@ mod tests {
     #[test]
     fn index_module_alias_method() {
         let context = index_source({
-            "
+            r#"
             alias_method :foo_symbol, :bar_symbol
-            alias_method \"foo_string\", \"bar_string\"
+            alias_method "foo_string", "bar_string"
 
             class Foo
               alias_method :baz, :qux
@@ -3756,7 +3756,7 @@ mod tests {
             alias_method :baz, ignored
             alias_method ignored, :qux
             alias_method ignored, ignored
-            "
+            "#
         });
 
         assert_no_diagnostics!(&context);
