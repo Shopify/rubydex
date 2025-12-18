@@ -975,19 +975,41 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
             "alias_method" => {
-                let arguments = node.arguments();
+                let mut names: Vec<(String, Offset)> = Vec::new();
 
-                if let Some(arguments) = arguments {
-                    let nodes: Vec<_> = arguments.arguments().iter().collect();
+                Self::each_string_or_symbol_arg(node, |name, location| {
+                    names.push((name.clone(), Offset::from_prism_location(&location)));
+                });
 
-                    if nodes.len() == 2
-                        && let Some(symbol_node) = nodes[1].as_symbol_node()
-                    {
-                        let value_loc = symbol_node.value_loc().unwrap();
-                        let alias_to = Self::location_to_string(&value_loc);
-                        self.index_method_reference(alias_to, &value_loc);
-                    }
+                if names.len() != 2 {
+                    // TODO: Add a diagnostic for this
+                    return;
                 }
+
+                let (new_name, _new_offset) = &names[0];
+                let (old_name, old_offset) = &names[1];
+
+                let new_name_str_id = self.local_graph.intern_string(new_name.clone());
+                let old_name_str_id = self.local_graph.intern_string(old_name.clone());
+
+                let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone());
+                self.local_graph.add_method_reference(reference);
+
+                let offset = Offset::from_prism_location(&node.location());
+                let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+
+                let definition = Definition::MethodAlias(Box::new(MethodAliasDefinition::new(
+                    new_name_str_id,
+                    old_name_str_id,
+                    self.uri_id,
+                    offset,
+                    comments,
+                    self.parent_nesting_id().copied(),
+                )));
+
+                let definition_id = self.local_graph.add_definition(definition);
+
+                self.add_member_to_current_nesting(definition_id);
             }
             "include" => {
                 let receiver = node.receiver();
@@ -1272,8 +1294,18 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_alias_method_node(&mut self, node: &ruby_prism::AliasMethodNode<'_>) {
-        let new_name = Self::location_to_string(&node.new_name().location());
-        let old_name = Self::location_to_string(&node.old_name().location());
+        let new_name = if let Some(symbol_node) = node.new_name().as_symbol_node() {
+            Self::location_to_string(&symbol_node.value_loc().unwrap())
+        } else {
+            Self::location_to_string(&node.new_name().location())
+        };
+
+        let old_name = if let Some(symbol_node) = node.old_name().as_symbol_node() {
+            Self::location_to_string(&symbol_node.value_loc().unwrap())
+        } else {
+            Self::location_to_string(&node.old_name().location())
+        };
+
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
@@ -3672,8 +3704,8 @@ mod tests {
             assert_definition_at!(&context, "3:3-3:18", MethodAlias, |def| {
                 let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
                 let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-                assert_eq!(new_name, ":baz");
-                assert_eq!(old_name, ":qux");
+                assert_eq!(new_name, "baz");
+                assert_eq!(old_name, "qux");
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });
@@ -3703,10 +3735,59 @@ mod tests {
         assert_definition_at!(&context, "2:1-2:16", MethodAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name, ":baz");
-            assert_eq!(old_name, ":qux");
+            assert_eq!(new_name, "baz");
+            assert_eq!(old_name, "qux");
 
             assert!(def.lexical_nesting_id().is_none());
+        });
+    }
+
+    #[test]
+    fn index_module_alias_method() {
+        let context = index_source({
+            "
+            alias_method :foo_symbol, :bar_symbol
+            alias_method \"foo_string\", \"bar_string\"
+
+            class Foo
+              alias_method :baz, :qux
+            end
+
+            alias_method :baz, ignored
+            alias_method ignored, :qux
+            alias_method ignored, ignored
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:38", MethodAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name, "foo_symbol");
+            assert_eq!(old_name, "bar_symbol");
+
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:1-2:40", MethodAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name, "foo_string");
+            assert_eq!(old_name, "bar_string");
+
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "5:3-5:26", MethodAlias, |def| {
+                let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+                let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+                assert_eq!(new_name, "baz");
+                assert_eq!(old_name, "qux");
+
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+            });
         });
     }
 
