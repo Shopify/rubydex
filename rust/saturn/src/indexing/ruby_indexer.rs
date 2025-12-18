@@ -1294,8 +1294,18 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_alias_method_node(&mut self, node: &ruby_prism::AliasMethodNode<'_>) {
-        let new_name = Self::location_to_string(&node.new_name().location());
-        let old_name = Self::location_to_string(&node.old_name().location());
+        let new_name = if let Some(symbol_node) = node.new_name().as_symbol_node() {
+            Self::location_to_string(&symbol_node.value_loc().unwrap())
+        } else {
+            Self::location_to_string(&node.new_name().location())
+        };
+
+        let old_name = if let Some(symbol_node) = node.old_name().as_symbol_node() {
+            Self::location_to_string(&symbol_node.value_loc().unwrap())
+        } else {
+            Self::location_to_string(&node.old_name().location())
+        };
+
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
@@ -3694,8 +3704,8 @@ mod tests {
             assert_definition_at!(&context, "3:3-3:18", MethodAlias, |def| {
                 let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
                 let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-                assert_eq!(new_name, ":baz");
-                assert_eq!(old_name, ":qux");
+                assert_eq!(new_name, "baz");
+                assert_eq!(old_name, "qux");
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });
@@ -3725,8 +3735,8 @@ mod tests {
         assert_definition_at!(&context, "2:1-2:16", MethodAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name, ":baz");
-            assert_eq!(old_name, ":qux");
+            assert_eq!(new_name, "baz");
+            assert_eq!(old_name, "qux");
 
             assert!(def.lexical_nesting_id().is_none());
         });
