@@ -79,7 +79,7 @@ macro_rules! namespace_declaration {
             definition_ids: Vec<DefinitionId>,
             /// The list of references that are made to this declaration
             references: Vec<ReferenceId>,
-            /// The ID of the owner of this declaration
+            /// The ID of the owner of this declaration. For singleton classes, this is the ID of the attached object
             owner_id: DeclarationId,
             /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
             /// the namespace. Note that this is a hashmap of unqualified name IDs to declaration IDs. That assists the
@@ -91,6 +91,8 @@ macro_rules! namespace_declaration {
             ancestors: RefCell<Ancestors>,
             /// The set of declarations that inherit from this declaration
             descendants: RefCell<IdentityHashSet<DeclarationId>>,
+            /// The singleton class associated with this declaration
+            singleton_class_id: Option<DeclarationId>,
         }
 
         impl $name {
@@ -104,6 +106,7 @@ macro_rules! namespace_declaration {
                     owner_id,
                     ancestors: RefCell::new(Ancestors::Partial(Vec::new())),
                     descendants: RefCell::new(IdentityHashSet::default()),
+                    singleton_class_id: None,
                 }
             }
 
@@ -114,6 +117,14 @@ macro_rules! namespace_declaration {
                     }
                     _ => panic!("Tried to merge incompatible declaration types"),
                 }
+            }
+
+            pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
+                self.singleton_class_id = Some(declaration_id);
+            }
+
+            pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
+                self.singleton_class_id.as_ref()
             }
 
             #[must_use]

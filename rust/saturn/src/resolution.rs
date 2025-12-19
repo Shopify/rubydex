@@ -111,19 +111,23 @@ fn handle_definition_unit(
     id: DefinitionId,
 ) {
     let outcome = match graph.definitions().get(&id).unwrap() {
-        Definition::Class(class) => handle_constant_declaration(graph, *class.name_id(), id, |name, owner_id| {
-            Declaration::Class(Box::new(ClassDeclaration::new(name, owner_id)))
-        }),
-        Definition::Module(module) => handle_constant_declaration(graph, *module.name_id(), id, |name, owner_id| {
-            Declaration::Module(Box::new(ModuleDeclaration::new(name, owner_id)))
-        }),
+        Definition::Class(class) => {
+            handle_constant_declaration(graph, *class.name_id(), id, false, |name, owner_id| {
+                Declaration::Class(Box::new(ClassDeclaration::new(name, owner_id)))
+            })
+        }
+        Definition::Module(module) => {
+            handle_constant_declaration(graph, *module.name_id(), id, false, |name, owner_id| {
+                Declaration::Module(Box::new(ModuleDeclaration::new(name, owner_id)))
+            })
+        }
         Definition::Constant(constant) => {
-            handle_constant_declaration(graph, *constant.name_id(), id, |name, owner_id| {
+            handle_constant_declaration(graph, *constant.name_id(), id, false, |name, owner_id| {
                 Declaration::Constant(Box::new(ConstantDeclaration::new(name, owner_id)))
             })
         }
         Definition::SingletonClass(singleton) => {
-            handle_constant_declaration(graph, *singleton.name_id(), id, |name, owner_id| {
+            handle_constant_declaration(graph, *singleton.name_id(), id, true, |name, owner_id| {
                 Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(name, owner_id)))
             })
         }
@@ -343,31 +347,32 @@ fn resolve_lexical_owner(graph: &Graph, lexical_nesting_id: Option<DefinitionId>
 
 /// Gets or creates a singleton class declaration for a given class/module declaration.
 /// For class `Foo`, this returns the declaration for `Foo::<Foo>`.
-fn get_or_create_singleton_class(graph: &mut Graph, owner_decl_id: DeclarationId) -> DeclarationId {
-    let owner_decl = graph.declarations().get(&owner_decl_id).unwrap();
-    let short_name = owner_decl.unqualified_name();
-    let singleton_short_name = format!("<{short_name}>");
-    let singleton_str_id = StringId::from(singleton_short_name.as_str());
+fn get_or_create_singleton_class(graph: &mut Graph, attached_id: DeclarationId) -> DeclarationId {
+    let attached_decl = graph.declarations_mut().get_mut(&attached_id).unwrap();
 
     // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
     // and `Module.new`, which now seem like constants, but are actually namespaces
-    if !matches!(owner_decl, Declaration::Constant(_))
-        && let Some(existing_id) = members_of(owner_decl).get(&singleton_str_id).copied()
+    if !matches!(attached_decl, Declaration::Constant(_))
+        && let Some(singleton_id) = singleton_class_id(attached_decl)
     {
-        return existing_id;
+        return *singleton_id;
     }
 
-    let singleton_full_name = format!("{}::{}", owner_decl.name(), singleton_short_name);
+    let singleton_full_name = format!("{}::<{}>", attached_decl.name(), attached_decl.unqualified_name());
     let singleton_decl_id = DeclarationId::from(&singleton_full_name);
+
+    // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
+    // and `Module.new`, which now seem like constants, but are actually namespaces
+    if !matches!(attached_decl, Declaration::Constant(_)) {
+        set_singleton_class_id(attached_decl, singleton_decl_id);
+    }
 
     graph.declarations_mut().entry(singleton_decl_id).or_insert_with(|| {
         Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(
             singleton_full_name,
-            owner_decl_id,
+            attached_id,
         )))
     });
-
-    graph.add_member(&owner_decl_id, singleton_decl_id, singleton_str_id);
 
     singleton_decl_id
 }
@@ -628,6 +633,7 @@ fn handle_constant_declaration<F>(
     graph: &mut Graph,
     name_id: NameId,
     definition_id: DefinitionId,
+    singleton: bool,
     declaration_builder: F,
 ) -> Outcome
 where
@@ -640,9 +646,8 @@ where
     // depending on whether the name has a parent scope
     match name_owner_id(graph, name_id) {
         Outcome::Resolved(owner_id, id_needing_linearization) => {
-            let owner = graph.declarations().get(&owner_id).unwrap();
-
             let mut fully_qualified_name = graph.strings().get(&str_id).unwrap().clone();
+            let owner = graph.declarations_mut().get_mut(&owner_id).unwrap();
 
             // We don't prefix declarations with `Object::`
             if owner_id != *OBJECT_ID {
@@ -651,10 +656,16 @@ where
             }
 
             let declaration_id = DeclarationId::from(&fully_qualified_name);
+
+            if singleton {
+                set_singleton_class_id(owner, declaration_id);
+            } else {
+                graph.add_member(&owner_id, declaration_id, str_id);
+            }
+
             graph.add_declaration(declaration_id, definition_id, || {
                 declaration_builder(fully_qualified_name, owner_id)
             });
-            graph.add_member(&owner_id, declaration_id, str_id);
             graph.record_resolved_name(name_id, declaration_id);
             Outcome::Resolved(declaration_id, id_needing_linearization)
         }
@@ -1008,6 +1019,24 @@ fn mixins_of(definition: &Definition) -> Option<&[Mixin]> {
         Definition::SingletonClass(class) => Some(class.mixins()),
         Definition::Module(module) => Some(module.mixins()),
         _ => None,
+    }
+}
+
+fn singleton_class_id(declaration: &Declaration) -> Option<&DeclarationId> {
+    match declaration {
+        Declaration::Class(class) => class.singleton_class_id(),
+        Declaration::Module(module) => module.singleton_class_id(),
+        Declaration::SingletonClass(singleton) => singleton.singleton_class_id(),
+        _ => panic!("Tried to get singleton class ID for a declaration that isn't a namespace"),
+    }
+}
+
+fn set_singleton_class_id(declaration: &mut Declaration, id: DeclarationId) {
+    match declaration {
+        Declaration::Class(class) => class.set_singleton_class_id(id),
+        Declaration::Module(module) => module.set_singleton_class_id(id),
+        Declaration::SingletonClass(singleton) => singleton.set_singleton_class_id(id),
+        _ => panic!("Tried to set singleton class ID for a declaration that isn't a namespace"),
     }
 }
 
@@ -1449,8 +1478,9 @@ mod tests {
         context.resolve();
 
         let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["<Foo>"]);
+        assert_members(foo, &[]);
         assert_owner(foo, "Object");
+        assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap());
 
         let singleton = context
             .graph
@@ -1478,14 +1508,19 @@ mod tests {
         context.resolve();
 
         let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["<Foo>"]);
+        assert_members(foo, &[]);
+        assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap());
 
         let singleton = context
             .graph
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>"))
             .unwrap();
-        assert_members(singleton, &["<<Foo>>"]);
+        assert_members(singleton, &[]);
+        assert_eq!(
+            &DeclarationId::from("Foo::<Foo>::<<Foo>>"),
+            singleton_class_id(singleton).unwrap()
+        );
 
         let nested_singleton = context
             .graph
@@ -1514,8 +1549,9 @@ mod tests {
         context.resolve();
 
         let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["<Foo>"]);
+        assert_members(foo, &[]);
         assert_owner(foo, "Object");
+        assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap());
 
         let bar = context.graph.declarations().get(&DeclarationId::from("Bar")).unwrap();
         assert_members(bar, &[]);
@@ -1549,7 +1585,7 @@ mod tests {
         context.resolve();
 
         let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["<Foo>", "@@bar", "@@baz"]);
+        assert_members(foo, &["@@bar", "@@baz"]);
         assert_owner(foo, "Object");
     }
 
@@ -1565,6 +1601,30 @@ mod tests {
 
         // TODO: this should push an error diagnostic
         assert_eq!(1, context.graph.declarations().len());
+    }
+
+    #[test]
+    fn singleton_class_is_set() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              class << self
+              end
+            end
+            "
+        });
+
+        context.resolve();
+        assert!(
+            context
+                .graph
+                .declarations()
+                .get(&DeclarationId::from("Foo::<Foo>"))
+                .is_some()
+        );
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap(),);
     }
 
     #[test]
