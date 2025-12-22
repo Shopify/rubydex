@@ -98,12 +98,16 @@ pub struct DeclarationsIter {
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - The returned pointer must be freed with `sat_graph_declarations_iter_free`.
+///
+/// # Panics
+///
+/// Will panic if acquiring a read lock on the graph's declarations fails
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sat_graph_declarations_iter_new(pointer: GraphPointer) -> *mut DeclarationsIter {
     // Snapshot the IDs at iterator creation to avoid borrowing across FFI calls
     let ids = with_graph(pointer, |graph| {
-        graph
-            .declarations()
+        let read_lock = graph.declarations().read().unwrap();
+        read_lock
             .keys()
             .map(|name_id| **name_id)
             .collect::<Vec<i64>>()
@@ -264,6 +268,10 @@ pub unsafe extern "C" fn sat_graph_documents_iter_free(iter: *mut DocumentsIter)
 /// - `pointer` must be a valid `GraphPointer`
 /// - `name` must be a valid, null-terminated UTF-8 string
 /// - `out_id` must be a valid, writable pointer
+///
+/// # Panics
+///
+/// Will panic if acquiring a read lock on the graph's declarations fails
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sat_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const i64 {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
@@ -273,7 +281,8 @@ pub unsafe extern "C" fn sat_graph_get_declaration(pointer: GraphPointer, name: 
     with_graph(pointer, |graph| {
         // TODO: We should perform name resolution instead of accessing the graph with the canonical ID
         let decl_id = DeclarationId::from(name_str.as_str());
-        if graph.declarations().contains_key(&decl_id) {
+        let read_lock = graph.declarations().read().unwrap();
+        if read_lock.contains_key(&decl_id) {
             Box::into_raw(Box::new(*decl_id)).cast_const()
         } else {
             ptr::null()
