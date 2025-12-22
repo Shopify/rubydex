@@ -14,6 +14,8 @@ use crate::model::references::{ConstantReference, MethodRef};
 use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
+pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
+pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
@@ -496,7 +498,7 @@ mod tests {
         assert!(context.graph.definitions.is_empty());
         // Object is left
         let read_lock = context.graph.declarations.read().unwrap();
-        assert_eq!(read_lock.len(), 1);
+        assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
 
         context.graph.assert_integrity();
     }
@@ -513,7 +515,7 @@ mod tests {
         assert!(context.graph.definitions.is_empty());
         // Object is left
         let read_lock = context.graph.declarations.read().unwrap();
-        assert_eq!(read_lock.len(), 1);
+        assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(context.graph.documents.len(), 1);
 
