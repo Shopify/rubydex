@@ -7,11 +7,11 @@ use std::{
 use crate::model::{
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantDeclaration, Declaration,
-        GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
+        DeclarationKind, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
         SingletonClassDeclaration,
     },
     definitions::{Definition, Mixin},
-    graph::{Graph, OBJECT_ID},
+    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
     name::{Name, NameRef},
@@ -67,6 +67,14 @@ pub fn resolve_all(graph: &mut Graph) {
         write_lock.insert(
             *OBJECT_ID,
             Declaration::Class(Box::new(ClassDeclaration::new("Object".to_string(), *OBJECT_ID))),
+        );
+        write_lock.insert(
+            *MODULE_ID,
+            Declaration::Class(Box::new(ClassDeclaration::new("Module".to_string(), *OBJECT_ID))),
+        );
+        write_lock.insert(
+            *CLASS_ID,
+            Declaration::Class(Box::new(ClassDeclaration::new("Class".to_string(), *OBJECT_ID))),
         );
     }
 
@@ -354,7 +362,7 @@ fn resolve_lexical_owner(graph: &Graph, lexical_nesting_id: Option<DefinitionId>
 
 /// Gets or creates a singleton class declaration for a given class/module declaration.
 /// For class `Foo`, this returns the declaration for `Foo::<Foo>`.
-fn get_or_create_singleton_class(graph: &mut Graph, attached_id: DeclarationId) -> DeclarationId {
+fn get_or_create_singleton_class(graph: &Graph, attached_id: DeclarationId) -> DeclarationId {
     let (decl_id, name) = {
         let lock = graph.declarations().read().unwrap();
         let attached_decl = lock.get(&attached_id).unwrap();
@@ -405,84 +413,149 @@ pub fn ancestors_of(graph: &Graph, declaration_id: DeclarationId) -> Ancestors {
 ///
 /// Can panic if there's inconsistent data in the graph
 #[must_use]
-pub fn linearize_ancestors<S: BuildHasher>(
+fn linearize_ancestors<S: BuildHasher>(
     graph: &Graph,
     declaration_id: DeclarationId,
     descendants: &mut HashSet<DeclarationId, S>,
     seen_ids: &mut HashSet<DeclarationId, S>,
 ) -> Ancestors {
-    let read_lock = graph.declarations().read().unwrap();
-    let declaration = read_lock.get(&declaration_id).unwrap();
     let mut cyclic = false;
     let mut partial = false;
+    let (kind, owner_id) = {
+        let declarations = graph.declarations().read().unwrap();
+        let declaration = declarations.get(&declaration_id).unwrap();
 
-    // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
-    // `Module.new`, which now seem like constants, but are actually namespaces
-    if matches!(declaration, Declaration::Constant(_)) {
-        return Ancestors::Complete(vec![]);
-    }
-
-    // Add this declaration to the descendants so that we capture transitive descendant relationships
-    descendants.insert(declaration_id);
-
-    // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
-    // again
-    {
-        let cached = current_ancestors(declaration);
-
-        if matches!(*cached, Ancestors::Complete(_) | Ancestors::Cyclic(_)) {
-            propagate_descendants(graph, descendants, &cached);
-            descendants.remove(&declaration_id);
-            return cached.clone();
+        // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
+        // `Module.new`, which now seem like constants, but are actually namespaces
+        if matches!(declaration, Declaration::Constant(_)) {
+            return Ancestors::Complete(vec![]);
         }
-    }
 
-    // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
-    // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
-    for descendant in descendants.iter() {
-        add_descendant(declaration, *descendant);
-    }
+        // Add this declaration to the descendants so that we capture transitive descendant relationships
+        descendants.insert(declaration_id);
 
-    if !seen_ids.insert(declaration_id) {
-        // If we find a cycle when linearizing ancestors, it's an error that the programmer must fix. However, we try to
-        // still approximate features by assuming that it must inherit from `Object` at some point (which is what most
-        // classes/modules inherit from). This is not 100% correct, but it allows us to provide a bit better IDE support
-        // for these cases
-        let estimated_ancestors = if matches!(declaration, Declaration::Class(_)) {
-            Ancestors::Cyclic(vec![Ancestor::Complete(*OBJECT_ID)])
-        } else {
-            Ancestors::Cyclic(vec![])
-        };
-        set_ancestors(declaration, estimated_ancestors.clone());
-        descendants.remove(&declaration_id);
-        return estimated_ancestors;
-    }
+        // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
+        // again
+        {
+            let cached = current_ancestors(declaration);
 
+            if matches!(*cached, Ancestors::Complete(_) | Ancestors::Cyclic(_)) {
+                propagate_descendants(graph, descendants, &cached);
+                descendants.remove(&declaration_id);
+                return cached.clone();
+            }
+        }
+
+        // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
+        // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
+        for descendant in descendants.iter() {
+            add_descendant(declaration, *descendant);
+        }
+
+        if !seen_ids.insert(declaration_id) {
+            // If we find a cycle when linearizing ancestors, it's an error that the programmer must fix. However, we try to
+            // still approximate features by assuming that it must inherit from `Object` at some point (which is what most
+            // classes/modules inherit from). This is not 100% correct, but it allows us to provide a bit better IDE support
+            // for these cases
+            let estimated_ancestors = if matches!(declaration, Declaration::Class(_)) {
+                Ancestors::Cyclic(vec![Ancestor::Complete(*OBJECT_ID)])
+            } else {
+                Ancestors::Cyclic(vec![])
+            };
+            set_ancestors(declaration, estimated_ancestors.clone());
+            descendants.remove(&declaration_id);
+            return estimated_ancestors;
+        }
+
+        (declaration.kind(), *declaration.owner_id())
+    };
+
+    // TODO: this check is against `Object` for now to avoid infinite recursion. After RBS indexing, we need to change
+    // this to `BasicObject` since it's the only class that cannot have a parent
+    let parent_ancestors = match kind {
+        DeclarationKind::Class if declaration_id != *OBJECT_ID => {
+            let declarations = graph.declarations().read().unwrap();
+            let declaration = declarations.get(&declaration_id).unwrap();
+            let definitions = declaration
+                .definitions()
+                .iter()
+                .filter_map(|def_id| graph.definitions().get(def_id))
+                .collect::<Vec<_>>();
+
+            Some(
+                match linearize_parent_class(graph, &definitions, descendants, seen_ids) {
+                    Ancestors::Complete(ids) => ids,
+                    Ancestors::Cyclic(ids) => {
+                        cyclic = true;
+                        ids
+                    }
+                    Ancestors::Partial(ids) => {
+                        partial = true;
+                        ids
+                    }
+                },
+            )
+        }
+        DeclarationKind::SingletonClass if declaration_id != *OBJECT_ID => {
+            let (singleton_parent_id, partial_singleton) = singleton_parent_id(graph, owner_id);
+            if partial_singleton {
+                partial = true;
+            }
+
+            Some(
+                match linearize_ancestors(graph, singleton_parent_id, descendants, seen_ids) {
+                    Ancestors::Complete(ids) => ids,
+                    Ancestors::Cyclic(ids) => {
+                        cyclic = true;
+                        ids
+                    }
+                    Ancestors::Partial(ids) => {
+                        partial = true;
+                        ids
+                    }
+                },
+            )
+        }
+        _ => None,
+    };
+
+    let declarations = graph.declarations().read().unwrap();
+    let declaration = declarations.get(&declaration_id).unwrap();
     let definitions = declaration
         .definitions()
         .iter()
         .filter_map(|def_id| graph.definitions().get(def_id))
         .collect::<Vec<_>>();
 
-    // TODO: this check is against `Object` for now to avoid infinite recursion. After RBS indexing, we need to change
-    // this to `BasicObject` since it's the only class that cannot have a parent
-    let parent_ancestors = if matches!(declaration, Declaration::Class(_)) && declaration_id != *OBJECT_ID {
-        Some(
-            match linearize_parent_class(graph, &definitions, descendants, seen_ids) {
-                Ancestors::Complete(ids) => ids,
-                Ancestors::Cyclic(ids) => {
-                    cyclic = true;
-                    ids
-                }
-                Ancestors::Partial(ids) => {
-                    partial = true;
-                    ids
-                }
-            },
-        )
-    } else {
-        None
-    };
+    let mut mixins = Vec::new();
+
+    // If we're linearizing a singleton class, add the extends of the attached class to the list of mixins to process
+    if let Declaration::SingletonClass(_) = declaration {
+        let attached_decl = declarations.get(&owner_id).unwrap();
+
+        let attached_definitions = attached_decl
+            .definitions()
+            .iter()
+            .filter_map(|def_id| graph.definitions().get(def_id))
+            .collect::<Vec<_>>();
+
+        mixins.extend(
+            attached_definitions
+                .iter()
+                .filter_map(|def| mixins_of(def))
+                .flatten()
+                .filter(|mixin| matches!(mixin, Mixin::Extend(_))),
+        );
+    }
+
+    // Consider only prepends and includes for the current declaration
+    mixins.extend(
+        definitions
+            .iter()
+            .filter_map(|def| mixins_of(def))
+            .flatten()
+            .filter(|mixin| matches!(mixin, Mixin::Prepend(_) | Mixin::Include(_))),
+    );
 
     let (linearized_prepends, linearized_includes) = linearize_mixins(
         graph,
@@ -490,7 +563,7 @@ pub fn linearize_ancestors<S: BuildHasher>(
         seen_ids,
         &mut cyclic,
         &mut partial,
-        &definitions,
+        &mixins,
         parent_ancestors.as_ref(),
     );
 
@@ -524,94 +597,87 @@ fn linearize_mixins<S: BuildHasher>(
     seen_ids: &mut HashSet<DeclarationId, S>,
     cyclic: &mut bool,
     partial: &mut bool,
-    definitions: &[&Definition],
+    mixins: &[&Mixin],
     parent_ancestors: Option<&Vec<Ancestor>>,
 ) -> (VecDeque<Ancestor>, VecDeque<Ancestor>) {
     let mut linearized_prepends = VecDeque::new();
     let mut linearized_includes = VecDeque::new();
 
-    for def in definitions {
-        let Some(mixins) = mixins_of(def) else {
-            continue;
-        };
-
-        for mixin in mixins {
-            match mixin {
-                Mixin::Prepend(name_id) => {
-                    match graph.names().get(name_id).unwrap() {
-                        NameRef::Resolved(resolved) => {
-                            let ids =
-                                match linearize_ancestors(graph, *resolved.declaration_id(), descendants, seen_ids) {
-                                    Ancestors::Complete(ids) => ids,
-                                    Ancestors::Cyclic(ids) => {
-                                        *cyclic = true;
-                                        ids
-                                    }
-                                    Ancestors::Partial(ids) => {
-                                        *partial = true;
-                                        ids
-                                    }
-                                };
-
-                            // Only reorder if there are new modules to add. If all modules being
-                            // prepended are already in the chain (e.g., `prepend A` when A is already
-                            // prepended via B), Ruby treats it as a no-op and keeps the existing order.
-                            if ids.iter().any(|id| !linearized_prepends.contains(id)) {
-                                // Remove existing entries that will be re-added from the new chain
-                                linearized_prepends.retain(|id| !ids.contains(id));
-
-                                for id in ids.into_iter().rev() {
-                                    linearized_prepends.push_front(id);
-                                }
+    // IMPORTANT! In the slice of mixins we receive, extends are the ones that occurred in the attached object, which we
+    // collect ahead of time. This is the reason why we apparently treat an extend like an include, because an extend in
+    // the attached object is equivalent to an include in the singleton class
+    for mixin in mixins {
+        match mixin {
+            Mixin::Prepend(name_id) => {
+                match graph.names().get(name_id).unwrap() {
+                    NameRef::Resolved(resolved) => {
+                        let ids = match linearize_ancestors(graph, *resolved.declaration_id(), descendants, seen_ids) {
+                            Ancestors::Complete(ids) => ids,
+                            Ancestors::Cyclic(ids) => {
+                                *cyclic = true;
+                                ids
                             }
-                        }
-                        NameRef::Unresolved(_) => {
-                            // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
-                            // later
-                            *partial = true;
-                            linearized_prepends.push_front(Ancestor::Partial(*name_id));
-                        }
-                    }
-                }
-                Mixin::Include(name_id) => {
-                    match graph.names().get(name_id).unwrap() {
-                        NameRef::Resolved(resolved) => {
-                            let mut ids =
-                                match linearize_ancestors(graph, *resolved.declaration_id(), descendants, seen_ids) {
-                                    Ancestors::Complete(ids) => ids,
-                                    Ancestors::Cyclic(ids) => {
-                                        *cyclic = true;
-                                        ids
-                                    }
-                                    Ancestors::Partial(ids) => {
-                                        *partial = true;
-                                        ids
-                                    }
-                                };
+                            Ancestors::Partial(ids) => {
+                                *partial = true;
+                                ids
+                            }
+                        };
 
-                            // Prepended module are deduped based only on other prepended modules
-                            ids.retain(|id| {
-                                !linearized_prepends.contains(id)
-                                    && !linearized_includes.contains(id)
-                                    && parent_ancestors
-                                        .as_ref()
-                                        .is_none_or(|parent_ids| !parent_ids.contains(id))
-                            });
+                        // Only reorder if there are new modules to add. If all modules being
+                        // prepended are already in the chain (e.g., `prepend A` when A is already
+                        // prepended via B), Ruby treats it as a no-op and keeps the existing order.
+                        if ids.iter().any(|id| !linearized_prepends.contains(id)) {
+                            // Remove existing entries that will be re-added from the new chain
+                            linearized_prepends.retain(|id| !ids.contains(id));
 
                             for id in ids.into_iter().rev() {
-                                linearized_includes.push_front(id);
+                                linearized_prepends.push_front(id);
                             }
                         }
-                        NameRef::Unresolved(_) => {
-                            // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
-                            // later
-                            *partial = true;
-                            linearized_includes.push_front(Ancestor::Partial(*name_id));
-                        }
+                    }
+                    NameRef::Unresolved(_) => {
+                        // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
+                        // later
+                        *partial = true;
+                        linearized_prepends.push_front(Ancestor::Partial(*name_id));
                     }
                 }
-                Mixin::Extend(_) => {
-                    // todo
+            }
+            Mixin::Include(name_id) | Mixin::Extend(name_id) => {
+                match graph.names().get(name_id).unwrap() {
+                    NameRef::Resolved(resolved) => {
+                        let mut ids =
+                            match linearize_ancestors(graph, *resolved.declaration_id(), descendants, seen_ids) {
+                                Ancestors::Complete(ids) => ids,
+                                Ancestors::Cyclic(ids) => {
+                                    *cyclic = true;
+                                    ids
+                                }
+                                Ancestors::Partial(ids) => {
+                                    *partial = true;
+                                    ids
+                                }
+                            };
+
+                        // Prepended module are deduped based only on other prepended modules
+                        ids.retain(|id| {
+                            !linearized_prepends.contains(id)
+                                && !linearized_includes.contains(id)
+                                && parent_ancestors
+                                    .as_ref()
+                                    .is_none_or(|parent_ids| !parent_ids.contains(id))
+                        });
+
+                        for id in ids.into_iter().rev() {
+                            linearized_includes.push_front(id);
+                        }
+                    }
+                    NameRef::Unresolved(_) => {
+                        // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
+                        // later
+                        *partial = true;
+                        linearized_includes.push_front(Ancestor::Partial(*name_id));
+                    }
                 }
             }
         }
@@ -973,12 +1039,50 @@ fn sorted_units(graph: &Graph) -> (VecDeque<Unit>, Vec<DefinitionId>) {
     (constants.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>(), others)
 }
 
-fn linearize_parent_class<S: BuildHasher>(
-    graph: &Graph,
-    definitions: &[&Definition],
-    descendants: &mut HashSet<DeclarationId, S>,
-    seen_ids: &mut HashSet<DeclarationId, S>,
-) -> Ancestors {
+/// Returns the singleton parent ID for an attached object ID. A singleton class' parent depends on what the attached
+/// object is:
+///
+/// - Module: parent is the `Module` class
+/// - Class: parent is the singleton class of the original parent class
+/// - Singleton class: recurse as many times as necessary to wrap the original attached object's parent class
+fn singleton_parent_id(graph: &Graph, attached_id: DeclarationId) -> (DeclarationId, bool) {
+    // Base case: if we reached `Object`, then the parent is `Class`
+    if attached_id == *OBJECT_ID {
+        return (*CLASS_ID, false);
+    }
+
+    let (kind, owner_id) = {
+        let declarations = graph.declarations().read().unwrap();
+        let decl = declarations.get(&attached_id).unwrap();
+        (decl.kind(), *decl.owner_id())
+    };
+
+    match kind {
+        DeclarationKind::Module => (*MODULE_ID, false),
+        DeclarationKind::SingletonClass => {
+            // For singleton classes, we keep recursively wrapping parents until we can reach the original attached
+            // object
+            let (inner_parent, partial) = singleton_parent_id(graph, owner_id);
+            (get_or_create_singleton_class(graph, inner_parent), partial)
+        }
+        _ => {
+            // For classes (the regular case), we need to return the singleton class of its parent
+            let definitions = {
+                let declarations = graph.declarations().read().unwrap();
+                let decl = declarations.get(&attached_id).unwrap();
+                decl.definitions()
+                    .iter()
+                    .filter_map(|def_id| graph.definitions().get(def_id))
+                    .collect::<Vec<_>>()
+            };
+
+            let (picked_parent, partial) = get_parent_class(graph, &definitions);
+            (get_or_create_singleton_class(graph, picked_parent), partial)
+        }
+    }
+}
+
+fn get_parent_class(graph: &Graph, definitions: &[&Definition]) -> (DeclarationId, bool) {
     let mut explicit_parents = Vec::new();
     let mut partial = false;
 
@@ -1001,7 +1105,16 @@ fn linearize_parent_class<S: BuildHasher>(
 
     // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
     // mismatch error. TODO: We should add a diagnostic here
-    let picked_parent = explicit_parents.first().copied().unwrap_or(*OBJECT_ID);
+    (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), partial)
+}
+
+fn linearize_parent_class<S: BuildHasher>(
+    graph: &Graph,
+    definitions: &[&Definition],
+    descendants: &mut HashSet<DeclarationId, S>,
+    seen_ids: &mut HashSet<DeclarationId, S>,
+) -> Ancestors {
+    let (picked_parent, partial) = get_parent_class(graph, definitions);
     let result = linearize_ancestors(graph, picked_parent, descendants, seen_ids);
     if partial { result.to_partial() } else { result }
 }
@@ -1440,7 +1553,9 @@ mod tests {
         });
         context.resolve();
         let read_lock = context.graph.declarations().read().unwrap();
-        assert_eq!(1, read_lock.len());
+        assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
+        assert!(read_lock.get(&DeclarationId::from("Foo::Bar")).is_none());
+        assert!(read_lock.get(&DeclarationId::from("Foo::Bar::Baz")).is_none());
     }
 
     #[test]
@@ -1612,7 +1727,7 @@ mod tests {
 
         // TODO: this should push an error diagnostic
         let read_lock = context.graph.declarations().read().unwrap();
-        assert_eq!(1, read_lock.len());
+        assert!(read_lock.get(&DeclarationId::from("Object::@@var")).is_none());
     }
 
     #[test]
@@ -1755,8 +1870,7 @@ mod tests {
             "
         });
         context.resolve();
-        let read_lock = context.graph.declarations().read().unwrap();
-        assert_eq!(2, read_lock.len());
+
         assert!(matches!(
             ancestors_of(&context.graph, DeclarationId::from("Bar")),
             Ancestors::Partial(_)
@@ -2421,5 +2535,208 @@ mod tests {
 
         assert_descendants!(context, "Bar", ["Baz"]);
         assert_descendants!(context, "Foo", ["Bar", "Baz"]);
+    }
+
+    #[test]
+    fn singleton_ancestors_for_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Qux; end
+            module Zip; end
+            class Bar; end
+
+            class Baz < Bar
+              extend Foo
+
+              class << self
+                include Qux
+
+                class << self
+                  include Zip
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Note: the commented out parts require RBS indexing
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>",
+            [
+                "Baz::<Baz>",
+                "Qux",
+                "Foo",
+                "Bar::<Bar>",
+                "Object::<Object>",
+                // "BasicObject::<BasicObject>",
+                "Class",
+                // "Module",
+                "Object",
+                // "Kernel",
+                // "BasicObject"
+            ]
+        );
+
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>::<<Baz>>",
+            [
+                "Baz::<Baz>::<<Baz>>",
+                "Zip",
+                "Bar::<Bar>::<<Bar>>",
+                "Object::<Object>::<<Object>>",
+                // "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                // "Module::<Module>",
+                "Object::<Object>",
+                // "BasicObject::<BasicObject>",
+                "Class",
+                // "Module",
+                "Object",
+                // "Kernel",
+                // "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_ancestors_for_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Qux; end
+            module Zip; end
+            class Bar; end
+
+            module Baz
+              extend Foo
+
+              class << self
+                include Qux
+
+                class << self
+                  include Zip
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Note: the commented out parts require RBS indexing
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>",
+            [
+                "Baz::<Baz>",
+                "Qux",
+                "Foo",
+                "Module",
+                "Object",
+                // "Kernel",
+                // "BasicObject"
+            ]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>::<<Baz>>",
+            [
+                "Baz::<Baz>::<<Baz>>",
+                "Zip",
+                "Module::<Module>",
+                "Object::<Object>",
+                // "BasicObject::<BasicObject>",
+                "Class",
+                // "Module",
+                "Object",
+                // "Kernel",
+                // "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_ancestors_with_inherited_parent_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Qux; end
+            class Bar
+              class << self
+                include Foo
+                prepend Qux
+              end
+            end
+
+            class Baz < Bar
+              class << self
+                class << self
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // TODO: the commented out parts require RBS indexing
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>",
+            [
+                "Qux",
+                "Bar::<Bar>",
+                "Foo",
+                "Object::<Object>",
+                // "BasicObject::<BasicObject>",
+                "Class",
+                // "Module",
+                "Object",
+                // "Kernel",
+                // "BasicObject"
+            ]
+        );
+
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>",
+            [
+                "Baz::<Baz>",
+                "Qux",
+                "Bar::<Bar>",
+                "Foo",
+                "Object::<Object>",
+                // "BasicObject::<BasicObject>",
+                "Class",
+                // "Module",
+                "Object",
+                // "Kernel",
+                // "BasicObject"
+            ]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>::<<Baz>>",
+            [
+                "Baz::<Baz>::<<Baz>>",
+                "Bar::<Bar>::<<Bar>>",
+                "Object::<Object>::<<Object>>",
+                // "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                // "Module::<Module>",
+                "Object::<Object>",
+                // "BasicObject::<BasicObject>",
+                "Class",
+                // "Module",
+                "Object",
+                // "Kernel",
+                // "BasicObject"
+            ]
+        );
     }
 }
