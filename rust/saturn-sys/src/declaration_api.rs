@@ -22,7 +22,9 @@ use saturn::model::ids::DeclarationId;
 pub unsafe extern "C" fn sat_declaration_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
-        if let Some(decl) = graph.declarations().get(&name_id) {
+        let read_lock = graph.declarations().read().unwrap();
+
+        if let Some(decl) = read_lock.get(&name_id) {
             CString::new(decl.name()).unwrap().into_raw().cast_const()
         } else {
             ptr::null()
@@ -44,7 +46,8 @@ pub unsafe extern "C" fn sat_declaration_name(pointer: GraphPointer, name_id: i6
 pub unsafe extern "C" fn sat_declaration_unqualified_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
-        if let Some(decl) = graph.declarations().get(&name_id) {
+        let read_lock = graph.declarations().read().unwrap();
+        if let Some(decl) = read_lock.get(&name_id) {
             CString::new(decl.unqualified_name()).unwrap().into_raw().cast_const()
         } else {
             ptr::null()
@@ -62,6 +65,10 @@ pub unsafe extern "C" fn sat_declaration_unqualified_name(pointer: GraphPointer,
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - The returned pointer must be freed with `sat_declaration_definitions_iter_free`.
+///
+/// # Panics
+///
+/// This function will panic if acquiring a read lock fails
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sat_declaration_definitions_iter_new(
     pointer: GraphPointer,
@@ -70,7 +77,8 @@ pub unsafe extern "C" fn sat_declaration_definitions_iter_new(
     // Snapshot the IDs and kinds at iterator creation to avoid borrowing across FFI calls
     with_graph(pointer, |graph| {
         let decl_id = DeclarationId::new(decl_id);
-        if let Some(decl) = graph.declarations().get(&decl_id) {
+        let read_lock = graph.declarations().read().unwrap();
+        if let Some(decl) = read_lock.get(&decl_id) {
             sat_definitions_iter_new_from_ids(graph, decl.definitions())
         } else {
             DefinitionsIter::new(Vec::<(i64, DefinitionKind)>::new().into_boxed_slice())

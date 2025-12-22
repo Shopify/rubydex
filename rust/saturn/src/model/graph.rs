@@ -1,5 +1,5 @@
 use std::collections::hash_map::Entry;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, RwLock};
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
@@ -20,7 +20,7 @@ pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::
 #[derive(Default, Debug)]
 pub struct Graph {
     // Map of declaration nodes
-    declarations: IdentityHashMap<DeclarationId, Declaration>,
+    declarations: RwLock<IdentityHashMap<DeclarationId, Declaration>>,
     // Map of document nodes
     documents: IdentityHashMap<UriId, Document>,
     // Map of definition nodes
@@ -44,7 +44,7 @@ impl Graph {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            declarations: IdentityHashMap::default(),
+            declarations: RwLock::new(IdentityHashMap::default()),
             definitions: IdentityHashMap::default(),
             definitions_to_declarations: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
@@ -56,30 +56,34 @@ impl Graph {
         }
     }
 
-    // TODO: remove this method once we have proper synchronization. This is a hack
-    #[must_use]
-    pub(crate) fn declarations_mut(&mut self) -> &mut IdentityHashMap<DeclarationId, Declaration> {
-        &mut self.declarations
-    }
-
     // Returns an immutable reference to the declarations map
     #[must_use]
-    pub fn declarations(&self) -> &IdentityHashMap<DeclarationId, Declaration> {
+    pub fn declarations(&self) -> &RwLock<IdentityHashMap<DeclarationId, Declaration>> {
         &self.declarations
     }
 
+    /// # Panics
+    ///
+    /// Panics if acquiring a write lock fails
     pub fn add_declaration<F>(&mut self, declaration_id: DeclarationId, definition_id: DefinitionId, constructor: F)
     where
         F: FnOnce() -> Declaration,
     {
-        let declaration = self.declarations.entry(declaration_id).or_insert_with(constructor);
-        declaration.add_definition(definition_id);
         self.definitions_to_declarations.insert(definition_id, declaration_id);
+
+        let mut write_lock = self.declarations.write().unwrap();
+        let declaration = write_lock.entry(declaration_id).or_insert_with(constructor);
+        declaration.add_definition(definition_id);
     }
 
+    /// # Panics
+    ///
+    /// Panics if acquiring a write lock fails
     pub fn clear_declarations(&mut self) {
-        self.declarations.clear();
         self.definitions_to_declarations.clear();
+
+        let mut write_lock = self.declarations.write().unwrap();
+        write_lock.clear();
     }
 
     // Returns an immutable reference to the definitions map
@@ -160,10 +164,14 @@ impl Graph {
         &self.diagnostics
     }
 
+    /// # Panics
+    ///
+    /// Panics if acquiring a read lock fails
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
         let declaration_id = DeclarationId::from(name);
-        let declaration = self.declarations.get(&declaration_id)?;
+        let read_lock = self.declarations.read().unwrap();
+        let declaration = read_lock.get(&declaration_id)?;
 
         Some(
             declaration
@@ -172,11 +180,6 @@ impl Graph {
                 .filter_map(|id| self.definitions.get(id))
                 .collect(),
         )
-    }
-
-    #[must_use]
-    pub fn get_declaration_mut(&mut self, declaration_id: &DeclarationId) -> Option<&mut Declaration> {
-        self.declarations.get_mut(declaration_id)
     }
 
     #[must_use]
@@ -204,13 +207,10 @@ impl Graph {
     /// # Panics
     ///
     /// Will panic if the declaration ID passed doesn't belong to a namespace declaration
-    pub fn add_member(
-        &mut self,
-        owner_id: &DeclarationId,
-        member_declaration_id: DeclarationId,
-        member_str_id: StringId,
-    ) {
-        if let Some(declaration) = self.declarations.get_mut(owner_id) {
+    pub fn add_member(&self, owner_id: &DeclarationId, member_declaration_id: DeclarationId, member_str_id: StringId) {
+        let mut write_lock = self.declarations.write().unwrap();
+
+        if let Some(declaration) = write_lock.get_mut(owner_id) {
             match declaration {
                 Declaration::Class(it) => it.add_member(member_str_id, member_declaration_id),
                 Declaration::Module(it) => it.add_member(member_str_id, member_declaration_id),
@@ -244,8 +244,12 @@ impl Graph {
         }
     }
 
-    pub fn record_resolved_reference(&mut self, reference_id: ReferenceId, declaration_id: DeclarationId) {
-        if let Some(declaration) = self.declarations.get_mut(&declaration_id) {
+    /// # Panics
+    ///
+    /// Panics if acquiring a write lock fails
+    pub fn record_resolved_reference(&self, reference_id: ReferenceId, declaration_id: DeclarationId) {
+        let mut write_lock = self.declarations.write().unwrap();
+        if let Some(declaration) = write_lock.get_mut(&declaration_id) {
             declaration.add_reference(reference_id);
         }
     }
@@ -407,6 +411,9 @@ impl Graph {
     //     checker
     // }
 
+    /// # Panics
+    ///
+    /// Panics if acquiring a read lock fails
     #[allow(clippy::cast_precision_loss)]
     pub fn print_query_statistics(&self) {
         use std::collections::HashMap;
@@ -416,7 +423,8 @@ impl Graph {
         let mut definition_types: HashMap<&str, usize> = HashMap::new();
         let mut multi_definition_count = 0;
 
-        for declaration in self.declarations().values() {
+        let read_lock = self.declarations.read().unwrap();
+        for declaration in read_lock.values() {
             // Check documentation
             if let Some(definitions) = self.get(declaration.name()) {
                 let has_docs = definitions.iter().any(|def| !def.comments().is_empty());
@@ -442,7 +450,7 @@ impl Graph {
 
         println!();
         println!("Query statistics");
-        let total_declarations = self.declarations().len();
+        let total_declarations = read_lock.len();
         println!("  Total declarations:         {total_declarations}");
         println!(
             "  With documentation:         {} ({:.1}%)",
@@ -487,7 +495,8 @@ mod tests {
         assert!(context.graph.documents.is_empty());
         assert!(context.graph.definitions.is_empty());
         // Object is left
-        assert_eq!(context.graph.declarations.len(), 1);
+        let read_lock = context.graph.declarations.read().unwrap();
+        assert_eq!(read_lock.len(), 1);
 
         context.graph.assert_integrity();
     }
@@ -503,7 +512,8 @@ mod tests {
 
         assert!(context.graph.definitions.is_empty());
         // Object is left
-        assert_eq!(context.graph.declarations.len(), 1);
+        let read_lock = context.graph.declarations.read().unwrap();
+        assert_eq!(read_lock.len(), 1);
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(context.graph.documents.len(), 1);
 
@@ -518,7 +528,8 @@ mod tests {
         context.resolve();
 
         assert_eq!(context.graph.definitions.len(), 1);
-        let declaration = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations.read().unwrap();
+        let declaration = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         let document = context.graph.documents.get(&UriId::from("file:///foo.rb")).unwrap();
         assert_eq!(document.uri(), "file:///foo.rb");
@@ -538,7 +549,8 @@ mod tests {
         context.resolve();
 
         assert_eq!(context.graph.definitions.len(), 1);
-        let declaration = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations.read().unwrap();
+        let declaration = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         assert_eq!(
             context
@@ -663,10 +675,13 @@ mod tests {
         });
         context.resolve();
 
-        if let Declaration::Module(foo) = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap() {
-            assert!(foo.members().contains_key(&StringId::from("Bar")));
-        } else {
-            panic!("Expected Foo to be a module");
+        {
+            let read_lock = context.graph.declarations.read().unwrap();
+            if let Declaration::Module(foo) = read_lock.get(&DeclarationId::from("Foo")).unwrap() {
+                assert!(foo.members().contains_key(&StringId::from("Bar")));
+            } else {
+                panic!("Expected Foo to be a module");
+            }
         }
 
         // Delete `Bar`
@@ -678,7 +693,8 @@ mod tests {
         });
         context.resolve();
 
-        if let Declaration::Module(foo) = context.graph.declarations.get(&DeclarationId::from("Foo")).unwrap() {
+        let read_lock = context.graph.declarations.read().unwrap();
+        if let Declaration::Module(foo) = read_lock.get(&DeclarationId::from("Foo")).unwrap() {
             assert!(!foo.members().contains_key(&StringId::from("Bar")));
         } else {
             panic!("Expected Foo to be a module");

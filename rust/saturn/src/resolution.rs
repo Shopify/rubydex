@@ -61,10 +61,14 @@ pub fn resolve_all(graph: &mut Graph) {
     // amount of work
     graph.clear_declarations();
     // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
-    graph.declarations_mut().insert(
-        *OBJECT_ID,
-        Declaration::Class(Box::new(ClassDeclaration::new("Object".to_string(), *OBJECT_ID))),
-    );
+
+    {
+        let mut write_lock = graph.declarations().write().unwrap();
+        write_lock.insert(
+            *OBJECT_ID,
+            Declaration::Class(Box::new(ClassDeclaration::new("Object".to_string(), *OBJECT_ID))),
+        );
+    }
 
     let (mut unit_queue, other_ids) = sorted_units(graph);
 
@@ -312,9 +316,12 @@ fn create_declaration<F>(
 ) where
     F: FnOnce(String) -> Declaration,
 {
-    let owner = graph.declarations().get(&owner_id).unwrap();
-    let name_str = graph.strings().get(&str_id).unwrap();
-    let fully_qualified_name = format!("{}::{name_str}", owner.name());
+    let fully_qualified_name = {
+        let read_lock = graph.declarations().read().unwrap();
+        let owner = read_lock.get(&owner_id).unwrap();
+        let name_str = graph.strings().get(&str_id).unwrap();
+        format!("{}::{name_str}", owner.name())
+    };
     let declaration_id = DeclarationId::from(&fully_qualified_name);
 
     graph.add_declaration(declaration_id, definition_id, || {
@@ -348,33 +355,36 @@ fn resolve_lexical_owner(graph: &Graph, lexical_nesting_id: Option<DefinitionId>
 /// Gets or creates a singleton class declaration for a given class/module declaration.
 /// For class `Foo`, this returns the declaration for `Foo::<Foo>`.
 fn get_or_create_singleton_class(graph: &mut Graph, attached_id: DeclarationId) -> DeclarationId {
-    let attached_decl = graph.declarations_mut().get_mut(&attached_id).unwrap();
+    let (decl_id, name) = {
+        let lock = graph.declarations().read().unwrap();
+        let attached_decl = lock.get(&attached_id).unwrap();
 
-    // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
-    // and `Module.new`, which now seem like constants, but are actually namespaces
-    if !matches!(attached_decl, Declaration::Constant(_))
-        && let Some(singleton_id) = singleton_class_id(attached_decl)
-    {
-        return *singleton_id;
-    }
+        // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
+        // and `Module.new`, which now seem like constants, but are actually namespaces
+        if !matches!(attached_decl, Declaration::Constant(_))
+            && let Some(singleton_id) = singleton_class_id(attached_decl)
+        {
+            return *singleton_id;
+        }
 
-    let singleton_full_name = format!("{}::<{}>", attached_decl.name(), attached_decl.unqualified_name());
-    let singleton_decl_id = DeclarationId::from(&singleton_full_name);
+        let name = format!("{}::<{}>", attached_decl.name(), attached_decl.unqualified_name());
+        (DeclarationId::from(&name), name)
+    };
+
+    let mut write_lock = graph.declarations().write().unwrap();
+    let attached_decl = write_lock.get_mut(&attached_id).unwrap();
 
     // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
     // and `Module.new`, which now seem like constants, but are actually namespaces
     if !matches!(attached_decl, Declaration::Constant(_)) {
-        set_singleton_class_id(attached_decl, singleton_decl_id);
+        set_singleton_class_id(attached_decl, decl_id);
     }
 
-    graph.declarations_mut().entry(singleton_decl_id).or_insert_with(|| {
-        Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(
-            singleton_full_name,
-            attached_id,
-        )))
-    });
+    write_lock
+        .entry(decl_id)
+        .or_insert_with(|| Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(name, attached_id))));
 
-    singleton_decl_id
+    decl_id
 }
 
 /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
@@ -401,7 +411,8 @@ pub fn linearize_ancestors<S: BuildHasher>(
     descendants: &mut HashSet<DeclarationId, S>,
     seen_ids: &mut HashSet<DeclarationId, S>,
 ) -> Ancestors {
-    let declaration = graph.declarations().get(&declaration_id).unwrap();
+    let read_lock = graph.declarations().read().unwrap();
+    let declaration = read_lock.get(&declaration_id).unwrap();
     let mut cyclic = false;
     let mut partial = false;
 
@@ -617,11 +628,13 @@ fn propagate_descendants<S: BuildHasher>(
 ) {
     if !descendants.is_empty() {
         for ancestor in cached.iter() {
-            if let Ancestor::Complete(ancestor_id) = ancestor
-                && let Some(ancestor_decl) = graph.declarations().get(ancestor_id)
-            {
-                for descendant in descendants.iter() {
-                    add_descendant(ancestor_decl, *descendant);
+            if let Ancestor::Complete(ancestor_id) = ancestor {
+                let read_lock = graph.declarations().read().unwrap();
+
+                if let Some(ancestor_decl) = read_lock.get(ancestor_id) {
+                    for descendant in descendants.iter() {
+                        add_descendant(ancestor_decl, *descendant);
+                    }
                 }
             }
         }
@@ -647,17 +660,23 @@ where
     match name_owner_id(graph, name_id) {
         Outcome::Resolved(owner_id, id_needing_linearization) => {
             let mut fully_qualified_name = graph.strings().get(&str_id).unwrap().clone();
-            let owner = graph.declarations_mut().get_mut(&owner_id).unwrap();
 
-            // We don't prefix declarations with `Object::`
-            if owner_id != *OBJECT_ID {
-                fully_qualified_name.insert_str(0, "::");
-                fully_qualified_name.insert_str(0, owner.name());
+            {
+                let read_lock = graph.declarations().read().unwrap();
+                let owner = read_lock.get(&owner_id).unwrap();
+
+                // We don't prefix declarations with `Object::`
+                if owner_id != *OBJECT_ID {
+                    fully_qualified_name.insert_str(0, "::");
+                    fully_qualified_name.insert_str(0, owner.name());
+                }
             }
 
             let declaration_id = DeclarationId::from(&fully_qualified_name);
 
             if singleton {
+                let mut write_lock = graph.declarations().write().unwrap();
+                let owner = write_lock.get_mut(&owner_id).unwrap();
                 set_singleton_class_id(owner, declaration_id);
             } else {
                 graph.add_member(&owner_id, declaration_id, str_id);
@@ -712,16 +731,21 @@ fn resolve_constant(graph: &mut Graph, name_id: NameId) -> Outcome {
             // way
             if let Some(parent_scope_id) = name.parent_scope() {
                 if let NameRef::Resolved(parent_scope) = graph.names().get(parent_scope_id).unwrap() {
-                    let declaration = graph.declarations().get(parent_scope.declaration_id()).unwrap();
+                    let member = {
+                        let read_lock = graph.declarations().read().unwrap();
+                        let declaration = read_lock.get(parent_scope.declaration_id()).unwrap();
 
-                    // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
-                    // `Module.new`, which now seem like constants, but are actually namespaces
-                    if matches!(declaration, Declaration::Constant(_)) {
-                        return Outcome::Unresolved(None);
-                    }
+                        // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
+                        // `Module.new`, which now seem like constants, but are actually namespaces
+                        if matches!(declaration, Declaration::Constant(_)) {
+                            return Outcome::Unresolved(None);
+                        }
 
-                    // TODO: we can't just look inside members here, we need to search inheritance too
-                    if let Some(member_id) = members_of(declaration).get(name.str()).copied() {
+                        // TODO: we can't just look inside members here, we need to search inheritance too
+                        members_of(declaration).get(name.str()).copied()
+                    };
+
+                    if let Some(member_id) = member {
                         graph.record_resolved_name(name_id, member_id);
                         return Outcome::Resolved(member_id, None);
                     }
@@ -793,7 +817,8 @@ fn search_ancestors(graph: &Graph, nesting_name_id: NameId, str_id: StringId) ->
                     .iter()
                     .find_map(|ancestor_id| {
                         if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                            let declaration = graph.declarations().get(ancestor_id).unwrap();
+                            let read_lock = graph.declarations().read().unwrap();
+                            let declaration = read_lock.get(ancestor_id).unwrap();
                             get_member(declaration, str_id).map(|id| Outcome::Resolved(*id, None))
                         } else {
                             None
@@ -804,7 +829,8 @@ fn search_ancestors(graph: &Graph, nesting_name_id: NameId, str_id: StringId) ->
                     .iter()
                     .find_map(|ancestor_id| {
                         if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                            let declaration = graph.declarations().get(ancestor_id).unwrap();
+                            let read_lock = graph.declarations().read().unwrap();
+                            let declaration = read_lock.get(ancestor_id).unwrap();
                             get_member(declaration, str_id).map(|id| Outcome::Resolved(*id, Some(nesting_id)))
                         } else {
                             None
@@ -823,7 +849,9 @@ fn search_lexical_scopes(graph: &Graph, name: &Name, str_id: StringId) -> Outcom
 
     while let Some(nesting_id) = current_name.nesting() {
         if let NameRef::Resolved(nesting_name_ref) = graph.names().get(nesting_id).unwrap() {
-            if let Some(declaration) = graph.declarations().get(nesting_name_ref.declaration_id())
+            let read_lock = graph.declarations().read().unwrap();
+
+            if let Some(declaration) = read_lock.get(nesting_name_ref.declaration_id())
             && !matches!(declaration, Declaration::Constant(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
                 && let Some(member) = members_of(declaration).get(&str_id)
             {
@@ -841,7 +869,8 @@ fn search_lexical_scopes(graph: &Graph, name: &Name, str_id: StringId) -> Outcom
 
 /// Look for the constant at the top level (member of Object)
 fn search_top_level(graph: &Graph, str_id: StringId) -> Outcome {
-    let object = graph.declarations().get(&OBJECT_ID).unwrap();
+    let read_lock = graph.declarations().read().unwrap();
+    let object = read_lock.get(&OBJECT_ID).unwrap();
 
     match members_of(object).get(&str_id) {
         Some(member_id) => Outcome::Resolved(*member_id, None),
@@ -1060,9 +1089,8 @@ mod tests {
         ($context:expr, $declaration_name:expr, $location:expr) => {
             let (uri, start, end) = $context.parse_location($location);
 
-            let declaration = $context
-                .graph
-                .declarations()
+            let read_lock = $context.graph.declarations().read().unwrap();
+            let declaration = read_lock
                 .get(&DeclarationId::from($declaration_name))
                 .expect(&format!("Declaration '{}' not found in graph", $declaration_name));
 
@@ -1118,7 +1146,11 @@ mod tests {
                             .iter()
                             .filter_map(|id| {
                                 if let Ancestor::Complete(id) = id {
-                                    Some($context.graph.declarations().get(id).unwrap().name())
+                                    let name = {
+                                        let read_lock = $context.graph.declarations().read().unwrap();
+                                        read_lock.get(id).unwrap().name().to_string()
+                                    };
+                                    Some(name)
                                 } else {
                                     None
                                 }
@@ -1136,12 +1168,8 @@ mod tests {
 
     macro_rules! assert_descendants {
         ($context:expr, $parent:expr, $descendants:expr) => {
-            let parent = $context
-                .graph
-                .declarations()
-                .get(&DeclarationId::from($parent))
-                .unwrap();
-
+            let read_lock = $context.graph.declarations().read().unwrap();
+            let parent = read_lock.get(&DeclarationId::from($parent)).unwrap();
             let actual = match parent {
                 Declaration::Class(class) => class.descendants().iter().cloned().collect::<Vec<_>>(),
                 Declaration::Module(module) => module.descendants().iter().cloned().collect::<Vec<_>>(),
@@ -1151,10 +1179,12 @@ mod tests {
 
             for descendant in &$descendants {
                 let descendant_id = DeclarationId::from(*descendant);
+                let read_lock = $context.graph.declarations().read().unwrap();
+
                 assert!(
                     actual.contains(&descendant_id),
                     "Expected '{}' to be a descendant of '{}'",
-                    $context.graph.declarations().get(&descendant_id).unwrap().name(),
+                    read_lock.get(&descendant_id).unwrap().name(),
                     parent.name()
                 );
             }
@@ -1299,23 +1329,16 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["Bar", "Baz"]);
         assert_owner(foo, "Object");
 
-        let bar = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap();
+        let bar = read_lock.get(&DeclarationId::from("Foo::Bar")).unwrap();
         assert_members(bar, &[]);
         assert_owner(bar, "Foo");
 
-        let baz = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::Baz"))
-            .unwrap();
+        let baz = read_lock.get(&DeclarationId::from("Foo::Baz")).unwrap();
         assert_members(baz, &[]);
         assert_owner(baz, "Foo");
     }
@@ -1334,7 +1357,8 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["initialize", "@name"]);
         assert_owner(foo, "Object");
     }
@@ -1364,11 +1388,12 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
         assert_owner(foo, "Object");
 
-        let bar = context.graph.declarations().get(&DeclarationId::from("Bar")).unwrap();
+        let bar = read_lock.get(&DeclarationId::from("Bar")).unwrap();
         assert_members(bar, &["Baz"]);
         assert_owner(bar, "Object");
     }
@@ -1388,19 +1413,16 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
         assert_owner(foo, "Object");
 
-        let bar = context.graph.declarations().get(&DeclarationId::from("Bar")).unwrap();
+        let bar = read_lock.get(&DeclarationId::from("Bar")).unwrap();
         assert_members(bar, &["Baz"]);
         assert_owner(bar, "Object");
 
-        let baz = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Bar::Baz"))
-            .unwrap();
+        let baz = read_lock.get(&DeclarationId::from("Bar::Baz")).unwrap();
         assert_members(baz, &[]);
         assert_owner(baz, "Bar");
     }
@@ -1417,7 +1439,8 @@ mod tests {
             "
         });
         context.resolve();
-        assert_eq!(1, context.graph.declarations().len());
+        let read_lock = context.graph.declarations().read().unwrap();
+        assert_eq!(1, read_lock.len());
     }
 
     #[test]
@@ -1477,16 +1500,13 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
         assert_owner(foo, "Object");
         assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap());
 
-        let singleton = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
+        let singleton = read_lock.get(&DeclarationId::from("Foo::<Foo>")).unwrap();
         assert_members(singleton, &["bar", "BAZ"]);
         assert_owner(singleton, "Foo");
     }
@@ -1507,26 +1527,19 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
         assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap());
 
-        let singleton = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
+        let singleton = read_lock.get(&DeclarationId::from("Foo::<Foo>")).unwrap();
         assert_members(singleton, &[]);
         assert_eq!(
             &DeclarationId::from("Foo::<Foo>::<<Foo>>"),
             singleton_class_id(singleton).unwrap()
         );
 
-        let nested_singleton = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>::<<Foo>>"))
-            .unwrap();
+        let nested_singleton = read_lock.get(&DeclarationId::from("Foo::<Foo>::<<Foo>>")).unwrap();
         assert_members(nested_singleton, &["baz"]);
         assert_owner(nested_singleton, "Foo::<Foo>");
     }
@@ -1548,20 +1561,17 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
         assert_owner(foo, "Object");
         assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap());
 
-        let bar = context.graph.declarations().get(&DeclarationId::from("Bar")).unwrap();
+        let bar = read_lock.get(&DeclarationId::from("Bar")).unwrap();
         assert_members(bar, &[]);
         assert_owner(bar, "Object");
 
-        let singleton = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
+        let singleton = read_lock.get(&DeclarationId::from("Foo::<Foo>")).unwrap();
         assert_members(singleton, &["baz", "Baz"]);
         assert_owner(singleton, "Foo");
     }
@@ -1584,7 +1594,8 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["@@bar", "@@baz"]);
         assert_owner(foo, "Object");
     }
@@ -1600,7 +1611,8 @@ mod tests {
         context.resolve();
 
         // TODO: this should push an error diagnostic
-        assert_eq!(1, context.graph.declarations().len());
+        let read_lock = context.graph.declarations().read().unwrap();
+        assert_eq!(1, read_lock.len());
     }
 
     #[test]
@@ -1616,14 +1628,10 @@ mod tests {
         });
 
         context.resolve();
-        assert!(
-            context
-                .graph
-                .declarations()
-                .get(&DeclarationId::from("Foo::<Foo>"))
-                .is_some()
-        );
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        assert!(read_lock.get(&DeclarationId::from("Foo::<Foo>")).is_some());
+
+        let foo = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap(),);
     }
 
@@ -1649,27 +1657,16 @@ mod tests {
         });
         context.resolve();
 
-        let foo_singleton = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo_singleton = read_lock.get(&DeclarationId::from("Foo::<Foo>")).unwrap();
         assert_members(foo_singleton, &["bar", "baz"]);
         assert_owner(foo_singleton, "Foo");
 
-        let nested_foo_singleton = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>::<<Foo>>"))
-            .unwrap();
+        let nested_foo_singleton = read_lock.get(&DeclarationId::from("Foo::<Foo>::<<Foo>>")).unwrap();
         assert_members(nested_foo_singleton, &["nested_bar"]);
         assert_owner(nested_foo_singleton, "Foo::<Foo>");
 
-        let bar_singleton = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Bar::<Bar>"))
-            .unwrap();
+        let bar_singleton = read_lock.get(&DeclarationId::from("Bar::<Bar>")).unwrap();
         assert_members(bar_singleton, &["qux"]);
         assert_owner(bar_singleton, "Bar");
     }
@@ -1758,7 +1755,8 @@ mod tests {
             "
         });
         context.resolve();
-        assert_eq!(2, context.graph.declarations().len());
+        let read_lock = context.graph.declarations().read().unwrap();
+        assert_eq!(2, read_lock.len());
         assert!(matches!(
             ancestors_of(&context.graph, DeclarationId::from("Bar")),
             Ancestors::Partial(_)
@@ -1800,7 +1798,8 @@ mod tests {
         });
         context.resolve();
 
-        let foo_class = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo_class = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo_class, &["foo", "bar"]);
     }
 
@@ -1815,11 +1814,8 @@ mod tests {
         });
         context.resolve();
 
-        let foo_class = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Object"))
-            .unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let foo_class = read_lock.get(&DeclarationId::from("Object")).unwrap();
         assert_members(foo_class, &["$bar", "$foo"]);
     }
 
@@ -2080,19 +2076,12 @@ mod tests {
         });
         context.resolve();
 
-        let bar = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let bar = read_lock.get(&DeclarationId::from("Foo::Bar")).unwrap();
         assert_members(bar, &["Qux"]);
         assert_owner(bar, "Foo");
 
-        let qux = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar::Qux"))
-            .unwrap();
+        let qux = read_lock.get(&DeclarationId::from("Foo::Bar::Qux")).unwrap();
         assert_members(qux, &[]);
         assert_owner(qux, "Foo::Bar");
     }
@@ -2311,19 +2300,12 @@ mod tests {
         });
         context.resolve();
 
-        let bar = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap();
+        let read_lock = context.graph.declarations().read().unwrap();
+        let bar = read_lock.get(&DeclarationId::from("Foo::Bar")).unwrap();
         assert_members(bar, &["Qux"]);
         assert_owner(bar, "Foo");
 
-        let qux = context
-            .graph
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar::Qux"))
-            .unwrap();
+        let qux = read_lock.get(&DeclarationId::from("Foo::Bar::Qux")).unwrap();
         assert_members(qux, &[]);
         assert_owner(qux, "Foo::Bar");
     }
