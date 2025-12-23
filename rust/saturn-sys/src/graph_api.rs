@@ -4,7 +4,7 @@ use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::utils;
 use libc::{c_char, c_void};
 use saturn::model::graph::Graph;
-use saturn::model::ids::DeclarationId;
+use saturn::model::ids::{DeclarationId, StringId};
 use saturn::{indexing, listing, resolution};
 use std::ffi::CString;
 use std::{mem, ptr};
@@ -272,6 +272,30 @@ pub unsafe extern "C" fn sat_graph_get_declaration(pointer: GraphPointer, name: 
         } else {
             ptr::null()
         }
+    })
+}
+
+/// Attempts to resolve a method declaration for a method name on a given declaration ID or it's ancestors.
+///
+/// # Safety
+/// - `method_name` must be a valid, null-terminated UTF-8 string
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_graph_resolve_method_declaration(
+    pointer: GraphPointer,
+    declaration_id: i64,
+    method_name: *const c_char,
+) -> *const i64 {
+    let Ok(method_name_str) = (unsafe { utils::convert_char_ptr_to_string(method_name) }) else {
+        return ptr::null();
+    };
+
+    with_graph(pointer, |graph| {
+        let declaration_id = DeclarationId::new(declaration_id);
+        let method_name = StringId::from(method_name_str.as_str());
+
+        graph
+            .resolve_method(&declaration_id, method_name)
+            .map_or(ptr::null(), |id| Box::into_raw(Box::new(**id)).cast_const())
     })
 }
 

@@ -106,4 +106,27 @@ class DeclarationTest < Minitest::Test
       assert_equal("B", decl_b.unqualified_name)
     end
   end
+
+  def test_method
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A
+          def foo; end
+        end
+
+        class B < A; end
+      RUBY
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      decl_b = graph["B"]
+      refute_nil(decl_b)
+
+      method_declaration = decl_b.method("foo")
+      assert_instance_of(Saturn::Declaration, method_declaration)
+      assert_equal("A::foo", method_declaration.name)
+    end
+  end
 end

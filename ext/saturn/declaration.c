@@ -132,6 +132,31 @@ static VALUE sr_declaration_member(VALUE self, VALUE name) {
     return rb_class_new_instance(2, argv, cDeclaration);
 }
 
+// Declaration#method: (String method_name) -> Declaration
+// Returns a declaration for the given method name
+static VALUE sr_declaration_method(VALUE self, VALUE method_name) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    if (TYPE(method_name) != T_STRING) {
+        rb_raise(rb_eTypeError, "expected String");
+    }
+
+    const int64_t *id_ptr = sat_graph_resolve_method_declaration(graph, data->id, StringValueCStr(method_name));
+    if (id_ptr == NULL) {
+        return Qnil;
+    }
+
+    int64_t id = *id_ptr;
+    free_i64(id_ptr);
+    VALUE argv[] = {data->graph_obj, LL2NUM(id)};
+
+    return rb_class_new_instance(2, argv, cDeclaration);
+}
+
 void initialize_declaration(VALUE mSaturn) {
     cDeclaration = rb_define_class_under(mSaturn, "Declaration", rb_cObject);
 
@@ -141,6 +166,7 @@ void initialize_declaration(VALUE mSaturn) {
     rb_define_method(cDeclaration, "unqualified_name", sr_declaration_unqualified_name, 0);
     rb_define_method(cDeclaration, "definitions", sr_declaration_definitions, 0);
     rb_define_method(cDeclaration, "member", sr_declaration_member, 1);
+    rb_define_method(cDeclaration, "method", sr_declaration_method, 1);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }

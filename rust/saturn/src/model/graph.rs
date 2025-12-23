@@ -11,7 +11,8 @@ use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, String
 use crate::model::name::{NameRef, ResolvedName};
 // use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ConstantReference, MethodRef};
-use crate::stats;
+use crate::resolution::AncestorOutcome;
+use crate::{resolution, stats};
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 
@@ -172,6 +173,28 @@ impl Graph {
                 .filter_map(|id| self.definitions.get(id))
                 .collect(),
         )
+    }
+
+    /// Resolves the method name to a declaration ID. This is used to resolve method calls to the correct declaration
+    /// within an inheritance chain.
+    /// # Panics
+    ///
+    /// This function will panic if the declaration ID passed doesn't belong to a namespace declaration
+    #[must_use]
+    pub fn resolve_method(&self, declaration_id: &DeclarationId, method_name: StringId) -> Option<&DeclarationId> {
+        let AncestorOutcome::Resolved(ancestors) = resolution::ancestors_of(self, *declaration_id) else {
+            return None;
+        };
+
+        ancestors.iter().find_map(|ancestor_id| {
+            let ancestor_decl = self.declarations.get(ancestor_id).unwrap();
+            match ancestor_decl {
+                Declaration::Class(class) => class.get_member(&method_name),
+                Declaration::Module(module) => module.get_member(&method_name),
+                Declaration::SingletonClass(singleton) => singleton.get_member(&method_name),
+                _ => None,
+            }
+        })
     }
 
     #[must_use]
@@ -722,5 +745,25 @@ mod tests {
             ],
             diagnostics,
         );
+    }
+
+    #[test]
+    fn resolving_method_from_ancestor() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+                def bar; end
+            end
+            class Baz < Foo; end
+            "
+        });
+        context.resolve();
+
+        let resolved_id = context
+            .graph
+            .resolve_method(&DeclarationId::from("Baz"), StringId::from("bar"))
+            .unwrap();
+        assert_eq!(resolved_id, &DeclarationId::from("Foo::bar"));
     }
 }
