@@ -6,7 +6,9 @@ use std::ptr;
 
 use crate::definition_api::{DefinitionKind, DefinitionsIter, sat_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
-use saturn::model::ids::DeclarationId;
+use crate::utils;
+use saturn::model::declaration::Declaration;
+use saturn::model::ids::{DeclarationId, StringId};
 
 /// Returns the UTF-8 name string for a declaration id.
 /// Caller must free with `free_c_string`.
@@ -27,6 +29,42 @@ pub unsafe extern "C" fn sat_declaration_name(pointer: GraphPointer, name_id: i6
         } else {
             ptr::null()
         }
+    })
+}
+
+/// Returns the declaration ID for a member from a declaration.
+/// Returns NULL if the member is not found.
+///
+/// # Safety
+/// - `member` must be a valid, null-terminated UTF-8 string
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_declaration_member(
+    pointer: GraphPointer,
+    name_id: i64,
+    member: *const c_char,
+) -> *const i64 {
+    let Ok(member_str) = (unsafe { utils::convert_char_ptr_to_string(member) }) else {
+        return ptr::null();
+    };
+
+    with_graph(pointer, |graph| {
+        let name_id = DeclarationId::new(name_id);
+        if let Some(decl) = graph.declarations().get(&name_id) {
+            let member_id = StringId::from(member_str.as_str());
+            let member_decl_id = match decl {
+                Declaration::Class(it) => it.get_member(&member_id),
+                Declaration::Module(it) => it.get_member(&member_id),
+                Declaration::SingletonClass(it) => it.get_member(&member_id),
+                // TODO: Panic when we specialize the declaration types for namespaces
+                _ => None,
+            };
+
+            if let Some(member_decl_id) = member_decl_id {
+                return Box::into_raw(Box::new(**member_decl_id)).cast_const();
+            }
+        }
+
+        ptr::null()
     })
 }
 
