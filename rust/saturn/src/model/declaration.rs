@@ -26,14 +26,6 @@ pub enum Ancestors {
 }
 
 impl Ancestors {
-    pub fn extend(&mut self, other: Vec<Ancestor>) {
-        match self {
-            Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {
-                ancestors.extend(other);
-            }
-        }
-    }
-
     pub fn iter(&self) -> std::slice::Iter<'_, Ancestor> {
         match self {
             Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {
@@ -48,18 +40,6 @@ impl Ancestors {
             Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) | Ancestors::Partial(ancestors) => {
                 Ancestors::Partial(ancestors)
             }
-        }
-    }
-
-    #[must_use]
-    pub fn filter_map<F>(self, f: F) -> Self
-    where
-        F: FnMut(Ancestor) -> Option<Ancestor>,
-    {
-        match self {
-            Ancestors::Complete(ancestors) => Ancestors::Complete(ancestors.into_iter().filter_map(f).collect()),
-            Ancestors::Cyclic(ancestors) => Ancestors::Cyclic(ancestors.into_iter().filter_map(f).collect()),
-            Ancestors::Partial(ancestors) => Ancestors::Partial(ancestors.into_iter().filter_map(f).collect()),
         }
     }
 }

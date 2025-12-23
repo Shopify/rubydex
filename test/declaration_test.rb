@@ -37,7 +37,7 @@ class DeclarationTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      declaration = graph.declarations.first
+      declaration = graph.declarations.find { |decl| decl.name == "A" }
       refute_nil(declaration)
 
       enumerator = declaration.definitions
@@ -56,7 +56,7 @@ class DeclarationTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      declaration = graph.declarations.first
+      declaration = graph.declarations.find { |decl| decl.name == "A" }
       refute_nil(declaration)
 
       definitions = []

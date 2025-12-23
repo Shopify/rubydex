@@ -46,6 +46,24 @@ impl Outcome {
     }
 }
 
+struct LinearizationContext {
+    descendants: IdentityHashSet<DeclarationId>,
+    seen_ids: IdentityHashSet<DeclarationId>,
+    cyclic: bool,
+    partial: bool,
+}
+
+impl LinearizationContext {
+    fn new() -> Self {
+        Self {
+            descendants: IdentityHashSet::default(),
+            seen_ids: IdentityHashSet::default(),
+            cyclic: false,
+            partial: false,
+        }
+    }
+}
+
 /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are computed:
 ///
 /// 1. Declarations for all definitions
@@ -509,9 +527,8 @@ fn get_or_create_singleton_class(graph: &Graph, attached_id: DeclarationId) -> D
 /// Can panic if there's inconsistent data in the graph
 #[must_use]
 pub fn ancestors_of(graph: &Graph, declaration_id: DeclarationId) -> Ancestors {
-    let mut seen_ids = IdentityHashSet::default();
-    let mut descendants = IdentityHashSet::default();
-    linearize_ancestors(graph, declaration_id, &mut descendants, &mut seen_ids)
+    let mut context = LinearizationContext::new();
+    linearize_ancestors(graph, declaration_id, &mut context)
 }
 
 /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
@@ -520,14 +537,7 @@ pub fn ancestors_of(graph: &Graph, declaration_id: DeclarationId) -> Ancestors {
 ///
 /// Can panic if there's inconsistent data in the graph
 #[must_use]
-fn linearize_ancestors<S: BuildHasher>(
-    graph: &Graph,
-    declaration_id: DeclarationId,
-    descendants: &mut HashSet<DeclarationId, S>,
-    seen_ids: &mut HashSet<DeclarationId, S>,
-) -> Ancestors {
-    let mut cyclic = false;
-    let mut partial = false;
+fn linearize_ancestors(graph: &Graph, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
     let (kind, owner_id) = {
         let declarations = graph.declarations().read().unwrap();
         let declaration = declarations.get(&declaration_id).unwrap();
@@ -539,7 +549,7 @@ fn linearize_ancestors<S: BuildHasher>(
         }
 
         // Add this declaration to the descendants so that we capture transitive descendant relationships
-        descendants.insert(declaration_id);
+        context.descendants.insert(declaration_id);
 
         // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
         // again
@@ -547,19 +557,19 @@ fn linearize_ancestors<S: BuildHasher>(
             let cached = current_ancestors(declaration);
 
             if matches!(*cached, Ancestors::Complete(_) | Ancestors::Cyclic(_)) {
-                propagate_descendants(graph, descendants, &cached);
-                descendants.remove(&declaration_id);
+                propagate_descendants(graph, &mut context.descendants, &cached);
+                context.descendants.remove(&declaration_id);
                 return cached.clone();
             }
         }
 
         // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
         // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
-        for descendant in descendants.iter() {
+        for descendant in &context.descendants {
             add_descendant(declaration, *descendant);
         }
 
-        if !seen_ids.insert(declaration_id) {
+        if !context.seen_ids.insert(declaration_id) {
             // If we find a cycle when linearizing ancestors, it's an error that the programmer must fix. However, we try to
             // still approximate features by assuming that it must inherit from `Object` at some point (which is what most
             // classes/modules inherit from). This is not 100% correct, but it allows us to provide a bit better IDE support
@@ -570,7 +580,7 @@ fn linearize_ancestors<S: BuildHasher>(
                 Ancestors::Cyclic(vec![])
             };
             set_ancestors(declaration, estimated_ancestors.clone());
-            descendants.remove(&declaration_id);
+            context.descendants.remove(&declaration_id);
             return estimated_ancestors;
         }
 
@@ -579,52 +589,7 @@ fn linearize_ancestors<S: BuildHasher>(
 
     // TODO: this check is against `Object` for now to avoid infinite recursion. After RBS indexing, we need to change
     // this to `BasicObject` since it's the only class that cannot have a parent
-    let parent_ancestors = match kind {
-        DeclarationKind::Class if declaration_id != *OBJECT_ID => {
-            let declarations = graph.declarations().read().unwrap();
-            let declaration = declarations.get(&declaration_id).unwrap();
-            let definitions = declaration
-                .definitions()
-                .iter()
-                .filter_map(|def_id| graph.definitions().get(def_id))
-                .collect::<Vec<_>>();
-
-            Some(
-                match linearize_parent_class(graph, &definitions, descendants, seen_ids) {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        partial = true;
-                        ids
-                    }
-                },
-            )
-        }
-        DeclarationKind::SingletonClass if declaration_id != *OBJECT_ID => {
-            let (singleton_parent_id, partial_singleton) = singleton_parent_id(graph, owner_id);
-            if partial_singleton {
-                partial = true;
-            }
-
-            Some(
-                match linearize_ancestors(graph, singleton_parent_id, descendants, seen_ids) {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        partial = true;
-                        ids
-                    }
-                },
-            )
-        }
-        _ => None,
-    };
+    let parent_ancestors = linearize_parent_ancestors(graph, declaration_id, context, &kind, owner_id);
 
     let declarations = graph.declarations().read().unwrap();
     let declaration = declarations.get(&declaration_id).unwrap();
@@ -664,15 +629,8 @@ fn linearize_ancestors<S: BuildHasher>(
             .filter(|mixin| matches!(mixin, Mixin::Prepend(_) | Mixin::Include(_))),
     );
 
-    let (linearized_prepends, linearized_includes) = linearize_mixins(
-        graph,
-        descendants,
-        seen_ids,
-        &mut cyclic,
-        &mut partial,
-        &mixins,
-        parent_ancestors.as_ref(),
-    );
+    let (linearized_prepends, linearized_includes) =
+        linearize_mixins(graph, context, &mixins, parent_ancestors.as_ref());
 
     // Build the final list
     let mut ancestors = Vec::new();
@@ -683,27 +641,75 @@ fn linearize_ancestors<S: BuildHasher>(
         ancestors.extend(parents);
     }
 
-    let result = if cyclic {
+    let result = if context.cyclic {
         Ancestors::Cyclic(ancestors)
-    } else if partial {
+    } else if context.partial {
         Ancestors::Partial(ancestors)
     } else {
         Ancestors::Complete(ancestors)
     };
     set_ancestors(declaration, result.clone());
 
-    descendants.remove(&declaration_id);
+    context.descendants.remove(&declaration_id);
     result
+}
+
+fn linearize_parent_ancestors(
+    graph: &Graph,
+    declaration_id: DeclarationId,
+    context: &mut LinearizationContext,
+    kind: &DeclarationKind,
+    owner_id: DeclarationId,
+) -> Option<Vec<Ancestor>> {
+    match kind {
+        DeclarationKind::Class if declaration_id != *OBJECT_ID => {
+            let declarations = graph.declarations().read().unwrap();
+            let declaration = declarations.get(&declaration_id).unwrap();
+            let definitions = declaration
+                .definitions()
+                .iter()
+                .filter_map(|def_id| graph.definitions().get(def_id))
+                .collect::<Vec<_>>();
+
+            Some(match linearize_parent_class(graph, &definitions, context) {
+                Ancestors::Complete(ids) => ids,
+                Ancestors::Cyclic(ids) => {
+                    context.cyclic = true;
+                    ids
+                }
+                Ancestors::Partial(ids) => {
+                    context.partial = true;
+                    ids
+                }
+            })
+        }
+        DeclarationKind::SingletonClass if declaration_id != *OBJECT_ID => {
+            let (singleton_parent_id, partial_singleton) = singleton_parent_id(graph, owner_id);
+            if partial_singleton {
+                context.partial = true;
+            }
+
+            Some(match linearize_ancestors(graph, singleton_parent_id, context) {
+                Ancestors::Complete(ids) => ids,
+                Ancestors::Cyclic(ids) => {
+                    context.cyclic = true;
+                    ids
+                }
+                Ancestors::Partial(ids) => {
+                    context.partial = true;
+                    ids
+                }
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Linearize all mixins into a prepend and include list. This function requires the parent ancestors because included
 /// modules are deduplicated against them
-fn linearize_mixins<S: BuildHasher>(
+fn linearize_mixins(
     graph: &Graph,
-    descendants: &mut HashSet<DeclarationId, S>,
-    seen_ids: &mut HashSet<DeclarationId, S>,
-    cyclic: &mut bool,
-    partial: &mut bool,
+    context: &mut LinearizationContext,
     mixins: &[&Mixin],
     parent_ancestors: Option<&Vec<Ancestor>>,
 ) -> (VecDeque<Ancestor>, VecDeque<Ancestor>) {
@@ -718,14 +724,14 @@ fn linearize_mixins<S: BuildHasher>(
             Mixin::Prepend(name_id) => {
                 match graph.names().get(name_id).unwrap() {
                     NameRef::Resolved(resolved) => {
-                        let ids = match linearize_ancestors(graph, *resolved.declaration_id(), descendants, seen_ids) {
+                        let ids = match linearize_ancestors(graph, *resolved.declaration_id(), context) {
                             Ancestors::Complete(ids) => ids,
                             Ancestors::Cyclic(ids) => {
-                                *cyclic = true;
+                                context.cyclic = true;
                                 ids
                             }
                             Ancestors::Partial(ids) => {
-                                *partial = true;
+                                context.partial = true;
                                 ids
                             }
                         };
@@ -745,7 +751,7 @@ fn linearize_mixins<S: BuildHasher>(
                     NameRef::Unresolved(_) => {
                         // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
                         // later
-                        *partial = true;
+                        context.partial = true;
                         linearized_prepends.push_front(Ancestor::Partial(*name_id));
                     }
                 }
@@ -753,18 +759,17 @@ fn linearize_mixins<S: BuildHasher>(
             Mixin::Include(name_id) | Mixin::Extend(name_id) => {
                 match graph.names().get(name_id).unwrap() {
                     NameRef::Resolved(resolved) => {
-                        let mut ids =
-                            match linearize_ancestors(graph, *resolved.declaration_id(), descendants, seen_ids) {
-                                Ancestors::Complete(ids) => ids,
-                                Ancestors::Cyclic(ids) => {
-                                    *cyclic = true;
-                                    ids
-                                }
-                                Ancestors::Partial(ids) => {
-                                    *partial = true;
-                                    ids
-                                }
-                            };
+                        let mut ids = match linearize_ancestors(graph, *resolved.declaration_id(), context) {
+                            Ancestors::Complete(ids) => ids,
+                            Ancestors::Cyclic(ids) => {
+                                context.cyclic = true;
+                                ids
+                            }
+                            Ancestors::Partial(ids) => {
+                                context.partial = true;
+                                ids
+                            }
+                        };
 
                         // Prepended module are deduped based only on other prepended modules
                         ids.retain(|id| {
@@ -782,7 +787,7 @@ fn linearize_mixins<S: BuildHasher>(
                     NameRef::Unresolved(_) => {
                         // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
                         // later
-                        *partial = true;
+                        context.partial = true;
                         linearized_includes.push_front(Ancestor::Partial(*name_id));
                     }
                 }
@@ -800,14 +805,14 @@ fn propagate_descendants<S: BuildHasher>(
     cached: &Ref<'_, Ancestors>,
 ) {
     if !descendants.is_empty() {
-        for ancestor in cached.iter() {
-            if let Ancestor::Complete(ancestor_id) = ancestor {
-                let read_lock = graph.declarations().read().unwrap();
+        let read_lock = graph.declarations().read().unwrap();
 
-                if let Some(ancestor_decl) = read_lock.get(ancestor_id) {
-                    for descendant in descendants.iter() {
-                        add_descendant(ancestor_decl, *descendant);
-                    }
+        for ancestor in cached.iter() {
+            if let Ancestor::Complete(ancestor_id) = ancestor
+                && let Some(ancestor_decl) = read_lock.get(ancestor_id)
+            {
+                for descendant in descendants.iter() {
+                    add_descendant(ancestor_decl, *descendant);
                 }
             }
         }
@@ -1215,14 +1220,9 @@ fn get_parent_class(graph: &Graph, definitions: &[&Definition]) -> (DeclarationI
     (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), partial)
 }
 
-fn linearize_parent_class<S: BuildHasher>(
-    graph: &Graph,
-    definitions: &[&Definition],
-    descendants: &mut HashSet<DeclarationId, S>,
-    seen_ids: &mut HashSet<DeclarationId, S>,
-) -> Ancestors {
+fn linearize_parent_class(graph: &Graph, definitions: &[&Definition], context: &mut LinearizationContext) -> Ancestors {
     let (picked_parent, partial) = get_parent_class(graph, definitions);
-    let result = linearize_ancestors(graph, picked_parent, descendants, seen_ids);
+    let result = linearize_ancestors(graph, picked_parent, context);
     if partial { result.to_partial() } else { result }
 }
 
