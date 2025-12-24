@@ -1,5 +1,4 @@
 use std::{
-    cell::Ref,
     collections::{HashSet, VecDeque},
     hash::BuildHasher,
 };
@@ -577,14 +576,11 @@ fn linearize_ancestors(graph: &Graph, declaration_id: DeclarationId, context: &m
 
         // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
         // again
-        {
-            let cached = current_ancestors(declaration);
-
-            if matches!(*cached, Ancestors::Complete(_) | Ancestors::Cyclic(_)) {
-                propagate_descendants(graph, &mut context.descendants, &cached);
-                context.descendants.remove(&declaration_id);
-                return cached.clone();
-            }
+        if has_complete_ancestors(declaration) {
+            let cached = clone_ancestors(declaration);
+            propagate_descendants(graph, &mut context.descendants, &cached);
+            context.descendants.remove(&declaration_id);
+            return cached;
         }
 
         // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
@@ -833,12 +829,12 @@ fn linearize_mixins(
 fn propagate_descendants<S: BuildHasher>(
     graph: &Graph,
     descendants: &mut HashSet<DeclarationId, S>,
-    cached: &Ref<'_, Ancestors>,
+    cached: &Ancestors,
 ) {
     if !descendants.is_empty() {
         let read_lock = graph.declarations().read().unwrap();
 
-        for ancestor in cached.iter() {
+        for ancestor in cached {
             if let Ancestor::Complete(ancestor_id) = ancestor
                 && let Some(ancestor_decl) = read_lock.get(ancestor_id)
             {
@@ -1271,12 +1267,21 @@ fn add_descendant(declaration: &Declaration, descendant_id: DeclarationId) {
     }
 }
 
-fn current_ancestors(declaration: &Declaration) -> Ref<'_, Ancestors> {
+fn clone_ancestors(declaration: &Declaration) -> Ancestors {
     match declaration {
-        Declaration::Class(class) => class.ancestors(),
-        Declaration::Module(module) => module.ancestors(),
-        Declaration::SingletonClass(singleton) => singleton.ancestors(),
+        Declaration::Class(class) => class.clone_ancestors(),
+        Declaration::Module(module) => module.clone_ancestors(),
+        Declaration::SingletonClass(singleton) => singleton.clone_ancestors(),
         _ => panic!("Tried to get ancestors for a declaration that isn't a namespace"),
+    }
+}
+
+fn has_complete_ancestors(declaration: &Declaration) -> bool {
+    match declaration {
+        Declaration::Class(class) => class.has_complete_ancestors(),
+        Declaration::Module(module) => module.has_complete_ancestors(),
+        Declaration::SingletonClass(singleton) => singleton.has_complete_ancestors(),
+        _ => panic!("Tried to check complete ancestors for a declaration that isn't a namespace"),
     }
 }
 

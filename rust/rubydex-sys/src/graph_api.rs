@@ -5,7 +5,7 @@ use crate::utils;
 use libc::{c_char, c_void};
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::DeclarationId;
-use rubydex::{indexing, listing, resolution};
+use rubydex::{indexing, listing, query, resolution};
 use std::ffi::CString;
 use std::{mem, ptr};
 
@@ -33,6 +33,31 @@ where
     let result = action(&mut graph);
     mem::forget(graph);
     result
+}
+
+/// Searches the graph based on query and returns all declarations that match
+///
+/// # Safety
+///
+/// Expects both the graph and the query pointers to be valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_declarations_search(
+    pointer: GraphPointer,
+    c_query: *const c_char,
+) -> *mut DeclarationsIter {
+    let Ok(query) = (unsafe { utils::convert_char_ptr_to_string(c_query) }) else {
+        return ptr::null_mut();
+    };
+
+    let ids = with_graph(pointer, |graph| {
+        query::declaration_search(graph, &query)
+            .into_iter()
+            .map(|id| *id)
+            .collect::<Vec<i64>>()
+            .into_boxed_slice()
+    });
+
+    Box::into_raw(Box::new(DeclarationsIter { ids, index: 0 }))
 }
 
 /// Indexes all given file paths in parallel using the provided Graph pointer

@@ -1,4 +1,4 @@
-use std::cell::{Ref, RefCell};
+use std::sync::{Mutex, MutexGuard, RwLock};
 
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
@@ -88,9 +88,9 @@ macro_rules! namespace_declaration {
             members: IdentityHashMap<StringId, DeclarationId>,
             /// The linearized ancestor chain for this declaration. These are the other declarations that this
             /// declaration inherits from
-            ancestors: RefCell<Ancestors>,
+            ancestors: RwLock<Ancestors>,
             /// The set of declarations that inherit from this declaration
-            descendants: RefCell<IdentityHashSet<DeclarationId>>,
+            descendants: Mutex<IdentityHashSet<DeclarationId>>,
             /// The singleton class associated with this declaration
             singleton_class_id: Option<DeclarationId>,
         }
@@ -104,8 +104,8 @@ macro_rules! namespace_declaration {
                     members: IdentityHashMap::default(),
                     references: Vec::new(),
                     owner_id,
-                    ancestors: RefCell::new(Ancestors::Partial(Vec::new())),
-                    descendants: RefCell::new(IdentityHashSet::default()),
+                    ancestors: RwLock::new(Ancestors::Partial(Vec::new())),
+                    descendants: Mutex::new(IdentityHashSet::default()),
                     singleton_class_id: None,
                 }
             }
@@ -146,21 +146,29 @@ macro_rules! namespace_declaration {
             }
 
             pub fn set_ancestors(&self, ancestors: Ancestors) {
-                *self.ancestors.borrow_mut() = ancestors;
+                let mut ancestors_lock = self.ancestors.write().unwrap();
+                *ancestors_lock = ancestors;
             }
 
             #[must_use]
-            pub fn ancestors(&self) -> Ref<'_, Ancestors> {
-                self.ancestors.borrow()
+            pub fn clone_ancestors(&self) -> Ancestors {
+                self.ancestors.read().unwrap().clone()
+            }
+
+            #[must_use]
+            pub fn has_complete_ancestors(&self) -> bool {
+                matches!(
+                    *self.ancestors.read().unwrap(),
+                    Ancestors::Complete(_) | Ancestors::Cyclic(_)
+                )
             }
 
             pub fn add_descendant(&self, descendant_id: DeclarationId) {
-                self.descendants.borrow_mut().insert(descendant_id);
+                self.descendants.lock().unwrap().insert(descendant_id);
             }
 
-            #[must_use]
-            pub fn descendants(&self) -> Ref<'_, IdentityHashSet<DeclarationId>> {
-                self.descendants.borrow()
+            pub fn descendants(&self) -> MutexGuard<'_, IdentityHashSet<DeclarationId>> {
+                self.descendants.lock().unwrap()
             }
         }
     };

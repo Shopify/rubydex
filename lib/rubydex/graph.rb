@@ -13,8 +13,12 @@ module Rubydex
     # Index all files and dependencies of the workspace that exists in `@workspace_path`
     #: -> String?
     def index_workspace
-      paths = workspace_dependency_paths
-      paths.unshift(@workspace_path)
+      paths = Dir.glob("#{@workspace_path}/**/*.rb")
+      paths.concat(
+        workspace_dependency_paths.flat_map do |path|
+          Dir.glob("#{path}/**/*.rb")
+        end,
+      )
       index_all(paths)
     end
 
