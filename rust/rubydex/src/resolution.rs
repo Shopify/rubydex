@@ -5,9 +5,9 @@ use std::{
 
 use crate::model::{
     declaration::{
-        Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantDeclaration, Declaration,
-        GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration, Namespace,
-        SingletonClassDeclaration,
+        Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
+        Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
+        Namespace, SingletonClassDeclaration,
     },
     definitions::{Definition, Mixin},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
@@ -170,6 +170,11 @@ impl<'a> Resolver<'a> {
             Definition::Constant(constant) => {
                 self.handle_constant_declaration(*constant.name_id(), id, false, |name, owner_id| {
                     Declaration::Constant(Box::new(ConstantDeclaration::new(name, owner_id)))
+                })
+            }
+            Definition::ConstantAlias(alias) => {
+                self.handle_constant_declaration(*alias.name_id(), id, false, |name, owner_id| {
+                    Declaration::ConstantAlias(Box::new(ConstantAliasDeclaration::new(name, owner_id)))
                 })
             }
             Definition::SingletonClass(singleton) => {
@@ -447,12 +452,6 @@ impl<'a> Resolver<'a> {
                         });
                     }
                 }
-                Definition::Class(_)
-                | Definition::SingletonClass(_)
-                | Definition::Module(_)
-                | Definition::Constant(_) => {
-                    panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
-                }
                 Definition::MethodAlias(alias) => {
                     let owner_id = self.resolve_lexical_owner(*alias.lexical_nesting_id());
 
@@ -464,6 +463,13 @@ impl<'a> Resolver<'a> {
                     self.create_declaration(*alias.new_name_str_id(), id, *OBJECT_ID, |name| {
                         Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, *OBJECT_ID)))
                     });
+                }
+                Definition::Class(_)
+                | Definition::SingletonClass(_)
+                | Definition::Module(_)
+                | Definition::Constant(_)
+                | Definition::ConstantAlias(_) => {
+                    panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
                 }
             }
         }
@@ -544,7 +550,7 @@ impl<'a> Resolver<'a> {
 
             // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
             // and `Module.new`, which now seem like constants, but are actually namespaces
-            if !matches!(attached_decl, Declaration::Constant(_))
+            if !matches!(attached_decl, Declaration::Constant(_) | Declaration::ConstantAlias(_))
                 && let Some(singleton_id) = Self::singleton_class(attached_decl)
             {
                 return *singleton_id;
@@ -558,7 +564,7 @@ impl<'a> Resolver<'a> {
         // and `Module.new`, which now seem like constants, but are actually namespaces
         if !matches!(
             self.graph.declarations().get(&attached_id).unwrap(),
-            Declaration::Constant(_)
+            Declaration::Constant(_) | Declaration::ConstantAlias(_)
         ) {
             self.set_singleton_class_id(attached_id, decl_id);
         }
@@ -597,7 +603,7 @@ impl<'a> Resolver<'a> {
 
             // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
             // `Module.new`, which now seem like constants, but are actually namespaces
-            if matches!(declaration, Declaration::Constant(_)) {
+            if matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) {
                 return Ancestors::Complete(vec![]);
             }
 
@@ -903,18 +909,25 @@ impl<'a> Resolver<'a> {
 
     // Returns the owner declaration ID for a given name. If the name is simple and has no parent scope, then the owner is
     // either the nesting or Object. If the name has a parent scope, we attempt to resolve the reference and that should be
-    // the name's owner
+    // the name's owner. For aliases, resolves through to get the actual namespace.
     fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap();
 
         if let Some(parent_scope) = name_ref.parent_scope() {
-            // If we have `A::B`, the owner of `B` is whatever `A` resolves to
-            self.resolve_constant(*parent_scope)
+            // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
+            // If `A` is an alias, resolve through to get the actual namespace.
+            match self.resolve_constant(*parent_scope) {
+                Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
+                other => other,
+            }
         } else if let Some(nesting_id) = name_ref.nesting() {
-            let nesting_name_ref = self.graph.names().get(nesting_id).unwrap();
-
-            match nesting_name_ref {
-                NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
+            // Lexical nesting from block structure, e.g.:
+            //   class ALIAS::Target
+            //     CONST = 1  # CONST's nesting is the class, which may resolve to an alias target
+            //   end
+            // If `ALIAS` points to `Outer`, `CONST` should be owned by `Outer::Target`, not `ALIAS::Target`.
+            match self.graph.names().get(nesting_id).unwrap() {
+                NameRef::Resolved(resolved) => self.resolve_to_primary_namespace(*resolved.declaration_id(), None),
                 NameRef::Unresolved(_) => {
                     // The only case where we wouldn't have the nesting resolved at this point is if it's available through
                     // inheritance or if it doesn't exist, so we need to retry later
@@ -925,6 +938,31 @@ impl<'a> Resolver<'a> {
             // Any constants at the top level are owned by Object
             Outcome::Resolved(*OBJECT_ID, None)
         }
+    }
+
+    /// Resolves a declaration ID through any alias chain to get the primary (first) namespace.
+    /// Returns `Retry` if the primary alias target hasn't been resolved yet.
+    fn resolve_to_primary_namespace(
+        &self,
+        declaration_id: DeclarationId,
+        linearization: Option<DeclarationId>,
+    ) -> Outcome {
+        let resolved_ids = self.resolve_alias_chains(declaration_id);
+
+        // Get the primary (first) resolved target
+        let Some(&primary_id) = resolved_ids.first() else {
+            return Outcome::Retry;
+        };
+
+        // Check if the primary result is still an unresolved alias
+        if matches!(
+            self.graph.declarations().get(&primary_id),
+            Some(Declaration::ConstantAlias(_))
+        ) {
+            return Outcome::Retry;
+        }
+
+        Outcome::Resolved(primary_id, linearization)
     }
 
     /// Attempts to resolve a constant reference against the graph. Returns the fully qualified declaration ID that the
@@ -940,23 +978,54 @@ impl<'a> Resolver<'a> {
                 // way
                 if let Some(parent_scope_id) = name.parent_scope() {
                     if let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() {
-                        let outcome = {
-                            let declaration = self.graph.declarations().get(parent_scope.declaration_id()).unwrap();
+                        let declaration = self.graph.declarations().get(parent_scope.declaration_id()).unwrap();
 
-                            // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
-                            // `Module.new`, which now seem like constants, but are actually namespaces
-                            if matches!(declaration, Declaration::Constant(_)) {
-                                return Outcome::Unresolved(None);
-                            }
-
-                            self.search_ancestors(*parent_scope_id, *name.str())
-                        };
-
-                        if let Outcome::Resolved(member_id, _) = outcome {
-                            self.graph.record_resolved_name(name_id, member_id);
+                        // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
+                        // `Module.new`, which now seem like constants, but are actually namespaces
+                        if matches!(declaration, Declaration::Constant(_)) {
+                            return Outcome::Unresolved(None);
                         }
 
-                        return outcome;
+                        // Resolve the namespace in case it's an alias (e.g., ALIAS::CONST where ALIAS = Foo)
+                        // An alias can have multiple targets, so we try all of them in order.
+                        let resolved_ids = self.resolve_alias_chains(*parent_scope.declaration_id());
+
+                        // Search each resolved target for the constant. Return early if found.
+                        let mut missing_linearization_id = None;
+                        let mut found_namespace = false;
+                        for &id in &resolved_ids {
+                            match self.graph.declarations().get(&id) {
+                                Some(Declaration::ConstantAlias(_)) => {
+                                    // Alias not fully resolved yet
+                                    return Outcome::Retry;
+                                }
+                                Some(Declaration::Namespace(_)) => {
+                                    found_namespace = true;
+                                    match self.search_ancestors(id, *name.str()) {
+                                        Outcome::Resolved(declaration_id, _) => {
+                                            self.graph.record_resolved_name(name_id, declaration_id);
+                                            return Outcome::Resolved(declaration_id, None);
+                                        }
+                                        Outcome::Unresolved(Some(needs_linearization_id)) => {
+                                            missing_linearization_id.get_or_insert(needs_linearization_id);
+                                        }
+                                        Outcome::Unresolved(None) => {}
+                                        Outcome::Retry => unreachable!("search_ancestors never returns Retry"),
+                                    }
+                                }
+                                _ => {
+                                    // Not a namespace (e.g., a constant) - skip
+                                }
+                            }
+                        }
+
+                        // If no namespaces were found, this constant path can never resolve.
+                        if !found_namespace {
+                            return Outcome::Unresolved(None);
+                        }
+
+                        // Member not found in any namespace yet - retry in case it's added later
+                        return missing_linearization_id.map_or(Outcome::Retry, |id| Outcome::Unresolved(Some(id)));
                     }
 
                     return Outcome::Retry;
@@ -975,6 +1044,47 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Resolves an alias chain to get all possible final target declarations.
+    /// Returns the original ID if it's not an alias or if the target hasn't been resolved yet.
+    ///
+    /// When an alias has multiple definitions with different targets (e.g., conditional assignment),
+    /// this returns all possible final targets.
+    fn resolve_alias_chains(&self, declaration_id: DeclarationId) -> Vec<DeclarationId> {
+        let mut results = Vec::new();
+        let mut queue = VecDeque::from([declaration_id]);
+        let mut seen = HashSet::new();
+
+        // Use BFS (pop_front) to preserve the order of alias targets.
+        // The first target of an alias should remain the first/primary result.
+        while let Some(current) = queue.pop_front() {
+            if !seen.insert(current) {
+                // Already processed or cycle detected
+                continue;
+            }
+
+            match self.graph.declarations().get(&current) {
+                Some(Declaration::ConstantAlias(_)) => {
+                    let targets = self.graph.alias_targets(&current).unwrap_or_default();
+                    if targets.is_empty() {
+                        // Target not resolved yet, keep the alias for retry
+                        results.push(current);
+                    } else {
+                        queue.extend(targets);
+                    }
+                }
+                Some(_) => {
+                    // Not an alias, this is a final target
+                    results.push(current);
+                }
+                None => {
+                    panic!("Declaration {current:?} not found in graph");
+                }
+            }
+        }
+
+        results
+    }
+
     fn run_resolution(&mut self, name: &Name) -> Outcome {
         let str_id = *name.str();
         let mut missing_linearization_id = None;
@@ -988,7 +1098,12 @@ impl<'a> Resolver<'a> {
             }
 
             // Search inheritance chain
-            let ancestor_outcome = self.search_ancestors(*nesting, str_id);
+            let ancestor_outcome = match self.graph.names().get(nesting).unwrap() {
+                NameRef::Resolved(nesting_name_ref) => {
+                    self.search_ancestors(*nesting_name_ref.declaration_id(), str_id)
+                }
+                NameRef::Unresolved(_) => Outcome::Retry,
+            };
             match ancestor_outcome {
                 Outcome::Resolved(_, _) | Outcome::Retry => return ancestor_outcome,
                 Outcome::Unresolved(Some(needs_linearization_id)) => {
@@ -1015,37 +1130,31 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn search_ancestors(&mut self, nesting_name_id: NameId, str_id: StringId) -> Outcome {
-        match self.graph.names().get(&nesting_name_id).unwrap() {
-            NameRef::Resolved(nesting_name_ref) => {
-                let nesting_id = *nesting_name_ref.declaration_id();
-
-                match self.ancestors_of(nesting_id) {
-                    Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
-                        .iter()
-                        .find_map(|ancestor_id| {
-                            if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                                let declaration = self.graph.declarations().get(ancestor_id).unwrap();
-                                Self::member(declaration, str_id).map(|id| Outcome::Resolved(*id, None))
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(Outcome::Unresolved(None)),
-                    Ancestors::Partial(ids) => ids
-                        .iter()
-                        .find_map(|ancestor_id| {
-                            if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                                let declaration = self.graph.declarations().get(ancestor_id).unwrap();
-                                Self::member(declaration, str_id).map(|id| Outcome::Resolved(*id, Some(nesting_id)))
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(Outcome::Unresolved(Some(nesting_id))),
-                }
-            }
-            NameRef::Unresolved(_) => Outcome::Retry,
+    /// Search for a member in a declaration's ancestor chain.
+    fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        match self.ancestors_of(declaration_id) {
+            Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
+                .iter()
+                .find_map(|ancestor_id| {
+                    if let Ancestor::Complete(ancestor_id) = ancestor_id {
+                        let declaration = self.graph.declarations().get(ancestor_id).unwrap();
+                        Self::member(declaration, str_id).map(|id| Outcome::Resolved(*id, None))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(Outcome::Unresolved(None)),
+            Ancestors::Partial(ids) => ids
+                .iter()
+                .find_map(|ancestor_id| {
+                    if let Ancestor::Complete(ancestor_id) = ancestor_id {
+                        let declaration = self.graph.declarations().get(ancestor_id).unwrap();
+                        Self::member(declaration, str_id).map(|id| Outcome::Resolved(*id, Some(declaration_id)))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(Outcome::Unresolved(Some(declaration_id))),
         }
     }
 
@@ -1056,7 +1165,7 @@ impl<'a> Resolver<'a> {
         while let Some(nesting_id) = current_name.nesting() {
             if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(nesting_id).unwrap() {
                 if let Some(declaration) = self.graph.declarations().get(nesting_name_ref.declaration_id())
-                && !matches!(declaration, Declaration::Constant(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
+                    && !matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
                     && let Some(member) = Self::member(declaration, str_id)
                 {
                     return Outcome::Resolved(*member, None);
@@ -1151,6 +1260,12 @@ impl<'a> Resolver<'a> {
                     ));
                 }
                 Definition::Constant(def) => {
+                    units.push((
+                        Unit::Definition(*id),
+                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                    ));
+                }
+                Definition::ConstantAlias(def) => {
                     units.push((
                         Unit::Definition(*id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
@@ -1560,6 +1675,19 @@ mod tests {
             let diagnostics = format_diagnostics($context, $ignore_rules);
             assert!(diagnostics.is_empty(), "expected no diagnostics, got {:?}", diagnostics);
         }};
+    }
+
+    fn get_alias_targets(context: &GraphTest, alias_name: &str) -> Vec<DeclarationId> {
+        let decl_id = DeclarationId::from(alias_name);
+        context.graph().alias_targets(&decl_id).unwrap_or_default()
+    }
+
+    fn get_constant_alias_target(context: &GraphTest, alias_name: &str) -> Option<DeclarationId> {
+        get_alias_targets(context, alias_name).first().copied()
+    }
+
+    fn has_constant_alias_target(context: &GraphTest, alias_name: &str) -> bool {
+        !get_alias_targets(context, alias_name).is_empty()
     }
 
     #[test]
@@ -3547,5 +3675,602 @@ mod tests {
         // All attr_* should be owned by Foo, not by setup
         let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo_class, &["reader_attr", "writer_attr", "accessor_attr"]);
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              CONST = 123
+            end
+
+            ALIAS = Foo
+            ALIAS::CONST
+            "
+        });
+        context.resolve();
+
+        let foo_decl_id = DeclarationId::from("Foo");
+        assert_eq!(get_constant_alias_target(&context, "ALIAS"), Some(foo_decl_id));
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:5:7-5:12");
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_nested_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar
+                CONST = 123
+              end
+            end
+
+            ALIAS = Foo::Bar
+            ALIAS::CONST
+            "
+        });
+        context.resolve();
+
+        let foo_bar_decl_id = DeclarationId::from("Foo::Bar");
+        assert_eq!(get_constant_alias_target(&context, "ALIAS"), Some(foo_bar_decl_id));
+        assert_constant_reference_to!(context, "Foo::Bar::CONST", "file:///foo.rb:7:7-7:12");
+    }
+
+    #[test]
+    fn resolving_constant_alias_inside_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              CONST = 123
+            end
+
+            module Bar
+              MyFoo = Foo
+              MyFoo::CONST
+            end
+            "
+        });
+        context.resolve();
+
+        let foo_decl_id = DeclarationId::from("Foo");
+        assert_eq!(get_constant_alias_target(&context, "Bar::MyFoo"), Some(foo_decl_id));
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:9-6:14");
+    }
+
+    #[test]
+    fn resolving_constant_alias_in_superclass() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 123
+            end
+
+            class Bar < Foo
+            end
+
+            ALIAS = Bar
+            ALIAS::CONST
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:8:7-8:12");
+    }
+
+    #[test]
+    fn resolving_chained_constant_aliases() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              CONST = 123
+            end
+
+            ALIAS1 = Foo
+            ALIAS2 = ALIAS1
+            ALIAS2::CONST
+            "
+        });
+        context.resolve();
+
+        let alias1_decl_id = DeclarationId::from("ALIAS1");
+        let foo_decl_id = DeclarationId::from("Foo");
+
+        assert_eq!(get_constant_alias_target(&context, "ALIAS1"), Some(foo_decl_id));
+        assert_eq!(get_constant_alias_target(&context, "ALIAS2"), Some(alias1_decl_id));
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:8-6:13");
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_non_existent_target() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            ALIAS_1 = NonExistent
+            ALIAS_2 = ALIAS_1
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            get_constant_alias_target(&context, "ALIAS_2"),
+            Some(DeclarationId::from("ALIAS_1"))
+        );
+        assert!(!has_constant_alias_target(&context, "ALIAS_1"));
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_value_in_constant_path() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            VALUE = 1
+            ALIAS = VALUE
+            ALIAS::NOPE
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            get_constant_alias_target(&context, "ALIAS"),
+            Some(DeclarationId::from("VALUE"))
+        );
+
+        // NOPE can't be created because ALIAS points to a value constant, not a namespace
+        let read_lock = context.graph().declarations();
+        assert!(!read_lock.contains_key(&DeclarationId::from("VALUE::NOPE")));
+    }
+
+    #[test]
+    fn resolving_constant_alias_defined_before_target() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            ALIAS = Foo
+            module Foo
+              CONST = 1
+            end
+            ALIAS::CONST
+            "
+        });
+        context.resolve();
+
+        let foo_decl_id = DeclarationId::from("Foo");
+        assert_eq!(get_constant_alias_target(&context, "ALIAS"), Some(foo_decl_id));
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:4:7-4:12");
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_value() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 1
+            end
+            class Bar
+              CONST = Foo::CONST
+            end
+            BAZ = Bar::CONST
+            "
+        });
+        context.resolve();
+
+        let bar_const_decl_id = DeclarationId::from("Bar::CONST");
+        let foo_const_decl_id = DeclarationId::from("Foo::CONST");
+
+        assert_eq!(get_constant_alias_target(&context, "BAZ"), Some(bar_const_decl_id));
+        assert_eq!(
+            get_constant_alias_target(&context, "Bar::CONST"),
+            Some(foo_const_decl_id)
+        );
+    }
+
+    #[test]
+    fn resolving_circular_constant_aliases() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            A = B
+            B = C
+            C = A
+            "
+        });
+        context.resolve();
+
+        let a_decl_id = DeclarationId::from("A");
+        let b_decl_id = DeclarationId::from("B");
+        let c_decl_id = DeclarationId::from("C");
+
+        let read_lock = context.graph().declarations();
+        assert!(read_lock.contains_key(&a_decl_id));
+        assert!(read_lock.contains_key(&b_decl_id));
+        assert!(read_lock.contains_key(&c_decl_id));
+
+        assert_eq!(get_constant_alias_target(&context, "A"), Some(b_decl_id));
+        assert_eq!(get_constant_alias_target(&context, "B"), Some(c_decl_id));
+        assert_eq!(get_constant_alias_target(&context, "C"), Some(a_decl_id));
+    }
+
+    #[test]
+    fn resolving_circular_constant_aliases_cross_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              X = B::Y
+            end
+            module B
+              Y = A::X
+            end
+
+            A::X::SOMETHING = 1
+            "
+        });
+        context.resolve();
+
+        let read_lock = context.graph().declarations();
+        assert!(read_lock.contains_key(&DeclarationId::from("A::X")));
+        assert!(read_lock.contains_key(&DeclarationId::from("B::Y")));
+
+        // SOMETHING can't be created because the circular alias can't resolve to a namespace
+        assert!(!read_lock.contains_key(&DeclarationId::from("A::X::SOMETHING")));
+    }
+
+    #[test]
+    fn resolving_constant_alias_ping_pong() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Left
+              module Deep
+                VALUE = 'left'
+              end
+            end
+
+            module Right
+              module Deep
+                VALUE = 'right'
+              end
+            end
+
+            Left::RIGHT_REF = Right
+            Right::LEFT_REF = Left
+
+            Left::RIGHT_REF::Deep::VALUE
+            Left::RIGHT_REF::LEFT_REF::Deep::VALUE
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            get_constant_alias_target(&context, "Left::RIGHT_REF"),
+            Some(DeclarationId::from("Right"))
+        );
+        assert_eq!(
+            get_constant_alias_target(&context, "Right::LEFT_REF"),
+            Some(DeclarationId::from("Left"))
+        );
+
+        // Left::RIGHT_REF::Deep::VALUE
+        assert_constant_reference_to!(context, "Right::Deep", "file:///foo.rb:15:17-15:21");
+        assert_constant_reference_to!(context, "Right::Deep::VALUE", "file:///foo.rb:15:23-15:28");
+        // Left::RIGHT_REF::LEFT_REF::Deep::VALUE
+        assert_constant_reference_to!(context, "Left::Deep", "file:///foo.rb:16:27-16:31");
+        assert_constant_reference_to!(context, "Left::Deep::VALUE", "file:///foo.rb:16:33-16:38");
+    }
+
+    #[test]
+    fn resolving_constant_alias_self_referential() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M
+              SELF_REF = M
+
+              class Thing
+                CONST = 1
+              end
+            end
+
+            M::SELF_REF::Thing::CONST
+            M::SELF_REF::SELF_REF::Thing::CONST
+            M::SELF_REF::SELF_REF::SELF_REF::Thing::CONST
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            get_constant_alias_target(&context, "M::SELF_REF"),
+            Some(DeclarationId::from("M"))
+        );
+
+        let read_lock = context.graph().declarations();
+        let m_thing_const = read_lock.get(&DeclarationId::from("M::Thing::CONST")).unwrap();
+        let m_thing = read_lock.get(&DeclarationId::from("M::Thing")).unwrap();
+
+        // All 3 paths resolve to M::Thing::CONST
+        assert_eq!(m_thing_const.references().len(), 3);
+        assert_eq!(m_thing.references().len(), 3);
+
+        // M::SELF_REF::Thing::CONST
+        assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:8:13-8:18");
+        assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:8:20-8:25");
+        // M::SELF_REF::SELF_REF::Thing::CONST
+        assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:9:23-9:28");
+        assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:9:30-9:35");
+        // M::SELF_REF::SELF_REF::SELF_REF::Thing::CONST
+        assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:10:33-10:38");
+        assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:10:40-10:45");
+    }
+
+    #[test]
+    fn resolving_class_through_constant_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Outer
+              class Inner
+              end
+            end
+
+            ALIAS = Outer
+            Outer::NESTED = Outer::Inner
+
+            class ALIAS::NESTED
+              ADDED_CONST = 1
+            end
+
+            Outer::Inner::ADDED_CONST
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            get_constant_alias_target(&context, "ALIAS"),
+            Some(DeclarationId::from("Outer"))
+        );
+        assert_eq!(
+            get_constant_alias_target(&context, "Outer::NESTED"),
+            Some(DeclarationId::from("Outer::Inner"))
+        );
+
+        // ADDED_CONST should be in Outer::Inner (the resolved target)
+        let read_lock = context.graph().declarations();
+        assert!(read_lock.contains_key(&DeclarationId::from("Outer::Inner::ADDED_CONST")));
+
+        let added_const = read_lock
+            .get(&DeclarationId::from("Outer::Inner::ADDED_CONST"))
+            .unwrap();
+        assert_eq!(added_const.references().len(), 1);
+    }
+
+    #[test]
+    fn resolving_class_definition_through_constant_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Outer
+              CONST = 1
+            end
+
+            ALIAS = Outer
+
+            class ALIAS::NewClass
+              CLASS_CONST = 2
+            end
+
+            Outer::NewClass::CLASS_CONST
+            ALIAS::NewClass::CLASS_CONST
+            "
+        });
+        context.resolve();
+
+        assert_eq!(
+            get_constant_alias_target(&context, "ALIAS"),
+            Some(DeclarationId::from("Outer"))
+        );
+
+        // NewClass should be declared under Outer, not ALIAS
+        let read_lock = context.graph().declarations();
+        assert!(read_lock.contains_key(&DeclarationId::from("Outer::NewClass")));
+        assert!(read_lock.contains_key(&DeclarationId::from("Outer::NewClass::CLASS_CONST")));
+
+        // Outer::NewClass::CLASS_CONST
+        assert_constant_reference_to!(context, "Outer::NewClass", "file:///foo.rb:10:7-10:15");
+        assert_constant_reference_to!(context, "Outer::NewClass::CLASS_CONST", "file:///foo.rb:10:17-10:28");
+        // ALIAS::NewClass::CLASS_CONST
+        assert_constant_reference_to!(context, "Outer::NewClass", "file:///foo.rb:11:7-11:15");
+        assert_constant_reference_to!(context, "Outer::NewClass::CLASS_CONST", "file:///foo.rb:11:17-11:28");
+    }
+
+    #[test]
+    fn resolving_constant_alias_with_multiple_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module A; end
+            FOO = A
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            r"
+            module B; end
+            FOO = B
+            "
+        });
+        context.resolve();
+
+        // FOO should have 2 definitions pointing to different targets
+        let read_lock = context.graph().declarations();
+        let foo_decl = read_lock.get(&DeclarationId::from("FOO")).unwrap();
+        assert_eq!(foo_decl.definitions().len(), 2);
+
+        let targets = get_alias_targets(&context, "FOO");
+        assert_eq!(targets.len(), 2);
+        assert!(targets.contains(&DeclarationId::from("A")));
+        assert!(targets.contains(&DeclarationId::from("B")));
+    }
+
+    #[test]
+    fn resolving_constant_alias_with_multiple_targets() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module A
+              CONST_A = 1
+            end
+            FOO = A
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            r"
+            module B
+              CONST_B = 2
+            end
+            FOO = B
+            "
+        });
+        context.index_uri("file:///usage.rb", {
+            r"
+            FOO::CONST_A
+            FOO::CONST_B
+            "
+        });
+        context.resolve();
+
+        // FOO::CONST_A should resolve to A::CONST_A
+        assert_constant_reference_to!(context, "A::CONST_A", "file:///usage.rb:0:5-0:12");
+        // FOO::CONST_B should resolve to B::CONST_B
+        assert_constant_reference_to!(context, "B::CONST_B", "file:///usage.rb:1:5-1:12");
+    }
+
+    #[test]
+    fn resolving_constant_alias_multi_target_with_circular() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module A
+              CONST = 1
+            end
+            ALIAS = A
+            "
+        });
+        context.index_uri("file:///b.rb", "ALIAS = ALIAS");
+        context.index_uri("file:///usage.rb", "ALIAS::CONST");
+        context.resolve();
+
+        // ALIAS should have two targets: A and ALIAS (self-reference)
+        let targets = get_alias_targets(&context, "ALIAS");
+        assert!(targets.contains(&DeclarationId::from("A")));
+        assert!(targets.contains(&DeclarationId::from("ALIAS")));
+
+        // ALIAS::CONST should still resolve to A::CONST through the valid path
+        assert_constant_reference_to!(context, "A::CONST", "file:///usage.rb:0:7-0:12");
+    }
+
+    #[test]
+    fn resolving_constant_reference_through_chained_aliases() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///defs.rb", {
+            r"
+            module Foo
+              CONST = 1
+            end
+            ALIAS1 = Foo
+            ALIAS2 = ALIAS1
+            "
+        });
+        context.index_uri("file:///usage.rb", "ALIAS2::CONST");
+        context.resolve();
+
+        assert_eq!(
+            get_constant_alias_target(&context, "ALIAS1"),
+            Some(DeclarationId::from("Foo"))
+        );
+        assert_eq!(
+            get_constant_alias_target(&context, "ALIAS2"),
+            Some(DeclarationId::from("ALIAS1"))
+        );
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:0:8-0:13");
+    }
+
+    #[test]
+    fn resolving_constant_reference_through_top_level_alias_target() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///defs.rb", {
+            r"
+            module Foo
+              CONST = 1
+            end
+            ALIAS = ::Foo
+            "
+        });
+        context.index_uri("file:///usage.rb", "ALIAS::CONST");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:0:7-0:12");
+    }
+
+    // Regression test: defining singleton method on alias triggers get_or_create_singleton_class
+    #[test]
+    fn resolving_singleton_method_on_alias_does_not_panic() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            ALIAS = Foo
+            def ALIAS.singleton_method; end
+            "
+        });
+        context.resolve();
+    }
+
+    #[test]
+    fn multi_target_alias_constant_added_to_primary_owner() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///modules.rb", {
+            r"
+            module Foo; end
+            module Bar; end
+            "
+        });
+        context.index_uri("file:///alias1.rb", {
+            r"
+            ALIAS ||= Foo
+            "
+        });
+        context.index_uri("file:///alias2.rb", {
+            r"
+            ALIAS ||= Bar
+            "
+        });
+        context.index_uri("file:///const.rb", {
+            r"
+            ALIAS::CONST = 123
+            "
+        });
+        context.resolve();
+
+        let declarations = context.graph().declarations();
+        let foo_decl = declarations.get(&DeclarationId::from("Foo")).expect("Foo should exist");
+        let bar_decl = declarations.get(&DeclarationId::from("Bar")).expect("Bar should exist");
+
+        assert_members(foo_decl, &["CONST"]);
+
+        // Bar should not have CONST as a member
+        let bar_members = match bar_decl {
+            Declaration::Namespace(Namespace::Module(module)) => module.members(),
+            _ => panic!("Bar should be a module"),
+        };
+
+        let const_key = StringId::from("CONST");
+        assert!(!bar_members.contains_key(&const_key));
     }
 }

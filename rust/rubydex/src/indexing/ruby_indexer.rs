@@ -5,9 +5,9 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantDefinition, Definition, DefinitionFlags, GlobalVariableAliasDefinition, GlobalVariableDefinition,
-    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter,
-    ParameterStruct, SingletonClassDefinition,
+    ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, GlobalVariableAliasDefinition,
+    GlobalVariableDefinition, InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin,
+    ModuleDefinition, Parameter, ParameterStruct, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -548,6 +548,7 @@ impl<'a> RubyIndexer<'a> {
         let location = match node {
             ruby_prism::Node::ConstantWriteNode { .. } => node.as_constant_write_node().unwrap().name_loc(),
             ruby_prism::Node::ConstantOrWriteNode { .. } => node.as_constant_or_write_node().unwrap().name_loc(),
+            ruby_prism::Node::ConstantPathNode { .. } => node.as_constant_path_node().unwrap().name_loc(),
             _ => node.location(),
         };
 
@@ -719,6 +720,70 @@ impl<'a> RubyIndexer<'a> {
             Nesting::LexicalScope(id) | Nesting::Owner(id) => Some(*id),
             Nesting::Method(_) => None,
         })
+    }
+
+    /// Indexes the final constant target from a value node, unwrapping chained assignments.
+    ///
+    /// For `A = B = C`, when processing `A`, the value is `ConstantWriteNode(B)`.
+    /// This function recursively unwraps to find the final `ConstantReadNode(C)` and indexes it.
+    ///
+    /// Returns `Some(NameId)` if the final value is a constant (`ConstantReadNode` or `ConstantPathNode`),
+    /// or `None` if the chain ends in a non-constant value.
+    fn index_constant_alias_target(&mut self, value: &ruby_prism::Node) -> Option<NameId> {
+        match value {
+            ruby_prism::Node::ConstantReadNode { .. } | ruby_prism::Node::ConstantPathNode { .. } => {
+                self.index_constant_reference(value, true)
+            }
+            ruby_prism::Node::ConstantWriteNode { .. } => {
+                self.index_constant_alias_target(&value.as_constant_write_node().unwrap().value())
+            }
+            ruby_prism::Node::ConstantOrWriteNode { .. } => {
+                self.index_constant_alias_target(&value.as_constant_or_write_node().unwrap().value())
+            }
+            ruby_prism::Node::ConstantPathWriteNode { .. } => {
+                self.index_constant_alias_target(&value.as_constant_path_write_node().unwrap().value())
+            }
+            ruby_prism::Node::ConstantPathOrWriteNode { .. } => {
+                self.index_constant_alias_target(&value.as_constant_path_or_write_node().unwrap().value())
+            }
+            _ => None,
+        }
+    }
+
+    fn add_constant_alias_definition(
+        &mut self,
+        name_node: &ruby_prism::Node,
+        target_name_id: NameId,
+        also_add_reference: bool,
+    ) -> Option<DefinitionId> {
+        let name_id = self.index_constant_reference(name_node, also_add_reference)?;
+
+        // Get the location for just the constant name (not including the namespace or value).
+        let location = match name_node {
+            ruby_prism::Node::ConstantWriteNode { .. } => name_node.as_constant_write_node().unwrap().name_loc(),
+            ruby_prism::Node::ConstantOrWriteNode { .. } => name_node.as_constant_or_write_node().unwrap().name_loc(),
+            ruby_prism::Node::ConstantPathNode { .. } => name_node.as_constant_path_node().unwrap().name_loc(),
+            _ => name_node.location(),
+        };
+
+        let offset = Offset::from_prism_location(&location);
+        let (comments, flags) = self.find_comments_for(offset.start());
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+
+        let definition = Definition::ConstantAlias(Box::new(ConstantAliasDefinition::new(
+            name_id,
+            target_name_id,
+            self.uri_id,
+            comments,
+            offset,
+            lexical_nesting_id,
+            flags,
+        )));
+        let definition_id = self.local_graph.add_definition(definition);
+
+        self.add_member_to_current_owner(definition_id);
+
+        Some(definition_id)
     }
 
     /// Adds a member to the current owner (class, module, or singleton class).
@@ -1034,7 +1099,11 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_or_write_node(&mut self, node: &ruby_prism::ConstantOrWriteNode) {
-        self.add_constant_definition(&node.as_node(), true);
+        if let Some(target_name_id) = self.index_constant_alias_target(&node.value()) {
+            self.add_constant_alias_definition(&node.as_node(), target_name_id, true);
+        } else {
+            self.add_constant_definition(&node.as_node(), true);
+        }
         self.visit(&node.value());
     }
 
@@ -1044,7 +1113,11 @@ impl Visit<'_> for RubyIndexer<'_> {
             return;
         }
 
-        self.add_constant_definition(&node.as_node(), false);
+        if let Some(target_name_id) = self.index_constant_alias_target(&value) {
+            self.add_constant_alias_definition(&node.as_node(), target_name_id, false);
+        } else {
+            self.add_constant_definition(&node.as_node(), false);
+        }
         self.visit(&value);
     }
 
@@ -1059,7 +1132,11 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_path_or_write_node(&mut self, node: &ruby_prism::ConstantPathOrWriteNode) {
-        self.add_constant_definition(&node.target().as_node(), true);
+        if let Some(target_name_id) = self.index_constant_alias_target(&node.value()) {
+            self.add_constant_alias_definition(&node.target().as_node(), target_name_id, true);
+        } else {
+            self.add_constant_definition(&node.target().as_node(), true);
+        }
         self.visit(&node.value());
     }
 
@@ -1069,7 +1146,11 @@ impl Visit<'_> for RubyIndexer<'_> {
             return;
         }
 
-        self.add_constant_definition(&node.target().as_node(), false);
+        if let Some(target_name_id) = self.index_constant_alias_target(&value) {
+            self.add_constant_alias_definition(&node.target().as_node(), target_name_id, false);
+        } else {
+            self.add_constant_definition(&node.target().as_node(), false);
+        }
         self.visit(&value);
     }
 
@@ -1695,6 +1776,15 @@ mod tests {
                 _ => panic!("expected {} definition, got {:?}", stringify!($variant), __kind),
             }
         }};
+
+        ($context:expr, $location:expr, $variant:ident) => {{
+            let __def = $context.definition_at($location);
+            let __kind = __def.kind();
+            match __def {
+                Definition::$variant(_) => {}
+                _ => panic!("expected {} definition, got {:?}", stringify!($variant), __kind),
+            }
+        }};
     }
 
     macro_rules! assert_name_eq {
@@ -1705,14 +1795,13 @@ mod tests {
         }};
     }
 
-    /// Asserts the full path of a definition's `name_id` matches the expected string.
-    /// Works with any definition that has a `name_id()` method (`ClassDefinition`, `ModuleDefinition`, `ConstantDefinition`).
+    /// Asserts that a `NameId` resolves to the expected full path string.
     ///
     /// Usage:
-    /// - `assert_name_id_to_string_eq!(ctx, "Foo::Bar::Baz", def)` - asserts the full path `Foo::Bar::Baz`
-    /// - `assert_name_id_to_string_eq!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
-    macro_rules! assert_name_id_to_string_eq {
-        ($context:expr, $expect_path:expr, $def:expr) => {{
+    /// - `assert_name_path_eq!(ctx, "Foo::Bar::Baz", name_id)` - asserts the full path `Foo::Bar::Baz`
+    /// - `assert_name_path_eq!(ctx, "Baz", name_id)` - asserts just `Baz` with no parent scope
+    macro_rules! assert_name_path_eq {
+        ($context:expr, $expect_path:expr, $name_id:expr) => {{
             let segments: Vec<&str> = $expect_path.split("::").collect();
             assert!(!segments.is_empty(), "expected path must have at least one segment");
 
@@ -1720,11 +1809,11 @@ mod tests {
             let expected_name = segments.last().unwrap();
             let expected_parents: Vec<&str> = segments[..segments.len() - 1].iter().rev().copied().collect();
 
-            let name = $context.graph().names().get($def.name_id()).unwrap();
+            let name = $context.graph().names().get($name_id).unwrap();
             let actual_name = $context.graph().strings().get(name.str()).unwrap();
             assert_eq!(
                 *expected_name, actual_name,
-                "constant name mismatch: expected '{}', got '{}'",
+                "name mismatch: expected '{}', got '{}'",
                 expected_name, actual_name
             );
 
@@ -1751,6 +1840,18 @@ mod tests {
                 current_name.parent_scope().is_none(),
                 "expected no more parent_scopes after chain, but got Some"
             );
+        }};
+    }
+
+    /// Asserts the full path of a definition's `name_id` matches the expected string.
+    /// Works with any definition that has a `name_id()` method.
+    ///
+    /// Usage:
+    /// - `assert_name_id_to_string_eq!(ctx, "Foo::Bar::Baz", def)` - asserts the full path `Foo::Bar::Baz`
+    /// - `assert_name_id_to_string_eq!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
+    macro_rules! assert_name_id_to_string_eq {
+        ($context:expr, $expect_path:expr, $def:expr) => {{
+            assert_name_path_eq!($context, $expect_path, $def.name_id());
         }};
     }
 
@@ -2206,12 +2307,12 @@ mod tests {
         assert_no_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
-        assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
+        assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
             assert!(def.lexical_nesting_id().is_none());
         });
 
-        assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
+        assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
@@ -2220,7 +2321,7 @@ mod tests {
             });
         });
 
-        assert_definition_at!(&context, "5:3-5:8", Constant, |def| {
+        assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
@@ -2278,12 +2379,12 @@ mod tests {
         assert_no_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
-        assert_definition_at!(&context, "1:1-1:9", Constant, |def| {
+        assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
             assert!(def.lexical_nesting_id().is_none());
         });
 
-        assert_definition_at!(&context, "4:3-4:11", Constant, |def| {
+        assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
@@ -2292,7 +2393,7 @@ mod tests {
             });
         });
 
-        assert_definition_at!(&context, "5:3-5:8", Constant, |def| {
+        assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
             assert_name_id_to_string_eq!(&context, "BAZ", def);
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
@@ -5003,6 +5104,147 @@ mod tests {
                     assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
                 });
             });
+        });
+    }
+
+    #[test]
+    fn index_constant_alias_simple() {
+        let context = index_source({
+            "
+            module Foo; end
+            ALIAS1 = Foo
+            ALIAS2 ||= Foo
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "ALIAS1", def);
+            assert_name_path_eq!(&context, "Foo", def.target_name_id());
+        });
+        assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "ALIAS2", def);
+            assert_name_path_eq!(&context, "Foo", def.target_name_id());
+        });
+    }
+
+    #[test]
+    fn index_constant_alias_to_path() {
+        let context = index_source({
+            "
+            module Foo
+              module Bar; end
+            end
+            ALIAS = Foo::Bar
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:1-4:6", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "ALIAS", def);
+            assert_name_path_eq!(&context, "Foo::Bar", def.target_name_id());
+        });
+
+        assert_constant_references_eq!(&context, vec!["Foo", "Bar"]);
+    }
+
+    #[test]
+    fn index_constant_alias_nested() {
+        let context = index_source({
+            "
+            module Foo; end
+            module Bar
+              MyFoo = Foo
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-4:4", Module, |bar_module_def| {
+            assert_definition_at!(&context, "3:3-3:8", ConstantAlias, |def| {
+                assert_name_id_to_string_eq!(&context, "MyFoo", def);
+                assert_eq!(bar_module_def.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_scoped_constant_alias() {
+        let context = index_source({
+            "
+            module Foo; end
+            module Bar; end
+            Bar::ALIAS = Foo
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:6-3:11", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "Bar::ALIAS", def);
+        });
+    }
+
+    #[test]
+    fn index_chained_constant_alias() {
+        let context = index_source({
+            "
+            module Target; end
+            A = B = Target
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:2", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "A", def);
+            assert_name_path_eq!(&context, "Target", def.target_name_id());
+        });
+        assert_definition_at!(&context, "2:5-2:6", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "B", def);
+            assert_name_path_eq!(&context, "Target", def.target_name_id());
+        });
+    }
+
+    #[test]
+    fn index_constant_alias_to_top_level_constant() {
+        let context = index_source({
+            "
+            module Foo; end
+            ALIAS = ::Foo
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:6", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "ALIAS", def);
+            assert_name_path_eq!(&context, "Foo", def.target_name_id());
+        });
+    }
+
+    #[test]
+    fn index_constant_alias_chain() {
+        let context = index_source({
+            "
+            module Foo; end
+            ALIAS1 = Foo
+            ALIAS2 = ALIAS1
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "ALIAS1", def);
+            assert_name_path_eq!(&context, "Foo", def.target_name_id());
+        });
+        assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
+            assert_name_id_to_string_eq!(&context, "ALIAS2", def);
+            assert_name_path_eq!(&context, "ALIAS1", def.target_name_id());
         });
     }
 }

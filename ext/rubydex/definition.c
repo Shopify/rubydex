@@ -12,6 +12,7 @@ VALUE cClassDefinition;
 VALUE cSingletonClassDefinition;
 VALUE cModuleDefinition;
 VALUE cConstantDefinition;
+VALUE cConstantAliasDefinition;
 VALUE cMethodDefinition;
 VALUE cAttrAccessorDefinition;
 VALUE cAttrReaderDefinition;
@@ -33,6 +34,8 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
         return cModuleDefinition;
     case DefinitionKind_Constant:
         return cConstantDefinition;
+    case DefinitionKind_ConstantAlias:
+        return cConstantAliasDefinition;
     case DefinitionKind_Method:
         return cMethodDefinition;
     case DefinitionKind_AttrAccessor:
@@ -167,6 +170,10 @@ void initialize_definition(VALUE mod) {
     cConstantDefinition = rb_define_class_under(mRubydex, "ConstantDefinition", cDefinition);
     rb_define_alloc_func(cConstantDefinition, sr_handle_alloc);
     rb_define_method(cConstantDefinition, "initialize", sr_handle_initialize, 2);
+
+    cConstantAliasDefinition = rb_define_class_under(mRubydex, "ConstantAliasDefinition", cDefinition);
+    rb_define_alloc_func(cConstantAliasDefinition, sr_handle_alloc);
+    rb_define_method(cConstantAliasDefinition, "initialize", sr_handle_initialize, 2);
 
     cMethodDefinition = rb_define_class_under(mRubydex, "MethodDefinition", cDefinition);
     rb_define_alloc_func(cMethodDefinition, sr_handle_alloc);

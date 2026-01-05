@@ -56,6 +56,7 @@ pub enum Definition {
     SingletonClass(Box<SingletonClassDefinition>),
     Module(Box<ModuleDefinition>),
     Constant(Box<ConstantDefinition>),
+    ConstantAlias(Box<ConstantAliasDefinition>),
     Method(Box<MethodDefinition>),
     AttrAccessor(Box<AttrAccessorDefinition>),
     AttrReader(Box<AttrReaderDefinition>),
@@ -74,6 +75,7 @@ macro_rules! all_definitions {
             Definition::SingletonClass($var) => $expr,
             Definition::Module($var) => $expr,
             Definition::Constant($var) => $expr,
+            Definition::ConstantAlias($var) => $expr,
             Definition::GlobalVariable($var) => $expr,
             Definition::InstanceVariable($var) => $expr,
             Definition::ClassVariable($var) => $expr,
@@ -120,6 +122,7 @@ impl Definition {
             Definition::SingletonClass(_) => "SingletonClass",
             Definition::Module(_) => "Module",
             Definition::Constant(_) => "Constant",
+            Definition::ConstantAlias(_) => "ConstantAlias",
             Definition::Method(_) => "Method",
             Definition::AttrAccessor(_) => "AttrAccessor",
             Definition::AttrReader(_) => "AttrReader",
@@ -504,6 +507,88 @@ impl ConstantDefinition {
     #[must_use]
     pub fn name_id(&self) -> &NameId {
         &self.name_id
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+}
+
+/// A constant alias definition
+///
+/// # Example
+/// ```ruby
+/// module Foo; end
+/// ALIAS = Foo
+/// ```
+#[derive(Debug)]
+pub struct ConstantAliasDefinition {
+    name_id: NameId,
+    target_name_id: NameId,
+    uri_id: UriId,
+    offset: Offset,
+    comments: Vec<Comment>,
+    flags: DefinitionFlags,
+    lexical_nesting_id: Option<DefinitionId>,
+}
+
+impl ConstantAliasDefinition {
+    #[must_use]
+    pub const fn new(
+        name_id: NameId,
+        target_name_id: NameId,
+        uri_id: UriId,
+        comments: Vec<Comment>,
+        offset: Offset,
+        lexical_nesting_id: Option<DefinitionId>,
+        flags: DefinitionFlags,
+    ) -> Self {
+        Self {
+            name_id,
+            target_name_id,
+            uri_id,
+            offset,
+            comments,
+            flags,
+            lexical_nesting_id,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!(
+            "{}{}{}{}",
+            *self.uri_id,
+            self.offset.start(),
+            *self.name_id,
+            *self.target_name_id,
+        ))
+    }
+
+    #[must_use]
+    pub fn name_id(&self) -> &NameId {
+        &self.name_id
+    }
+
+    #[must_use]
+    pub fn target_name_id(&self) -> &NameId {
+        &self.target_name_id
     }
 
     #[must_use]
