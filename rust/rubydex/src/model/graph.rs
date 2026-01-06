@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration, DeclarationKind};
 use crate::model::definitions::Definition;
@@ -82,10 +82,59 @@ impl Graph {
     ) -> DeclarationId {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
-        let declaration = self
-            .declarations
-            .entry(declaration_id)
-            .or_insert_with(|| Declaration::build(fully_qualified_name, declaration_kind, owner_id));
+        let entry = self.declarations.entry(declaration_id);
+        let diagnostics = &mut self.diagnostics;
+
+        let declaration = match entry {
+            Entry::Occupied(entry) => {
+                // We already have a declaration for this name
+
+                let old_declaration = entry.get();
+                let old_kind = old_declaration.kind();
+
+                if *declaration_kind != old_kind {
+                    // We're trying to redefine the declaration with a different kind, let's produce a diagnostic
+
+                    let old_definition_id = old_declaration.definitions().first().unwrap();
+                    let old_definition = self.definitions.get(old_definition_id).unwrap();
+                    let new_definition = self.definitions.get(&definition_id).unwrap();
+
+                    let mut definitions = [
+                        (old_definition, old_kind.as_str()),
+                        (new_definition, declaration_kind.as_str()),
+                    ];
+
+                    // We want to show the diagnostic for the most recent definition, so we sort by uri and offset
+                    definitions.sort_by_key(|(d, _)| {
+                        let uri_id = d.uri_id();
+                        let uri = self.documents.get(uri_id).unwrap().uri();
+                        let offset = d.offset();
+                        (uri, offset)
+                    });
+
+                    let (_first_definition, first_kind) = definitions.first().unwrap();
+                    let (last_definition, last_kind) = definitions.last().unwrap();
+
+                    diagnostics.push(Diagnostic::new(
+                        Rule::KindRedefinition,
+                        *last_definition.uri_id(),
+                        last_definition.offset().clone(),
+                        format!(
+                            "Redefining `{fully_qualified_name}` as `{last_kind}`, previously defined as `{first_kind}`"
+                        ),
+                    ));
+                }
+
+                entry.into_mut()
+            }
+            Entry::Vacant(entry) => {
+                let declaration = Declaration::build(fully_qualified_name, declaration_kind, owner_id);
+                entry.insert(declaration)
+            }
+        };
+
+        self.definitions_to_declarations.insert(definition_id, declaration_id);
+
         declaration.add_definition(definition_id);
 
         declaration_id
@@ -172,9 +221,15 @@ impl Graph {
         &self.method_references
     }
 
+    // Diagnostics
+
     #[must_use]
     pub fn diagnostics(&self) -> &Vec<Diagnostic> {
         &self.diagnostics
+    }
+
+    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+        self.diagnostics.push(diagnostic);
     }
 
     /// # Panics

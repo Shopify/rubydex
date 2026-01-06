@@ -1560,6 +1560,47 @@ mod tests {
     }
 
     #[test]
+    fn resolution_diagnostics_for_kind_redefinition() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            class Foo; end
+
+            class Bar; end
+            module Bar; end
+
+            class Baz; end
+            Baz = 123
+
+            module Qux; end
+            module Qux; end
+
+            def foo; end
+            attr_reader :foo
+
+            class Qaz
+              class Array; end
+              def Array; end
+            end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "kind-redefinition: Redefining `Foo` as `class`, previously defined as `module` (2:1-2:15)",
+                "kind-redefinition: Redefining `Bar` as `module`, previously defined as `class` (5:1-5:16)",
+                "kind-redefinition: Redefining `Baz` as `constant`, previously defined as `class` (8:1-8:4)",
+                // FIXME: We should allow this case:
+                "kind-redefinition: Redefining `Qaz::Array` as `method`, previously defined as `class` (18:3-18:17)",
+            ]
+        );
+    }
+
+    #[test]
     fn resolving_reference_for_non_existing_declaration() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
