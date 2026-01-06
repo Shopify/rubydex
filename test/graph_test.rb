@@ -15,11 +15,10 @@ class GraphTest < Minitest::Test
 
   def test_indexing_context_files
     with_context do |context|
-      graph = Saturn::Graph.new
-
       context.write!("foo.rb", "class Foo; end")
       context.write!("bar.rb", "class Bar; end")
 
+      graph = Saturn::Graph.new
       assert_nil(graph.index_all(context.glob("**/*.rb")))
     end
   end
@@ -27,7 +26,29 @@ class GraphTest < Minitest::Test
   def test_indexing_invalid_file_paths
     graph = Saturn::Graph.new
 
-    assert_equal("File read error: Path 'not_found.rb' does not exist", graph.index_all(["not_found.rb"]))
+    error = assert_raises(Saturn::IndexingError) do
+      graph.index_all(["not_found.rb"])
+    end
+
+    assert_kind_of(Saturn::Error, error)
+    assert_match(/File read error: Path '.*not_found.rb' does not exist/, error.message)
+  end
+
+  def test_indexing_with_parse_errors
+    with_context do |context|
+      context.write!("file.rb", "class Foo")
+
+      graph = Saturn::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      assert_diagnostics(
+        [
+          { code: 2000, severity: :error, path: "file.rb", message: "expected an `end` to close the `class` statement" },
+          { code: 2000, severity: :error, path: "file.rb", message: "unexpected end-of-input, assuming it is closing the parent top level context" },
+        ],
+        graph.diagnostics,
+      )
+    end
   end
 
   def test_passing_invalid_arguments_to_index_all
@@ -128,5 +149,15 @@ class GraphTest < Minitest::Test
 
       assert_equal(2, documents.size)
     end
+  end
+
+  private
+
+  def assert_diagnostics(expected, actual)
+    assert_equal(
+      expected,
+      actual.sort_by { |d| [d.location, d.message] }
+        .map { |d| { code: d.code, severity: d.severity, path: File.basename(d.location.path), message: d.message } },
+    )
   end
 end
