@@ -688,6 +688,12 @@ impl Visit<'_> for RubyIndexer<'_> {
         };
 
         let Some(attached_target) = attached_target else {
+            self.local_graph.add_diagnostic(
+                Diagnostics::DynamicSingletonDefinition,
+                Offset::from_prism_location(&node.location()),
+                "Dynamic singleton class definition".to_string(),
+            );
+
             return;
         };
 
@@ -867,6 +873,12 @@ impl Visit<'_> for RubyIndexer<'_> {
                 // Dynamic receiver (def foo.bar) - visit and then skip
                 // We still want to visit because it could be a variable reference
                 _ => {
+                    self.local_graph.add_diagnostic(
+                        Diagnostics::DynamicSingletonDefinition,
+                        Offset::from_prism_location(&node.location()),
+                        "Dynamic receiver for singleton method definition".to_string(),
+                    );
+
                     self.visit(&recv_node);
                     return;
                 }
@@ -2117,7 +2129,10 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["Warning: Dynamic receiver for singleton method definition (1:1-1:17)"]
+        );
         assert_eq!(context.graph().definitions().len(), 0);
         assert_method_references_eq!(&context, vec!["foo"]);
     }
@@ -2253,7 +2268,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic singleton class definition (1:1-3:4)"]);
         assert_eq!(context.graph().definitions().len(), 0);
     }
 
