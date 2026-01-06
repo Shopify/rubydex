@@ -31,7 +31,7 @@ class GraphTest < Minitest::Test
     end
 
     assert_kind_of(Saturn::Error, error)
-    assert_match(/File read error: Path `.*not_found.rb` does not exist/, error.message)
+    assert_match(/FileError: Path `.*not_found.rb` does not exist/, error.message)
   end
 
   def test_indexing_with_parse_errors
