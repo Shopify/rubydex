@@ -3,7 +3,12 @@
 require "bundler"
 require "uri"
 
+module Saturn
+  class Error < StandardError; end
+end
+
 require "saturn/version"
+
 begin
   # Load the precompiled version of the library
   ruby_version = /(\d+\.\d+)/.match(RUBY_VERSION)
@@ -17,7 +22,3 @@ require "saturn/location"
 require "saturn/comment"
 require "saturn/diagnostic"
 require "saturn/graph"
-
-module Saturn
-  class Error < StandardError; end
-end

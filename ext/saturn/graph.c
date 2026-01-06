@@ -8,6 +8,7 @@
 #include "utils.h"
 
 static VALUE cGraph;
+static VALUE eIndexingError;
 
 // Free function for the custom Graph allocator. We always have to call into Rust to free data allocated by it
 static void graph_free(void *ptr) {
@@ -25,8 +26,8 @@ static VALUE sr_graph_alloc(VALUE klass) {
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
 }
 
-// Graph#index_all: (Array[String] file_paths) -> String?
-// Returns the error messages concatenated as a single string if anything failed during indexing or `nil`
+// Graph#index_all: (Array[String] file_paths) -> nil
+// Raises IndexingError if anything failed during indexing
 static VALUE sr_graph_index_all(VALUE self, VALUE file_paths) {
     check_array_of_strings(file_paths);
 
@@ -50,7 +51,7 @@ static VALUE sr_graph_index_all(VALUE self, VALUE file_paths) {
     if (error_messages != NULL) {
         VALUE error_string = rb_utf8_str_new_cstr(error_messages);
         free_c_string(error_messages);
-        return error_string;
+        rb_raise(eIndexingError, "%s", StringValueCStr(error_string));
     }
 
     return Qnil;
@@ -312,8 +313,10 @@ static VALUE sr_graph_diagnostics(VALUE self) {
 }
 
 void initialize_graph(VALUE mSaturn) {
-    cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
+    VALUE eSaturnError = rb_const_get(mSaturn, rb_intern("Error"));
+    eIndexingError = rb_define_class_under(mSaturn, "IndexingError", eSaturnError);
 
+    cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, sr_graph_alloc);
     rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
     rb_define_method(cGraph, "resolve", sr_graph_resolve, 0);

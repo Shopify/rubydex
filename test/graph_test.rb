@@ -26,7 +26,12 @@ class GraphTest < Minitest::Test
   def test_indexing_invalid_file_paths
     graph = Saturn::Graph.new
 
-    assert_equal("File read error: Path 'not_found.rb' does not exist", graph.index_all(["not_found.rb"]))
+    error = assert_raises(Saturn::IndexingError) do
+      graph.index_all(["not_found.rb"])
+    end
+
+    assert_kind_of(Saturn::Error, error)
+    assert_match(/File read error: Path '.*not_found.rb' does not exist/, error.message)
   end
 
   def test_indexing_with_parse_errors
