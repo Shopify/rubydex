@@ -320,6 +320,12 @@ impl<'a> RubyIndexer<'a> {
                     match parent {
                         ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
                         _ => {
+                            self.local_graph.add_diagnostic(
+                                Diagnostics::DynamicConstantReference,
+                                Offset::from_prism_location(&parent.location()),
+                                "Dynamic constant reference".to_string(),
+                            );
+
                             return None;
                         }
                     }
@@ -1751,7 +1757,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic constant reference (1:7-1:10)"]);
         assert!(context.graph().definitions().is_empty());
     }
 
@@ -1846,7 +1852,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic constant reference (1:8-1:11)"]);
         assert!(context.graph().definitions().is_empty());
     }
 
@@ -3123,7 +3129,7 @@ mod tests {
             r##"
             puts C1
             puts C2::C3::C4
-            puts foo::IGNORED0
+            puts ignored0::IGNORED0
             puts C6.foo
             foo = C7
             C8 << 42
@@ -3144,7 +3150,13 @@ mod tests {
             "##
         });
 
-        assert_diagnostics_eq!(&context, vec!["Warning: assigned but unused variable - foo (5:1-5:4)"]);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "Warning: assigned but unused variable - foo (5:1-5:4)",
+                "Warning: Dynamic constant reference (3:6-3:14)",
+            ]
+        );
 
         assert_constant_references_eq!(
             &context,
@@ -3508,10 +3520,11 @@ mod tests {
             class Foo < method_call; end
             class Bar < 123; end
             class MyMigration < ActiveRecord::Migration[8.0]; end
+            class Baz < foo::Bar; end
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic constant reference (4:13-4:16)",]);
 
         assert_definition_at!(&context, "1:1-1:29", Class, |def| {
             assert!(def.superclass_ref().is_none(),);
@@ -3522,6 +3535,10 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:1-3:54", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
+
+        assert_definition_at!(&context, "4:1-4:26", Class, |def| {
             assert!(def.superclass_ref().is_none(),);
         });
     }
@@ -3661,6 +3678,27 @@ mod tests {
             assert_prepends_eq!(&context, def, vec!["Foo"]);
             assert_extends_eq!(&context, def, vec!["Foo"]);
         });
+    }
+
+    #[test]
+    fn index_mixins_with_dynamic_constants() {
+        let context = index_source({
+            "
+            include foo::Bar
+            prepend foo::Baz
+            extend foo::Qux
+            "
+        });
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "Warning: Dynamic constant reference (1:9-1:12)",
+                "Warning: Dynamic constant reference (2:9-2:12)",
+                "Warning: Dynamic constant reference (3:8-3:11)",
+            ]
+        );
+        assert!(context.graph().definitions().is_empty());
     }
 
     #[test]
