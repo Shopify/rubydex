@@ -488,12 +488,24 @@ impl<'a> RubyIndexer<'a> {
             return;
         };
 
+        let lexical_nesting_id = self.parent_nesting_id().copied();
+
         // Collect all arguments as constant references. Ignore anything that isn't a constant
         let reference_ids: Vec<_> = arguments
             .arguments()
             .iter()
             .filter_map(|arg| {
                 if arg.as_self_node().is_some() {
+                    if lexical_nesting_id.is_none() {
+                        self.local_graph.add_diagnostic(
+                            Diagnostics::TopLevelMixinSelf,
+                            Offset::from_prism_location(&arg.location()),
+                            "Top level mixin self".to_string(),
+                        );
+
+                        return None;
+                    }
+
                     // FIXME: Ideally we would want to save the mixin as `self` but we can only save mixins with a name.
                     // We'll just use the parent nesting name id for now.
                     self.parent_nesting_name_id()
@@ -515,12 +527,11 @@ impl<'a> RubyIndexer<'a> {
             return;
         }
 
-        let Some(lexical_nesting_id) = self.parent_nesting_id().copied() else {
+        let Some(lexical_nesting_id) = lexical_nesting_id else {
             return;
         };
-        let Some(definition) = self.local_graph.get_definition_mut(lexical_nesting_id) else {
-            return;
-        };
+
+        let definition = self.local_graph.get_definition_mut(lexical_nesting_id).unwrap();
 
         for id in reference_ids {
             let mixin = match mixin_type {
@@ -3595,6 +3606,8 @@ mod tests {
         });
 
         assert_no_diagnostics!(&context);
+
+        // FIXME: This should be indexed
         assert_eq!(context.graph().definitions().len(), 0);
     }
 
@@ -3644,6 +3657,8 @@ mod tests {
         });
 
         assert_no_diagnostics!(&context);
+
+        // FIXME: This should be indexed
         assert_eq!(context.graph().definitions().len(), 0);
     }
 
@@ -3763,7 +3778,14 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "Warning: Top level mixin self (1:9-1:13)",
+                "Warning: Top level mixin self (2:9-2:13)",
+                "Warning: Top level mixin self (3:8-3:12)"
+            ]
+        );
 
         assert_eq!(context.graph().definitions().len(), 0);
     }
