@@ -40,7 +40,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         Timer::set_global_timer(Timer::new());
     }
 
-    let file_paths = time_it!(listing, { listing::collect_file_paths(vec![args.dir]) })?;
+    let (file_paths, errors) = time_it!(listing, { listing::collect_file_paths(vec![args.dir]) });
+
+    for error in errors {
+        eprintln!("{error}");
+    }
 
     let mut graph = Graph::new();
     time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;

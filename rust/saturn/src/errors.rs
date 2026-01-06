@@ -26,7 +26,7 @@ impl From<Errors> for MultipleErrors {
 }
 
 // Enum representing all types of indexing errors that may happen
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Errors {
     FileReadError(String),
     InvalidUri(String),
