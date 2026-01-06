@@ -1900,7 +1900,7 @@ mod tests {
                         "{}: {} ({})",
                         d.rule(),
                         d.message(),
-                        $context.offset_to_display_range(d.offset())
+                        d.offset().to_display_range($context.source())
                     )
                 })
                 .collect();
@@ -1921,7 +1921,7 @@ mod tests {
                         "{}: {} ({})",
                         d.rule(),
                         d.message(),
-                        $context.offset_to_display_range(d.offset())
+                        d.offset().to_display_range($context.source())
                     ))
                     .collect::<Vec<_>>()
             );
