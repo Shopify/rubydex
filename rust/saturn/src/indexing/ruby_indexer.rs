@@ -497,8 +497,16 @@ impl<'a> RubyIndexer<'a> {
                     // FIXME: Ideally we would want to save the mixin as `self` but we can only save mixins with a name.
                     // We'll just use the parent nesting name id for now.
                     self.parent_nesting_name_id()
+                } else if let Some(constant_ref_id) = self.index_constant_reference(&arg, true) {
+                    Some(constant_ref_id)
                 } else {
-                    self.index_constant_reference(&arg, true)
+                    self.local_graph.add_diagnostic(
+                        Diagnostics::DynamicAncestor,
+                        Offset::from_prism_location(&arg.location()),
+                        "Dynamic mixin argument".to_string(),
+                    );
+
+                    None
                 }
             })
             .collect();
@@ -611,6 +619,16 @@ impl Visit<'_> for RubyIndexer<'_> {
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
         let lexical_nesting_id = self.parent_nesting_id().copied();
         let superclass = node.superclass().and_then(|n| self.index_constant_reference(&n, true));
+
+        if let Some(superclass_node) = node.superclass()
+            && superclass.is_none()
+        {
+            self.local_graph.add_diagnostic(
+                Diagnostics::DynamicAncestor,
+                Offset::from_prism_location(&superclass_node.location()),
+                "Dynamic superclass".to_string(),
+            );
+        }
 
         if let Some(name_id) = self.index_constant_reference(&node.constant_path(), false) {
             let definition = Definition::Class(Box::new(ClassDefinition::new(
@@ -3539,7 +3557,16 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic constant reference (4:13-4:16)",]);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "Warning: Dynamic superclass (1:13-1:24)",
+                "Warning: Dynamic superclass (2:13-2:16)",
+                "Warning: Dynamic superclass (3:21-3:49)",
+                "Warning: Dynamic constant reference (4:13-4:16)",
+                "Warning: Dynamic superclass (4:13-4:21)",
+            ]
+        );
 
         assert_definition_at!(&context, "1:1-1:29", Class, |def| {
             assert!(def.superclass_ref().is_none(),);
@@ -3562,7 +3589,7 @@ mod tests {
     fn index_includes_at_top_level() {
         let context = index_source({
             "
-            include Bar, Baz, ignored, 123
+            include Bar, Baz
             include Qux
             "
         });
@@ -3576,7 +3603,7 @@ mod tests {
         let context = index_source({
             "
             class Foo
-              include Bar, Baz, ignored, 123
+              include Bar, Baz
               include Qux
             end
             "
@@ -3594,7 +3621,7 @@ mod tests {
         let context = index_source({
             "
             module Foo
-              include Bar, Baz, ignored, 123
+              include Bar, Baz
               include Qux
             end
             "
@@ -3611,7 +3638,7 @@ mod tests {
     fn index_prepends_at_top_level() {
         let context = index_source({
             "
-            prepend Bar, Baz, ignored, 123
+            prepend Bar, Baz
             prepend Qux
             "
         });
@@ -3625,7 +3652,7 @@ mod tests {
         let context = index_source({
             "
             class Foo
-              prepend Bar, Baz, ignored, 123
+              prepend Bar, Baz
               prepend Qux
             end
             "
@@ -3643,7 +3670,7 @@ mod tests {
         let context = index_source({
             "
             module Foo
-              prepend Bar, Baz, ignored, 123
+              prepend Bar, Baz
               prepend Qux
             end
             "
@@ -3702,6 +3729,10 @@ mod tests {
             include foo::Bar
             prepend foo::Baz
             extend foo::Qux
+
+            include foo
+            prepend 123
+            extend 'x'
             "
         });
 
@@ -3709,8 +3740,14 @@ mod tests {
             &context,
             vec![
                 "Warning: Dynamic constant reference (1:9-1:12)",
+                "Warning: Dynamic mixin argument (1:9-1:17)",
                 "Warning: Dynamic constant reference (2:9-2:12)",
+                "Warning: Dynamic mixin argument (2:9-2:17)",
                 "Warning: Dynamic constant reference (3:8-3:11)",
+                "Warning: Dynamic mixin argument (3:8-3:16)",
+                "Warning: Dynamic mixin argument (5:9-5:12)",
+                "Warning: Dynamic mixin argument (6:9-6:12)",
+                "Warning: Dynamic mixin argument (7:8-7:11)"
             ]
         );
         assert!(context.graph().definitions().is_empty());
