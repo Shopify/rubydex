@@ -1122,11 +1122,29 @@ impl Visit<'_> for RubyIndexer<'_> {
                     return;
                 }
 
-                self.visibility_stack.push(Visibility::from_string(message.as_str()));
-
                 if let Some(arguments) = node.arguments() {
+                    // With this case:
+                    //
+                    // ```ruby
+                    // private def foo(bar); end
+                    // ```
+                    //
+                    // We push the new visibility to the stack and then pop it after visiting the arguments so it only affects the method definition.
+                    self.visibility_stack.push(Visibility::from_string(message.as_str()));
                     self.visit_arguments_node(&arguments);
                     self.visibility_stack.pop();
+                } else {
+                    // With this case:
+                    //
+                    // ```ruby
+                    // private
+                    //
+                    // def foo(bar); end
+                    // ```
+                    //
+                    // We replace the current visibility with the new one so it only affects all the subsequent method definitions.
+                    let last_visibility = self.visibility_stack.last_mut().unwrap();
+                    *last_visibility = Visibility::from_string(message.as_str());
                 }
             }
             _ => {
