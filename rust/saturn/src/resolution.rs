@@ -1405,6 +1405,52 @@ mod tests {
     }
 
     #[test]
+    fn resolution_for_class_variable_in_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar
+                @@baz = 456
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo, &["bar", "@@baz"]);
+    }
+
+    #[test]
+    fn resolution_for_class_variable_only_follows_lexical_nesting() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar
+              def Foo.demo
+                @@cvar1 = 1
+              end
+
+              class << Foo
+                def demo2
+                  @@cvar2 = 1
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo, &["<Foo>"]);
+
+        let bar = context.graph.declarations().get(&DeclarationId::from("Bar")).unwrap();
+        assert_members(bar, &["@@cvar1", "@@cvar2"]);
+    }
+
+    #[test]
     fn resolution_for_class_variable_at_top_level() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {

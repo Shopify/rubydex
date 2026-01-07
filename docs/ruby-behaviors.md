@@ -416,6 +416,60 @@ $foo, $bar, $baz = 1, 2, 3
 FOO, BAR::BAZ, ::BAZ = 3, 4, 5
 ```
 
+### Instance Variables vs Class Variables: Receiver vs Lexical Scoping
+
+A critical difference between instance variables (`@`) and class variables (`@@`) is how they determine ownership when defined inside a method with an explicit receiver:
+
+- **Instance variables** follow the **receiver** (`self` at runtime)
+- **Class variables** follow **lexical scope** (where the code is written)
+
+```ruby
+class Foo; end
+
+class Bar
+  # This defines a singleton method on Foo, but lexically inside Bar
+  def Foo.demo
+    @ivar = "instance var"   # Belongs to <Foo> (the receiver)
+    @@cvar = "class var"     # Belongs to Bar (lexical scope)
+  end
+end
+
+Foo.demo
+
+Foo.instance_variables  # => [:@ivar]
+Bar.instance_variables  # => []
+
+Foo.class_variables     # => []
+Bar.class_variables     # => [:@@cvar]
+```
+
+This behavior has important implications for static analysis:
+
+| Variable Type | Scoping Rule | In `def Foo.demo` inside `class Bar` |
+|---------------|--------------|--------------------------------------|
+| `@ivar`       | Receiver     | Belongs to `Foo`                     |
+| `@@cvar`      | Lexical      | Belongs to `Bar`                     |
+
+The same applies to `class << Foo` blocks defined inside another class:
+
+```ruby
+class Foo; end
+
+class Bar
+  class << Foo
+    def another_demo
+      @ivar2 = 1   # Belongs to Foo (receiver is Foo's singleton)
+      @@cvar2 = 2  # Belongs to Bar (lexical scope)
+    end
+  end
+end
+
+Foo.another_demo
+
+Foo.instance_variables  # => [:@ivar2]
+Bar.class_variables     # => [:@@cvar2]
+```
+
 ## Constant References
 
 Constants in Ruby can be referenced before they're defined, and resolution depends on lexical scope.
