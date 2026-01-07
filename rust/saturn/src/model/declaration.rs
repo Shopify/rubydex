@@ -162,18 +162,13 @@ macro_rules! namespace_declaration {
             pub fn descendants(&self) -> Ref<'_, IdentityHashSet<DeclarationId>> {
                 self.descendants.borrow()
             }
-
-            #[must_use]
-            pub fn kind(&self) -> DeclarationKind {
-                DeclarationKind::$variant
-            }
         }
     };
 }
 
 /// Macro to generate a new struct for simple declarations like variables and methods
 macro_rules! simple_declaration {
-    ($variant:ident, $name:ident) => {
+    ($name:ident) => {
         #[derive(Debug)]
         pub struct $name {
             /// The fully qualified name of this declaration
@@ -198,24 +193,8 @@ macro_rules! simple_declaration {
             }
 
             pub fn extend(&mut self, _other: Declaration) {}
-
-            #[must_use]
-            pub fn kind(&self) -> DeclarationKind {
-                DeclarationKind::$variant
-            }
         }
     };
-}
-
-pub enum DeclarationKind {
-    Class,
-    SingletonClass,
-    Module,
-    Constant,
-    Method,
-    GlobalVariable,
-    InstanceVariable,
-    ClassVariable,
 }
 
 /// A `Declaration` represents the global concept of an entity in Ruby. For example, the class `Foo` may be defined 3
@@ -305,21 +284,16 @@ impl Declaration {
     pub fn unqualified_name(&self) -> String {
         all_declarations!(self, it => it.name.rsplit("::").next().unwrap_or(&it.name).to_string())
     }
-
-    #[must_use]
-    pub fn kind(&self) -> DeclarationKind {
-        all_declarations!(self, it => it.kind())
-    }
 }
 
 namespace_declaration!(Class, ClassDeclaration);
 namespace_declaration!(Module, ModuleDeclaration);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
-simple_declaration!(Constant, ConstantDeclaration);
-simple_declaration!(Method, MethodDeclaration);
-simple_declaration!(GlobalVariable, GlobalVariableDeclaration);
-simple_declaration!(InstanceVariable, InstanceVariableDeclaration);
-simple_declaration!(ClassVariable, ClassVariableDeclaration);
+simple_declaration!(ConstantDeclaration);
+simple_declaration!(MethodDeclaration);
+simple_declaration!(GlobalVariableDeclaration);
+simple_declaration!(InstanceVariableDeclaration);
+simple_declaration!(ClassVariableDeclaration);
 
 #[cfg(test)]
 mod tests {

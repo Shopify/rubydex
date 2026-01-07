@@ -7,7 +7,7 @@ use std::{
 use crate::model::{
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantDeclaration, Declaration,
-        DeclarationKind, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
+        GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
         SingletonClassDeclaration,
     },
     definitions::{Definition, Mixin},
@@ -325,13 +325,13 @@ fn handle_remaining_definitions(
 
                             // Instance variable in singleton method - owned by the receiver's singleton class
                             let owner_id = get_or_create_singleton_class(graph, receiver_decl_id);
-                            debug_assert!(
-                                matches!(
-                                    graph.declarations().get(&owner_id),
-                                    Some(Declaration::SingletonClass(_))
-                                ),
-                                "Instance variable in singleton method should be owned by a SingletonClass"
-                            );
+                            {
+                                let declarations = graph.declarations().read().unwrap();
+                                debug_assert!(
+                                    matches!(declarations.get(&owner_id), Some(Declaration::SingletonClass(_))),
+                                    "Instance variable in singleton method should be owned by a SingletonClass"
+                                );
+                            }
                             create_declaration(graph, str_id, id, owner_id, |name| {
                                 Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
                                     name, owner_id,
@@ -345,9 +345,11 @@ fn handle_remaining_definitions(
 
                         // If the method is in a singleton class, the instance variable belongs to the class object
                         // Like `class << Foo; def bar; @bar = 1; end; end`, where `@bar` is owned by `Foo::<Foo>`
-                        if let Some(decl) = graph.declarations().get(&method_owner_id)
+                        let declarations = graph.declarations().read().unwrap();
+                        if let Some(decl) = declarations.get(&method_owner_id)
                             && matches!(decl, Declaration::SingletonClass(_))
                         {
+                            drop(declarations);
                             // Method in singleton class - owner is the singleton class itself
                             create_declaration(graph, str_id, id, method_owner_id, |name| {
                                 Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
@@ -356,6 +358,7 @@ fn handle_remaining_definitions(
                                 )))
                             });
                         } else {
+                            drop(declarations);
                             // Regular instance method
                             // Create an instance variable declaration for the method's owner
                             create_declaration(graph, str_id, id, method_owner_id, |name| {
@@ -375,13 +378,13 @@ fn handle_remaining_definitions(
                             .copied()
                             .unwrap_or(*OBJECT_ID);
                         let owner_id = get_or_create_singleton_class(graph, nesting_decl_id);
-                        debug_assert!(
-                            matches!(
-                                graph.declarations().get(&owner_id),
-                                Some(Declaration::SingletonClass(_))
-                            ),
-                            "Instance variable in class/module body should be owned by a SingletonClass"
-                        );
+                        {
+                            let declarations = graph.declarations().read().unwrap();
+                            debug_assert!(
+                                matches!(declarations.get(&owner_id), Some(Declaration::SingletonClass(_))),
+                                "Instance variable in class/module body should be owned by a SingletonClass"
+                            );
+                        }
                         create_declaration(graph, str_id, id, owner_id, |name| {
                             Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
                         });
@@ -395,13 +398,13 @@ fn handle_remaining_definitions(
                             .copied()
                             .unwrap_or(*OBJECT_ID);
                         let owner_id = get_or_create_singleton_class(graph, singleton_class_decl_id);
-                        debug_assert!(
-                            matches!(
-                                graph.declarations().get(&owner_id),
-                                Some(Declaration::SingletonClass(_))
-                            ),
-                            "Instance variable in singleton class body should be owned by a SingletonClass"
-                        );
+                        {
+                            let declarations = graph.declarations().read().unwrap();
+                            debug_assert!(
+                                matches!(declarations.get(&owner_id), Some(Declaration::SingletonClass(_))),
+                                "Instance variable in singleton class body should be owned by a SingletonClass"
+                            );
+                        }
                         create_declaration(graph, str_id, id, owner_id, |name| {
                             Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
                         });
@@ -538,7 +541,7 @@ pub fn ancestors_of(graph: &Graph, declaration_id: DeclarationId) -> Ancestors {
 /// Can panic if there's inconsistent data in the graph
 #[must_use]
 fn linearize_ancestors(graph: &Graph, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
-    let (kind, owner_id) = {
+    {
         let declarations = graph.declarations().read().unwrap();
         let declaration = declarations.get(&declaration_id).unwrap();
 
@@ -583,13 +586,11 @@ fn linearize_ancestors(graph: &Graph, declaration_id: DeclarationId, context: &m
             context.descendants.remove(&declaration_id);
             return estimated_ancestors;
         }
-
-        (declaration.kind(), *declaration.owner_id())
-    };
+    }
 
     // TODO: this check is against `Object` for now to avoid infinite recursion. After RBS indexing, we need to change
     // this to `BasicObject` since it's the only class that cannot have a parent
-    let parent_ancestors = linearize_parent_ancestors(graph, declaration_id, context, &kind, owner_id);
+    let parent_ancestors = linearize_parent_ancestors(graph, declaration_id, context);
 
     let declarations = graph.declarations().read().unwrap();
     let declaration = declarations.get(&declaration_id).unwrap();
@@ -603,7 +604,7 @@ fn linearize_ancestors(graph: &Graph, declaration_id: DeclarationId, context: &m
 
     // If we're linearizing a singleton class, add the extends of the attached class to the list of mixins to process
     if let Declaration::SingletonClass(_) = declaration {
-        let attached_decl = declarations.get(&owner_id).unwrap();
+        let attached_decl = declarations.get(declaration.owner_id()).unwrap();
 
         let attached_definitions = attached_decl
             .definitions()
@@ -658,18 +659,23 @@ fn linearize_parent_ancestors(
     graph: &Graph,
     declaration_id: DeclarationId,
     context: &mut LinearizationContext,
-    kind: &DeclarationKind,
-    owner_id: DeclarationId,
 ) -> Option<Vec<Ancestor>> {
-    match kind {
-        DeclarationKind::Class if declaration_id != *OBJECT_ID => {
-            let declarations = graph.declarations().read().unwrap();
-            let declaration = declarations.get(&declaration_id).unwrap();
-            let definitions = declaration
+    if declaration_id == *OBJECT_ID {
+        return None;
+    }
+
+    let declarations = graph.declarations().read().unwrap();
+    let declaration = declarations.get(&declaration_id).unwrap();
+
+    match declaration {
+        Declaration::Class(_) => {
+            let definitions: Vec<_> = declaration
                 .definitions()
                 .iter()
                 .filter_map(|def_id| graph.definitions().get(def_id))
-                .collect::<Vec<_>>();
+                .collect();
+            // Release read lock before calling functions that may acquire write locks
+            drop(declarations);
 
             Some(match linearize_parent_class(graph, &definitions, context) {
                 Ancestors::Complete(ids) => ids,
@@ -683,7 +689,11 @@ fn linearize_parent_ancestors(
                 }
             })
         }
-        DeclarationKind::SingletonClass if declaration_id != *OBJECT_ID => {
+        Declaration::SingletonClass(_) => {
+            let owner_id = *declaration.owner_id();
+            // Release read lock before calling functions that may acquire write locks
+            drop(declarations);
+
             let (singleton_parent_id, partial_singleton) = singleton_parent_id(graph, owner_id);
             if partial_singleton {
                 context.partial = true;
@@ -1163,33 +1173,38 @@ fn singleton_parent_id(graph: &Graph, attached_id: DeclarationId) -> (Declaratio
         return (*CLASS_ID, false);
     }
 
-    let (kind, owner_id) = {
-        let declarations = graph.declarations().read().unwrap();
-        let decl = declarations.get(&attached_id).unwrap();
-        (decl.kind(), *decl.owner_id())
-    };
+    let declarations = graph.declarations().read().unwrap();
+    let decl = declarations.get(&attached_id).unwrap();
 
-    match kind {
-        DeclarationKind::Module => (*MODULE_ID, false),
-        DeclarationKind::SingletonClass => {
+    match decl {
+        Declaration::Module(_) => (*MODULE_ID, false),
+        Declaration::SingletonClass(_) => {
             // For singleton classes, we keep recursively wrapping parents until we can reach the original attached
             // object
+            let owner_id = *decl.owner_id();
+            // Release read lock before calling functions that may acquire write locks
+            drop(declarations);
             let (inner_parent, partial) = singleton_parent_id(graph, owner_id);
             (get_or_create_singleton_class(graph, inner_parent), partial)
         }
-        _ => {
+        Declaration::Class(_) => {
             // For classes (the regular case), we need to return the singleton class of its parent
-            let definitions = {
-                let declarations = graph.declarations().read().unwrap();
-                let decl = declarations.get(&attached_id).unwrap();
-                decl.definitions()
-                    .iter()
-                    .filter_map(|def_id| graph.definitions().get(def_id))
-                    .collect::<Vec<_>>()
-            };
+            let definitions: Vec<_> = decl
+                .definitions()
+                .iter()
+                .filter_map(|def_id| graph.definitions().get(def_id))
+                .collect();
+            // Release read lock before calling functions that may acquire write locks
+            drop(declarations);
 
             let (picked_parent, partial) = get_parent_class(graph, &definitions);
             (get_or_create_singleton_class(graph, picked_parent), partial)
+        }
+        _ => {
+            // Other declaration types (constants, methods, etc.) shouldn't reach here,
+            // but default to Object's singleton parent
+            drop(declarations);
+            (*CLASS_ID, false)
         }
     }
 }
@@ -1436,9 +1451,8 @@ mod tests {
     }
 
     fn assert_instance_variable(context: &GraphTest, fqn: &str, owner: &str) {
-        let decl = context
-            .graph
-            .declarations()
+        let declarations = context.graph.declarations().read().unwrap();
+        let decl = declarations
             .get(&DeclarationId::from(fqn))
             .unwrap_or_else(|| panic!("{fqn} declaration should exist"));
         assert!(
@@ -2141,7 +2155,8 @@ mod tests {
 
         // Top-level instance variables belong to `<main>`, not `Object`.
         // We can't represent `<main>` yet, so no declaration is created.
-        let foo_decl = context.graph.declarations().get(&DeclarationId::from("Object::@foo"));
+        let declarations = context.graph.declarations().read().unwrap();
+        let foo_decl = declarations.get(&DeclarationId::from("Object::@foo"));
         assert!(foo_decl.is_none(), "Object::@foo declaration should not exist");
     }
 
@@ -2160,10 +2175,11 @@ mod tests {
         context.resolve();
 
         // Instance variable in method with unresolved receiver should not create a declaration
-        let baz_decl = context.graph.declarations().get(&DeclarationId::from("Object::@baz"));
+        let declarations = context.graph.declarations().read().unwrap();
+        let baz_decl = declarations.get(&DeclarationId::from("Object::@baz"));
         assert!(baz_decl.is_none(), "@baz declaration should not exist");
 
-        let foo_baz_decl = context.graph.declarations().get(&DeclarationId::from("Foo::@baz"));
+        let foo_baz_decl = declarations.get(&DeclarationId::from("Foo::@baz"));
         assert!(foo_baz_decl.is_none(), "Foo::@baz declaration should not exist");
     }
 
