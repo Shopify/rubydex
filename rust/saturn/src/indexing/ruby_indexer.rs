@@ -450,6 +450,32 @@ impl<'a> RubyIndexer<'a> {
         definition_id
     }
 
+    /// Adds a class variable definition.
+    ///
+    /// Class variables use lexical scoping - they belong to the lexically enclosing class/module,
+    /// not the method receiver. This is different from instance variables which follow the receiver.
+    fn add_class_variable_definition(&mut self, location: &ruby_prism::Location) -> DefinitionId {
+        let name = Self::location_to_string(location);
+        let str_id = self.local_graph.intern_string(name);
+        let offset = Offset::from_prism_location(location);
+        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        // Class variables use the enclosing class/module (skipping methods) as lexical nesting
+        let lexical_nesting_id = self.current_nesting_definition_id();
+        let uri_id = self.uri_id;
+
+        let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
+            str_id,
+            uri_id,
+            offset,
+            comments,
+            lexical_nesting_id,
+        )));
+
+        let definition_id = self.local_graph.add_definition(definition);
+        self.add_member_to_current_owner(definition_id);
+        definition_id
+    }
+
     fn add_constant_definition(&mut self, node: &ruby_prism::Node, also_add_reference: bool) -> Option<DefinitionId> {
         let name_id = self.index_constant_reference(node, also_add_reference)?;
 
@@ -478,21 +504,29 @@ impl<'a> RubyIndexer<'a> {
         Some(definition_id)
     }
 
+    /// Returns the definition ID of the current nesting (class, module, or singleton class),
+    /// but skips methods in the definitions stack.
+    fn current_nesting_definition_id(&self) -> Option<DefinitionId> {
+        self.definitions_stack
+            .iter()
+            .rev()
+            .find(|&&id| {
+                self.local_graph.definitions().get(&id).is_some_and(|def| {
+                    matches!(
+                        def,
+                        Definition::Class(_) | Definition::SingletonClass(_) | Definition::Module(_)
+                    )
+                })
+            })
+            .copied()
+    }
+
     /// Adds a member to the current owner (class, module, or singleton class).
     ///
     /// Iterates through the definitions stack in reverse to find the first class/module/singleton
     /// class, skipping methods, and adds the member to it.
     fn add_member_to_current_owner(&mut self, member_id: DefinitionId) {
-        let owner_id = self.definitions_stack.iter().rev().find(|&&id| {
-            self.local_graph.definitions().get(&id).is_some_and(|def| {
-                matches!(
-                    def,
-                    Definition::Class(_) | Definition::SingletonClass(_) | Definition::Module(_)
-                )
-            })
-        });
-
-        let Some(&owner_id) = owner_id else {
+        let Some(owner_id) = self.current_nesting_definition_id() else {
             return;
         };
 
@@ -858,18 +892,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.add_instance_variable_definition(&left.location());
                 }
                 ruby_prism::Node::ClassVariableTargetNode { .. } => {
-                    self.add_definition_from_location(
-                        &left.location(),
-                        |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                            Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                                str_id,
-                                uri_id,
-                                offset,
-                                comments,
-                                lexical_nesting_id,
-                            )))
-                        },
-                    );
+                    self.add_class_variable_definition(&left.location());
                 }
                 ruby_prism::Node::CallTargetNode { .. } => {
                     let call_target_node = left.as_call_target_node().unwrap();
@@ -1228,66 +1251,22 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_class_variable_and_write_node(&mut self, node: &ruby_prism::ClassVariableAndWriteNode) {
-        self.add_definition_from_location(
-            &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                    str_id,
-                    uri_id,
-                    offset,
-                    comments,
-                    lexical_nesting_id,
-                )))
-            },
-        );
+        self.add_class_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
     fn visit_class_variable_operator_write_node(&mut self, node: &ruby_prism::ClassVariableOperatorWriteNode) {
-        self.add_definition_from_location(
-            &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                    str_id,
-                    uri_id,
-                    offset,
-                    comments,
-                    lexical_nesting_id,
-                )))
-            },
-        );
+        self.add_class_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
     fn visit_class_variable_or_write_node(&mut self, node: &ruby_prism::ClassVariableOrWriteNode) {
-        self.add_definition_from_location(
-            &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                    str_id,
-                    uri_id,
-                    offset,
-                    comments,
-                    lexical_nesting_id,
-                )))
-            },
-        );
+        self.add_class_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
     fn visit_class_variable_write_node(&mut self, node: &ruby_prism::ClassVariableWriteNode) {
-        self.add_definition_from_location(
-            &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
-                Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
-                    str_id,
-                    uri_id,
-                    offset,
-                    comments,
-                    lexical_nesting_id,
-                )))
-            },
-        );
+        self.add_class_variable_definition(&node.name_loc());
         self.visit(&node.value());
     }
 
@@ -2332,12 +2311,10 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        // Class variables inside methods have lexical_nesting_id pointing to the method
-        // (the resolution phase handles determining the correct owner)
-        assert_definition_at!(&context, "2:3-4:6", Method, |method_def| {
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
             assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
                 assert_name_eq!(&context, "@@var", def);
-                assert_eq!(Some(method_def.id()), def.lexical_nesting_id().clone());
+                assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
             });
         });
     }
@@ -2944,6 +2921,10 @@ mod tests {
               @@foo &= 1
               @@bar &&= 2
               @@baz ||= 3
+
+              def set_foo
+                @@foo = 4
+              end
             end
             "
         });
@@ -2992,7 +2973,7 @@ mod tests {
             assert!(def.lexical_nesting_id().is_none());
         });
 
-        assert_definition_at!(&context, "12:1-16:4", Class, |bar_class_def| {
+        assert_definition_at!(&context, "12:1-20:4", Class, |bar_class_def| {
             assert_definition_at!(&context, "13:3-13:8", ClassVariable, |def| {
                 assert_name_eq!(&context, "@@foo", def);
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
@@ -3009,6 +2990,13 @@ mod tests {
                 assert_name_eq!(&context, "@@baz", def);
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(bar_class_def.members()[2], def.id());
+            });
+
+            // Method `set_foo` is members()[3], class variable inside method is members()[4]
+            assert_definition_at!(&context, "18:5-18:10", ClassVariable, |def| {
+                assert_name_eq!(&context, "@@foo", def);
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[4], def.id());
             });
         });
     }
