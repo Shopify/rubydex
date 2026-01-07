@@ -817,7 +817,9 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         if let Some(body) = node.body() {
             self.definitions_stack.push(definition_id);
+            self.visibility_stack.push(Visibility::Public);
             self.visit(&body);
+            self.visibility_stack.pop();
             self.definitions_stack.pop();
         }
     }
@@ -2516,6 +2518,44 @@ mod tests {
         assert_definition_at!(&context, "10:3-10:19", Method, |def| {
             assert_name_eq!(&context, "m3", def);
             assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_visibility_in_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              protected
+
+              class << self
+                def m1; end
+
+                private
+
+                def m2; end
+              end
+
+              def m3; end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:5-5:16", Method, |def| {
+            assert_name_eq!(&context, "m1", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "9:5-9:16", Method, |def| {
+            assert_name_eq!(&context, "m2", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "12:3-12:14", Method, |def| {
+            assert_name_eq!(&context, "m3", def);
+            assert_eq!(def.visibility(), &Visibility::Protected);
         });
     }
 
