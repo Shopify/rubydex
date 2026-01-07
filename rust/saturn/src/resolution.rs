@@ -169,6 +169,7 @@ fn handle_reference_unit(
 }
 
 /// Handle other definitions that don't require resolution, but need to have their declarations and membership created
+#[allow(clippy::too_many_lines)]
 fn handle_remaining_definitions(
     graph: &mut Graph,
     other_ids: Vec<crate::model::id::Id<crate::model::ids::DefinitionMarker>>,
@@ -228,11 +229,117 @@ fn handle_remaining_definitions(
                 });
             }
             Definition::InstanceVariable(var) => {
-                let owner_id = resolve_lexical_owner(graph, *var.lexical_nesting_id());
+                let str_id = *var.str_id();
 
-                create_declaration(graph, *var.str_id(), id, owner_id, |name| {
-                    Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
-                });
+                // Top-level instance variables belong to the `<main>` object, not `Object`.
+                // We can't represent `<main>` yet, so skip creating declarations for these.
+                // TODO: Make sure we introduce `<main>` representation later and update this
+                let Some(nesting_id) = *var.lexical_nesting_id() else {
+                    continue;
+                };
+
+                let Some(nesting_def) = graph.definitions().get(&nesting_id) else {
+                    continue;
+                };
+
+                match nesting_def {
+                    // When the instance variable is inside a method body, we determine the owner based on the method's receiver
+                    Definition::Method(method) => {
+                        // Method has explicit receiver (def self.foo or def Foo.bar)
+                        if let Some(receiver_name_id) = method.receiver() {
+                            let Some(NameRef::Resolved(resolved)) = graph.names().get(receiver_name_id) else {
+                                // TODO: add diagnostic for unresolved receiver
+                                continue;
+                            };
+                            let receiver_decl_id = *resolved.declaration_id();
+
+                            // Instance variable in singleton method - owned by the receiver's singleton class
+                            let owner_id = get_or_create_singleton_class(graph, receiver_decl_id);
+                            debug_assert!(
+                                matches!(
+                                    graph.declarations().get(&owner_id),
+                                    Some(Declaration::SingletonClass(_))
+                                ),
+                                "Instance variable in singleton method should be owned by a SingletonClass"
+                            );
+                            create_declaration(graph, str_id, id, owner_id, |name| {
+                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
+                                    name, owner_id,
+                                )))
+                            });
+                            continue;
+                        }
+
+                        // If the method has no explicit receiver, we resolve the owner based on the lexical nesting
+                        let method_owner_id = resolve_lexical_owner(graph, *method.lexical_nesting_id());
+
+                        // If the method is in a singleton class, the instance variable belongs to the class object
+                        // Like `class << Foo; def bar; @bar = 1; end; end`, where `@bar` is owned by `Foo::<Foo>`
+                        if let Some(decl) = graph.declarations().get(&method_owner_id)
+                            && matches!(decl, Declaration::SingletonClass(_))
+                        {
+                            // Method in singleton class - owner is the singleton class itself
+                            create_declaration(graph, str_id, id, method_owner_id, |name| {
+                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
+                                    name,
+                                    method_owner_id,
+                                )))
+                            });
+                        } else {
+                            // Regular instance method
+                            // Create an instance variable declaration for the method's owner
+                            create_declaration(graph, str_id, id, method_owner_id, |name| {
+                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
+                                    name,
+                                    method_owner_id,
+                                )))
+                            });
+                        }
+                    }
+                    // If the instance variable is directly in a class/module body, it belongs to the class object
+                    // and is owned by the singleton class of that class/module
+                    Definition::Class(_) | Definition::Module(_) => {
+                        let nesting_decl_id = graph
+                            .definitions_to_declarations()
+                            .get(&nesting_id)
+                            .copied()
+                            .unwrap_or(*OBJECT_ID);
+                        let owner_id = get_or_create_singleton_class(graph, nesting_decl_id);
+                        debug_assert!(
+                            matches!(
+                                graph.declarations().get(&owner_id),
+                                Some(Declaration::SingletonClass(_))
+                            ),
+                            "Instance variable in class/module body should be owned by a SingletonClass"
+                        );
+                        create_declaration(graph, str_id, id, owner_id, |name| {
+                            Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
+                        });
+                    }
+                    // If in a singleton class body directly, the owner is the singleton class's singleton class
+                    // Like `class << Foo; @bar = 1; end`, where `@bar` is owned by `Foo::<Foo>::<<Foo>>`
+                    Definition::SingletonClass(_) => {
+                        let singleton_class_decl_id = graph
+                            .definitions_to_declarations()
+                            .get(&nesting_id)
+                            .copied()
+                            .unwrap_or(*OBJECT_ID);
+                        let owner_id = get_or_create_singleton_class(graph, singleton_class_decl_id);
+                        debug_assert!(
+                            matches!(
+                                graph.declarations().get(&owner_id),
+                                Some(Declaration::SingletonClass(_))
+                            ),
+                            "Instance variable in singleton class body should be owned by a SingletonClass"
+                        );
+                        create_declaration(graph, str_id, id, owner_id, |name| {
+                            Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
+                        });
+                    }
+                    _ => {
+                        panic!("Unexpected lexical nesting for instance variable: {nesting_def:?}");
+                    }
+                }
             }
             Definition::ClassVariable(var) => {
                 // TODO: add diagnostic on the else branch. Defining class variables at the top level crashes
@@ -887,6 +994,19 @@ mod tests {
         );
     }
 
+    fn assert_instance_variable(context: &GraphTest, fqn: &str, owner: &str) {
+        let decl = context
+            .graph
+            .declarations()
+            .get(&DeclarationId::from(fqn))
+            .unwrap_or_else(|| panic!("{fqn} declaration should exist"));
+        assert!(
+            matches!(decl, Declaration::InstanceVariable(_)),
+            "{fqn} should be InstanceVariable, got {decl:?}"
+        );
+        assert_owner(decl, owner);
+    }
+
     #[test]
     fn resolving_top_level_references() {
         let mut context = GraphTest::new();
@@ -1456,6 +1576,155 @@ mod tests {
         });
         context.resolve();
         assert_constant_reference_to!(context, "Foo::Bar::Baz::CONST", "file:///foo.rb:8:2-8:7");
+    }
+
+    #[test]
+    fn resolution_for_instance_and_class_instance_variables() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              @foo = 0
+
+              def initialize
+                @bar = 1
+              end
+
+              def self.baz
+                @baz = 2
+              end
+
+              class << self
+                def qux
+                  @qux = 3
+                end
+
+                def self.nested
+                  @nested = 4
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_instance_variable(&context, "Foo::<Foo>::@foo", "Foo::<Foo>");
+        assert_instance_variable(&context, "Foo::@bar", "Foo");
+        assert_instance_variable(&context, "Foo::<Foo>::@baz", "Foo::<Foo>");
+        // @qux in `class << self; def qux` - self is Foo when called, so @qux belongs to Foo's singleton class
+        assert_instance_variable(&context, "Foo::<Foo>::@qux", "Foo::<Foo>");
+        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>::@nested", "Foo::<Foo>::<<Foo>>");
+    }
+
+    #[test]
+    fn resolution_for_instance_variables_with_dynamic_method_owner() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+
+            class Bar
+              def Foo.bar
+                @foo = 0
+              end
+
+              class << Foo
+                def Bar.baz
+                  @baz = 1
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_instance_variable(&context, "Foo::<Foo>::@foo", "Foo::<Foo>");
+        assert_instance_variable(&context, "Bar::<Bar>::@baz", "Bar::<Bar>");
+    }
+
+    #[test]
+    fn resolution_for_class_instance_variable_in_compact_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar; end
+
+            class Foo
+              class Bar::Baz
+                @baz = 1
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
+        assert_instance_variable(&context, "Bar::Baz::<Baz>::@baz", "Bar::Baz::<Baz>");
+    }
+
+    #[test]
+    fn resolution_for_instance_variable_in_singleton_class_body() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+                @bar = 1
+
+                class << self
+                  @baz = 2
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>::@bar", "Foo::<Foo>::<<Foo>>");
+        assert_instance_variable(
+            &context,
+            "Foo::<Foo>::<<Foo>>::<<<Foo>>>::@baz",
+            "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
+        );
+    }
+
+    #[test]
+    fn resolution_for_top_level_instance_variable() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            @foo = 0
+            "
+        });
+        context.resolve();
+
+        // Top-level instance variables belong to `<main>`, not `Object`.
+        // We can't represent `<main>` yet, so no declaration is created.
+        let foo_decl = context.graph.declarations().get(&DeclarationId::from("Object::@foo"));
+        assert!(foo_decl.is_none(), "Object::@foo declaration should not exist");
+    }
+
+    #[test]
+    fn resolution_for_instance_variable_with_unresolved_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def foo.bar
+                @baz = 0
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Instance variable in method with unresolved receiver should not create a declaration
+        let baz_decl = context.graph.declarations().get(&DeclarationId::from("Object::@baz"));
+        assert!(baz_decl.is_none(), "@baz declaration should not exist");
+
+        let foo_baz_decl = context.graph.declarations().get(&DeclarationId::from("Foo::@baz"));
+        assert!(foo_baz_decl.is_none(), "Foo::@baz declaration should not exist");
     }
 
     #[test]
