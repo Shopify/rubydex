@@ -320,6 +320,12 @@ impl<'a> RubyIndexer<'a> {
                     match parent {
                         ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
                         _ => {
+                            self.local_graph.add_diagnostic(
+                                Diagnostics::DynamicConstantReference,
+                                Offset::from_prism_location(&parent.location()),
+                                "Dynamic constant reference".to_string(),
+                            );
+
                             return None;
                         }
                     }
@@ -482,17 +488,37 @@ impl<'a> RubyIndexer<'a> {
             return;
         };
 
+        let lexical_nesting_id = self.parent_nesting_id().copied();
+
         // Collect all arguments as constant references. Ignore anything that isn't a constant
         let reference_ids: Vec<_> = arguments
             .arguments()
             .iter()
             .filter_map(|arg| {
                 if arg.as_self_node().is_some() {
+                    if lexical_nesting_id.is_none() {
+                        self.local_graph.add_diagnostic(
+                            Diagnostics::TopLevelMixinSelf,
+                            Offset::from_prism_location(&arg.location()),
+                            "Top level mixin self".to_string(),
+                        );
+
+                        return None;
+                    }
+
                     // FIXME: Ideally we would want to save the mixin as `self` but we can only save mixins with a name.
                     // We'll just use the parent nesting name id for now.
                     self.parent_nesting_name_id()
+                } else if let Some(constant_ref_id) = self.index_constant_reference(&arg, true) {
+                    Some(constant_ref_id)
                 } else {
-                    self.index_constant_reference(&arg, true)
+                    self.local_graph.add_diagnostic(
+                        Diagnostics::DynamicAncestor,
+                        Offset::from_prism_location(&arg.location()),
+                        "Dynamic mixin argument".to_string(),
+                    );
+
+                    None
                 }
             })
             .collect();
@@ -501,12 +527,11 @@ impl<'a> RubyIndexer<'a> {
             return;
         }
 
-        let Some(lexical_nesting_id) = self.parent_nesting_id().copied() else {
+        let Some(lexical_nesting_id) = lexical_nesting_id else {
             return;
         };
-        let Some(definition) = self.local_graph.get_definition_mut(lexical_nesting_id) else {
-            return;
-        };
+
+        let definition = self.local_graph.get_definition_mut(lexical_nesting_id).unwrap();
 
         for id in reference_ids {
             let mixin = match mixin_type {
@@ -606,6 +631,16 @@ impl Visit<'_> for RubyIndexer<'_> {
         let lexical_nesting_id = self.parent_nesting_id().copied();
         let superclass = node.superclass().and_then(|n| self.index_constant_reference(&n, true));
 
+        if let Some(superclass_node) = node.superclass()
+            && superclass.is_none()
+        {
+            self.local_graph.add_diagnostic(
+                Diagnostics::DynamicAncestor,
+                Offset::from_prism_location(&superclass_node.location()),
+                "Dynamic superclass".to_string(),
+            );
+        }
+
         if let Some(name_id) = self.index_constant_reference(&node.constant_path(), false) {
             let definition = Definition::Class(Box::new(ClassDefinition::new(
                 name_id,
@@ -682,6 +717,12 @@ impl Visit<'_> for RubyIndexer<'_> {
         };
 
         let Some(attached_target) = attached_target else {
+            self.local_graph.add_diagnostic(
+                Diagnostics::DynamicSingletonDefinition,
+                Offset::from_prism_location(&node.location()),
+                "Dynamic singleton class definition".to_string(),
+            );
+
             return;
         };
 
@@ -861,6 +902,12 @@ impl Visit<'_> for RubyIndexer<'_> {
                 // Dynamic receiver (def foo.bar) - visit and then skip
                 // We still want to visit because it could be a variable reference
                 _ => {
+                    self.local_graph.add_diagnostic(
+                        Diagnostics::DynamicSingletonDefinition,
+                        Offset::from_prism_location(&node.location()),
+                        "Dynamic receiver for singleton method definition".to_string(),
+                    );
+
                     self.visit(&recv_node);
                     return;
                 }
@@ -1751,7 +1798,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic constant reference (1:7-1:10)"]);
         assert!(context.graph().definitions().is_empty());
     }
 
@@ -1846,7 +1893,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic constant reference (1:8-1:11)"]);
         assert!(context.graph().definitions().is_empty());
     }
 
@@ -2111,7 +2158,10 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["Warning: Dynamic receiver for singleton method definition (1:1-1:17)"]
+        );
         assert_eq!(context.graph().definitions().len(), 0);
         assert_method_references_eq!(&context, vec!["foo"]);
     }
@@ -2247,7 +2297,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic singleton class definition (1:1-3:4)"]);
         assert_eq!(context.graph().definitions().len(), 0);
     }
 
@@ -3123,7 +3173,7 @@ mod tests {
             r##"
             puts C1
             puts C2::C3::C4
-            puts foo::IGNORED0
+            puts ignored0::IGNORED0
             puts C6.foo
             foo = C7
             C8 << 42
@@ -3144,7 +3194,13 @@ mod tests {
             "##
         });
 
-        assert_diagnostics_eq!(&context, vec!["Warning: assigned but unused variable - foo (5:1-5:4)"]);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "Warning: assigned but unused variable - foo (5:1-5:4)",
+                "Warning: Dynamic constant reference (3:6-3:14)",
+            ]
+        );
 
         assert_constant_references_eq!(
             &context,
@@ -3508,10 +3564,20 @@ mod tests {
             class Foo < method_call; end
             class Bar < 123; end
             class MyMigration < ActiveRecord::Migration[8.0]; end
+            class Baz < foo::Bar; end
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "Warning: Dynamic superclass (1:13-1:24)",
+                "Warning: Dynamic superclass (2:13-2:16)",
+                "Warning: Dynamic superclass (3:21-3:49)",
+                "Warning: Dynamic constant reference (4:13-4:16)",
+                "Warning: Dynamic superclass (4:13-4:21)",
+            ]
+        );
 
         assert_definition_at!(&context, "1:1-1:29", Class, |def| {
             assert!(def.superclass_ref().is_none(),);
@@ -3524,18 +3590,24 @@ mod tests {
         assert_definition_at!(&context, "3:1-3:54", Class, |def| {
             assert!(def.superclass_ref().is_none(),);
         });
+
+        assert_definition_at!(&context, "4:1-4:26", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
     }
 
     #[test]
     fn index_includes_at_top_level() {
         let context = index_source({
             "
-            include Bar, Baz, ignored, 123
+            include Bar, Baz
             include Qux
             "
         });
 
         assert_no_diagnostics!(&context);
+
+        // FIXME: This should be indexed
         assert_eq!(context.graph().definitions().len(), 0);
     }
 
@@ -3544,7 +3616,7 @@ mod tests {
         let context = index_source({
             "
             class Foo
-              include Bar, Baz, ignored, 123
+              include Bar, Baz
               include Qux
             end
             "
@@ -3562,7 +3634,7 @@ mod tests {
         let context = index_source({
             "
             module Foo
-              include Bar, Baz, ignored, 123
+              include Bar, Baz
               include Qux
             end
             "
@@ -3579,12 +3651,14 @@ mod tests {
     fn index_prepends_at_top_level() {
         let context = index_source({
             "
-            prepend Bar, Baz, ignored, 123
+            prepend Bar, Baz
             prepend Qux
             "
         });
 
         assert_no_diagnostics!(&context);
+
+        // FIXME: This should be indexed
         assert_eq!(context.graph().definitions().len(), 0);
     }
 
@@ -3593,7 +3667,7 @@ mod tests {
         let context = index_source({
             "
             class Foo
-              prepend Bar, Baz, ignored, 123
+              prepend Bar, Baz
               prepend Qux
             end
             "
@@ -3611,7 +3685,7 @@ mod tests {
         let context = index_source({
             "
             module Foo
-              prepend Bar, Baz, ignored, 123
+              prepend Bar, Baz
               prepend Qux
             end
             "
@@ -3664,6 +3738,37 @@ mod tests {
     }
 
     #[test]
+    fn index_mixins_with_dynamic_constants() {
+        let context = index_source({
+            "
+            include foo::Bar
+            prepend foo::Baz
+            extend foo::Qux
+
+            include foo
+            prepend 123
+            extend 'x'
+            "
+        });
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "Warning: Dynamic constant reference (1:9-1:12)",
+                "Warning: Dynamic mixin argument (1:9-1:17)",
+                "Warning: Dynamic constant reference (2:9-2:12)",
+                "Warning: Dynamic mixin argument (2:9-2:17)",
+                "Warning: Dynamic constant reference (3:8-3:11)",
+                "Warning: Dynamic mixin argument (3:8-3:16)",
+                "Warning: Dynamic mixin argument (5:9-5:12)",
+                "Warning: Dynamic mixin argument (6:9-6:12)",
+                "Warning: Dynamic mixin argument (7:8-7:11)"
+            ]
+        );
+        assert!(context.graph().definitions().is_empty());
+    }
+
+    #[test]
     fn index_mixins_self_at_top_level() {
         let context = index_source({
             "
@@ -3673,7 +3778,14 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "Warning: Top level mixin self (1:9-1:13)",
+                "Warning: Top level mixin self (2:9-2:13)",
+                "Warning: Top level mixin self (3:8-3:12)"
+            ]
+        );
 
         assert_eq!(context.graph().definitions().len(), 0);
     }

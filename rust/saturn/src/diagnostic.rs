@@ -105,6 +105,10 @@ diagnostics! {
     (2001, ParseWarning, Severity::Warning);
 
     // 3000 - Indexing errors
+    (3001, DynamicConstantReference, Severity::Warning);
+    (3002, DynamicSingletonDefinition, Severity::Warning);
+    (3003, DynamicAncestor, Severity::Warning);
+    (3004, TopLevelMixinSelf, Severity::Warning);
 
     // 4000 - Resolution errors
 }
