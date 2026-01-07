@@ -709,15 +709,13 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             self.add_member_to_current_owner(definition_id);
 
-            self.definitions_stack.push(definition_id);
-            self.visibility_stack.push(Visibility::Public);
-
             if let Some(body) = node.body() {
+                self.definitions_stack.push(definition_id);
+                self.visibility_stack.push(Visibility::Public);
                 self.visit(&body);
+                self.visibility_stack.pop();
+                self.definitions_stack.pop();
             }
-
-            self.visibility_stack.pop();
-            self.definitions_stack.pop();
         }
     }
 
@@ -739,15 +737,13 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             self.add_member_to_current_owner(definition_id);
 
-            self.definitions_stack.push(definition_id);
-            self.visibility_stack.push(Visibility::Public);
-
             if let Some(body) = node.body() {
+                self.definitions_stack.push(definition_id);
+                self.visibility_stack.push(Visibility::Public);
                 self.visit(&body);
+                self.visibility_stack.pop();
+                self.definitions_stack.pop();
             }
-
-            self.visibility_stack.pop();
-            self.definitions_stack.pop();
         }
     }
 
@@ -1124,6 +1120,8 @@ impl Visit<'_> for RubyIndexer<'_> {
                     return;
                 }
 
+                let visibility = Visibility::from_string(message.as_str());
+
                 if let Some(arguments) = node.arguments() {
                     // With this case:
                     //
@@ -1132,7 +1130,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     // ```
                     //
                     // We push the new visibility to the stack and then pop it after visiting the arguments so it only affects the method definition.
-                    self.visibility_stack.push(Visibility::from_string(message.as_str()));
+                    self.visibility_stack.push(visibility);
                     self.visit_arguments_node(&arguments);
                     self.visibility_stack.pop();
                 } else {
@@ -1146,7 +1144,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     //
                     // We replace the current visibility with the new one so it only affects all the subsequent method definitions.
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
-                    *last_visibility = Visibility::from_string(message.as_str());
+                    *last_visibility = visibility;
                 }
             }
             _ => {
@@ -2783,7 +2781,7 @@ mod tests {
 
                 attr_reader :baz
 
-                protected
+                public
               end
 
               attr_writer :qux
