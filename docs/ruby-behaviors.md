@@ -11,7 +11,8 @@ This document describes various Ruby language behaviors, compiled from observati
 5. [Attribute Methods](#attribute-methods)
 6. [Variable Scoping](#variable-scoping)
 7. [Constant References](#constant-references)
-8. [Singleton Classes](#singleton-classes)
+8. [Constant Aliases](#constant-aliases)
+9. [Singleton Classes](#singleton-classes)
 
 ## Namespace Qualification
 
@@ -623,6 +624,78 @@ end
 ```
 
 Constant paths are resolved left-to-right: `Object` is resolved first, then `String` is looked up within `Object`.
+
+## Constant Aliases
+
+Constants can be assigned to reference other constants, creating **aliases**:
+
+```ruby
+module Foo
+  CONST = 123
+end
+
+ALIAS = Foo
+ALIAS::CONST  # Resolves to Foo::CONST (123)
+```
+
+### Chained Aliases
+
+Aliases can reference other aliases, forming chains:
+
+```ruby
+module Foo
+  CONST = 123
+end
+
+ALIAS1 = Foo
+ALIAS2 = ALIAS1
+ALIAS2::CONST  # Resolves through ALIAS2 -> ALIAS1 -> Foo -> Foo::CONST
+```
+
+### Scoped Aliases
+
+Aliases can be defined within namespaces:
+
+```ruby
+module Foo
+  CONST = 1
+end
+
+module Bar
+  MyFoo = Foo  # Bar::MyFoo is an alias for Foo
+end
+
+Bar::MyFoo::CONST  # Resolves to Foo::CONST
+```
+
+Aliases can also be assigned using qualified paths:
+
+```ruby
+module Foo; end
+module Bar; end
+
+Bar::ALIAS = Foo  # Creates Bar::ALIAS pointing to Foo
+```
+
+### Conditional Aliases
+
+The `||=` operator can create conditional aliases:
+
+```ruby
+ALIAS ||= Foo  # Only assigns if ALIAS is not already defined
+```
+
+### Defining Classes Or Modules Under Aliased Path
+
+Ruby allows defining classes or modules under aliases. The defined class/module will have its fully qualified name based on the alias target, not the alias itself. For example:
+
+```ruby
+class Foo; end
+ALIAS = Foo
+
+class ALIAS::Bar; end
+ALIAS::Bar.name # Foo::Bar, not ALIAS::Bar
+```
 
 ## Singleton Classes
 
