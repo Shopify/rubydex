@@ -156,6 +156,82 @@ pub struct ClassDefinition {
     mixins: Vec<Mixin>,
 }
 
+impl ClassDefinition {
+    #[must_use]
+    pub const fn new(
+        name_id: NameId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Vec<Comment>,
+        lexical_nesting_id: Option<DefinitionId>,
+        superclass_ref: Option<NameId>,
+    ) -> Self {
+        Self {
+            name_id,
+            uri_id,
+            offset,
+            comments,
+            lexical_nesting_id,
+            superclass_ref,
+            members: Vec::new(),
+            mixins: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+    }
+
+    #[must_use]
+    pub fn name_id(&self) -> &NameId {
+        &self.name_id
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn superclass_ref(&self) -> Option<NameId> {
+        self.superclass_ref
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &[DefinitionId] {
+        &self.members
+    }
+
+    pub fn add_member(&mut self, member_id: DefinitionId) {
+        self.members.push(member_id);
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
+    }
+
+    pub fn add_mixin(&mut self, mixin: Mixin) {
+        self.mixins.push(mixin);
+    }
+}
+
 /// A singleton class definition created from `class << X` syntax.
 /// This is created only when `class << X` syntax is encountered, NOT for `def self.foo`.
 /// Methods with receivers (like `def self.foo`) have their `receiver` field set instead.
@@ -249,82 +325,6 @@ impl SingletonClassDefinition {
 
     pub fn add_member(&mut self, member_id: DefinitionId) {
         self.members.push(member_id);
-    }
-
-    pub fn add_mixin(&mut self, mixin: Mixin) {
-        self.mixins.push(mixin);
-    }
-}
-
-impl ClassDefinition {
-    #[must_use]
-    pub const fn new(
-        name_id: NameId,
-        uri_id: UriId,
-        offset: Offset,
-        comments: Vec<Comment>,
-        lexical_nesting_id: Option<DefinitionId>,
-        superclass_ref: Option<NameId>,
-    ) -> Self {
-        Self {
-            name_id,
-            uri_id,
-            offset,
-            comments,
-            lexical_nesting_id,
-            superclass_ref,
-            members: Vec::new(),
-            mixins: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
-    }
-
-    #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
-    }
-
-    #[must_use]
-    pub fn uri_id(&self) -> &UriId {
-        &self.uri_id
-    }
-
-    #[must_use]
-    pub fn offset(&self) -> &Offset {
-        &self.offset
-    }
-
-    #[must_use]
-    pub fn comments(&self) -> &[Comment] {
-        &self.comments
-    }
-
-    #[must_use]
-    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
-        &self.lexical_nesting_id
-    }
-
-    #[must_use]
-    pub fn superclass_ref(&self) -> Option<NameId> {
-        self.superclass_ref
-    }
-
-    #[must_use]
-    pub fn members(&self) -> &[DefinitionId] {
-        &self.members
-    }
-
-    pub fn add_member(&mut self, member_id: DefinitionId) {
-        self.members.push(member_id);
-    }
-
-    #[must_use]
-    pub fn mixins(&self) -> &[Mixin] {
-        &self.mixins
     }
 
     pub fn add_mixin(&mut self, mixin: Mixin) {
