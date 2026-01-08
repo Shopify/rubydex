@@ -1890,19 +1890,10 @@ mod tests {
     }
 
     fn format_diagnostics(context: &LocalGraphTest) -> Vec<String> {
-        context
-            .graph()
-            .diagnostics()
-            .iter()
-            .map(|d| {
-                format!(
-                    "{}: {} ({})",
-                    d.severity().as_str(),
-                    d.message(),
-                    d.offset().to_display_range(context.source())
-                )
-            })
-            .collect()
+        let mut diagnostics = context.graph().diagnostics().iter().collect::<Vec<_>>();
+
+        diagnostics.sort_by_key(|d| d.offset());
+        diagnostics.iter().map(|d| d.formatted(context.source())).collect()
     }
 
     macro_rules! assert_diagnostics_eq {
@@ -3642,8 +3633,8 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "parse-warning: assigned but unused variable - foo (5:1-5:4)",
                 "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
+                "parse-warning: assigned but unused variable - foo (5:1-5:4)",
             ]
         );
 
