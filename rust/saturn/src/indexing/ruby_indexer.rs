@@ -25,6 +25,26 @@ enum MixinType {
     Extend,
 }
 
+enum Nesting {
+    /// Nesting stack entries that produce a new lexical scope to which constant references must be attached to (i.e.:
+    /// the class and module keywords). All lexical scopes are also owner, but the opposite is not true
+    LexicalScope(DefinitionId),
+    /// An owner entry that will be associated with all members encountered, but will not produce a new lexical scope
+    /// (e.g.: Module.new or Class.new)
+    #[allow(dead_code)]
+    Owner(DefinitionId),
+    /// A method entry that is used to set the correct owner for instance variables, but cannot own anything itself
+    Method(DefinitionId),
+}
+
+impl Nesting {
+    fn id(&self) -> DefinitionId {
+        match self {
+            Nesting::LexicalScope(id) | Nesting::Owner(id) | Nesting::Method(id) => *id,
+        }
+    }
+}
+
 /// The indexer for the definitions found in the Ruby source code.
 ///
 /// It implements the `Visit` trait from `ruby_prism` to visit the AST and create a hash of definitions that must be
@@ -34,7 +54,7 @@ pub struct RubyIndexer<'a> {
     local_graph: LocalGraph,
     source: &'a str,
     comments: Vec<CommentGroup>,
-    definitions_stack: Vec<DefinitionId>,
+    nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<Visibility>,
 }
 
@@ -49,7 +69,7 @@ impl<'a> RubyIndexer<'a> {
             local_graph,
             source,
             comments: Vec::new(),
-            definitions_stack: Vec::new(),
+            nesting_stack: Vec::new(),
             visibility_stack: vec![Visibility::Private],
         }
     }
@@ -271,18 +291,22 @@ impl<'a> RubyIndexer<'a> {
     ///
     /// Panics if the definition is not a class, module, or singleton class
     fn current_owner_name_id(&self) -> Option<NameId> {
-        for &id in self.definitions_stack.iter().rev() {
-            if let Some(definition) = self.local_graph.definitions().get(&id) {
-                match definition {
-                    Definition::Class(class_def) => return Some(*class_def.name_id()),
-                    Definition::Module(module_def) => return Some(*module_def.name_id()),
-                    Definition::SingletonClass(singleton_class_def) => return Some(*singleton_class_def.name_id()),
-                    Definition::Method(_) => {}
-                    _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
+        self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
+            Nesting::LexicalScope(id) | Nesting::Owner(id) => {
+                if let Some(definition) = self.local_graph.definitions().get(id) {
+                    match definition {
+                        Definition::Class(class_def) => Some(*class_def.name_id()),
+                        Definition::Module(module_def) => Some(*module_def.name_id()),
+                        Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
+                        Definition::Method(_) => None,
+                        _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
+                    }
+                } else {
+                    None
                 }
             }
-        }
-        None
+            Nesting::Method(_) => None,
+        })
     }
 
     // Runs the given closure if the given call `node` is invoked directly on `self` for each one of its string or
@@ -418,10 +442,10 @@ impl<'a> RubyIndexer<'a> {
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(location);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let parent_nesting_id = self.parent_nesting_id();
         let uri_id = self.uri_id;
 
-        let definition = builder(str_id, offset, comments, lexical_nesting_id, uri_id);
+        let definition = builder(str_id, offset, comments, parent_nesting_id, uri_id);
         let definition_id = self.local_graph.add_definition(definition);
 
         self.add_member_to_current_owner(definition_id);
@@ -434,7 +458,7 @@ impl<'a> RubyIndexer<'a> {
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(location);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let parent_nesting_id = self.parent_nesting_id();
         let uri_id = self.uri_id;
 
         let definition = Definition::InstanceVariable(Box::new(InstanceVariableDefinition::new(
@@ -442,7 +466,7 @@ impl<'a> RubyIndexer<'a> {
             uri_id,
             offset,
             comments,
-            lexical_nesting_id,
+            parent_nesting_id,
         )));
 
         let definition_id = self.local_graph.add_definition(definition);
@@ -488,7 +512,7 @@ impl<'a> RubyIndexer<'a> {
 
         let offset = Offset::from_prism_location(&location);
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_lexical_scope_id();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
             name_id,
@@ -507,18 +531,10 @@ impl<'a> RubyIndexer<'a> {
     /// Returns the definition ID of the current nesting (class, module, or singleton class),
     /// but skips methods in the definitions stack.
     fn current_nesting_definition_id(&self) -> Option<DefinitionId> {
-        self.definitions_stack
-            .iter()
-            .rev()
-            .find(|&&id| {
-                self.local_graph.definitions().get(&id).is_some_and(|def| {
-                    matches!(
-                        def,
-                        Definition::Class(_) | Definition::SingletonClass(_) | Definition::Module(_)
-                    )
-                })
-            })
-            .copied()
+        self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
+            Nesting::LexicalScope(id) | Nesting::Owner(id) => Some(*id),
+            Nesting::Method(_) => None,
+        })
     }
 
     /// Adds a member to the current owner (class, module, or singleton class).
@@ -548,7 +564,7 @@ impl<'a> RubyIndexer<'a> {
             return;
         };
 
-        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let parent_nesting_id = self.current_nesting_definition_id();
 
         // Collect all arguments as constant references. Ignore anything that isn't a constant
         let reference_ids: Vec<_> = arguments
@@ -556,7 +572,7 @@ impl<'a> RubyIndexer<'a> {
             .iter()
             .filter_map(|arg| {
                 if arg.as_self_node().is_some() {
-                    if lexical_nesting_id.is_none() {
+                    if parent_nesting_id.is_none() {
                         self.local_graph.add_diagnostic(
                             Diagnostics::TopLevelMixinSelf,
                             Offset::from_prism_location(&arg.location()),
@@ -587,7 +603,7 @@ impl<'a> RubyIndexer<'a> {
             return;
         }
 
-        let Some(lexical_nesting_id) = lexical_nesting_id else {
+        let Some(lexical_nesting_id) = parent_nesting_id else {
             return;
         };
 
@@ -626,8 +642,16 @@ impl<'a> RubyIndexer<'a> {
     }
 
     #[must_use]
-    fn parent_nesting_id(&self) -> Option<&DefinitionId> {
-        self.definitions_stack.last()
+    fn parent_lexical_scope_id(&self) -> Option<DefinitionId> {
+        self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
+            Nesting::LexicalScope(id) => Some(*id),
+            Nesting::Owner(_) | Nesting::Method(_) => None,
+        })
+    }
+
+    #[must_use]
+    fn parent_nesting_id(&self) -> Option<DefinitionId> {
+        self.nesting_stack.last().map(Nesting::id)
     }
 
     #[must_use]
@@ -682,7 +706,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_lexical_scope_id();
         let superclass = node.superclass().and_then(|n| self.index_constant_reference(&n, true));
 
         if let Some(superclass_node) = node.superclass()
@@ -710,11 +734,11 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.add_member_to_current_owner(definition_id);
 
             if let Some(body) = node.body() {
-                self.definitions_stack.push(definition_id);
+                self.nesting_stack.push(Nesting::LexicalScope(definition_id));
                 self.visibility_stack.push(Visibility::Public);
                 self.visit(&body);
                 self.visibility_stack.pop();
-                self.definitions_stack.pop();
+                self.nesting_stack.pop();
             }
         }
     }
@@ -722,7 +746,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_lexical_scope_id();
 
         if let Some(constant_ref_id) = self.index_constant_reference(&node.constant_path(), false) {
             let definition = Definition::Module(Box::new(ModuleDefinition::new(
@@ -738,11 +762,11 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.add_member_to_current_owner(definition_id);
 
             if let Some(body) = node.body() {
-                self.definitions_stack.push(definition_id);
+                self.nesting_stack.push(Nesting::LexicalScope(definition_id));
                 self.visibility_stack.push(Visibility::Public);
                 self.visit(&body);
                 self.visibility_stack.pop();
-                self.definitions_stack.pop();
+                self.nesting_stack.pop();
             }
         }
     }
@@ -778,7 +802,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let lexical_nesting_id = self.parent_lexical_scope_id();
 
         let singleton_class_name = {
             let name = self
@@ -812,11 +836,11 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.add_member_to_current_owner(definition_id);
 
         if let Some(body) = node.body() {
-            self.definitions_stack.push(definition_id);
+            self.nesting_stack.push(Nesting::LexicalScope(definition_id));
             self.visibility_stack.push(Visibility::Public);
             self.visit(&body);
             self.visibility_stack.pop();
-            self.definitions_stack.pop();
+            self.nesting_stack.pop();
         }
     }
 
@@ -911,7 +935,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&node.location());
         let comments = self.find_comments_for(offset.start()).unwrap_or_default();
-        let lexical_nesting_id = self.parent_nesting_id().copied();
+        let parent_nesting_id = self.parent_nesting_id();
         let parameters = self.collect_parameters(node);
         let is_singleton = node.receiver().is_some();
 
@@ -951,7 +975,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.uri_id,
             offset,
             comments,
-            lexical_nesting_id,
+            parent_nesting_id,
             parameters,
             visibility,
             receiver,
@@ -962,9 +986,9 @@ impl Visit<'_> for RubyIndexer<'_> {
         self.add_member_to_current_owner(definition_id);
 
         if let Some(body) = node.body() {
-            self.definitions_stack.push(definition_id);
+            self.nesting_stack.push(Nesting::Method(definition_id));
             self.visit(&body);
-            self.definitions_stack.pop();
+            self.nesting_stack.pop();
         }
     }
 
@@ -979,7 +1003,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
             Self::each_string_or_symbol_arg(call, |name, location| {
                 let str_id = self.local_graph.intern_string(name);
-                let lexical_nesting_id = self.parent_nesting_id().copied();
+                let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
                 let comments = self.find_comments_for(offset.start()).unwrap_or_default();
 
@@ -989,7 +1013,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.uri_id,
                         offset,
                         comments,
-                        lexical_nesting_id,
+                        parent_nesting_id,
                         *self.current_visibility(),
                     ))),
                     AttrKind::Reader => Definition::AttrReader(Box::new(AttrReaderDefinition::new(
@@ -997,7 +1021,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.uri_id,
                         offset,
                         comments,
-                        lexical_nesting_id,
+                        parent_nesting_id,
                         *self.current_visibility(),
                     ))),
                     AttrKind::Writer => Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
@@ -1005,7 +1029,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.uri_id,
                         offset,
                         comments,
-                        lexical_nesting_id,
+                        parent_nesting_id,
                         *self.current_visibility(),
                     ))),
                 };
@@ -1083,7 +1107,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.uri_id,
                     offset,
                     comments,
-                    self.parent_nesting_id().copied(),
+                    self.parent_nesting_id(),
                 )));
 
                 let definition_id = self.local_graph.add_definition(definition);
@@ -1326,7 +1350,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.uri_id,
             offset,
             comments,
-            self.parent_nesting_id().copied(),
+            self.parent_nesting_id(),
         )));
 
         let definition_id = self.local_graph.add_definition(definition);
@@ -1349,7 +1373,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.uri_id,
             offset,
             comments,
-            self.parent_nesting_id().copied(),
+            self.parent_nesting_id(),
         )));
 
         let definition_id = self.local_graph.add_definition(definition);
