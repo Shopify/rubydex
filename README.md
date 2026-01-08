@@ -1,43 +1,25 @@
 # Rubydex
 
-TODO
-
-## Documentation
-
-- [Ruby Language Behaviors](docs/ruby-behaviors.md) - Comprehensive documentation of Ruby language behaviors that the indexer handles, including lexical scoping, constant resolution, method parameters, attribute methods, and more. This document is useful for understanding the nuances of Ruby that affect indexing.
+This project is a high performance static analysis toolkit for the Ruby language. The goal is to be a solid
+foundation to power a variety of tools, such as type checkers, linters, language servers and more.
 
 ## Usage
 
-TODO
+Both Ruby and Rust APIs are made available through a gem and a crate, respectively. Here's a simple example
+of using the Ruby API:
 
-## Development
+```ruby
+# Create a new graph representing the current workspace
+graph = Rubydex::Graph.new
+# Index the entire workspace with all dependencies
+graph.index_workspace
+# Transform the initially collected information into its semantic understanding by running resolution
+graph.resolve
 
-TODO: move to a proper contributing file.
-
-### Compiling the Rust and C code
-
-The command `bundle exec rake compile` can be used to build both the Rust and C libraries. To clean generated files, simply run `bundle exec rake clean`.
-
-### Running tests
-
-Run `bundle exec rake test` to execute both the Ruby and Rust test suites. To run only the Ruby tests, use `bundle exec rake ruby_test`. The combined lint-and-test flow is available through `bundle exec rake check`.
-
-### Running memory leak and other sanitization checks
-
-We have two layers of sanitization checks:
-
-- [ruby_memcheck](https://github.com/Shopify/ruby_memcheck): uses Valgrind to find memory leaks by running our Ruby test suite (only supported for Linux)
-- Rust sanitizers for valid memory addresses, leaks and thread data races
-
-Here's how to run the checks locally:
-
-```shell
-# Run ruby_memcheck in combination with a Rust sanitization mode (Linux only)
-SANITIZER=leak bundle exec rake ruby_test:valgrind
-
-# Run only ruby_memcheck (Linux only)
-bundle exec rake ruby_test:valgrind
-
-# Run Rust sanitization only
-SANITIZER=leak bundle exec rake ruby_test
+# Access the information as needed
+graph["Foo"]
 ```
+
+## Contributing
+
+See [the contributing documentation](CONTRIBUTING.md).
