@@ -494,13 +494,13 @@ mod tests {
         context.delete_uri("file:///foo.rb");
         context.resolve();
 
-        assert!(context.graph.documents.is_empty());
-        assert!(context.graph.definitions.is_empty());
+        assert!(context.graph().documents.is_empty());
+        assert!(context.graph().definitions.is_empty());
         // Object is left
-        let read_lock = context.graph.declarations.read().unwrap();
+        let read_lock = context.graph().declarations.read().unwrap();
         assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
 
-        context.graph.assert_integrity();
+        context.graph().assert_integrity();
     }
 
     #[test]
@@ -512,14 +512,14 @@ mod tests {
         context.index_uri("file:///foo.rb", "");
         context.resolve();
 
-        assert!(context.graph.definitions.is_empty());
+        assert!(context.graph().definitions.is_empty());
         // Object is left
-        let read_lock = context.graph.declarations.read().unwrap();
+        let read_lock = context.graph().declarations.read().unwrap();
         assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
         // URI remains if the file was not deleted, but definitions got erased
-        assert_eq!(context.graph.documents.len(), 1);
+        assert_eq!(context.graph().documents.len(), 1);
 
-        context.graph.assert_integrity();
+        context.graph().assert_integrity();
     }
 
     #[test]
@@ -529,16 +529,16 @@ mod tests {
         context.index_uri("file:///foo.rb", "module Foo; end");
         context.resolve();
 
-        assert_eq!(context.graph.definitions.len(), 1);
-        let read_lock = context.graph.declarations.read().unwrap();
+        assert_eq!(context.graph().definitions.len(), 1);
+        let read_lock = context.graph().declarations.read().unwrap();
         let declaration = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
-        let document = context.graph.documents.get(&UriId::from("file:///foo.rb")).unwrap();
+        let document = context.graph().documents.get(&UriId::from("file:///foo.rb")).unwrap();
         assert_eq!(document.uri(), "file:///foo.rb");
         assert_eq!(declaration.definitions().len(), 1);
         assert_eq!(document.definitions().len(), 1);
 
-        context.graph.assert_integrity();
+        context.graph().assert_integrity();
     }
 
     #[test]
@@ -550,25 +550,25 @@ mod tests {
         context.index_uri("file:///foo.rb", "\n\n\n\n\n\nmodule Foo; end");
         context.resolve();
 
-        assert_eq!(context.graph.definitions.len(), 1);
-        let read_lock = context.graph.declarations.read().unwrap();
+        assert_eq!(context.graph().definitions.len(), 1);
+        let read_lock = context.graph().declarations.read().unwrap();
         let declaration = read_lock.get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         assert_eq!(
             context
-                .graph
-                .documents
+                .graph()
+                .documents()
                 .get(&UriId::from("file:///foo.rb"))
                 .unwrap()
                 .uri(),
             "file:///foo.rb"
         );
 
-        let definitions = context.graph.get("Foo").unwrap();
+        let definitions = context.graph().get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].offset().start(), 6);
 
-        context.graph.assert_integrity();
+        context.graph().assert_integrity();
     }
 
     #[test]
@@ -579,13 +579,13 @@ mod tests {
         context.index_uri("file:///foo2.rb", "\n\n\n\n\nmodule Foo; end");
         context.resolve();
 
-        let definitions = context.graph.get("Foo").unwrap();
+        let definitions = context.graph().get("Foo").unwrap();
         let mut offsets = definitions.iter().map(|d| d.offset().start()).collect::<Vec<_>>();
         offsets.sort_unstable();
         assert_eq!(definitions.len(), 2);
         assert_eq!(vec![0, 5], offsets);
 
-        context.graph.assert_integrity();
+        context.graph().assert_integrity();
     }
 
     #[test]
@@ -606,7 +606,7 @@ mod tests {
 
         context.resolve();
 
-        let definitions = context.graph.get("Foo").unwrap();
+        let definitions = context.graph().get("Foo").unwrap();
         assert_eq!(definitions.len(), 2);
 
         let mut offsets = definitions
@@ -617,7 +617,7 @@ mod tests {
         assert_eq!([0, 15], offsets[0]);
         assert_eq!([18, 33], offsets[1]);
 
-        context.graph.assert_integrity();
+        context.graph().assert_integrity();
     }
 
     #[test]
@@ -639,21 +639,21 @@ mod tests {
 
         context.resolve();
 
-        let definitions = context.graph.get("CommentedClass").unwrap();
+        let definitions = context.graph().get("CommentedClass").unwrap();
         let def = definitions.first().unwrap();
         assert_eq!(
             def.comments().iter().map(Comment::string).collect::<Vec<&String>>(),
             vec!["# This is a class comment", "# Multi-line comment"]
         );
 
-        let definitions = context.graph.get("CommentedModule").unwrap();
+        let definitions = context.graph().get("CommentedModule").unwrap();
         let def = definitions.first().unwrap();
         assert_eq!(
             def.comments().iter().map(Comment::string).collect::<Vec<&String>>(),
             vec!["# Module comment"]
         );
 
-        let definitions = context.graph.get("NoCommentClass").unwrap();
+        let definitions = context.graph().get("NoCommentClass").unwrap();
         let def = definitions.first().unwrap();
         assert!(def.comments().is_empty());
     }
@@ -678,7 +678,7 @@ mod tests {
         context.resolve();
 
         {
-            let read_lock = context.graph.declarations.read().unwrap();
+            let read_lock = context.graph().declarations.read().unwrap();
             if let Declaration::Module(foo) = read_lock.get(&DeclarationId::from("Foo")).unwrap() {
                 assert!(foo.members().contains_key(&StringId::from("Bar")));
             } else {
@@ -695,7 +695,7 @@ mod tests {
         });
         context.resolve();
 
-        let read_lock = context.graph.declarations.read().unwrap();
+        let read_lock = context.graph().declarations.read().unwrap();
         if let Declaration::Module(foo) = read_lock.get(&DeclarationId::from("Foo")).unwrap() {
             assert!(!foo.members().contains_key(&StringId::from("Bar")));
         } else {
@@ -720,7 +720,7 @@ mod tests {
         });
 
         let mut diagnostics = context
-            .graph
+            .graph()
             .diagnostics()
             .iter()
             .map(|d| {
@@ -728,7 +728,7 @@ mod tests {
                     "{}: {} ({})",
                     d.severity().as_str(),
                     d.message(),
-                    context.graph.documents().get(d.uri_id()).unwrap().uri()
+                    context.graph().documents().get(d.uri_id()).unwrap().uri()
                 )
             })
             .collect::<Vec<_>>();
