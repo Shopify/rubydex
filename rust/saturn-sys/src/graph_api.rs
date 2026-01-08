@@ -65,8 +65,16 @@ pub unsafe extern "C" fn sat_index_all(
     }
 
     with_graph(pointer, |graph| {
-        if let Err(errors) = indexing::index_in_parallel(graph, file_paths) {
-            return CString::new(errors.to_string()).unwrap().into_raw().cast_const();
+        let errors = indexing::index_files(graph, file_paths);
+
+        if !errors.is_empty() {
+            let error_messages = errors
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            return CString::new(error_messages).unwrap().into_raw().cast_const();
         }
 
         ptr::null()

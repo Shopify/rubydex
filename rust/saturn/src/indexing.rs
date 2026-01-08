@@ -1,98 +1,97 @@
 use crate::{
-    errors::{Errors, MultipleErrors},
+    errors::Errors,
     indexing::{local_graph::LocalGraph, ruby_indexer::RubyIndexer},
+    job_queue::{Job, JobQueue},
     model::graph::Graph,
 };
-use std::fs;
-use std::sync::{
-    Arc, Mutex,
-    mpsc::{Receiver, Sender},
-};
-use std::{sync::mpsc, thread};
+use crossbeam_channel::{Sender, unbounded};
+use std::{fs, path::PathBuf, sync::Arc};
 use url::Url;
 
 pub mod local_graph;
 pub mod ruby_indexer;
 
-type LocalGraphResult = Result<LocalGraph, Errors>;
-
-/// Indexes the given items, reading the content from disk and populating the given `Graph` instance.
-///
-/// # Errors
-///
-/// Returns Ok if indexing succeeded for all given documents or a vector of errors for all failures
-///
-/// # Panics
-/// This function will panic in the event of a thread dead lock, which indicates a bug in our implementation. There
-/// should not be any code that tries to lock the same mutex multiple times in the same thread
-pub fn index_in_parallel(graph: &mut Graph, file_paths: Vec<String>) -> Result<(), MultipleErrors> {
-    let index_document = |file_path: &String| -> LocalGraphResult {
-        let source = fs::read_to_string(file_path)
-            .map_err(|e| Errors::FileReadError(format!("Failed to read {file_path}: {e}")))?;
-
-        let uri = uri_from_file_path(file_path).unwrap();
-        let mut ruby_indexer = RubyIndexer::new(uri, &source);
-        ruby_indexer.index();
-        Ok(ruby_indexer.local_graph())
-    };
-
-    with_parallel_workers(graph, file_paths, index_document)
+/// Job that indexes a single Ruby file
+pub struct IndexingRubyFileJob {
+    path: PathBuf,
+    local_graph_tx: Sender<LocalGraph>,
+    errors_tx: Sender<Errors>,
 }
 
-fn uri_from_file_path(path: &str) -> Result<String, Errors> {
-    // Resolve the path to an absolute path
-    let path =
-        fs::canonicalize(path).map_err(|_e| Errors::FileReadError(format!("Failed to canonicalize path '{path}'")))?;
-    Ok(Url::from_file_path(&path)
-        .map_err(|_e| Errors::InvalidUri(format!("Couldn't build URI from path '{:?}'", &path.display())))?
-        .to_string())
-}
-
-fn with_parallel_workers<F>(graph: &mut Graph, file_paths: Vec<String>, worker_fn: F) -> Result<(), MultipleErrors>
-where
-    F: Fn(&String) -> Result<LocalGraph, Errors> + Send + Clone + 'static,
-{
-    let (tx, rx): (Sender<LocalGraphResult>, Receiver<LocalGraphResult>) = mpsc::channel();
-    let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
-    let mut threads = Vec::with_capacity(num_threads);
-    let document_queue = Arc::new(Mutex::new(file_paths));
-
-    for _ in 0..num_threads {
-        let thread_tx = tx.clone();
-        let queue = Arc::clone(&document_queue);
-        let thread_fn = worker_fn.clone();
-
-        let handle = thread::spawn(move || {
-            while let Some(document) = { queue.lock().unwrap().pop() } {
-                let result = thread_fn(&document);
-                thread_tx
-                    .send(result)
-                    .expect("Receiver end should not be closed until all threads are done");
-            }
-        });
-
-        threads.push(handle);
-    }
-
-    drop(tx);
-
-    let mut all_errors = Vec::new();
-    for result in rx {
-        match result {
-            Ok(local_graph) => {
-                graph.update(local_graph);
-            }
-            Err(e) => {
-                all_errors.push(e);
-            }
+impl IndexingRubyFileJob {
+    #[must_use]
+    pub fn new(path: PathBuf, local_graph_tx: Sender<LocalGraph>, errors_tx: Sender<Errors>) -> Self {
+        Self {
+            path,
+            local_graph_tx,
+            errors_tx,
         }
     }
 
-    if all_errors.is_empty() {
-        Ok(())
-    } else {
-        Err(MultipleErrors(all_errors))
+    fn send_error(&self, error: Errors) {
+        self.errors_tx
+            .send(error)
+            .expect("errors receiver dropped before run completion");
     }
+}
+
+impl Job for IndexingRubyFileJob {
+    fn run(&self) {
+        let Ok(source) = fs::read_to_string(&self.path) else {
+            self.send_error(Errors::FileReadError(format!(
+                "Failed to read file `{}`",
+                self.path.display()
+            )));
+
+            return;
+        };
+
+        let Ok(url) = Url::from_file_path(&self.path) else {
+            self.send_error(Errors::InvalidUri(format!(
+                "Couldn't build URI from path `{}`",
+                self.path.display()
+            )));
+
+            return;
+        };
+
+        let mut ruby_indexer = RubyIndexer::new(url.to_string(), &source);
+        ruby_indexer.index();
+
+        self.local_graph_tx
+            .send(ruby_indexer.local_graph())
+            .expect("graph receiver dropped before merge");
+    }
+}
+
+/// Indexes the given paths, reading the content from disk and populating the given `Graph` instance.
+///
+/// # Panics
+///
+/// Will panic if the graph cannot be wrapped in an Arc<Mutex<>>
+pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
+    let queue = Arc::new(JobQueue::new());
+    let (local_graphs_tx, local_graphs_rx) = unbounded();
+    let (errors_tx, errors_rx) = unbounded();
+
+    for path in paths {
+        queue.push(Box::new(IndexingRubyFileJob::new(
+            path,
+            local_graphs_tx.clone(),
+            errors_tx.clone(),
+        )));
+    }
+
+    drop(local_graphs_tx);
+    drop(errors_tx);
+
+    JobQueue::run(&queue);
+
+    while let Ok(local_graph) = local_graphs_rx.recv() {
+        graph.update(local_graph);
+    }
+
+    errors_rx.iter().collect()
 }
 
 #[cfg(test)]
@@ -121,9 +120,9 @@ mod tests {
         let relative_to_pwd = &dots.join(absolute_path);
 
         let mut graph = Graph::new();
-        let errors = index_in_parallel(&mut graph, vec![relative_to_pwd.to_str().unwrap().to_string()]);
+        let errors = index_files(&mut graph, vec![relative_to_pwd.clone()]);
 
-        assert!(errors.is_ok());
+        assert!(errors.is_empty());
         assert_eq!(graph.documents().len(), 1);
     }
 }

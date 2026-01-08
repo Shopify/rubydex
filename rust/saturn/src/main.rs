@@ -1,6 +1,5 @@
-use std::{error::Error, mem};
-
 use clap::Parser;
+use std::mem;
 
 use saturn::{
     indexing, listing,
@@ -33,7 +32,7 @@ struct Args {
     stats: bool,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
     let args = Args::parse();
 
     if args.stats {
@@ -47,7 +46,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut graph = Graph::new();
-    time_it!(indexing, { indexing::index_in_parallel(&mut graph, file_paths) })?;
+    let errors = time_it!(indexing, { indexing::index_files(&mut graph, file_paths) });
+
+    for error in errors {
+        eprintln!("{error}");
+    }
 
     time_it!(resolution, {
         resolution::resolve_all(&mut graph);
@@ -93,6 +96,4 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Forget the graph so we don't have to wait for deallocation and let the system reclaim the memory at exit
     mem::forget(graph);
-
-    Ok(())
 }
