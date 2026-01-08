@@ -1,9 +1,57 @@
-use std::cell::{OnceCell, Ref, RefCell};
+use std::cell::{Ref, RefCell};
 
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, ReferenceId, StringId},
+    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
 };
+
+/// A single ancestor in the linearized ancestor chain
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ancestor {
+    /// A complete ancestor that we have fully linearized
+    Complete(DeclarationId),
+    /// A partial ancestor that is missing linearization
+    Partial(NameId),
+}
+
+/// The ancestor chain and its current state
+#[derive(Debug, Clone)]
+pub enum Ancestors {
+    /// A complete linearization of ancestors with all parts resolved
+    Complete(Vec<Ancestor>),
+    /// A cyclic linearization of ancestors (e.g.: a module that includes itself)
+    Cyclic(Vec<Ancestor>),
+    /// A partial linearization of ancestors with some parts unresolved. This chain state always triggers retries
+    Partial(Vec<Ancestor>),
+}
+
+impl Ancestors {
+    pub fn iter(&self) -> std::slice::Iter<'_, Ancestor> {
+        match self {
+            Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {
+                ancestors.iter()
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn to_partial(self) -> Self {
+        match self {
+            Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) | Ancestors::Partial(ancestors) => {
+                Ancestors::Partial(ancestors)
+            }
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Ancestors {
+    type Item = &'a Ancestor;
+    type IntoIter = std::slice::Iter<'a, Ancestor>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
 
 macro_rules! all_declarations {
     ($value:expr, $var:ident => $expr:expr) => {
@@ -31,7 +79,7 @@ macro_rules! namespace_declaration {
             definition_ids: Vec<DefinitionId>,
             /// The list of references that are made to this declaration
             references: Vec<ReferenceId>,
-            /// The ID of the owner of this declaration
+            /// The ID of the owner of this declaration. For singleton classes, this is the ID of the attached object
             owner_id: DeclarationId,
             /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
             /// the namespace. Note that this is a hashmap of unqualified name IDs to declaration IDs. That assists the
@@ -40,9 +88,11 @@ macro_rules! namespace_declaration {
             members: IdentityHashMap<StringId, DeclarationId>,
             /// The linearized ancestor chain for this declaration. These are the other declarations that this
             /// declaration inherits from
-            ancestors: OnceCell<Vec<DeclarationId>>,
+            ancestors: RefCell<Ancestors>,
             /// The set of declarations that inherit from this declaration
             descendants: RefCell<IdentityHashSet<DeclarationId>>,
+            /// The singleton class associated with this declaration
+            singleton_class_id: Option<DeclarationId>,
         }
 
         impl $name {
@@ -54,8 +104,9 @@ macro_rules! namespace_declaration {
                     members: IdentityHashMap::default(),
                     references: Vec::new(),
                     owner_id,
-                    ancestors: OnceCell::new(),
+                    ancestors: RefCell::new(Ancestors::Partial(Vec::new())),
                     descendants: RefCell::new(IdentityHashSet::default()),
+                    singleton_class_id: None,
                 }
             }
 
@@ -66,6 +117,14 @@ macro_rules! namespace_declaration {
                     }
                     _ => panic!("Tried to merge incompatible declaration types"),
                 }
+            }
+
+            pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
+                self.singleton_class_id = Some(declaration_id);
+            }
+
+            pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
+                self.singleton_class_id.as_ref()
             }
 
             #[must_use]
@@ -86,24 +145,20 @@ macro_rules! namespace_declaration {
                 self.members.get(string_id)
             }
 
-            /// # Panics
-            ///
-            /// Will panic if invoked twice without clearing ancestors
-            pub fn set_ancestors(&self, ancestors: Vec<DeclarationId>) {
-                self.ancestors
-                    .set(ancestors)
-                    .expect("ancestors should only be set once per declaration");
+            pub fn set_ancestors(&self, ancestors: Ancestors) {
+                *self.ancestors.borrow_mut() = ancestors;
             }
 
             #[must_use]
-            pub fn ancestors(&self) -> Option<&[DeclarationId]> {
-                self.ancestors.get().map(Vec::as_slice)
+            pub fn ancestors(&self) -> Ref<'_, Ancestors> {
+                self.ancestors.borrow()
             }
 
             pub fn add_descendant(&self, descendant_id: DeclarationId) {
                 self.descendants.borrow_mut().insert(descendant_id);
             }
 
+            #[must_use]
             pub fn descendants(&self) -> Ref<'_, IdentityHashSet<DeclarationId>> {
                 self.descendants.borrow()
             }

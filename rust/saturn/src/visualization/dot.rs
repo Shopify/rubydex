@@ -39,7 +39,8 @@ pub fn generate(graph: &Graph) -> String {
 }
 
 fn write_declaration_nodes(output: &mut String, graph: &Graph) {
-    let mut declarations: Vec<_> = graph.declarations().values().collect();
+    let read_lock = graph.declarations().read().unwrap();
+    let mut declarations: Vec<_> = read_lock.values().collect();
     declarations.sort_by(|a, b| a.name().cmp(b.name()));
 
     for declaration in declarations {
@@ -64,8 +65,8 @@ fn write_definition_nodes(output: &mut String, graph: &Graph) {
         .definitions()
         .iter()
         .filter_map(|(def_id, definition)| {
-            graph
-                .declarations()
+            let read_lock = graph.declarations().read().unwrap();
+            read_lock
                 .get(graph.definitions_to_declarations().get(def_id).unwrap())
                 .map(|declaration| {
                     let def_type = definition.kind();
@@ -150,6 +151,8 @@ mod tests {
             r#"digraph {{
     rankdir=TB;
 
+    "Name:Class" [label="Class",shape=hexagon];
+    "Name:Module" [label="Module",shape=hexagon];
     "Name:Object" [label="Object",shape=hexagon];
     "Name:TestClass" [label="TestClass",shape=hexagon];
     "Name:TestClass" -> "def_{class_def_id}" [dir=both];

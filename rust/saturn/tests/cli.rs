@@ -44,7 +44,7 @@ fn prints_index_metrics() {
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("Indexed 2 files"));
-        assert!(stdout.contains("Found 3 names"));
+        assert!(stdout.contains("Found 5 names"));
         assert!(stdout.contains("Found 2 definitions"));
     });
 }
@@ -76,6 +76,8 @@ fn visualize_simple_class() {
             digraph {
                 rankdir=TB;
 
+                "Name:Class" [label="Class",shape=hexagon];
+                "Name:Module" [label="Module",shape=hexagon];
                 "Name:Object" [label="Object",shape=hexagon];
                 "Name:SimpleClass" [label="SimpleClass",shape=hexagon];
                 "Name:SimpleClass" -> "def_<ID>" [dir=both];

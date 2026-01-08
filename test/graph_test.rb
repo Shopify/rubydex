@@ -94,9 +94,10 @@ class GraphTest < Minitest::Test
 
       enumerator = graph.declarations
 
-      assert_equal(3, enumerator.size)
-      assert_equal(3, enumerator.count)
-      assert_equal(3, enumerator.to_a.size)
+      # Object, Class, Module + the indexed files
+      assert_equal(5, enumerator.size)
+      assert_equal(5, enumerator.count)
+      assert_equal(5, enumerator.to_a.size)
     end
   end
 
@@ -114,7 +115,7 @@ class GraphTest < Minitest::Test
         declarations << declaration
       end
 
-      assert_equal(3, declarations.size)
+      assert_equal(5, declarations.size)
     end
   end
 
