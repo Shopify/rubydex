@@ -39,7 +39,7 @@ impl FileDiscoveryJob {
 
     fn handle_symlink(&self, path: &PathBuf) {
         let Ok(canonicalized) = fs::canonicalize(path) else {
-            self.send_error(Errors::FileReadError(format!(
+            self.send_error(Errors::FileError(format!(
                 "Failed to canonicalize symlink: `{}`",
                 path.display(),
             )));
@@ -66,7 +66,7 @@ impl Job for FileDiscoveryJob {
     fn run(&self) {
         if self.path.is_dir() {
             let Ok(read_dir) = self.path.read_dir() else {
-                self.send_error(Errors::FileReadError(format!(
+                self.send_error(Errors::FileError(format!(
                     "Failed to read directory `{}`",
                     self.path.display(),
                 )));
@@ -76,7 +76,7 @@ impl Job for FileDiscoveryJob {
 
             for result in read_dir {
                 let Ok(entry) = result else {
-                    self.send_error(Errors::FileReadError(format!(
+                    self.send_error(Errors::FileError(format!(
                         "Failed to read directory `{}`: {result:?}",
                         self.path.display(),
                     )));
@@ -98,7 +98,7 @@ impl Job for FileDiscoveryJob {
                 } else if kind.is_symlink() {
                     self.handle_symlink(&entry.path());
                 } else {
-                    self.send_error(Errors::FileReadError(format!(
+                    self.send_error(Errors::FileError(format!(
                         "Path `{}` is not a file or directory",
                         entry.path().display()
                     )));
@@ -109,7 +109,7 @@ impl Job for FileDiscoveryJob {
         } else if self.path.is_symlink() {
             self.handle_symlink(&self.path);
         } else {
-            self.send_error(Errors::FileReadError(format!(
+            self.send_error(Errors::FileError(format!(
                 "Path `{}` is not a file or directory",
                 self.path.display()
             )));
@@ -135,7 +135,7 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<PathBuf>, Vec<Errors>) {
     for path in paths {
         let Ok(canonicalized) = fs::canonicalize(&path) else {
             errors_tx
-                .send(Errors::FileReadError(format!("Path `{path}` does not exist")))
+                .send(Errors::FileError(format!("Path `{path}` does not exist")))
                 .expect("errors receiver dropped before run completion");
 
             continue;
@@ -240,7 +240,7 @@ mod tests {
 
         assert_eq!(
             errors,
-            vec![Errors::FileReadError(format!(
+            vec![Errors::FileError(format!(
                 "Path `{}` does not exist",
                 context.absolute_path_to("non_existing_path").display()
             ))]

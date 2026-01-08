@@ -1,44 +1,28 @@
-use std::error::Error;
-
-#[derive(Debug)]
-pub struct MultipleErrors(pub Vec<Errors>);
-
-impl std::fmt::Display for MultipleErrors {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.0
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    }
-}
-
-impl Error for MultipleErrors {}
-
-impl From<Errors> for MultipleErrors {
-    fn from(error: Errors) -> Self {
-        MultipleErrors(vec![error])
-    }
-}
-
-// Enum representing all types of indexing errors that may happen
-#[derive(Debug, PartialEq, Eq)]
-pub enum Errors {
-    FileReadError(String),
-    InvalidUri(String),
-}
-
-impl std::fmt::Display for Errors {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Errors::FileReadError(msg) => write!(f, "File read error: {msg}"),
-            Errors::InvalidUri(msg) => write!(f, "Invalid URI: {msg}"),
+macro_rules! errors {
+    (
+        $( $variant:ident );* $(;)?
+    ) => {
+        #[derive(Debug, PartialEq, Eq)]
+        pub enum Errors {
+            $(
+                $variant(String),
+            )*
         }
+
+        impl std::fmt::Display for Errors {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(
+                        Errors::$variant(msg) => write!(f, "{}: {}", stringify!($variant), msg),
+                    )*
+                }
+            }
+        }
+
+        impl std::error::Error for Errors {}
     }
 }
 
-impl Error for Errors {}
+errors!(
+    FileError;
+);

@@ -38,7 +38,7 @@ impl IndexingRubyFileJob {
 impl Job for IndexingRubyFileJob {
     fn run(&self) {
         let Ok(source) = fs::read_to_string(&self.path) else {
-            self.send_error(Errors::FileReadError(format!(
+            self.send_error(Errors::FileError(format!(
                 "Failed to read file `{}`",
                 self.path.display()
             )));
@@ -47,7 +47,7 @@ impl Job for IndexingRubyFileJob {
         };
 
         let Ok(url) = Url::from_file_path(&self.path) else {
-            self.send_error(Errors::InvalidUri(format!(
+            self.send_error(Errors::FileError(format!(
                 "Couldn't build URI from path `{}`",
                 self.path.display()
             )));
