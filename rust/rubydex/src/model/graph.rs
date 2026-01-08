@@ -213,14 +213,11 @@ impl Graph {
         let mut write_lock = self.declarations.write().unwrap();
 
         if let Some(declaration) = write_lock.get_mut(owner_id) {
-            match declaration {
-                Declaration::Class(it) => it.add_member(member_str_id, member_declaration_id),
-                Declaration::Module(it) => it.add_member(member_str_id, member_declaration_id),
-                Declaration::SingletonClass(it) => it.add_member(member_str_id, member_declaration_id),
-                Declaration::Constant(_) => {
-                    // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
-                }
-                _ => panic!("Tried to add member to a declaration that isn't a namespace"),
+            if let Some(namespace) = declaration.as_namespace_mut() {
+                namespace.add_member(member_str_id, member_declaration_id);
+            } else if !matches!(declaration, Declaration::Constant(_)) {
+                // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
+                panic!("Tried to add member to a declaration that isn't a namespace");
             }
         }
     }
