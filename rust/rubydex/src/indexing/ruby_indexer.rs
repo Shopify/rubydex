@@ -1889,15 +1889,25 @@ mod tests {
         }};
     }
 
+    fn format_diagnostics(context: &LocalGraphTest) -> Vec<String> {
+        context
+            .graph()
+            .diagnostics()
+            .iter()
+            .map(|d| {
+                format!(
+                    "{}: {} ({})",
+                    d.severity().as_str(),
+                    d.message(),
+                    d.offset().to_display_range(context.source())
+                )
+            })
+            .collect()
+    }
+
     macro_rules! assert_diagnostics_eq {
         ($context:expr, $expected_diagnostics:expr) => {{
-            let actual_diagnostics: Vec<String> = $context
-                .graph()
-                .diagnostics()
-                .iter()
-                .map(|d| d.formatted($context.source()))
-                .collect();
-            assert_eq!($expected_diagnostics, actual_diagnostics);
+            assert_eq!($expected_diagnostics, format_diagnostics($context));
         }};
     }
 
@@ -1906,12 +1916,7 @@ mod tests {
             assert!(
                 $context.graph().diagnostics().is_empty(),
                 "expected no diagnostics, got {:?}",
-                $context
-                    .graph()
-                    .diagnostics()
-                    .iter()
-                    .map(|d| d.formatted($context.source()))
-                    .collect::<Vec<_>>()
+                format_diagnostics($context)
             );
         }};
     }
