@@ -919,7 +919,7 @@ fn resolve_constant(graph: &mut Graph, name_id: NameId) -> Outcome {
             // way
             if let Some(parent_scope_id) = name.parent_scope() {
                 if let NameRef::Resolved(parent_scope) = graph.names().get(parent_scope_id).unwrap() {
-                    let member = {
+                    let outcome = {
                         let read_lock = graph.declarations().read().unwrap();
                         let declaration = read_lock.get(parent_scope.declaration_id()).unwrap();
 
@@ -929,14 +929,14 @@ fn resolve_constant(graph: &mut Graph, name_id: NameId) -> Outcome {
                             return Outcome::Unresolved(None);
                         }
 
-                        // TODO: we can't just look inside members here, we need to search inheritance too
-                        members_of(declaration).get(name.str()).copied()
+                        search_ancestors(graph, *parent_scope_id, *name.str())
                     };
 
-                    if let Some(member_id) = member {
+                    if let Outcome::Resolved(member_id, _) = outcome {
                         graph.record_resolved_name(name_id, member_id);
-                        return Outcome::Resolved(member_id, None);
                     }
+
+                    return outcome;
                 }
 
                 return Outcome::Retry;
@@ -1863,7 +1863,8 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let declarations = context.graph.declarations().read().unwrap();
+        let foo = declarations.get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["bar", "@@baz"]);
     }
 
@@ -1888,10 +1889,11 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph.declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["<Foo>"]);
+        let declarations = context.graph.declarations().read().unwrap();
+        let foo = declarations.get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo, &[]);
 
-        let bar = context.graph.declarations().get(&DeclarationId::from("Bar")).unwrap();
+        let bar = declarations.get(&DeclarationId::from("Bar")).unwrap();
         assert_members(bar, &["@@cvar1", "@@cvar2"]);
     }
 
@@ -2753,6 +2755,26 @@ mod tests {
         let qux = read_lock.get(&DeclarationId::from("Foo::Bar::Qux")).unwrap();
         assert_members(qux, &[]);
         assert_owner(qux, "Foo::Bar");
+    }
+
+    #[test]
+    fn references_with_parent_scope_search_inheritance() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+            end
+
+            class Baz
+              include Foo
+            end
+
+            Baz::Bar
+            "
+        });
+        context.resolve();
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///foo.rb:8:5-8:8");
     }
 
     #[test]
