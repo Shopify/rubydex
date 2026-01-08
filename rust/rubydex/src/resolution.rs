@@ -1072,12 +1072,9 @@ fn search_top_level(graph: &Graph, str_id: StringId) -> Outcome {
 }
 
 fn members_of(decl: &Declaration) -> &IdentityHashMap<StringId, DeclarationId> {
-    match decl {
-        Declaration::Class(it) => it.members(),
-        Declaration::SingletonClass(it) => it.members(),
-        Declaration::Module(it) => it.members(),
-        _ => panic!("Tried to get members for a declaration that isn't a namespace"),
-    }
+    decl.as_namespace()
+        .expect("Tried to get members for a declaration that isn't a namespace")
+        .members()
 }
 
 /// Returns a complexity score for a given name, which is used to sort names for resolution. The complexity is based
