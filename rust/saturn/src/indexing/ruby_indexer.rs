@@ -709,15 +709,13 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             self.add_member_to_current_owner(definition_id);
 
-            self.definitions_stack.push(definition_id);
-            self.visibility_stack.push(Visibility::Public);
-
             if let Some(body) = node.body() {
+                self.definitions_stack.push(definition_id);
+                self.visibility_stack.push(Visibility::Public);
                 self.visit(&body);
+                self.visibility_stack.pop();
+                self.definitions_stack.pop();
             }
-
-            self.visibility_stack.pop();
-            self.definitions_stack.pop();
         }
     }
 
@@ -739,15 +737,13 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             self.add_member_to_current_owner(definition_id);
 
-            self.definitions_stack.push(definition_id);
-            self.visibility_stack.push(Visibility::Public);
-
             if let Some(body) = node.body() {
+                self.definitions_stack.push(definition_id);
+                self.visibility_stack.push(Visibility::Public);
                 self.visit(&body);
+                self.visibility_stack.pop();
+                self.definitions_stack.pop();
             }
-
-            self.visibility_stack.pop();
-            self.definitions_stack.pop();
         }
     }
 
@@ -817,7 +813,9 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         if let Some(body) = node.body() {
             self.definitions_stack.push(definition_id);
+            self.visibility_stack.push(Visibility::Public);
             self.visit(&body);
+            self.visibility_stack.pop();
             self.definitions_stack.pop();
         }
     }
@@ -1122,11 +1120,31 @@ impl Visit<'_> for RubyIndexer<'_> {
                     return;
                 }
 
-                self.visibility_stack.push(Visibility::from_string(message.as_str()));
+                let visibility = Visibility::from_string(message.as_str());
 
                 if let Some(arguments) = node.arguments() {
+                    // With this case:
+                    //
+                    // ```ruby
+                    // private def foo(bar); end
+                    // ```
+                    //
+                    // We push the new visibility to the stack and then pop it after visiting the arguments so it only affects the method definition.
+                    self.visibility_stack.push(visibility);
                     self.visit_arguments_node(&arguments);
                     self.visibility_stack.pop();
+                } else {
+                    // With this case:
+                    //
+                    // ```ruby
+                    // private
+                    //
+                    // def foo(bar); end
+                    // ```
+                    //
+                    // We replace the current visibility with the new one so it only affects all the subsequent method definitions.
+                    let last_visibility = self.visibility_stack.last_mut().unwrap();
+                    *last_visibility = visibility;
                 }
             }
             _ => {
@@ -2502,6 +2520,44 @@ mod tests {
     }
 
     #[test]
+    fn index_visibility_in_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              protected
+
+              class << self
+                def m1; end
+
+                private
+
+                def m2; end
+              end
+
+              def m3; end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:5-5:16", Method, |def| {
+            assert_name_eq!(&context, "m1", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "9:5-9:16", Method, |def| {
+            assert_name_eq!(&context, "m2", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "12:3-12:14", Method, |def| {
+            assert_name_eq!(&context, "m3", def);
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+    }
+
+    #[test]
     fn index_attr_accessor_definition() {
         let context = index_source({
             "
@@ -2725,7 +2781,7 @@ mod tests {
 
                 attr_reader :baz
 
-                protected
+                public
               end
 
               attr_writer :qux
