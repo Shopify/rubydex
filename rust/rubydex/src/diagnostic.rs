@@ -103,6 +103,8 @@ rules! {
     DynamicSingletonDefinition;
     DynamicAncestor;
     TopLevelMixinSelf;
+    InvalidConstantName;
+    DynamicConstantField;
 
     // Resolution
 }
