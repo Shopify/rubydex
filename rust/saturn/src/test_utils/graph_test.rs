@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct GraphTest {
-    pub graph: Graph,
+    graph: Graph,
     sources: HashMap<String, String>,
 }
 
@@ -22,6 +22,11 @@ impl GraphTest {
             graph: Graph::new(),
             sources: HashMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn graph(&self) -> &Graph {
+        &self.graph
     }
 
     #[must_use]

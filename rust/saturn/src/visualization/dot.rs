@@ -112,7 +112,7 @@ mod tests {
     use super::*;
     use crate::test_utils::GraphTest;
 
-    fn create_test_graph() -> Graph {
+    fn create_test_graph() -> GraphTest {
         let mut graph_test = GraphTest::new();
         graph_test.index_uri(
             "file:///test.rb",
@@ -125,22 +125,24 @@ mod tests {
             ",
         );
         graph_test.resolve();
-        graph_test.graph
+        graph_test
     }
 
     #[test]
     fn test_dot_generation() {
-        let graph = create_test_graph();
-        let dot_output = generate(&graph);
+        let context = create_test_graph();
+        let dot_output = generate(context.graph());
 
-        let class_def_id = graph
+        let class_def_id = context
+            .graph()
             .definitions()
             .iter()
             .find(|(_, def)| matches!(def, crate::model::definitions::Definition::Class(_)))
             .map(|(id, _)| id.to_string())
             .unwrap();
 
-        let module_def_id = graph
+        let module_def_id = context
+            .graph()
             .definitions()
             .iter()
             .find(|(_, def)| matches!(def, crate::model::definitions::Definition::Module(_)))
