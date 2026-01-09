@@ -14,7 +14,7 @@
 #
 # What this script does:
 # 1. Generate the corpus if it doesn't exist (for predefined sizes only)
-# 2. Build saturn_cli in release mode
+# 2. Build rubydex_cli in release mode
 # 3. Benchmark the indexer (measuring memory usage and execution time)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +24,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CORPUS_SIZE="${1:-huge}"
 
 # Corpora base directory - outside project to avoid triggering LSP
-CORPUS_BASE="$(dirname "$PROJECT_ROOT")/saturn_corpora"
+CORPUS_BASE="$(dirname "$PROJECT_ROOT")/rubydex_corpora"
 
 # Determine corpus path and scale based on input
 case "$CORPUS_SIZE" in
@@ -71,4 +71,4 @@ echo "----------------------------------------"
 
 cd "$PROJECT_ROOT/rust" || exit 1
 cargo build --release
-$PROJECT_ROOT/utils/mem-use "$PROJECT_ROOT/rust/target/release/saturn_cli" "$CORPUS_PATH" --stats
+$PROJECT_ROOT/utils/mem-use "$PROJECT_ROOT/rust/target/release/rubydex_cli" "$CORPUS_PATH" --stats

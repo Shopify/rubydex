@@ -11,4 +11,4 @@ AllCops:
 
 Style/GlobalVars:
   Exclude:
-    - ext/saturn/extconf.rb
+    - ext/rubydex/extconf.rb

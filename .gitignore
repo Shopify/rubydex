@@ -11,10 +11,10 @@
 *.o
 *.a
 *.dSYM
-/ext/saturn/Makefile
+/ext/rubydex/Makefile
 mkmf.log
 target/
-rust/saturn-sys/rustbindings.h
-ext/saturn/rustbindings.h
-ext/saturn/compile_commands.json
-ext/saturn/.cache
+rust/rubydex-sys/rustbindings.h
+ext/rubydex/rustbindings.h
+ext/rubydex/compile_commands.json
+ext/rubydex/.cache

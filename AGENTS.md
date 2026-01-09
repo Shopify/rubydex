@@ -29,7 +29,7 @@ the Ruby VM to the Rust crate logic.
 
 ### Structure
 
-- `ext/saturn`: The C native extension that connects the Ruby VM with the Rust crate logic through FFI
+- `ext/rubydex`: The C native extension that connects the Ruby VM with the Rust crate logic through FFI
 - `lib`: The rest of the Ruby code
 - `test`: Ruby test files
 
@@ -48,20 +48,20 @@ When necessary, commands can be executed for the Ruby code.
 
 The Rust workspace under the `rust` directory contains two crates:
 
-- `saturn`: this crate implements the entire indexing and static analysis logic. The implementation aims to be optimized
+- `rubydex`: this crate implements the entire indexing and static analysis logic. The implementation aims to be optimized
 to achieve maximum performance in super large codebases while maintaining memory usage to a minimum
-- `saturn-sys`: this crate provides bindings for C, so that the logic from `saturn` can be called through FFI
+- `rubydex-sys`: this crate provides bindings for C, so that the logic from `rubydex` can be called through FFI
 
 The workspace's goal is to provide all indexing and static analysis capabilities to power tools such as language servers,
 type checkers, linting and other code analysis features.
 
 ### Key files
 
-- `rust/saturn/src/model/graph.rs`: the Graph representation of the codebase. Read more about the architecture of the graph
+- `rust/rubydex/src/model/graph.rs`: the Graph representation of the codebase. Read more about the architecture of the graph
 in `docs/architecture.md`
-- `rust/saturn/src/indexing/ruby_indexer.rs`: the visitor that extracts declaration information from the
+- `rust/rubydex/src/indexing/ruby_indexer.rs`: the visitor that extracts declaration information from the
 AST to save in the global graph
-- `rust/saturn/src/indexing.rs`: the parallel implementation of indexing a list of documents
+- `rust/rubydex/src/indexing.rs`: the parallel implementation of indexing a list of documents
 
 ### Commands
 
