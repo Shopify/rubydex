@@ -1,10 +1,10 @@
-#ifndef SATURN_DOCUMENT_H
-#define SATURN_DOCUMENT_H
+#ifndef RUBYDEX_DOCUMENT_H
+#define RUBYDEX_DOCUMENT_H
 
 #include "ruby.h"
 
 extern VALUE cDocument;
 
-void initialize_document(VALUE mSaturn);
+void initialize_document(VALUE mRubydex);
 
-#endif // SATURN_DOCUMENT_H
+#endif // RUBYDEX_DOCUMENT_H

@@ -16,4 +16,4 @@ VALUE severity_symbol(DiagnosticSeverity severity) {
     return Qnil;
 }
 
-void initialize_diagnostic(VALUE mSaturn) { cDiagnostic = rb_define_class_under(mSaturn, "Diagnostic", rb_cObject); }
+void initialize_diagnostic(VALUE mRubydex) { cDiagnostic = rb_define_class_under(mRubydex, "Diagnostic", rb_cObject); }

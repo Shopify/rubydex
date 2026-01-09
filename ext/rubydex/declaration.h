@@ -1,10 +1,10 @@
-#ifndef SATURN_DECLARATION_H
-#define SATURN_DECLARATION_H
+#ifndef RUBYDEX_DECLARATION_H
+#define RUBYDEX_DECLARATION_H
 
 #include "ruby.h"
 
 extern VALUE cDeclaration;
 
-void initialize_declaration(VALUE mSaturn);
+void initialize_declaration(VALUE mRubydex);
 
-#endif // SATURN_DECLARATION_H
+#endif // RUBYDEX_DECLARATION_H

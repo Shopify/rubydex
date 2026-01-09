@@ -107,8 +107,8 @@ static VALUE sr_declaration_definitions(VALUE self) {
     return self;
 }
 
-void initialize_declaration(VALUE mSaturn) {
-    cDeclaration = rb_define_class_under(mSaturn, "Declaration", rb_cObject);
+void initialize_declaration(VALUE mRubydex) {
+    cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
 
     rb_define_alloc_func(cDeclaration, sr_handle_alloc);
     rb_define_method(cDeclaration, "initialize", sr_handle_initialize, 2);

@@ -1,5 +1,5 @@
-#ifndef SATURN_HANDLE_H
-#define SATURN_HANDLE_H
+#ifndef RUBYDEX_HANDLE_H
+#define RUBYDEX_HANDLE_H
 
 #include "ruby.h"
 
@@ -22,7 +22,7 @@ static void handle_free(void *ptr) {
 }
 
 static const rb_data_type_t handle_type = {
-    "SaturnHandle", {handle_mark, handle_free, 0}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
+    "RubydexHandle", {handle_mark, handle_free, 0}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
 
 static VALUE sr_handle_alloc(VALUE klass) {
     HandleData *data = ALLOC(HandleData);
@@ -41,4 +41,4 @@ static VALUE sr_handle_initialize(VALUE self, VALUE graph_obj, VALUE id_val) {
     return self;
 }
 
-#endif // SATURN_HANDLE_H
+#endif // RUBYDEX_HANDLE_H

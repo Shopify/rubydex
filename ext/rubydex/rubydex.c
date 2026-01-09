@@ -6,17 +6,17 @@
 #include "location.h"
 #include "reference.h"
 
-VALUE mSaturn;
+VALUE mRubydex;
 
-void Init_saturn(void) {
+void Init_rubydex(void) {
     rb_ext_ractor_safe(true);
 
-    mSaturn = rb_define_module("Saturn");
-    initialize_graph(mSaturn);
-    initialize_declaration(mSaturn);
-    initialize_document(mSaturn);
-    initialize_definition(mSaturn);
-    initialize_location(mSaturn);
-    initialize_diagnostic(mSaturn);
-    initialize_reference(mSaturn);
+    mRubydex = rb_define_module("Rubydex");
+    initialize_graph(mRubydex);
+    initialize_declaration(mRubydex);
+    initialize_document(mRubydex);
+    initialize_definition(mRubydex);
+    initialize_location(mRubydex);
+    initialize_diagnostic(mRubydex);
+    initialize_reference(mRubydex);
 }

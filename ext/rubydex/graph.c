@@ -277,7 +277,7 @@ static VALUE sr_graph_resolve(VALUE self) {
     return self;
 }
 
-// Graph#diagnostics -> Array[Saturn::Diagnostic]
+// Graph#diagnostics -> Array[Rubydex::Diagnostic]
 static VALUE sr_graph_diagnostics(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -312,11 +312,11 @@ static VALUE sr_graph_diagnostics(VALUE self) {
     return diagnostics;
 }
 
-void initialize_graph(VALUE mSaturn) {
-    VALUE eSaturnError = rb_const_get(mSaturn, rb_intern("Error"));
-    eIndexingError = rb_define_class_under(mSaturn, "IndexingError", eSaturnError);
+void initialize_graph(VALUE mRubydex) {
+    VALUE eRubydexError = rb_const_get(mRubydex, rb_intern("Error"));
+    eIndexingError = rb_define_class_under(mRubydex, "IndexingError", eRubydexError);
 
-    cGraph = rb_define_class_under(mSaturn, "Graph", rb_cObject);
+    cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, sr_graph_alloc);
     rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
     rb_define_method(cGraph, "resolve", sr_graph_resolve, 0);

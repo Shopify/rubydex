@@ -5,7 +5,7 @@
 #include "ruby/internal/scan_args.h"
 #include "rustbindings.h"
 
-static VALUE mSaturn;
+static VALUE mRubydex;
 VALUE cComment;
 VALUE cDefinition;
 VALUE cClassDefinition;
@@ -56,7 +56,7 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
     }
 }
 
-// Definition#location -> Saturn::Location
+// Definition#location -> Rubydex::Location
 static VALUE sr_definition_location(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -71,7 +71,7 @@ static VALUE sr_definition_location(VALUE self) {
     return location;
 }
 
-// Definition#comments -> [Saturn::Comment]
+// Definition#comments -> [Rubydex::Comment]
 static VALUE sr_definition_comments(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -127,11 +127,11 @@ static VALUE sr_definition_name(VALUE self) {
 }
 
 void initialize_definition(VALUE mod) {
-    mSaturn = mod;
+    mRubydex = mod;
 
-    cComment = rb_define_class_under(mSaturn, "Comment", rb_cObject);
+    cComment = rb_define_class_under(mRubydex, "Comment", rb_cObject);
 
-    cDefinition = rb_define_class_under(mSaturn, "Definition", rb_cObject);
+    cDefinition = rb_define_class_under(mRubydex, "Definition", rb_cObject);
     rb_define_alloc_func(cDefinition, sr_handle_alloc);
     rb_define_method(cDefinition, "initialize", sr_handle_initialize, 2);
     rb_funcall(rb_singleton_class(cDefinition), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
@@ -139,55 +139,55 @@ void initialize_definition(VALUE mod) {
     rb_define_method(cDefinition, "comments", sr_definition_comments, 0);
     rb_define_method(cDefinition, "name", sr_definition_name, 0);
 
-    cClassDefinition = rb_define_class_under(mSaturn, "ClassDefinition", cDefinition);
+    cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
     rb_define_alloc_func(cClassDefinition, sr_handle_alloc);
     rb_define_method(cClassDefinition, "initialize", sr_handle_initialize, 2);
 
-    cSingletonClassDefinition = rb_define_class_under(mSaturn, "SingletonClassDefinition", cDefinition);
+    cSingletonClassDefinition = rb_define_class_under(mRubydex, "SingletonClassDefinition", cDefinition);
     rb_define_alloc_func(cSingletonClassDefinition, sr_handle_alloc);
     rb_define_method(cSingletonClassDefinition, "initialize", sr_handle_initialize, 2);
 
-    cModuleDefinition = rb_define_class_under(mSaturn, "ModuleDefinition", cDefinition);
+    cModuleDefinition = rb_define_class_under(mRubydex, "ModuleDefinition", cDefinition);
     rb_define_alloc_func(cModuleDefinition, sr_handle_alloc);
     rb_define_method(cModuleDefinition, "initialize", sr_handle_initialize, 2);
 
-    cConstantDefinition = rb_define_class_under(mSaturn, "ConstantDefinition", cDefinition);
+    cConstantDefinition = rb_define_class_under(mRubydex, "ConstantDefinition", cDefinition);
     rb_define_alloc_func(cConstantDefinition, sr_handle_alloc);
     rb_define_method(cConstantDefinition, "initialize", sr_handle_initialize, 2);
 
-    cMethodDefinition = rb_define_class_under(mSaturn, "MethodDefinition", cDefinition);
+    cMethodDefinition = rb_define_class_under(mRubydex, "MethodDefinition", cDefinition);
     rb_define_alloc_func(cMethodDefinition, sr_handle_alloc);
     rb_define_method(cMethodDefinition, "initialize", sr_handle_initialize, 2);
 
-    cAttrAccessorDefinition = rb_define_class_under(mSaturn, "AttrAccessorDefinition", cDefinition);
+    cAttrAccessorDefinition = rb_define_class_under(mRubydex, "AttrAccessorDefinition", cDefinition);
     rb_define_alloc_func(cAttrAccessorDefinition, sr_handle_alloc);
     rb_define_method(cAttrAccessorDefinition, "initialize", sr_handle_initialize, 2);
 
-    cAttrReaderDefinition = rb_define_class_under(mSaturn, "AttrReaderDefinition", cDefinition);
+    cAttrReaderDefinition = rb_define_class_under(mRubydex, "AttrReaderDefinition", cDefinition);
     rb_define_alloc_func(cAttrReaderDefinition, sr_handle_alloc);
     rb_define_method(cAttrReaderDefinition, "initialize", sr_handle_initialize, 2);
 
-    cAttrWriterDefinition = rb_define_class_under(mSaturn, "AttrWriterDefinition", cDefinition);
+    cAttrWriterDefinition = rb_define_class_under(mRubydex, "AttrWriterDefinition", cDefinition);
     rb_define_alloc_func(cAttrWriterDefinition, sr_handle_alloc);
     rb_define_method(cAttrWriterDefinition, "initialize", sr_handle_initialize, 2);
 
-    cGlobalVariableDefinition = rb_define_class_under(mSaturn, "GlobalVariableDefinition", cDefinition);
+    cGlobalVariableDefinition = rb_define_class_under(mRubydex, "GlobalVariableDefinition", cDefinition);
     rb_define_alloc_func(cGlobalVariableDefinition, sr_handle_alloc);
     rb_define_method(cGlobalVariableDefinition, "initialize", sr_handle_initialize, 2);
 
-    cInstanceVariableDefinition = rb_define_class_under(mSaturn, "InstanceVariableDefinition", cDefinition);
+    cInstanceVariableDefinition = rb_define_class_under(mRubydex, "InstanceVariableDefinition", cDefinition);
     rb_define_alloc_func(cInstanceVariableDefinition, sr_handle_alloc);
     rb_define_method(cInstanceVariableDefinition, "initialize", sr_handle_initialize, 2);
 
-    cClassVariableDefinition = rb_define_class_under(mSaturn, "ClassVariableDefinition", cDefinition);
+    cClassVariableDefinition = rb_define_class_under(mRubydex, "ClassVariableDefinition", cDefinition);
     rb_define_alloc_func(cClassVariableDefinition, sr_handle_alloc);
     rb_define_method(cClassVariableDefinition, "initialize", sr_handle_initialize, 2);
 
-    cMethodAliasDefinition = rb_define_class_under(mSaturn, "MethodAliasDefinition", cDefinition);
+    cMethodAliasDefinition = rb_define_class_under(mRubydex, "MethodAliasDefinition", cDefinition);
     rb_define_alloc_func(cMethodAliasDefinition, sr_handle_alloc);
     rb_define_method(cMethodAliasDefinition, "initialize", sr_handle_initialize, 2);
 
-    cGlobalVariableAliasDefinition = rb_define_class_under(mSaturn, "GlobalVariableAliasDefinition", cDefinition);
+    cGlobalVariableAliasDefinition = rb_define_class_under(mRubydex, "GlobalVariableAliasDefinition", cDefinition);
     rb_define_alloc_func(cGlobalVariableAliasDefinition, sr_handle_alloc);
     rb_define_method(cGlobalVariableAliasDefinition, "initialize", sr_handle_initialize, 2);
 }

@@ -1,15 +1,15 @@
-#ifndef SATURN_LOCATION_H
-#define SATURN_LOCATION_H
+#ifndef RUBYDEX_LOCATION_H
+#define RUBYDEX_LOCATION_H
 
 #include "ruby.h"
 #include "rustbindings.h"
 
 extern VALUE cLocation;
 
-void initialize_location(VALUE mSaturn);
+void initialize_location(VALUE mRubydex);
 
-// Helper to build a Ruby Saturn::Location from a C Location pointer.
+// Helper to build a Ruby Rubydex::Location from a C Location pointer.
 // Does not take ownership; caller remains responsible for freeing the C Location on the Rust side.
 VALUE build_location_value(Location *loc);
 
-#endif // SATURN_LOCATION_H
+#endif // RUBYDEX_LOCATION_H

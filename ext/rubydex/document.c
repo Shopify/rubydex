@@ -86,8 +86,8 @@ static VALUE sr_document_definitions(VALUE self) {
     return self;
 }
 
-void initialize_document(VALUE mSaturn) {
-    cDocument = rb_define_class_under(mSaturn, "Document", rb_cObject);
+void initialize_document(VALUE mRubydex) {
+    cDocument = rb_define_class_under(mRubydex, "Document", rb_cObject);
 
     rb_define_alloc_func(cDocument, sr_handle_alloc);
     rb_define_method(cDocument, "initialize", sr_handle_initialize, 2);

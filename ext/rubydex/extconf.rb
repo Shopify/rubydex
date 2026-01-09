@@ -9,7 +9,7 @@ target_dir = root_dir.join("target")
 target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
 target_dir = target_dir.join(release ? "release" : "debug")
 
-bindings_path = root_dir.join("saturn-sys").join("rustbindings.h")
+bindings_path = root_dir.join("rubydex-sys").join("rustbindings.h")
 
 cargo_args = ["--manifest-path #{root_dir.join("Cargo.toml")}"]
 cargo_args << "--release" if release
@@ -23,7 +23,7 @@ append_cflags("-Werror=unused-but-set-variable")
 append_cflags("-Werror=implicit-function-declaration")
 
 if Gem.win_platform?
-  $LDFLAGS << " #{target_dir.join("libsaturn_sys.a")}"
+  $LDFLAGS << " #{target_dir.join("librubydex_sys.a")}"
 
   # On Windows, statically link system libraries to avoid having to distribute and load DLLs
   #
@@ -36,10 +36,10 @@ else
   append_ldflags("-Wl,-rpath,#{target_dir}")
   # We cannot use append_ldflags here because the Rust code is only compiled later. If it's not compiled yet, this will
   # fail and the flag will not be added
-  $LDFLAGS << " -L#{target_dir} -lsaturn_sys"
+  $LDFLAGS << " -L#{target_dir} -lrubydex_sys"
 end
 
-create_makefile("saturn/saturn")
+create_makefile("rubydex/rubydex")
 
 cargo_command = if ENV["SANITIZER"]
   ENV["RUSTFLAGS"] = "-Zsanitizer=#{ENV["SANITIZER"]}"

@@ -26,7 +26,7 @@ static VALUE sr_constant_reference_name(VALUE self) {
     return str;
 }
 
-// ConstantReference#location -> Saturn::Location
+// ConstantReference#location -> Rubydex::Location
 static VALUE sr_constant_reference_location(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -58,7 +58,7 @@ static VALUE sr_method_reference_name(VALUE self) {
     return str;
 }
 
-// MethodReference#location -> Saturn::Location
+// MethodReference#location -> Rubydex::Location
 static VALUE sr_method_reference_location(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -84,19 +84,19 @@ VALUE reference_class_for_kind(ReferenceKind kind) {
     }
 }
 
-void initialize_reference(VALUE mSaturn) {
-    cReference = rb_define_class_under(mSaturn, "Reference", rb_cObject);
+void initialize_reference(VALUE mRubydex) {
+    cReference = rb_define_class_under(mRubydex, "Reference", rb_cObject);
     rb_define_alloc_func(cReference, sr_handle_alloc);
     rb_define_method(cReference, "initialize", sr_handle_initialize, 2);
     rb_funcall(rb_singleton_class(cReference), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 
-    cConstantReference = rb_define_class_under(mSaturn, "ConstantReference", cReference);
+    cConstantReference = rb_define_class_under(mRubydex, "ConstantReference", cReference);
     rb_define_alloc_func(cConstantReference, sr_handle_alloc);
     rb_define_method(cConstantReference, "initialize", sr_handle_initialize, 2);
     rb_define_method(cConstantReference, "name", sr_constant_reference_name, 0);
     rb_define_method(cConstantReference, "location", sr_constant_reference_location, 0);
 
-    cMethodReference = rb_define_class_under(mSaturn, "MethodReference", cReference);
+    cMethodReference = rb_define_class_under(mRubydex, "MethodReference", cReference);
     rb_define_alloc_func(cMethodReference, sr_handle_alloc);
     rb_define_method(cMethodReference, "initialize", sr_handle_initialize, 2);
     rb_define_method(cMethodReference, "name", sr_method_reference_name, 0);

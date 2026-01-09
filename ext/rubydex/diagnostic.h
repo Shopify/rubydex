@@ -1,13 +1,13 @@
-#ifndef SATURN_DIAGNOSTIC_H
-#define SATURN_DIAGNOSTIC_H
+#ifndef RUBYDEX_DIAGNOSTIC_H
+#define RUBYDEX_DIAGNOSTIC_H
 
 #include "ruby.h"
 #include "rustbindings.h"
 
 extern VALUE cDiagnostic;
 
-void initialize_diagnostic(VALUE mSaturn);
+void initialize_diagnostic(VALUE mRubydex);
 
 VALUE severity_symbol(DiagnosticSeverity severity);
 
-#endif // SATURN_DIAGNOSTIC_H
+#endif // RUBYDEX_DIAGNOSTIC_H

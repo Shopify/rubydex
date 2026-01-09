@@ -1,5 +1,5 @@
-#ifndef SATURN_DEFINITION_H
-#define SATURN_DEFINITION_H
+#ifndef RUBYDEX_DEFINITION_H
+#define RUBYDEX_DEFINITION_H
 
 #include "ruby.h"
 #include "rustbindings.h"
@@ -19,9 +19,9 @@ extern VALUE cClassVariableDefinition;
 extern VALUE cMethodAliasDefinition;
 extern VALUE cGlobalVariableAliasDefinition;
 
-void initialize_definition(VALUE mSaturn);
+void initialize_definition(VALUE mRubydex);
 
 // Returns the Ruby class for a given DefinitionKind without calling back into Rust
 VALUE definition_class_for_kind(DefinitionKind kind);
 
-#endif // SATURN_DEFINITION_H
+#endif // RUBYDEX_DEFINITION_H
