@@ -5,7 +5,7 @@ use std::ffi::CString;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
-use saturn::model::ids::ReferenceId;
+use rubydex::model::ids::ReferenceId;
 
 /// Kind of reference for FFI dispatch
 #[repr(C)]

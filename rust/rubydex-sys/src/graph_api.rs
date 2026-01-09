@@ -3,9 +3,9 @@
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::utils;
 use libc::{c_char, c_void};
-use saturn::model::graph::Graph;
-use saturn::model::ids::DeclarationId;
-use saturn::{indexing, listing, resolution};
+use rubydex::model::graph::Graph;
+use rubydex::model::ids::DeclarationId;
+use rubydex::{indexing, listing, resolution};
 use std::ffi::CString;
 use std::{mem, ptr};
 

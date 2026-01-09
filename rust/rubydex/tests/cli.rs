@@ -1,12 +1,12 @@
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use regex::Regex;
-use saturn::test_utils::{normalize_indentation, with_context};
+use rubydex::test_utils::{normalize_indentation, with_context};
 use std::process::Command;
 
 #[test]
 fn prints_help() {
-    let mut cmd = Command::cargo_bin("saturn_cli").unwrap();
+    let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
     cmd.arg("--help");
     cmd.assert()
         .success()
@@ -17,14 +17,14 @@ fn prints_help() {
 
 #[test]
 fn dir_argument_variants() {
-    let mut zero = Command::cargo_bin("saturn_cli").unwrap();
+    let mut zero = Command::cargo_bin("rubydex_cli").unwrap();
     zero.assert().success().stderr(predicate::str::is_empty());
 
-    let mut one = Command::cargo_bin("saturn_cli").unwrap();
+    let mut one = Command::cargo_bin("rubydex_cli").unwrap();
     one.arg(".");
     one.assert().success().stderr(predicate::str::is_empty());
 
-    let mut two = Command::cargo_bin("saturn_cli").unwrap();
+    let mut two = Command::cargo_bin("rubydex_cli").unwrap();
     two.args(["foo", "bar"]);
     two.assert()
         .failure()
@@ -37,7 +37,7 @@ fn prints_index_metrics() {
         context.write("file1.rb", "class FirstClass\nend\n");
         context.write("file2.rb", "module SecondModule\nend\n");
 
-        let mut cmd = Command::cargo_bin("saturn_cli").unwrap();
+        let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
         cmd.arg(context.absolute_path());
         let output = cmd.output().unwrap();
 
@@ -62,7 +62,7 @@ fn visualize_simple_class() {
     with_context(|context| {
         context.write("simple.rb", "class SimpleClass\nend\n");
 
-        let mut cmd = Command::cargo_bin("saturn_cli").unwrap();
+        let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
         cmd.args([context.absolute_path().to_str().unwrap(), "--visualize"]);
 
         let output = cmd.output().unwrap();

@@ -167,7 +167,7 @@ impl JobQueue {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use saturn::job_queue::{Job, JobQueue};
+/// use rubydex::job_queue::{Job, JobQueue};
 ///
 /// struct PrintJob;
 ///

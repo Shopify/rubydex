@@ -3,7 +3,7 @@
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
-use saturn::diagnostic::Severity;
+use rubydex::diagnostic::Severity;
 use std::{ffi::CString, mem, ptr};
 
 /// C-compatible enum representing diagnostic severity levels.

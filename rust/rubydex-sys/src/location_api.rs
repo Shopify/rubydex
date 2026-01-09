@@ -2,7 +2,7 @@
 
 use libc::c_char;
 use line_index::LineIndex;
-use saturn::offset::Offset;
+use rubydex::offset::Offset;
 use std::ffi::CString;
 use std::fs;
 use url::Url;

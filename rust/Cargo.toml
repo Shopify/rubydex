@@ -1,7 +1,7 @@
 [workspace]
 members = [
-  "saturn",
-  "saturn-sys",
+  "rubydex",
+  "rubydex-sys",
 ]
 
 resolver = "3"

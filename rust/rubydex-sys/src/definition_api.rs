@@ -3,8 +3,8 @@
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
-use saturn::model::definitions::Definition;
-use saturn::model::ids::DefinitionId;
+use rubydex::model::definitions::Definition;
+use rubydex::model::ids::DefinitionId;
 use std::ffi::CString;
 use std::ptr;
 
@@ -291,7 +291,7 @@ pub unsafe extern "C" fn sat_definition_location(pointer: GraphPointer, definiti
 ///
 /// This function will panic if a definition cannot be found.
 pub(crate) fn sat_definitions_iter_new_from_ids<'a, I>(
-    graph: &saturn::model::graph::Graph,
+    graph: &rubydex::model::graph::Graph,
     ids: I,
 ) -> *mut DefinitionsIter
 where

@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::mem;
 
-use saturn::{
+use rubydex::{
     indexing, listing,
     model::graph::Graph,
     resolution,
@@ -13,7 +13,7 @@ use saturn::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "saturn_cli", about = "A Static Analysis Toolkit for Ruby", version)]
+#[command(name = "rubydex_cli", about = "A Static Analysis Toolkit for Ruby", version)]
 #[allow(clippy::struct_excessive_bools)]
 struct Args {
     #[arg(value_name = "DIR", default_value = ".")]

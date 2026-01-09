@@ -1,11 +1,11 @@
 [package]
-name = "saturn"
+name = "rubydex"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89.0"
 
 [[bin]]
-name = "saturn_cli"
+name = "rubydex_cli"
 path = "src/main.rs"
 
 [lib]
@@ -29,7 +29,7 @@ crossbeam-utils = "0.8"
 crossbeam-channel = "0.5"
 
 [dev-dependencies]
-saturn = { path = ".", features = ["test_utils"] }
+rubydex = { path = ".", features = ["test_utils"] }
 tempfile = "3.0"
 assert_cmd = "2.0"
 predicates = "3.1"

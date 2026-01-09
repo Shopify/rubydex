@@ -6,7 +6,7 @@ use std::ptr;
 
 use crate::definition_api::{DefinitionKind, DefinitionsIter, sat_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
-use saturn::model::ids::UriId;
+use rubydex::model::ids::UriId;
 
 /// Returns the UTF-8 URI string for a document id.
 /// Caller must free with `free_c_string`.

@@ -1,5 +1,5 @@
 [package]
-name = "saturn-sys"
+name = "rubydex-sys"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-saturn = { path = "../saturn" }
+rubydex = { path = "../rubydex" }
 libc = "0.2.174"
 url = "2.5.4"
 line-index = "0.1.2"

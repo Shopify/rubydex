@@ -14,7 +14,7 @@ pub struct Context {
 /// # Examples
 ///
 /// ```
-/// use saturn::test_utils::with_context;
+/// use rubydex::test_utils::with_context;
 ///
 /// with_context(|context| {
 ///     context.touch("foo.rb");
