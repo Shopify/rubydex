@@ -246,6 +246,9 @@ fn handle_remaining_definitions(
 ) {
     for id in other_ids {
         match graph.definitions().get(&id).unwrap() {
+            Definition::Anonymous(_) => {
+                // Anonymous namespaces are discarded
+            }
             Definition::Method(method_definition) => {
                 let str_id = *method_definition.str_id();
                 let owner_id = if let Some(receiver) = method_definition.receiver() {
@@ -2365,8 +2368,8 @@ mod tests {
         context.resolve();
         assert_ancestors_eq!(context, "B", ["B"]);
         assert_ancestors_eq!(context, "A", Vec::<&str>::new());
-        assert_ancestors_eq!(context, "C", Vec::<&str>::new());
-        assert_ancestors_eq!(context, "D", Vec::<&str>::new());
+        assert_ancestors_eq!(context, "C", ["B", "C", "Object"]);
+        assert_ancestors_eq!(context, "D", ["B", "D"]);
     }
 
     #[test]
@@ -2609,8 +2612,8 @@ mod tests {
         context.resolve();
         assert_ancestors_eq!(context, "B", ["B"]);
         assert_ancestors_eq!(context, "A", Vec::<&str>::new());
-        assert_ancestors_eq!(context, "C", Vec::<&str>::new());
-        assert_ancestors_eq!(context, "D", Vec::<&str>::new());
+        assert_ancestors_eq!(context, "C", ["C", "B", "Object"]);
+        assert_ancestors_eq!(context, "D", ["D", "B"]);
     }
 
     #[test]

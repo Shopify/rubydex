@@ -127,6 +127,9 @@ impl Graph {
             Definition::Method(it) => it.str_id(),
             Definition::MethodAlias(it) => it.new_name_str_id(),
             Definition::GlobalVariableAlias(it) => it.new_name_str_id(),
+            Definition::Anonymous(_) => {
+                panic!("API clients shouldn't be able to get a handle to an anonymous definition")
+            }
         };
 
         *id

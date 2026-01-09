@@ -52,6 +52,7 @@ impl DefinitionFlags {
 
 #[derive(Debug)]
 pub enum Definition {
+    Anonymous(Box<AnonymousNamespaceDefinition>),
     Class(Box<ClassDefinition>),
     SingletonClass(Box<SingletonClassDefinition>),
     Module(Box<ModuleDefinition>),
@@ -70,6 +71,7 @@ pub enum Definition {
 macro_rules! all_definitions {
     ($value:expr, $var:ident => $expr:expr) => {
         match $value {
+            Definition::Anonymous($var) => $expr,
             Definition::Class($var) => $expr,
             Definition::SingletonClass($var) => $expr,
             Definition::Module($var) => $expr,
@@ -116,6 +118,7 @@ impl Definition {
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
+            Definition::Anonymous(_) => "Anonymous",
             Definition::Class(_) => "Class",
             Definition::SingletonClass(_) => "SingletonClass",
             Definition::Module(_) => "Module",
@@ -408,6 +411,85 @@ impl ModuleDefinition {
     #[must_use]
     pub fn name_id(&self) -> &NameId {
         &self.name_id
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &[DefinitionId] {
+        &self.members
+    }
+
+    pub fn add_member(&mut self, member_id: DefinitionId) {
+        self.members.push(member_id);
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
+    }
+
+    pub fn add_mixin(&mut self, mixin: Mixin) {
+        self.mixins.push(mixin);
+    }
+}
+
+/// An anonymous namespace definition
+///
+/// # Example
+/// ```ruby
+/// Class.new(Parent) do
+/// end
+/// ```
+#[derive(Debug)]
+pub struct AnonymousNamespaceDefinition {
+    uri_id: UriId,
+    offset: Offset,
+    comments: Vec<Comment>,
+    lexical_nesting_id: Option<DefinitionId>,
+    members: Vec<DefinitionId>,
+    mixins: Vec<Mixin>,
+}
+
+impl AnonymousNamespaceDefinition {
+    #[must_use]
+    pub const fn new(
+        uri_id: UriId,
+        offset: Offset,
+        comments: Vec<Comment>,
+        lexical_nesting_id: Option<DefinitionId>,
+    ) -> Self {
+        Self {
+            uri_id,
+            offset,
+            comments,
+            lexical_nesting_id,
+            members: Vec::new(),
+            mixins: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("<anonymous>{}{}", *self.uri_id, self.offset.start()))
     }
 
     #[must_use]
