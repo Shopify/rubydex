@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Saturn
+module Rubydex
   # The global graph representing all declarations and their relationships for the workspace
   #
   # Note: this class is partially defined in C to integrate with the Rust backend

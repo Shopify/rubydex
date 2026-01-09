@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Saturn
+module Rubydex
   class Comment
     #: String
     attr_reader :string

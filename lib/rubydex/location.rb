@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module Saturn
+module Rubydex
   class Location
     include Comparable
 
@@ -22,7 +22,7 @@ module Saturn
     #: () -> String
     def path
       uri = URI(@uri)
-      raise Saturn::Error, "URI is not a file:// URI: #{@uri}" unless uri.scheme == "file"
+      raise Rubydex::Error, "URI is not a file:// URI: #{@uri}" unless uri.scheme == "file"
 
       path = uri.path
       # TODO: This has to go away once we have a proper URI abstraction

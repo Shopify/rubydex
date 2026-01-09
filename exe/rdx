@@ -8,8 +8,8 @@ OptionParser.new do |parser|
   parser.banner = "Usage: [path1, path2]"
 
   parser.on("--version", "Print the gem's version") do
-    require "saturn/version"
-    puts "v#{Saturn::VERSION}"
+    require "rubydex/version"
+    puts "v#{Rubydex::VERSION}"
     exit
   end
 
@@ -19,7 +19,7 @@ OptionParser.new do |parser|
   end
 end.parse!
 
-require "saturn"
+require "rubydex"
 
 workspace_path = ARGV.first
 
@@ -43,5 +43,5 @@ if workspace_path
   end
 end
 
-graph = Saturn::Graph.new(workspace_path: workspace_path)
+graph = Rubydex::Graph.new(workspace_path: workspace_path)
 graph.index_workspace
