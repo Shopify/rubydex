@@ -25,6 +25,8 @@
 
 use std::ops::Deref;
 
+use bitflags::bitflags;
+
 use crate::{
     model::{
         comment::Comment,
@@ -33,6 +35,20 @@ use crate::{
     },
     offset::Offset,
 };
+
+bitflags! {
+    #[derive(Debug)]
+    pub struct DefinitionFlags: u8 {
+        const DEPRECATED = 0b0001;
+    }
+}
+
+impl DefinitionFlags {
+    #[must_use]
+    pub fn is_deprecated(&self) -> bool {
+        self.contains(Self::DEPRECATED)
+    }
+}
 
 #[derive(Debug)]
 pub enum Definition {
@@ -115,6 +131,11 @@ impl Definition {
             Definition::GlobalVariableAlias(_) => "GlobalVariableAlias",
         }
     }
+
+    #[must_use]
+    pub fn is_deprecated(&self) -> bool {
+        all_definitions!(self, it => it.flags.is_deprecated())
+    }
 }
 
 /// Represents a mixin: include, prepend, or extend.
@@ -149,6 +170,7 @@ pub struct ClassDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     members: Vec<DefinitionId>,
@@ -163,6 +185,7 @@ impl ClassDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
         superclass_ref: Option<NameId>,
     ) -> Self {
@@ -170,6 +193,7 @@ impl ClassDefinition {
             name_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
             superclass_ref,
@@ -254,6 +278,7 @@ pub struct SingletonClassDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     /// The definition where `class << X` was found (lexical owner)
     lexical_nesting_id: Option<DefinitionId>,
@@ -270,12 +295,14 @@ impl SingletonClassDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
             members: Vec::new(),
@@ -344,6 +371,7 @@ pub struct ModuleDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     members: Vec<DefinitionId>,
@@ -357,12 +385,14 @@ impl ModuleDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
             members: Vec::new(),
@@ -430,6 +460,7 @@ pub struct ConstantDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
@@ -441,12 +472,14 @@ impl ConstantDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             name_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
         }
@@ -495,6 +528,7 @@ pub struct MethodDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
@@ -510,6 +544,7 @@ impl MethodDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
         visibility: Visibility,
@@ -519,6 +554,7 @@ impl MethodDefinition {
             str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
             parameters,
@@ -620,6 +656,7 @@ pub struct AttrAccessorDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
@@ -632,6 +669,7 @@ impl AttrAccessorDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
         visibility: Visibility,
     ) -> Self {
@@ -639,6 +677,7 @@ impl AttrAccessorDefinition {
             str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
             visibility,
@@ -692,6 +731,7 @@ pub struct AttrReaderDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
@@ -704,6 +744,7 @@ impl AttrReaderDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
         visibility: Visibility,
     ) -> Self {
@@ -711,6 +752,7 @@ impl AttrReaderDefinition {
             str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
             visibility,
@@ -764,6 +806,7 @@ pub struct AttrWriterDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
@@ -776,6 +819,7 @@ impl AttrWriterDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
         visibility: Visibility,
     ) -> Self {
@@ -783,6 +827,7 @@ impl AttrWriterDefinition {
             str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
             visibility,
@@ -836,6 +881,7 @@ pub struct GlobalVariableDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
@@ -847,12 +893,14 @@ impl GlobalVariableDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
         }
@@ -900,6 +948,7 @@ pub struct InstanceVariableDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
@@ -911,12 +960,14 @@ impl InstanceVariableDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
         }
@@ -964,6 +1015,7 @@ pub struct ClassVariableDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
@@ -975,12 +1027,14 @@ impl ClassVariableDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
             str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
         }
@@ -1023,6 +1077,7 @@ pub struct MethodAliasDefinition {
     old_name_str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
@@ -1035,6 +1090,7 @@ impl MethodAliasDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
@@ -1042,6 +1098,7 @@ impl MethodAliasDefinition {
             old_name_str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
         }
@@ -1095,6 +1152,7 @@ pub struct GlobalVariableAliasDefinition {
     old_name_str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
@@ -1107,6 +1165,7 @@ impl GlobalVariableAliasDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
+        flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
@@ -1114,6 +1173,7 @@ impl GlobalVariableAliasDefinition {
             old_name_str_id,
             uri_id,
             offset,
+            flags,
             comments,
             lexical_nesting_id,
         }

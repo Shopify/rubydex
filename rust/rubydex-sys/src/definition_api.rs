@@ -312,3 +312,20 @@ where
 
     DefinitionsIter::new(entries)
 }
+
+/// Returns true if the definition is deprecated.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `sat_graph_new`.
+/// - `definition_id` must be a valid definition id.
+///
+/// # Panics
+/// This function will panic if a definition cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sat_definition_is_deprecated(pointer: GraphPointer, definition_id: i64) -> bool {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let defn = graph.definitions().get(&def_id).expect("definition not found");
+        defn.is_deprecated()
+    })
+}

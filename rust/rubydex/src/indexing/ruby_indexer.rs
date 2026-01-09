@@ -5,7 +5,7 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantDefinition, Definition, GlobalVariableAliasDefinition, GlobalVariableDefinition,
+    ConstantDefinition, Definition, DefinitionFlags, GlobalVariableAliasDefinition, GlobalVariableDefinition,
     InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter,
     ParameterStruct, SingletonClassDefinition,
 };
@@ -126,10 +126,10 @@ impl<'a> RubyIndexer<'a> {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
-    fn find_comments_for(&self, offset: u32) -> Option<Vec<Comment>> {
+    fn find_comments_for(&self, offset: u32) -> (Vec<Comment>, DefinitionFlags) {
         let offset_usize = offset as usize;
         if self.comments.is_empty() {
-            return None;
+            return (Vec::new(), DefinitionFlags::empty());
         }
 
         let idx = match self.comments.binary_search_by_key(&offset_usize, |g| g.end_offset) {
@@ -137,28 +137,24 @@ impl<'a> RubyIndexer<'a> {
                 // This should never happen in valid Ruby syntax - a comment cannot end exactly
                 // where a definition begins (there must be at least a newline between them)
                 debug_assert!(false, "Comment ends exactly at definition start - this indicates a bug");
-                return None;
+                return (Vec::new(), DefinitionFlags::empty());
             }
             Err(i) if i > 0 => i - 1,
-            Err(_) => return None,
+            Err(_) => return (Vec::new(), DefinitionFlags::empty()),
         };
 
         let group = &self.comments[idx];
         let between = &self.source.as_bytes()[group.end_offset..offset_usize];
         if !between.iter().all(|&b| b.is_ascii_whitespace()) {
-            return None;
+            return (Vec::new(), DefinitionFlags::empty());
         }
 
         // We allow at most one blank line between the comment and the definition
         if bytecount::count(between, b'\n') > 2 {
-            return None;
+            return (Vec::new(), DefinitionFlags::empty());
         }
 
-        if group.comments.is_empty() {
-            None
-        } else {
-            Some(group.comments.clone())
-        }
+        (group.comments(), group.flags())
     }
 
     fn collect_parameters(&mut self, node: &ruby_prism::DefNode) -> Vec<Parameter> {
@@ -436,16 +432,16 @@ impl<'a> RubyIndexer<'a> {
 
     fn add_definition_from_location<F>(&mut self, location: &ruby_prism::Location, builder: F) -> DefinitionId
     where
-        F: FnOnce(StringId, Offset, Vec<Comment>, Option<DefinitionId>, UriId) -> Definition,
+        F: FnOnce(StringId, Offset, Vec<Comment>, DefinitionFlags, Option<DefinitionId>, UriId) -> Definition,
     {
         let name = Self::location_to_string(location);
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(location);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
         let parent_nesting_id = self.parent_nesting_id();
         let uri_id = self.uri_id;
 
-        let definition = builder(str_id, offset, comments, parent_nesting_id, uri_id);
+        let definition = builder(str_id, offset, comments, flags, parent_nesting_id, uri_id);
         let definition_id = self.local_graph.add_definition(definition);
 
         self.add_member_to_current_owner(definition_id);
@@ -457,7 +453,7 @@ impl<'a> RubyIndexer<'a> {
         let name = Self::location_to_string(location);
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(location);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
         let parent_nesting_id = self.parent_nesting_id();
         let uri_id = self.uri_id;
 
@@ -466,6 +462,7 @@ impl<'a> RubyIndexer<'a> {
             uri_id,
             offset,
             comments,
+            flags,
             parent_nesting_id,
         )));
 
@@ -482,7 +479,7 @@ impl<'a> RubyIndexer<'a> {
         let name = Self::location_to_string(location);
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(location);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
         // Class variables use the enclosing class/module (skipping methods) as lexical nesting
         let lexical_nesting_id = self.current_nesting_definition_id();
         let uri_id = self.uri_id;
@@ -492,6 +489,7 @@ impl<'a> RubyIndexer<'a> {
             uri_id,
             offset,
             comments,
+            flags,
             lexical_nesting_id,
         )));
 
@@ -511,7 +509,7 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let offset = Offset::from_prism_location(&location);
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
@@ -519,6 +517,7 @@ impl<'a> RubyIndexer<'a> {
             self.uri_id,
             offset,
             comments,
+            flags,
             lexical_nesting_id,
         )));
         let definition_id = self.local_graph.add_definition(definition);
@@ -663,6 +662,7 @@ impl<'a> RubyIndexer<'a> {
 struct CommentGroup {
     end_offset: usize,
     comments: Vec<Comment>,
+    deprecated: bool,
 }
 
 impl CommentGroup {
@@ -671,6 +671,7 @@ impl CommentGroup {
         Self {
             end_offset: 0,
             comments: Vec::new(),
+            deprecated: false,
         }
     }
 
@@ -695,17 +696,34 @@ impl CommentGroup {
     fn add_comment(&mut self, comment: &ruby_prism::Comment) {
         self.end_offset = comment.location().end_offset();
         let text = String::from_utf8_lossy(comment.location().as_slice()).to_string();
+
+        if text.lines().any(|line| line.starts_with("# @deprecated")) {
+            self.deprecated = true;
+        }
+
         self.comments.push(Comment::new(
             Offset::from_prism_location(&comment.location()),
             text.trim().to_string(),
         ));
+    }
+
+    fn comments(&self) -> Vec<Comment> {
+        self.comments.clone()
+    }
+
+    fn flags(&self) -> DefinitionFlags {
+        if self.deprecated {
+            DefinitionFlags::DEPRECATED
+        } else {
+            DefinitionFlags::empty()
+        }
     }
 }
 
 impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         let offset = Offset::from_prism_location(&node.location());
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
         let superclass = node.superclass().and_then(|n| self.index_constant_reference(&n, true));
 
@@ -725,6 +743,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 self.uri_id,
                 offset,
                 comments,
+                flags,
                 lexical_nesting_id,
                 superclass,
             )));
@@ -745,7 +764,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
         let offset = Offset::from_prism_location(&node.location());
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
         if let Some(constant_ref_id) = self.index_constant_reference(&node.constant_path(), false) {
@@ -754,6 +773,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 self.uri_id,
                 offset,
                 comments,
+                flags,
                 lexical_nesting_id,
             )));
 
@@ -801,7 +821,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         };
 
         let offset = Offset::from_prism_location(&node.location());
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
         let singleton_class_name = {
@@ -828,6 +848,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.uri_id,
             offset,
             comments,
+            flags,
             lexical_nesting_id,
         )));
 
@@ -899,12 +920,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     self.add_definition_from_location(
                         &left.location(),
-                        |str_id, offset, comments, lexical_nesting_id, uri_id| {
+                        |str_id, offset, comments, flags, lexical_nesting_id, uri_id| {
                             Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
                                 str_id,
                                 uri_id,
                                 offset,
                                 comments,
+                                flags,
                                 lexical_nesting_id,
                             )))
                         },
@@ -934,7 +956,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let name = Self::location_to_string(&node.name_loc());
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&node.location());
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
         let parent_nesting_id = self.parent_nesting_id();
         let parameters = self.collect_parameters(node);
         let is_singleton = node.receiver().is_some();
@@ -975,6 +997,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.uri_id,
             offset,
             comments,
+            flags,
             parent_nesting_id,
             parameters,
             visibility,
@@ -1005,7 +1028,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let str_id = self.local_graph.intern_string(name);
                 let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
-                let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                let (comments, flags) = self.find_comments_for(offset.start());
 
                 let definition = match kind {
                     AttrKind::Accessor => Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
@@ -1013,6 +1036,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.uri_id,
                         offset,
                         comments,
+                        flags,
                         parent_nesting_id,
                         *self.current_visibility(),
                     ))),
@@ -1021,6 +1045,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.uri_id,
                         offset,
                         comments,
+                        flags,
                         parent_nesting_id,
                         *self.current_visibility(),
                     ))),
@@ -1029,6 +1054,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.uri_id,
                         offset,
                         comments,
+                        flags,
                         parent_nesting_id,
                         *self.current_visibility(),
                     ))),
@@ -1099,7 +1125,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 self.local_graph.add_method_reference(reference);
 
                 let offset = Offset::from_prism_location(&node.location());
-                let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+                let (comments, flags) = self.find_comments_for(offset.start());
 
                 let definition = Definition::MethodAlias(Box::new(MethodAliasDefinition::new(
                     new_name_str_id,
@@ -1107,6 +1133,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.uri_id,
                     offset,
                     comments,
+                    flags,
                     self.parent_nesting_id(),
                 )));
 
@@ -1232,12 +1259,13 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_global_variable_write_node(&mut self, node: &ruby_prism::GlobalVariableWriteNode) {
         self.add_definition_from_location(
             &node.name_loc(),
-            |str_id, offset, comments, lexical_nesting_id, uri_id| {
+            |str_id, offset, comments, flags, lexical_nesting_id, uri_id| {
                 Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
                     str_id,
                     uri_id,
                     offset,
                     comments,
+                    flags,
                     lexical_nesting_id,
                 )))
             },
@@ -1246,29 +1274,38 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_global_variable_and_write_node(&mut self, node: &ruby_prism::GlobalVariableAndWriteNode<'_>) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, nesting_id, uri_id| {
-            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                str_id, uri_id, offset, comments, nesting_id,
-            )))
-        });
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, flags, nesting_id, uri_id| {
+                Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                    str_id, uri_id, offset, comments, flags, nesting_id,
+                )))
+            },
+        );
         self.visit(&node.value());
     }
 
     fn visit_global_variable_or_write_node(&mut self, node: &ruby_prism::GlobalVariableOrWriteNode<'_>) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, nesting_id, uri_id| {
-            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                str_id, uri_id, offset, comments, nesting_id,
-            )))
-        });
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, flags, nesting_id, uri_id| {
+                Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                    str_id, uri_id, offset, comments, flags, nesting_id,
+                )))
+            },
+        );
         self.visit(&node.value());
     }
 
     fn visit_global_variable_operator_write_node(&mut self, node: &ruby_prism::GlobalVariableOperatorWriteNode<'_>) {
-        self.add_definition_from_location(&node.name_loc(), |str_id, offset, comments, nesting_id, uri_id| {
-            Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
-                str_id, uri_id, offset, comments, nesting_id,
-            )))
-        });
+        self.add_definition_from_location(
+            &node.name_loc(),
+            |str_id, offset, comments, flags, nesting_id, uri_id| {
+                Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+                    str_id, uri_id, offset, comments, flags, nesting_id,
+                )))
+            },
+        );
         self.visit(&node.value());
     }
 
@@ -1342,7 +1379,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         };
 
         let offset = Offset::from_prism_location(&node.location());
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
 
         let definition = Definition::MethodAlias(Box::new(MethodAliasDefinition::new(
             self.local_graph.intern_string(new_name),
@@ -1350,6 +1387,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.uri_id,
             offset,
             comments,
+            flags,
             self.parent_nesting_id(),
         )));
 
@@ -1365,7 +1403,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let new_name = Self::location_to_string(&node.new_name().location());
         let old_name = Self::location_to_string(&node.old_name().location());
         let offset = Offset::from_prism_location(&node.location());
-        let comments = self.find_comments_for(offset.start()).unwrap_or_default();
+        let (comments, flags) = self.find_comments_for(offset.start());
 
         let definition = Definition::GlobalVariableAlias(Box::new(GlobalVariableAliasDefinition::new(
             self.local_graph.intern_string(new_name),
@@ -1373,6 +1411,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.uri_id,
             offset,
             comments,
+            flags,
             self.parent_nesting_id(),
         )));
 
@@ -3202,6 +3241,45 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "AnotherInner", def);
             assert_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
         });
+    }
+
+    #[test]
+    fn index_comments_with_tags() {
+        let context = index_source({
+            "
+            # @deprecated
+            class Deprecated; end
+
+            class NotDeprecated; end
+
+            # Multi-line comment
+            # @deprecated Use something else
+            def deprecated_method; end
+
+            # Not @deprecated
+            def not_deprecated_method; end
+            "
+        });
+
+        assert_definition_at!(&context, "2:1-2:22", Class, |def| {
+            assert_name_id_to_string_eq!(&context, "Deprecated", def);
+        });
+        assert!(context.definition_at("2:1-2:22").is_deprecated());
+
+        assert_definition_at!(&context, "4:1-4:25", Class, |def| {
+            assert_name_id_to_string_eq!(&context, "NotDeprecated", def);
+        });
+        assert!(!context.definition_at("4:1-4:25").is_deprecated());
+
+        assert_definition_at!(&context, "8:1-8:27", Method, |def| {
+            assert_name_eq!(&context, "deprecated_method", def);
+        });
+        assert!(context.definition_at("8:1-8:27").is_deprecated());
+
+        assert_definition_at!(&context, "11:1-11:31", Method, |def| {
+            assert_name_eq!(&context, "not_deprecated_method", def);
+        });
+        assert!(!context.definition_at("11:1-11:31").is_deprecated());
     }
 
     #[test]

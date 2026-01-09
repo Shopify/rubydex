@@ -730,6 +730,7 @@ name = "rubydex"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "bitflags",
  "bytecount",
  "clap",
  "crossbeam-channel",
