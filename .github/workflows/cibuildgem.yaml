@@ -1,4 +1,4 @@
-name: "Release gems with precompiled binaries"
+name: "Package and release gems with precompiled binaries"
 on:
   workflow_dispatch:
     inputs:
@@ -13,7 +13,7 @@ jobs:
     name: "Cross compile the gem on different ruby versions"
     strategy:
       matrix:
-        os: ["macos-latest", "shopify-ubuntu-20.04"]
+        os: ["macos-latest", "ubuntu-22.04"]
     runs-on: "${{ matrix.os }}"
     steps:
       - name: "Checkout code"
@@ -23,8 +23,8 @@ jobs:
         with:
           ruby-version: "3.2.9"
           bundler-cache: true
-      - name: "Run easy compile"
-        uses: "shopify-playground/edouard-playground/.github/actions/easy_compile@main"
+      - name: "Run cibuildgem"
+        uses: "shopify/cibuildgem/.github/actions/cibuildgem@main"
         with:
           step: "compile"
   test:
@@ -33,8 +33,8 @@ jobs:
     needs: compile
     strategy:
       matrix:
-        os: ["macos-latest", "shopify-ubuntu-20.04"]
-        rubies: ["3.2", "3.3", "3.4"]
+        os: ["macos-latest", "ubuntu-22.04"]
+        rubies: ["3.2", "3.3", "3.4", "4.0"]
         type: ["cross", "native"]
     runs-on: "${{ matrix.os }}"
     steps:
@@ -45,8 +45,8 @@ jobs:
         with:
           ruby-version: "${{ matrix.rubies }}"
           bundler-cache: true
-      - name: "Run easy compile"
-        uses: "shopify-playground/edouard-playground/.github/actions/easy_compile@main"
+      - name: "Run cibuildgem"
+        uses: "shopify/cibuildgem/.github/actions/cibuildgem@main"
         with:
           step: "test_${{ matrix.type }}"
   install:
@@ -55,16 +55,19 @@ jobs:
     needs: test
     strategy:
       matrix:
-        os: ["macos-latest", "shopify-ubuntu-20.04"]
+        os: ["macos-latest", "ubuntu-22.04"]
     runs-on: "${{ matrix.os }}"
     steps:
       - name: "Setup Ruby"
         uses: ruby/setup-ruby@d5f787ce339eb0767271bc01d922e85644c2c8ab # v1.280.0
-      - name: "Run easy compile"
-        uses: "shopify-playground/edouard-playground/.github/actions/easy_compile@main"
+        with:
+          ruby-version: "4.0.0"
+      - name: "Run cibuildgem"
+        uses: "shopify/cibuildgem/.github/actions/cibuildgem@main"
         with:
           step: "install"
   release:
+    environment: release
     permissions:
       id-token: write
       contents: read
@@ -72,11 +75,13 @@ jobs:
     if: ${{ inputs.release }}
     name: "Release all gems with RubyGems"
     needs: install
-    runs-on: "shopify-ubuntu-latest"
+    runs-on: "ubuntu-latest"
     steps:
       - name: "Setup Ruby"
         uses: ruby/setup-ruby@d5f787ce339eb0767271bc01d922e85644c2c8ab # v1.280.0
-      - name: "Run easy compile"
-        uses: "shopify-playground/edouard-playground/.github/actions/easy_compile@main"
+        with:
+          ruby-version: "4.0.0"
+      - name: "Run cibuildgem"
+        uses: "shopify/cibuildgem/.github/actions/cibuildgem@main"
         with:
           step: "release"
