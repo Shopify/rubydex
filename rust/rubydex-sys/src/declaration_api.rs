@@ -4,7 +4,7 @@ use libc::c_char;
 use std::ffi::CString;
 use std::ptr;
 
-use crate::definition_api::{DefinitionKind, DefinitionsIter, sat_definitions_iter_new_from_ids};
+use crate::definition_api::{DefinitionKind, DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use rubydex::model::ids::DeclarationId;
 
@@ -19,7 +19,7 @@ use rubydex::model::ids::DeclarationId;
 ///
 /// This function will panic if the name pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_declaration_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
+pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
         let read_lock = graph.declarations().read().unwrap();
@@ -43,7 +43,7 @@ pub unsafe extern "C" fn sat_declaration_name(pointer: GraphPointer, name_id: i6
 ///
 /// This function will panic if the name pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_declaration_unqualified_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
+pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
         let read_lock = graph.declarations().read().unwrap();
@@ -64,13 +64,13 @@ pub unsafe extern "C" fn sat_declaration_unqualified_name(pointer: GraphPointer,
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - The returned pointer must be freed with `sat_declaration_definitions_iter_free`.
+/// - The returned pointer must be freed with `rdx_declaration_definitions_iter_free`.
 ///
 /// # Panics
 ///
 /// This function will panic if acquiring a read lock fails
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_declaration_definitions_iter_new(
+pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
     pointer: GraphPointer,
     decl_id: i64,
 ) -> *mut DefinitionsIter {
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn sat_declaration_definitions_iter_new(
         let decl_id = DeclarationId::new(decl_id);
         let read_lock = graph.declarations().read().unwrap();
         if let Some(decl) = read_lock.get(&decl_id) {
-            sat_definitions_iter_new_from_ids(graph, decl.definitions())
+            rdx_definitions_iter_new_from_ids(graph, decl.definitions())
         } else {
             DefinitionsIter::new(Vec::<(i64, DefinitionKind)>::new().into_boxed_slice())
         }

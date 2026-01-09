@@ -13,13 +13,13 @@ pub type GraphPointer = *mut c_void;
 
 /// Creates a new graph within a mutex. This is meant to be used when creating new Graph objects in Ruby
 #[unsafe(no_mangle)]
-pub extern "C" fn sat_graph_new() -> GraphPointer {
+pub extern "C" fn rdx_graph_new() -> GraphPointer {
     Box::into_raw(Box::new(Graph::new())) as GraphPointer
 }
 
 /// Frees a Graph through its pointer
 #[unsafe(no_mangle)]
-pub extern "C" fn sat_graph_free(pointer: GraphPointer) {
+pub extern "C" fn rdx_graph_free(pointer: GraphPointer) {
     unsafe {
         let _ = Box::from_raw(pointer.cast::<Graph>());
     }
@@ -46,7 +46,7 @@ where
 /// This function is unsafe because it dereferences raw pointers coming from C. The caller has to ensure that the Ruby
 /// VM will not free the pointers related to the string array while they are in use by Rust
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_index_all(
+pub unsafe extern "C" fn rdx_index_all(
     pointer: GraphPointer,
     file_paths: *const *const c_char,
     count: usize,
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn sat_index_all(
 
 /// Runs the resolver to compute declarations, ownership and related structures
 #[unsafe(no_mangle)]
-pub extern "C" fn sat_graph_resolve(pointer: GraphPointer) {
+pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
     with_graph(pointer, |graph| {
         resolution::resolve_all(graph);
     });
@@ -105,13 +105,13 @@ pub struct DeclarationsIter {
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - The returned pointer must be freed with `sat_graph_declarations_iter_free`.
+/// - The returned pointer must be freed with `rdx_graph_declarations_iter_free`.
 ///
 /// # Panics
 ///
 /// Will panic if acquiring a read lock on the graph's declarations fails
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_declarations_iter_new(pointer: GraphPointer) -> *mut DeclarationsIter {
+pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) -> *mut DeclarationsIter {
     // Snapshot the IDs at iterator creation to avoid borrowing across FFI calls
     let ids = with_graph(pointer, |graph| {
         let read_lock = graph.declarations().read().unwrap();
@@ -129,9 +129,9 @@ pub unsafe extern "C" fn sat_graph_declarations_iter_new(pointer: GraphPointer) 
 ///
 /// # Safety
 ///
-/// - `iter` must be a valid pointer previously returned by `sat_graph_declarations_iter_new`.
+/// - `iter` must be a valid pointer previously returned by `rdx_graph_declarations_iter_new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_declarations_iter_len(iter: *const DeclarationsIter) -> usize {
+pub unsafe extern "C" fn rdx_graph_declarations_iter_len(iter: *const DeclarationsIter) -> usize {
     if iter.is_null() {
         return 0;
     }
@@ -144,10 +144,10 @@ pub unsafe extern "C" fn sat_graph_declarations_iter_len(iter: *const Declaratio
 ///
 /// # Safety
 ///
-/// - `iter` must be a valid pointer previously returned by `sat_graph_declarations_iter_new`.
+/// - `iter` must be a valid pointer previously returned by `rdx_graph_declarations_iter_new`.
 /// - `out_id` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_declarations_iter_next(iter: *mut DeclarationsIter, out_id: *mut i64) -> bool {
+pub unsafe extern "C" fn rdx_graph_declarations_iter_next(iter: *mut DeclarationsIter, out_id: *mut i64) -> bool {
     if iter.is_null() || out_id.is_null() {
         return false;
     }
@@ -164,14 +164,14 @@ pub unsafe extern "C" fn sat_graph_declarations_iter_next(iter: *mut Declaration
     true
 }
 
-/// Frees an iterator created by `sat_graph_declarations_iter_new`.
+/// Frees an iterator created by `rdx_graph_declarations_iter_new`.
 ///
 /// # Safety
 ///
-/// - `iter` must be a pointer previously returned by `sat_graph_declarations_iter_new`.
+/// - `iter` must be a pointer previously returned by `rdx_graph_declarations_iter_new`.
 /// - `iter` must not be used after being freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_declarations_iter_free(iter: *mut DeclarationsIter) {
+pub unsafe extern "C" fn rdx_graph_declarations_iter_free(iter: *mut DeclarationsIter) {
     if iter.is_null() {
         return;
     }
@@ -197,9 +197,9 @@ pub struct DocumentsIter {
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - The returned pointer must be freed with `sat_graph_documents_iter_free`.
+/// - The returned pointer must be freed with `rdx_graph_documents_iter_free`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_documents_iter_new(pointer: GraphPointer) -> *mut DocumentsIter {
+pub unsafe extern "C" fn rdx_graph_documents_iter_new(pointer: GraphPointer) -> *mut DocumentsIter {
     // Snapshot the IDs at iterator creation to avoid borrowing across FFI calls
     let ids = with_graph(pointer, |graph| {
         graph
@@ -217,9 +217,9 @@ pub unsafe extern "C" fn sat_graph_documents_iter_new(pointer: GraphPointer) -> 
 ///
 /// # Safety
 ///
-/// - `iter` must be a valid pointer previously returned by `sat_graph_documents_iter_new`.
+/// - `iter` must be a valid pointer previously returned by `rdx_graph_documents_iter_new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_documents_iter_len(iter: *const DocumentsIter) -> usize {
+pub unsafe extern "C" fn rdx_graph_documents_iter_len(iter: *const DocumentsIter) -> usize {
     if iter.is_null() {
         return 0;
     }
@@ -232,10 +232,10 @@ pub unsafe extern "C" fn sat_graph_documents_iter_len(iter: *const DocumentsIter
 ///
 /// # Safety
 ///
-/// - `iter` must be a valid pointer previously returned by `sat_graph_documents_iter_new`.
+/// - `iter` must be a valid pointer previously returned by `rdx_graph_documents_iter_new`.
 /// - `out_id` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_documents_iter_next(iter: *mut DocumentsIter, out_id: *mut i64) -> bool {
+pub unsafe extern "C" fn rdx_graph_documents_iter_next(iter: *mut DocumentsIter, out_id: *mut i64) -> bool {
     if iter.is_null() || out_id.is_null() {
         return false;
     }
@@ -252,14 +252,14 @@ pub unsafe extern "C" fn sat_graph_documents_iter_next(iter: *mut DocumentsIter,
     true
 }
 
-/// Frees an iterator created by `sat_graph_documents_iter_new`.
+/// Frees an iterator created by `rdx_graph_documents_iter_new`.
 ///
 /// # Safety
 ///
-/// - `iter` must be a pointer previously returned by `sat_graph_documents_iter_new`.
+/// - `iter` must be a pointer previously returned by `rdx_graph_documents_iter_new`.
 /// - `iter` must not be used after being freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_documents_iter_free(iter: *mut DocumentsIter) {
+pub unsafe extern "C" fn rdx_graph_documents_iter_free(iter: *mut DocumentsIter) {
     if iter.is_null() {
         return;
     }
@@ -281,7 +281,7 @@ pub unsafe extern "C" fn sat_graph_documents_iter_free(iter: *mut DocumentsIter)
 ///
 /// Will panic if acquiring a read lock on the graph's declarations fails
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const i64 {
+pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const i64 {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
         return ptr::null();
     };
@@ -303,7 +303,7 @@ pub unsafe extern "C" fn sat_graph_get_declaration(pointer: GraphPointer, name: 
 /// # Safety
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_constant_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
+pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
     with_graph(pointer, |graph| {
         let refs: Vec<(i64, ReferenceKind)> = graph
             .constant_references()
@@ -320,7 +320,7 @@ pub unsafe extern "C" fn sat_graph_constant_references_iter_new(pointer: GraphPo
 /// # Safety
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_method_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
+pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
     with_graph(pointer, |graph| {
         let refs: Vec<(i64, ReferenceKind)> = graph
             .method_references()

@@ -16,7 +16,7 @@ static VALUE sr_constant_reference_name(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    const char *name = sat_constant_reference_name(graph, data->id);
+    const char *name = rdx_constant_reference_name(graph, data->id);
     if (name == NULL) {
         return Qnil;
     }
@@ -34,9 +34,9 @@ static VALUE sr_constant_reference_location(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    Location *loc = sat_constant_reference_location(graph, data->id);
+    Location *loc = rdx_constant_reference_location(graph, data->id);
     VALUE location = build_location_value(loc);
-    sat_location_free(loc);
+    rdx_location_free(loc);
     return location;
 }
 
@@ -48,7 +48,7 @@ static VALUE sr_method_reference_name(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    const char *name = sat_method_reference_name(graph, data->id);
+    const char *name = rdx_method_reference_name(graph, data->id);
     if (name == NULL) {
         return Qnil;
     }
@@ -66,9 +66,9 @@ static VALUE sr_method_reference_location(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    Location *loc = sat_method_reference_location(graph, data->id);
+    Location *loc = rdx_method_reference_location(graph, data->id);
     VALUE location = build_location_value(loc);
-    sat_location_free(loc);
+    rdx_location_free(loc);
     return location;
 }
 

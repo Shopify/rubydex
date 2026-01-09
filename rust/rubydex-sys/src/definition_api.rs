@@ -55,7 +55,7 @@ pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
 ///
 /// This function will panic if the definition cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definition_kind(pointer: GraphPointer, definition_id: i64) -> DefinitionKind {
+pub unsafe extern "C" fn rdx_definition_kind(pointer: GraphPointer, definition_id: i64) -> DefinitionKind {
     with_graph(pointer, |graph| {
         let definition_id = DefinitionId::new(definition_id);
         if let Some(defn) = graph.definitions().get(&definition_id) {
@@ -77,7 +77,7 @@ pub unsafe extern "C" fn sat_definition_kind(pointer: GraphPointer, definition_i
 ///
 /// This function will panic if the definition cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definition_name(pointer: GraphPointer, definition_id: i64) -> *const c_char {
+pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_id: i64) -> *const c_char {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         if let Some(defn) = graph.definitions().get(&def_id) {
@@ -113,7 +113,7 @@ impl DefinitionsIter {
 /// # Safety
 /// - `iter` must be a valid pointer previously returned by `DefinitionsIter::new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definitions_iter_len(iter: *const DefinitionsIter) -> usize {
+pub unsafe extern "C" fn rdx_definitions_iter_len(iter: *const DefinitionsIter) -> usize {
     if iter.is_null() {
         return 0;
     }
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn sat_definitions_iter_len(iter: *const DefinitionsIter) 
 /// - `iter` must be a valid pointer previously returned by `DefinitionsIter::new`.
 /// - `out_id` and `out_kind` must be valid, writable pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definitions_iter_next(
+pub unsafe extern "C" fn rdx_definitions_iter_next(
     iter: *mut DefinitionsIter,
     out_id: *mut i64,
     out_kind: *mut DefinitionKind,
@@ -156,7 +156,7 @@ pub unsafe extern "C" fn sat_definitions_iter_next(
 /// - `iter` must be a pointer previously returned by `DefinitionsIter::new`.
 /// - `iter` must not be used after being freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definitions_iter_free(iter: *mut DefinitionsIter) {
+pub unsafe extern "C" fn rdx_definitions_iter_free(iter: *mut DefinitionsIter) {
     if iter.is_null() {
         return;
     }
@@ -180,16 +180,16 @@ pub struct CommentArray {
 }
 
 /// Returns a newly allocated array of comments (string and location) for the given definition id.
-/// Caller must free the returned pointer with `sat_definition_comments_free` and each inner string with `free_c_string` if needed.
+/// Caller must free the returned pointer with `rdx_definition_comments_free` and each inner string with `free_c_string` if needed.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `sat_graph_new`.
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
 /// This function will panic if a definition or document cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definition_comments(pointer: GraphPointer, definition_id: i64) -> *mut CommentArray {
+pub unsafe extern "C" fn rdx_definition_comments(pointer: GraphPointer, definition_id: i64) -> *mut CommentArray {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         let Some(defn) = graph.definitions().get(&def_id) else {
@@ -221,13 +221,13 @@ pub unsafe extern "C" fn sat_definition_comments(pointer: GraphPointer, definiti
     })
 }
 
-/// Frees a `CommentArray` previously returned by `sat_definition_comments`.
+/// Frees a `CommentArray` previously returned by `rdx_definition_comments`.
 ///
 /// # Safety
-/// - `ptr` must be a valid pointer previously returned by `sat_definition_comments`.
+/// - `ptr` must be a valid pointer previously returned by `rdx_definition_comments`.
 /// - `ptr` must not be used after being freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definition_comments_free(ptr: *mut CommentArray) {
+pub unsafe extern "C" fn rdx_definition_comments_free(ptr: *mut CommentArray) {
     if ptr.is_null() {
         return;
     }
@@ -246,7 +246,7 @@ pub unsafe extern "C" fn sat_definition_comments_free(ptr: *mut CommentArray) {
                 let _ = unsafe { CString::from_raw(item.string.cast_mut()) };
             }
             if !item.location.is_null() {
-                unsafe { crate::location_api::sat_location_free(item.location) };
+                unsafe { crate::location_api::rdx_location_free(item.location) };
                 item.location = ptr::null_mut();
             }
         }
@@ -257,17 +257,17 @@ pub unsafe extern "C" fn sat_definition_comments_free(ptr: *mut CommentArray) {
 }
 
 /// Returns a newly allocated `Location` for the given definition id.
-/// Caller must free the returned pointer with `sat_location_free`.
+/// Caller must free the returned pointer with `rdx_location_free`.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `sat_graph_new`.
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
 ///
 /// This function will panic if a definition or document cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_definition_location(pointer: GraphPointer, definition_id: i64) -> *mut Location {
+pub unsafe extern "C" fn rdx_definition_location(pointer: GraphPointer, definition_id: i64) -> *mut Location {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         let Some(defn) = graph.definitions().get(&def_id) else {
@@ -290,7 +290,7 @@ pub unsafe extern "C" fn sat_definition_location(pointer: GraphPointer, definiti
 /// # Panics
 ///
 /// This function will panic if a definition cannot be found.
-pub(crate) fn sat_definitions_iter_new_from_ids<'a, I>(
+pub(crate) fn rdx_definitions_iter_new_from_ids<'a, I>(
     graph: &rubydex::model::graph::Graph,
     ids: I,
 ) -> *mut DefinitionsIter

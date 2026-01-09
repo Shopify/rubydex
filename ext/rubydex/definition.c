@@ -64,9 +64,9 @@ static VALUE sr_definition_location(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    Location *loc = sat_definition_location(graph, data->id);
+    Location *loc = rdx_definition_location(graph, data->id);
     VALUE location = build_location_value(loc);
-    sat_location_free(loc);
+    rdx_location_free(loc);
 
     return location;
 }
@@ -79,10 +79,10 @@ static VALUE sr_definition_comments(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    CommentArray *arr = sat_definition_comments(graph, data->id);
+    CommentArray *arr = rdx_definition_comments(graph, data->id);
     if (arr == NULL || arr->len == 0) {
         if (arr != NULL) {
-            sat_definition_comments_free(arr);
+            rdx_definition_comments_free(arr);
         }
         return rb_ary_new();
     }
@@ -105,7 +105,7 @@ static VALUE sr_definition_comments(VALUE self) {
     }
 
     // Free the array and all inner allocations on the Rust side
-    sat_definition_comments_free(arr);
+    rdx_definition_comments_free(arr);
     return ary;
 }
 
@@ -117,7 +117,7 @@ static VALUE sr_definition_name(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    const char *name = sat_definition_name(graph, data->id);
+    const char *name = rdx_definition_name(graph, data->id);
     if (name == NULL) {
         return Qnil;
     }

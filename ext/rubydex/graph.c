@@ -13,7 +13,7 @@ static VALUE eIndexingError;
 // Free function for the custom Graph allocator. We always have to call into Rust to free data allocated by it
 static void graph_free(void *ptr) {
     if (ptr) {
-        sat_graph_free(ptr);
+        rdx_graph_free(ptr);
     }
 }
 
@@ -22,7 +22,7 @@ const rb_data_type_t graph_type = {"Graph", {0, graph_free, 0}, 0, 0, RUBY_TYPED
 // Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
 // as a void pointer
 static VALUE sr_graph_alloc(VALUE klass) {
-    void *graph = sat_graph_new();
+    void *graph = rdx_graph_new();
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
 }
 
@@ -38,7 +38,7 @@ static VALUE sr_graph_index_all(VALUE self, VALUE file_paths) {
     // Get the underying graph pointer and then invoke the Rust index all implementation
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
-    const char *error_messages = sat_index_all(graph, (const char **)converted_file_paths, length);
+    const char *error_messages = rdx_index_all(graph, (const char **)converted_file_paths, length);
 
     // Free the converted file paths and allow the GC to collect them
     for (size_t i = 0; i < length; i++) {
@@ -63,7 +63,7 @@ static VALUE graph_declarations_yield(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
     int64_t id = 0;
-    while (sat_graph_declarations_iter_next(iter, &id)) {
+    while (rdx_graph_declarations_iter_next(iter, &id)) {
         VALUE argv[] = {self, LL2NUM(id)};
         VALUE handle = rb_class_new_instance(2, argv, cDeclaration);
         rb_yield(handle);
@@ -75,7 +75,7 @@ static VALUE graph_declarations_yield(VALUE args) {
 // Ensure function for rb_ensure in Graph#declarations to always free the iterator
 static VALUE graph_declarations_ensure(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    sat_graph_declarations_iter_free(iter);
+    rdx_graph_declarations_iter_free(iter);
 
     return Qnil;
 }
@@ -85,9 +85,9 @@ static VALUE graph_declarations_size(VALUE self, VALUE _args, VALUE _eobj) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    DeclarationsIter *iter = sat_graph_declarations_iter_new(graph);
-    size_t len = sat_graph_declarations_iter_len(iter);
-    sat_graph_declarations_iter_free(iter);
+    DeclarationsIter *iter = rdx_graph_declarations_iter_new(graph);
+    size_t len = rdx_graph_declarations_iter_len(iter);
+    rdx_graph_declarations_iter_free(iter);
 
     return SIZET2NUM(len);
 }
@@ -102,7 +102,7 @@ static VALUE sr_graph_declarations(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    void *iter = sat_graph_declarations_iter_new(graph);
+    void *iter = rdx_graph_declarations_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
     rb_ensure(graph_declarations_yield, args, graph_declarations_ensure, args);
 
@@ -115,7 +115,7 @@ static VALUE graph_documents_yield(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
     int64_t id = 0;
-    while (sat_graph_documents_iter_next(iter, &id)) {
+    while (rdx_graph_documents_iter_next(iter, &id)) {
         VALUE argv[] = {self, LL2NUM(id)};
         VALUE handle = rb_class_new_instance(2, argv, cDocument);
         rb_yield(handle);
@@ -127,7 +127,7 @@ static VALUE graph_documents_yield(VALUE args) {
 // Ensure function for rb_ensure in Graph#documents to always free the iterator
 static VALUE graph_documents_ensure(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    sat_graph_documents_iter_free(iter);
+    rdx_graph_documents_iter_free(iter);
 
     return Qnil;
 }
@@ -137,9 +137,9 @@ static VALUE graph_documents_size(VALUE self, VALUE _args, VALUE _eobj) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    DocumentsIter *iter = sat_graph_documents_iter_new(graph);
-    size_t len = sat_graph_documents_iter_len(iter);
-    sat_graph_documents_iter_free(iter);
+    DocumentsIter *iter = rdx_graph_documents_iter_new(graph);
+    size_t len = rdx_graph_documents_iter_len(iter);
+    rdx_graph_documents_iter_free(iter);
 
     return SIZET2NUM(len);
 }
@@ -154,7 +154,7 @@ static VALUE sr_graph_documents(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    void *iter = sat_graph_documents_iter_new(graph);
+    void *iter = rdx_graph_documents_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
     rb_ensure(graph_documents_yield, args, graph_documents_ensure, args);
 
@@ -171,7 +171,7 @@ static VALUE sr_graph_aref(VALUE self, VALUE key) {
         rb_raise(rb_eTypeError, "expected String");
     }
 
-    const int64_t *id_ptr = sat_graph_get_declaration(graph, StringValueCStr(key));
+    const int64_t *id_ptr = rdx_graph_get_declaration(graph, StringValueCStr(key));
     if (id_ptr == NULL) {
         return Qnil;
     }
@@ -190,7 +190,7 @@ static VALUE graph_references_yield(VALUE args) {
 
     int64_t id = 0;
     ReferenceKind kind;
-    while (sat_references_iter_next(iter, &id, &kind)) {
+    while (rdx_references_iter_next(iter, &id, &kind)) {
         VALUE ref_class = reference_class_for_kind(kind);
         VALUE argv[] = {self, LL2NUM(id)};
         VALUE obj = rb_class_new_instance(2, argv, ref_class);
@@ -203,7 +203,7 @@ static VALUE graph_references_yield(VALUE args) {
 // Ensure function for rb_ensure for the reference enumerators to always free the iterator
 static VALUE graph_references_ensure(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    sat_references_iter_free(iter);
+    rdx_references_iter_free(iter);
 
     return Qnil;
 }
@@ -213,9 +213,9 @@ static VALUE graph_constant_references_size(VALUE self, VALUE _args, VALUE _eobj
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    ReferencesIter *iter = sat_graph_constant_references_iter_new(graph);
-    size_t len = sat_references_iter_len(iter);
-    sat_references_iter_free(iter);
+    ReferencesIter *iter = rdx_graph_constant_references_iter_new(graph);
+    size_t len = rdx_references_iter_len(iter);
+    rdx_references_iter_free(iter);
 
     return SIZET2NUM(len);
 }
@@ -231,7 +231,7 @@ static VALUE sr_graph_constant_references(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    void *iter = sat_graph_constant_references_iter_new(graph);
+    void *iter = rdx_graph_constant_references_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
     rb_ensure(graph_references_yield, args, graph_references_ensure, args);
 
@@ -243,9 +243,9 @@ static VALUE graph_method_references_size(VALUE self, VALUE _args, VALUE _eobj) 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    ReferencesIter *iter = sat_graph_method_references_iter_new(graph);
-    size_t len = sat_references_iter_len(iter);
-    sat_references_iter_free(iter);
+    ReferencesIter *iter = rdx_graph_method_references_iter_new(graph);
+    size_t len = rdx_references_iter_len(iter);
+    rdx_references_iter_free(iter);
 
     return SIZET2NUM(len);
 }
@@ -261,7 +261,7 @@ static VALUE sr_graph_method_references(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    void *iter = sat_graph_method_references_iter_new(graph);
+    void *iter = rdx_graph_method_references_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
     rb_ensure(graph_references_yield, args, graph_references_ensure, args);
 
@@ -273,7 +273,7 @@ static VALUE sr_graph_method_references(VALUE self) {
 static VALUE sr_graph_resolve(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
-    sat_graph_resolve(graph);
+    rdx_graph_resolve(graph);
     return self;
 }
 
@@ -282,10 +282,10 @@ static VALUE sr_graph_diagnostics(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    DiagnosticArray *array = sat_graph_diagnostics(graph);
+    DiagnosticArray *array = rdx_graph_diagnostics(graph);
     if (array == NULL || array->len == 0) {
         if (array != NULL) {
-            sat_diagnostics_free(array);
+            rdx_diagnostics_free(array);
         }
         return rb_ary_new();
     }
@@ -308,7 +308,7 @@ static VALUE sr_graph_diagnostics(VALUE self) {
         rb_ary_push(diagnostics, diagnostic);
     }
 
-    sat_diagnostics_free(array);
+    rdx_diagnostics_free(array);
     return diagnostics;
 }
 

@@ -34,7 +34,7 @@ impl ReferencesIter {
 /// # Safety
 /// - `iter` must be a valid pointer previously returned by `ReferencesIter::new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_references_iter_len(iter: *const ReferencesIter) -> usize {
+pub unsafe extern "C" fn rdx_references_iter_len(iter: *const ReferencesIter) -> usize {
     if iter.is_null() {
         return 0;
     }
@@ -52,7 +52,7 @@ pub unsafe extern "C" fn sat_references_iter_len(iter: *const ReferencesIter) ->
 /// - If the iterator is exhausted or inputs are invalid.
 /// - If the name, URI, start, or end pointers are invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_references_iter_next(
+pub unsafe extern "C" fn rdx_references_iter_next(
     iter: *mut ReferencesIter,
     out_id: *mut i64,
     out_kind: *mut ReferenceKind,
@@ -81,7 +81,7 @@ pub unsafe extern "C" fn sat_references_iter_next(
 /// - `iter` must be a pointer previously returned by `ReferencesIter::new`.
 /// - `iter` must not be used after being freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_references_iter_free(iter: *mut ReferencesIter) {
+pub unsafe extern "C" fn rdx_references_iter_free(iter: *mut ReferencesIter) {
     if iter.is_null() {
         return;
     }
@@ -101,7 +101,7 @@ pub unsafe extern "C" fn sat_references_iter_free(iter: *mut ReferencesIter) {
 ///
 /// This function will panic if the reference cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_constant_reference_name(pointer: GraphPointer, reference_id: i64) -> *const c_char {
+pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, reference_id: i64) -> *const c_char {
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
@@ -123,7 +123,7 @@ pub unsafe extern "C" fn sat_constant_reference_name(pointer: GraphPointer, refe
 ///
 /// This function will panic if the reference cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_method_reference_name(pointer: GraphPointer, reference_id: i64) -> *const c_char {
+pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, reference_id: i64) -> *const c_char {
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");
@@ -137,18 +137,18 @@ pub unsafe extern "C" fn sat_method_reference_name(pointer: GraphPointer, refere
 }
 
 /// Returns a newly allocated `Location` for the given constant reference id.
-/// Caller must free the returned pointer with `sat_location_free`.
+/// Caller must free the returned pointer with `rdx_location_free`.
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid pointer previously returned by `sat_graph_new`.
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
 /// - `reference_id` must be a valid reference id.
 ///
 /// # Panics
 ///
 /// This function will panic if a reference or document cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_constant_reference_location(pointer: GraphPointer, reference_id: i64) -> *mut Location {
+pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, reference_id: i64) -> *mut Location {
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
@@ -163,18 +163,18 @@ pub unsafe extern "C" fn sat_constant_reference_location(pointer: GraphPointer, 
 }
 
 /// Returns a newly allocated `Location` for the given method reference id.
-/// Caller must free the returned pointer with `sat_location_free`.
+/// Caller must free the returned pointer with `rdx_location_free`.
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid pointer previously returned by `sat_graph_new`.
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
 /// - `reference_id` must be a valid reference id.
 ///
 /// # Panics
 ///
 /// This function will panic if a reference or document cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_method_reference_location(pointer: GraphPointer, reference_id: i64) -> *mut Location {
+pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, reference_id: i64) -> *mut Location {
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");

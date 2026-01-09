@@ -59,7 +59,7 @@ impl DiagnosticArray {
 ///
 /// - If a diagnostic references a URI whose file cannot be read to build a location.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_graph_diagnostics(pointer: GraphPointer) -> *mut DiagnosticArray {
+pub unsafe extern "C" fn rdx_graph_diagnostics(pointer: GraphPointer) -> *mut DiagnosticArray {
     with_graph(pointer, |graph| {
         let entries = graph
             .diagnostics()
@@ -81,14 +81,14 @@ pub unsafe extern "C" fn sat_graph_diagnostics(pointer: GraphPointer) -> *mut Di
     })
 }
 
-/// Frees a diagnostic array previously returned by `sat_graph_diagnostics`.
+/// Frees a diagnostic array previously returned by `rdx_graph_diagnostics`.
 ///
 /// # Safety
 ///
-/// - `ptr` must be a valid pointer previously returned by `sat_graph_diagnostics`.
+/// - `ptr` must be a valid pointer previously returned by `rdx_graph_diagnostics`.
 /// - `ptr` must not be used after being freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sat_diagnostics_free(ptr: *mut DiagnosticArray) {
+pub unsafe extern "C" fn rdx_diagnostics_free(ptr: *mut DiagnosticArray) {
     if ptr.is_null() {
         return;
     }
@@ -103,7 +103,7 @@ pub unsafe extern "C" fn sat_diagnostics_free(ptr: *mut DiagnosticArray) {
                 let _ = unsafe { CString::from_raw(entry.message.cast_mut()) };
             }
             if !entry.location.is_null() {
-                unsafe { crate::location_api::sat_location_free(entry.location) };
+                unsafe { crate::location_api::rdx_location_free(entry.location) };
                 entry.location = ptr::null_mut();
             }
         }

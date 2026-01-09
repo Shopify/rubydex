@@ -13,7 +13,7 @@ static VALUE sr_declaration_name(VALUE self) {
 
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
-    const char *name = sat_declaration_name(graph, data->id);
+    const char *name = rdx_declaration_name(graph, data->id);
 
     if (name == NULL) {
         return Qnil;
@@ -32,7 +32,7 @@ static VALUE sr_declaration_unqualified_name(VALUE self) {
 
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
-    const char *name = sat_declaration_unqualified_name(graph, data->id);
+    const char *name = rdx_declaration_unqualified_name(graph, data->id);
 
     if (name == NULL) {
         return Qnil;
@@ -54,7 +54,7 @@ static VALUE declaration_definitions_yield(VALUE args) {
 
     int64_t id = 0;
     DefinitionKind kind;
-    while (sat_definitions_iter_next(iter, &id, &kind)) {
+    while (rdx_definitions_iter_next(iter, &id, &kind)) {
         VALUE argv[] = {data->graph_obj, LL2NUM(id)};
         VALUE defn_class = definition_class_for_kind(kind);
         VALUE handle = rb_class_new_instance(2, argv, defn_class);
@@ -68,7 +68,7 @@ static VALUE declaration_definitions_yield(VALUE args) {
 // iterator
 static VALUE declaration_definitions_ensure(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    sat_definitions_iter_free(iter);
+    rdx_definitions_iter_free(iter);
 
     return Qnil;
 }
@@ -80,9 +80,9 @@ static VALUE declaration_definitions_size(VALUE self, VALUE _args, VALUE _eobj) 
 
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
-    struct DefinitionsIter *iter = sat_declaration_definitions_iter_new(graph, data->id);
-    size_t len = sat_definitions_iter_len(iter);
-    sat_definitions_iter_free(iter);
+    struct DefinitionsIter *iter = rdx_declaration_definitions_iter_new(graph, data->id);
+    size_t len = rdx_definitions_iter_len(iter);
+    rdx_definitions_iter_free(iter);
 
     return SIZET2NUM(len);
 }
@@ -100,7 +100,7 @@ static VALUE sr_declaration_definitions(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    void *iter = sat_declaration_definitions_iter_new(graph, data->id);
+    void *iter = rdx_declaration_definitions_iter_new(graph, data->id);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
     rb_ensure(declaration_definitions_yield, args, declaration_definitions_ensure, args);
 
