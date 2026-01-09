@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in saturn.gemspec
+# Specify your gem's dependencies in rubydex.gemspec
 gemspec
 
 gem "rake", "~> 13.0"

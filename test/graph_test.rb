@@ -8,7 +8,7 @@ class GraphTest < Minitest::Test
 
   def test_indexing_empty_context
     with_context do |context|
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       assert_nil(graph.index_all(context.glob("**/*.rb")))
     end
   end
@@ -18,19 +18,19 @@ class GraphTest < Minitest::Test
       context.write!("foo.rb", "class Foo; end")
       context.write!("bar.rb", "class Bar; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       assert_nil(graph.index_all(context.glob("**/*.rb")))
     end
   end
 
   def test_indexing_invalid_file_paths
-    graph = Saturn::Graph.new
+    graph = Rubydex::Graph.new
 
-    error = assert_raises(Saturn::IndexingError) do
+    error = assert_raises(Rubydex::IndexingError) do
       graph.index_all(["not_found.rb"])
     end
 
-    assert_kind_of(Saturn::Error, error)
+    assert_kind_of(Rubydex::Error, error)
     assert_match(/FileError: Path `.*not_found.rb` does not exist/, error.message)
   end
 
@@ -38,7 +38,7 @@ class GraphTest < Minitest::Test
     with_context do |context|
       context.write!("file.rb", "class Foo")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       assert_diagnostics(
@@ -52,7 +52,7 @@ class GraphTest < Minitest::Test
   end
 
   def test_passing_invalid_arguments_to_index_all
-    graph = Saturn::Graph.new
+    graph = Rubydex::Graph.new
 
     assert_raises(TypeError) do
       graph.index_all("not an array")
@@ -68,7 +68,7 @@ class GraphTest < Minitest::Test
       context.write!("file1.rb", "class A; end")
       context.write!("file2.rb", "class B; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
@@ -88,7 +88,7 @@ class GraphTest < Minitest::Test
       context.write!("file1.rb", "class A; end")
       context.write!("file2.rb", "class B; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
@@ -106,7 +106,7 @@ class GraphTest < Minitest::Test
       context.write!("file1.rb", "class A; end")
       context.write!("file2.rb", "class B; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
@@ -124,7 +124,7 @@ class GraphTest < Minitest::Test
       context.write!("file1.rb", "class A; end")
       context.write!("file2.rb", "class B; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       enumerator = graph.documents
@@ -140,7 +140,7 @@ class GraphTest < Minitest::Test
       context.write!("file1.rb", "class A; end")
       context.write!("file2.rb", "class B; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       documents = []

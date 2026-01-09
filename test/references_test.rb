@@ -17,7 +17,7 @@ class ReferencesTest < Minitest::Test
         end
       RUBY
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       enumerator = graph.constant_references
@@ -39,7 +39,7 @@ class ReferencesTest < Minitest::Test
         end
       RUBY
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       references = []
@@ -52,11 +52,11 @@ class ReferencesTest < Minitest::Test
 
       ref1, ref2 = references
 
-      assert_kind_of(Saturn::ConstantReference, ref1)
+      assert_kind_of(Rubydex::ConstantReference, ref1)
       assert_equal("A", ref1.name)
       assert_equal("#{context.absolute_path_to("file1.rb")}:2:11-2:12", ref1.location.to_s)
 
-      assert_kind_of(Saturn::ConstantReference, ref2)
+      assert_kind_of(Rubydex::ConstantReference, ref2)
       assert_equal("B", ref2.name)
       assert_equal("#{context.absolute_path_to("file1.rb")}:4:10-4:11", ref2.location.to_s)
     end
@@ -73,7 +73,7 @@ class ReferencesTest < Minitest::Test
         end
       RUBY
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       enumerator = graph.method_references
@@ -95,7 +95,7 @@ class ReferencesTest < Minitest::Test
         end
       RUBY
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       references = []
@@ -107,7 +107,7 @@ class ReferencesTest < Minitest::Test
       references.sort_by!(&:location)
 
       ref1 = references[0]
-      assert_kind_of(Saturn::MethodReference, ref1)
+      assert_kind_of(Rubydex::MethodReference, ref1)
       assert_equal("puts", ref1.name)
       assert_equal("#{context.absolute_path_to("file1.rb")}:4:5-4:9", ref1.location.to_s)
     end

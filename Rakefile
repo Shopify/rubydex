@@ -5,10 +5,10 @@ require "rubocop/rake_task"
 require "rake/extensiontask"
 require "rake/testtask"
 
-GEMSPEC = Gem::Specification.load("saturn.gemspec")
+GEMSPEC = Gem::Specification.load("rubydex.gemspec")
 
-Rake::ExtensionTask.new("saturn", GEMSPEC) do |ext|
-  ext.lib_dir = "lib/saturn"
+Rake::ExtensionTask.new("rubydex", GEMSPEC) do |ext|
+  ext.lib_dir = "lib/rubydex"
 end
 
 test_config = lambda do |t|

@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    saturn (0.1.0)
+    rubydex (0.1.0)
 
 GEM
   remote: https://rubygems.org/
@@ -65,7 +65,7 @@ DEPENDENCIES
   rubocop
   rubocop-shopify
   ruby_memcheck
-  saturn!
+  rubydex!
 
 BUNDLED WITH
   4.0.3

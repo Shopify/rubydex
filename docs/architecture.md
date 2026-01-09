@@ -1,6 +1,6 @@
 # Architecture
 
-Saturn indexes Ruby codebases in two distinct stages: **Discovery** and **Resolution**. Understanding this separation is crucial for working with the codebase.
+Rubydex indexes Ruby codebases in two distinct stages: **Discovery** and **Resolution**. Understanding this separation is crucial for working with the codebase.
 
 ## Core Concepts: Definition vs Declaration
 
@@ -84,7 +84,7 @@ Resolution combines the discovered definitions to build a semantic understanding
 
 ## Graph Structure
 
-Saturn represents the codebase as a graph, where entities are nodes and relationships are edges. The visualization below shows the conceptual structure (implemented as an adjacency list using IDs).
+Rubydex represents the codebase as a graph, where entities are nodes and relationships are edges. The visualization below shows the conceptual structure (implemented as an adjacency list using IDs).
 
 [Open in Excalidraw](https://excalidraw.com/#json=hQiLSD8nJRVxONhuwtSn4,L78TkfeB4YL1HJTf5L0bvw)
 

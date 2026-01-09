@@ -1,0 +1,19 @@
+[package]
+name = "rubydex-sys"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+rubydex = { path = "../rubydex" }
+libc = "0.2.174"
+url = "2.5.4"
+line-index = "0.1.2"
+
+[build-dependencies]
+cbindgen = "0.29"
+
+[lints]
+workspace = true

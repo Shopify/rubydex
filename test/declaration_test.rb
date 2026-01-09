@@ -8,22 +8,22 @@ class DeclarationTest < Minitest::Test
 
   def test_instantiating_a_declaration_from_ruby_fails
     e = assert_raises(NoMethodError) do
-      Saturn::Declaration.new
+      Rubydex::Declaration.new
     end
 
-    assert_match(/private method .new. called for.* Saturn::Declaration/, e.message)
+    assert_match(/private method .new. called for.* Rubydex::Declaration/, e.message)
   end
 
   def test_declaration_initialize_from_graph
     with_context do |context|
       context.write!("file1.rb", "class A; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
       declaration = graph["A"]
-      assert_instance_of(Saturn::Declaration, declaration)
+      assert_instance_of(Rubydex::Declaration, declaration)
       assert_equal("A", declaration.name)
     end
   end
@@ -33,7 +33,7 @@ class DeclarationTest < Minitest::Test
       context.write!("file1.rb", "class A; end")
       context.write!("file2.rb", "class A; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
@@ -52,7 +52,7 @@ class DeclarationTest < Minitest::Test
       context.write!("file1.rb", "class A; end")
       context.write!("file2.rb", "class A; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
@@ -72,7 +72,7 @@ class DeclarationTest < Minitest::Test
     with_context do |context|
       context.write!("file1.rb", "module A; class B; end; end")
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 

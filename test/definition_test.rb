@@ -8,23 +8,23 @@ class DefinitionTest < Minitest::Test
 
   def test_instantiating_a_definition_from_ruby_fails
     e = assert_raises(NoMethodError) do
-      Saturn::Definition.new
+      Rubydex::Definition.new
     end
 
-    assert_match(/private method .new. called for.* Saturn::Definition/, e.message)
+    assert_match(/private method .new. called for.* Rubydex::Definition/, e.message)
 
-    assert_raises(NoMethodError) { Saturn::ClassDefinition.new }
-    assert_raises(NoMethodError) { Saturn::ModuleDefinition.new }
-    assert_raises(NoMethodError) { Saturn::ConstantDefinition.new }
-    assert_raises(NoMethodError) { Saturn::MethodDefinition.new }
-    assert_raises(NoMethodError) { Saturn::AttrAccessorDefinition.new }
-    assert_raises(NoMethodError) { Saturn::AttrReaderDefinition.new }
-    assert_raises(NoMethodError) { Saturn::AttrWriterDefinition.new }
-    assert_raises(NoMethodError) { Saturn::GlobalVariableDefinition.new }
-    assert_raises(NoMethodError) { Saturn::InstanceVariableDefinition.new }
-    assert_raises(NoMethodError) { Saturn::ClassVariableDefinition.new }
-    assert_raises(NoMethodError) { Saturn::MethodAliasDefinition.new }
-    assert_raises(NoMethodError) { Saturn::GlobalVariableAliasDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::ClassDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::ModuleDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::ConstantDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::MethodDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::AttrAccessorDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::AttrReaderDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::AttrWriterDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::GlobalVariableDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::InstanceVariableDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::ClassVariableDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::MethodAliasDefinition.new }
+    assert_raises(NoMethodError) { Rubydex::GlobalVariableAliasDefinition.new }
   end
 
   def test_definition_subclass_mapping
@@ -45,7 +45,7 @@ class DefinitionTest < Minitest::Test
         alias $baz $qux
       RUBY
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       defs = graph.documents
@@ -53,18 +53,18 @@ class DefinitionTest < Minitest::Test
         .flatten
         .sort_by(&:location)
 
-      assert_instance_of(Saturn::ClassDefinition, defs[0])
-      assert_instance_of(Saturn::ClassVariableDefinition, defs[1])
-      assert_instance_of(Saturn::AttrAccessorDefinition, defs[2])
-      assert_instance_of(Saturn::AttrReaderDefinition, defs[3])
-      assert_instance_of(Saturn::AttrWriterDefinition, defs[4])
-      assert_instance_of(Saturn::ModuleDefinition, defs[5])
-      assert_instance_of(Saturn::ConstantDefinition, defs[6])
-      assert_instance_of(Saturn::MethodDefinition, defs[7])
-      assert_instance_of(Saturn::GlobalVariableDefinition, defs[8])
-      assert_instance_of(Saturn::InstanceVariableDefinition, defs[9])
-      assert_instance_of(Saturn::MethodAliasDefinition, defs[10])
-      assert_instance_of(Saturn::GlobalVariableAliasDefinition, defs[11])
+      assert_instance_of(Rubydex::ClassDefinition, defs[0])
+      assert_instance_of(Rubydex::ClassVariableDefinition, defs[1])
+      assert_instance_of(Rubydex::AttrAccessorDefinition, defs[2])
+      assert_instance_of(Rubydex::AttrReaderDefinition, defs[3])
+      assert_instance_of(Rubydex::AttrWriterDefinition, defs[4])
+      assert_instance_of(Rubydex::ModuleDefinition, defs[5])
+      assert_instance_of(Rubydex::ConstantDefinition, defs[6])
+      assert_instance_of(Rubydex::MethodDefinition, defs[7])
+      assert_instance_of(Rubydex::GlobalVariableDefinition, defs[8])
+      assert_instance_of(Rubydex::InstanceVariableDefinition, defs[9])
+      assert_instance_of(Rubydex::MethodAliasDefinition, defs[10])
+      assert_instance_of(Rubydex::GlobalVariableAliasDefinition, defs[11])
     end
   end
 
@@ -76,7 +76,7 @@ class DefinitionTest < Minitest::Test
         end
       RUBY
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       def_a = graph.documents.first.definitions.find { |d| d.name == "A" }
@@ -114,7 +114,7 @@ class DefinitionTest < Minitest::Test
         end
       RUBY
 
-      graph = Saturn::Graph.new
+      graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
       foo_comments = graph.documents.first.definitions.find { |d| d.name == "Foo" }.comments
@@ -142,7 +142,7 @@ class DefinitionTest < Minitest::Test
     loc = comment.location
     return loc unless Gem.win_platform?
 
-    Saturn::Location.new(
+    Rubydex::Location.new(
       uri: loc.uri,
       start_line: loc.start_line,
       start_column: loc.start_column,
