@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration};
+use crate::model::declaration::{Ancestor, Declaration, DeclarationKind};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
@@ -73,14 +73,22 @@ impl Graph {
     /// # Panics
     ///
     /// Panics if acquiring a write lock fails
-    pub fn add_declaration<F>(&mut self, declaration_id: DeclarationId, definition_id: DefinitionId, constructor: F)
-    where
-        F: FnOnce() -> Declaration,
-    {
-        self.definitions_to_declarations.insert(definition_id, declaration_id);
+    pub fn add_declaration(
+        &mut self,
+        fully_qualified_name: String,
+        declaration_kind: &DeclarationKind,
+        owner_id: DeclarationId,
+        definition_id: DefinitionId,
+    ) -> DeclarationId {
+        let declaration_id = DeclarationId::from(&fully_qualified_name);
 
-        let declaration = self.declarations.entry(declaration_id).or_insert_with(constructor);
+        let declaration = self
+            .declarations
+            .entry(declaration_id)
+            .or_insert_with(|| Declaration::build(fully_qualified_name, declaration_kind, owner_id));
         declaration.add_definition(definition_id);
+
+        declaration_id
     }
 
     /// # Panics
@@ -507,7 +515,7 @@ impl Graph {
                 }
             }
 
-            *declarations_types.entry(declaration.kind()).or_insert(0) += 1;
+            *declarations_types.entry(declaration.kind().as_str()).or_insert(0) += 1;
 
             // Count definitions by type
             let definition_count = declaration.definitions().len();
@@ -704,12 +712,14 @@ mod tests {
         assert!(matches!(baz_ancestors, Ancestors::Complete(_)));
 
         {
-            let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap() else {
+            let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
+            else {
                 panic!("Expected Bar to be a module");
             };
             assert!(bar.descendants().contains(&DeclarationId::from("Foo")));
 
-            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() else {
+            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
+            else {
                 panic!("Expected Foo to be a class");
             };
             assert!(foo.descendants().contains(&DeclarationId::from("Baz")));
@@ -718,19 +728,22 @@ mod tests {
         context.index_uri("file:///a.rb", "");
 
         {
-            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() else {
+            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
+            else {
                 panic!("Expected Foo to be a class");
             };
             assert!(matches!(foo.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
             assert!(foo.descendants().is_empty());
 
-            let Declaration::Class(baz) = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap() else {
+            let Declaration::Class(baz) = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap()
+            else {
                 panic!("Expected Baz to be a class");
             };
             assert!(matches!(baz.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
             assert!(baz.descendants().is_empty());
 
-            let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap() else {
+            let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
+            else {
                 panic!("Expected Bar to be a module");
             };
             assert!(!bar.descendants().contains(&DeclarationId::from("Foo")));
@@ -742,7 +755,8 @@ mod tests {
         assert!(matches!(baz_ancestors, Ancestors::Complete(_)));
 
         {
-            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() else {
+            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
+            else {
                 panic!("Expected Foo to be a class");
             };
             assert!(foo.descendants().contains(&DeclarationId::from("Baz")));

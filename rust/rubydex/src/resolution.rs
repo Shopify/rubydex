@@ -4,11 +4,7 @@ use std::{
 };
 
 use crate::model::{
-    declaration::{
-        Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantDeclaration, Declaration,
-        GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        SingletonClassDeclaration,
-    },
+    declaration::{Ancestor, Ancestors, ClassDeclaration, Declaration, DeclarationKind, SingletonClassDeclaration},
     definitions::{Definition, Mixin},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
@@ -140,24 +136,16 @@ fn handle_definition_unit(
 ) {
     let outcome = match graph.definitions().get(&id).unwrap() {
         Definition::Class(class) => {
-            handle_constant_declaration(graph, *class.name_id(), id, false, |name, owner_id| {
-                Declaration::Class(Box::new(ClassDeclaration::new(name, owner_id)))
-            })
+            handle_constant_declaration(graph, *class.name_id(), &DeclarationKind::Class, id, false)
         }
         Definition::Module(module) => {
-            handle_constant_declaration(graph, *module.name_id(), id, false, |name, owner_id| {
-                Declaration::Module(Box::new(ModuleDeclaration::new(name, owner_id)))
-            })
+            handle_constant_declaration(graph, *module.name_id(), &DeclarationKind::Module, id, false)
         }
         Definition::Constant(constant) => {
-            handle_constant_declaration(graph, *constant.name_id(), id, false, |name, owner_id| {
-                Declaration::Constant(Box::new(ConstantDeclaration::new(name, owner_id)))
-            })
+            handle_constant_declaration(graph, *constant.name_id(), &DeclarationKind::Constant, id, false)
         }
         Definition::SingletonClass(singleton) => {
-            handle_constant_declaration(graph, *singleton.name_id(), id, true, |name, owner_id| {
-                Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(name, owner_id)))
-            })
+            handle_constant_declaration(graph, *singleton.name_id(), &DeclarationKind::SingletonClass, id, true)
         }
         _ => panic!("Expected constant definitions"),
     };
@@ -265,36 +253,26 @@ fn handle_remaining_definitions(
                     resolve_lexical_owner(graph, *method_definition.lexical_nesting_id())
                 };
 
-                create_declaration(graph, str_id, id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                });
+                create_declaration(graph, str_id, &DeclarationKind::Method, id, owner_id);
             }
             Definition::AttrAccessor(attr) => {
                 let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
 
-                create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                });
+                create_declaration(graph, *attr.str_id(), &DeclarationKind::Method, id, owner_id);
             }
             Definition::AttrReader(attr) => {
                 let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
 
-                create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                });
+                create_declaration(graph, *attr.str_id(), &DeclarationKind::Method, id, owner_id);
             }
             Definition::AttrWriter(attr) => {
                 let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
 
-                create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                });
+                create_declaration(graph, *attr.str_id(), &DeclarationKind::Method, id, owner_id);
             }
             Definition::GlobalVariable(var) => {
                 let owner_id = *OBJECT_ID;
-                create_declaration(graph, *var.str_id(), id, owner_id, |name| {
-                    Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, owner_id)))
-                });
+                create_declaration(graph, *var.str_id(), &DeclarationKind::GlobalVariable, id, owner_id);
             }
             Definition::InstanceVariable(var) => {
                 let str_id = *var.str_id();
@@ -332,11 +310,9 @@ fn handle_remaining_definitions(
                                     "Instance variable in singleton method should be owned by a SingletonClass"
                                 );
                             }
-                            create_declaration(graph, str_id, id, owner_id, |name| {
-                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                    name, owner_id,
-                                )))
-                            });
+
+                            create_declaration(graph, str_id, &DeclarationKind::InstanceVariable, id, owner_id);
+
                             continue;
                         }
 
@@ -349,21 +325,11 @@ fn handle_remaining_definitions(
                             && matches!(decl, Declaration::SingletonClass(_))
                         {
                             // Method in singleton class - owner is the singleton class itself
-                            create_declaration(graph, str_id, id, method_owner_id, |name| {
-                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                    name,
-                                    method_owner_id,
-                                )))
-                            });
+                            create_declaration(graph, str_id, &DeclarationKind::InstanceVariable, id, method_owner_id);
                         } else {
                             // Regular instance method
                             // Create an instance variable declaration for the method's owner
-                            create_declaration(graph, str_id, id, method_owner_id, |name| {
-                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                    name,
-                                    method_owner_id,
-                                )))
-                            });
+                            create_declaration(graph, str_id, &DeclarationKind::InstanceVariable, id, method_owner_id);
                         }
                     }
                     // If the instance variable is directly in a class/module body, it belongs to the class object
@@ -384,9 +350,7 @@ fn handle_remaining_definitions(
                                 "Instance variable in class/module body should be owned by a SingletonClass"
                             );
                         }
-                        create_declaration(graph, str_id, id, owner_id, |name| {
-                            Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
-                        });
+                        create_declaration(graph, str_id, &DeclarationKind::InstanceVariable, id, owner_id);
                     }
                     // If in a singleton class body directly, the owner is the singleton class's singleton class
                     // Like `class << Foo; @bar = 1; end`, where `@bar` is owned by `Foo::<Foo>::<<Foo>>`
@@ -406,9 +370,7 @@ fn handle_remaining_definitions(
                                 "Instance variable in singleton class body should be owned by a SingletonClass"
                             );
                         }
-                        create_declaration(graph, str_id, id, owner_id, |name| {
-                            Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
-                        });
+                        create_declaration(graph, str_id, &DeclarationKind::InstanceVariable, id, owner_id);
                     }
                     _ => {
                         panic!("Unexpected lexical nesting for instance variable: {nesting_def:?}");
@@ -418,9 +380,7 @@ fn handle_remaining_definitions(
             Definition::ClassVariable(var) => {
                 // TODO: add diagnostic on the else branch. Defining class variables at the top level crashes
                 if let Some(owner_id) = resolve_class_variable_owner(graph, *var.lexical_nesting_id()) {
-                    create_declaration(graph, *var.str_id(), id, owner_id, |name| {
-                        Declaration::ClassVariable(Box::new(ClassVariableDeclaration::new(name, owner_id)))
-                    });
+                    create_declaration(graph, *var.str_id(), &DeclarationKind::ClassVariable, id, owner_id);
                 }
             }
             Definition::Class(_) | Definition::SingletonClass(_) | Definition::Module(_) | Definition::Constant(_) => {
@@ -429,38 +389,35 @@ fn handle_remaining_definitions(
             Definition::MethodAlias(alias) => {
                 let owner_id = resolve_lexical_owner(graph, *alias.lexical_nesting_id());
 
-                create_declaration(graph, *alias.new_name_str_id(), id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                });
+                create_declaration(graph, *alias.new_name_str_id(), &DeclarationKind::Method, id, owner_id);
             }
             Definition::GlobalVariableAlias(alias) => {
-                create_declaration(graph, *alias.new_name_str_id(), id, *OBJECT_ID, |name| {
-                    Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, *OBJECT_ID)))
-                });
+                create_declaration(
+                    graph,
+                    *alias.new_name_str_id(),
+                    &DeclarationKind::GlobalVariable,
+                    id,
+                    *OBJECT_ID,
+                );
             }
         }
     }
 }
 
-fn create_declaration<F>(
+fn create_declaration(
     graph: &mut Graph,
     str_id: StringId,
+    declaration_kind: &DeclarationKind,
     definition_id: DefinitionId,
     owner_id: DeclarationId,
-    declaration_builder: F,
-) where
-    F: FnOnce(String) -> Declaration,
-{
+) {
     let fully_qualified_name = {
         let owner = graph.declarations().get(&owner_id).unwrap();
         let name_str = graph.strings().get(&str_id).unwrap();
         format!("{}::{name_str}", owner.name())
     };
-    let declaration_id = DeclarationId::from(&fully_qualified_name);
 
-    graph.add_declaration(declaration_id, definition_id, || {
-        declaration_builder(fully_qualified_name)
-    });
+    let declaration_id = graph.add_declaration(fully_qualified_name, declaration_kind, owner_id, definition_id);
     graph.add_member(&owner_id, declaration_id, str_id);
 }
 
@@ -829,16 +786,13 @@ fn propagate_descendants<S: BuildHasher>(
 }
 
 // Handles the resolution of the namespace name, the creation of the declaration and membership
-fn handle_constant_declaration<F>(
+fn handle_constant_declaration(
     graph: &mut Graph,
     name_id: NameId,
+    declaration_kind: &DeclarationKind,
     definition_id: DefinitionId,
     singleton: bool,
-    declaration_builder: F,
-) -> Outcome
-where
-    F: FnOnce(String, DeclarationId) -> Declaration,
-{
+) -> Outcome {
     let name_ref = graph.names().get(&name_id).unwrap();
     let str_id = *name_ref.str();
 
@@ -858,7 +812,7 @@ where
                 }
             }
 
-            let declaration_id = DeclarationId::from(&fully_qualified_name);
+            let declaration_id = graph.add_declaration(fully_qualified_name, declaration_kind, owner_id, definition_id);
 
             if singleton {
                 let owner = graph.declarations_mut().get_mut(&owner_id).unwrap();
@@ -867,9 +821,6 @@ where
                 graph.add_member(&owner_id, declaration_id, str_id);
             }
 
-            graph.add_declaration(declaration_id, definition_id, || {
-                declaration_builder(fully_qualified_name, owner_id)
-            });
             graph.record_resolved_name(name_id, declaration_id);
             Outcome::Resolved(declaration_id, id_needing_linearization)
         }

@@ -53,6 +53,34 @@ impl<'a> IntoIterator for &'a Ancestors {
     }
 }
 
+#[derive(PartialEq, Eq)]
+pub enum DeclarationKind {
+    Class,
+    SingletonClass,
+    Module,
+    Constant,
+    Method,
+    GlobalVariable,
+    InstanceVariable,
+    ClassVariable,
+}
+
+impl DeclarationKind {
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeclarationKind::Class => "class",
+            DeclarationKind::SingletonClass => "singleton class",
+            DeclarationKind::Module => "module",
+            DeclarationKind::Constant => "constant",
+            DeclarationKind::Method => "method",
+            DeclarationKind::GlobalVariable => "global variable",
+            DeclarationKind::InstanceVariable => "instance variable",
+            DeclarationKind::ClassVariable => "class variable",
+        }
+    }
+}
+
 macro_rules! all_declarations {
     ($value:expr, $var:ident => $expr:expr) => {
         match $value {
@@ -229,6 +257,36 @@ pub enum Declaration {
 }
 
 impl Declaration {
+    #[must_use]
+    pub fn build(fully_qualified_name: String, kind: &DeclarationKind, owner_id: DeclarationId) -> Self {
+        match kind {
+            DeclarationKind::Class => {
+                Declaration::Class(Box::new(ClassDeclaration::new(fully_qualified_name, owner_id)))
+            }
+            DeclarationKind::SingletonClass => {
+                Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(fully_qualified_name, owner_id)))
+            }
+            DeclarationKind::Module => {
+                Declaration::Module(Box::new(ModuleDeclaration::new(fully_qualified_name, owner_id)))
+            }
+            DeclarationKind::Constant => {
+                Declaration::Constant(Box::new(ConstantDeclaration::new(fully_qualified_name, owner_id)))
+            }
+            DeclarationKind::Method => {
+                Declaration::Method(Box::new(MethodDeclaration::new(fully_qualified_name, owner_id)))
+            }
+            DeclarationKind::GlobalVariable => {
+                Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(fully_qualified_name, owner_id)))
+            }
+            DeclarationKind::InstanceVariable => Declaration::InstanceVariable(Box::new(
+                InstanceVariableDeclaration::new(fully_qualified_name, owner_id),
+            )),
+            DeclarationKind::ClassVariable => {
+                Declaration::ClassVariable(Box::new(ClassVariableDeclaration::new(fully_qualified_name, owner_id)))
+            }
+        }
+    }
+
     // Extend this declaration with more definitions by moving `other.definition_ids` inside
     pub fn extend(&mut self, other: Declaration) {
         all_declarations!(self, it => {
@@ -244,16 +302,16 @@ impl Declaration {
     }
 
     #[must_use]
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> DeclarationKind {
         match self {
-            Declaration::Class(_) => "Class",
-            Declaration::SingletonClass(_) => "SingletonClass",
-            Declaration::Module(_) => "Module",
-            Declaration::Constant(_) => "Constant",
-            Declaration::Method(_) => "Method",
-            Declaration::GlobalVariable(_) => "GlobalVariable",
-            Declaration::InstanceVariable(_) => "InstanceVariable",
-            Declaration::ClassVariable(_) => "ClassVariable",
+            Declaration::Class(_) => DeclarationKind::Class,
+            Declaration::SingletonClass(_) => DeclarationKind::SingletonClass,
+            Declaration::Module(_) => DeclarationKind::Module,
+            Declaration::Constant(_) => DeclarationKind::Constant,
+            Declaration::Method(_) => DeclarationKind::Method,
+            Declaration::GlobalVariable(_) => DeclarationKind::GlobalVariable,
+            Declaration::InstanceVariable(_) => DeclarationKind::InstanceVariable,
+            Declaration::ClassVariable(_) => DeclarationKind::ClassVariable,
         }
     }
 
