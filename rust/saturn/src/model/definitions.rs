@@ -318,13 +318,13 @@ impl SingletonClassDefinition {
         &self.members
     }
 
+    pub fn add_member(&mut self, member_id: DefinitionId) {
+        self.members.push(member_id);
+    }
+
     #[must_use]
     pub fn mixins(&self) -> &[Mixin] {
         &self.mixins
-    }
-
-    pub fn add_member(&mut self, member_id: DefinitionId) {
-        self.members.push(member_id);
     }
 
     pub fn add_mixin(&mut self, mixin: Mixin) {
