@@ -8,7 +8,7 @@ use crate::model::ids::DeclarationId;
 /// Will panic if any of the threads panic
 pub fn declaration_search(graph: &Graph, query: &str) -> Vec<DeclarationId> {
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
-    let declarations = graph.declarations().read().unwrap();
+    let declarations = graph.declarations();
     let ids: Vec<DeclarationId> = declarations.keys().copied().collect();
     let chunk_size = ids.len().div_ceil(num_threads);
 
@@ -79,8 +79,6 @@ mod tests {
                     .map(|id| $context
                         .graph()
                         .declarations()
-                        .read()
-                        .unwrap()
                         .get(id)
                         .unwrap()
                         .name()

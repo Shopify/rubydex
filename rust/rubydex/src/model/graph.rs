@@ -1,5 +1,5 @@
 use std::collections::hash_map::Entry;
-use std::sync::{LazyLock, RwLock};
+use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
@@ -22,7 +22,7 @@ pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::f
 #[derive(Default, Debug)]
 pub struct Graph {
     // Map of declaration nodes
-    declarations: RwLock<IdentityHashMap<DeclarationId, Declaration>>,
+    declarations: IdentityHashMap<DeclarationId, Declaration>,
     // Map of document nodes
     documents: IdentityHashMap<UriId, Document>,
     // Map of definition nodes
@@ -46,7 +46,7 @@ impl Graph {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            declarations: RwLock::new(IdentityHashMap::default()),
+            declarations: IdentityHashMap::default(),
             definitions: IdentityHashMap::default(),
             definitions_to_declarations: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
@@ -60,8 +60,14 @@ impl Graph {
 
     // Returns an immutable reference to the declarations map
     #[must_use]
-    pub fn declarations(&self) -> &RwLock<IdentityHashMap<DeclarationId, Declaration>> {
+    pub fn declarations(&self) -> &IdentityHashMap<DeclarationId, Declaration> {
         &self.declarations
+    }
+
+    /// Returns a mutable reference to the declarations map
+    #[must_use]
+    pub fn declarations_mut(&mut self) -> &mut IdentityHashMap<DeclarationId, Declaration> {
+        &mut self.declarations
     }
 
     /// # Panics
@@ -73,8 +79,7 @@ impl Graph {
     {
         self.definitions_to_declarations.insert(definition_id, declaration_id);
 
-        let mut write_lock = self.declarations.write().unwrap();
-        let declaration = write_lock.entry(declaration_id).or_insert_with(constructor);
+        let declaration = self.declarations.entry(declaration_id).or_insert_with(constructor);
         declaration.add_definition(definition_id);
     }
 
@@ -83,9 +88,7 @@ impl Graph {
     /// Panics if acquiring a write lock fails
     pub fn clear_declarations(&mut self) {
         self.definitions_to_declarations.clear();
-
-        let mut write_lock = self.declarations.write().unwrap();
-        write_lock.clear();
+        self.declarations.clear();
     }
 
     // Returns an immutable reference to the definitions map
@@ -172,8 +175,7 @@ impl Graph {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
         let declaration_id = DeclarationId::from(name);
-        let read_lock = self.declarations.read().unwrap();
-        let declaration = read_lock.get(&declaration_id)?;
+        let declaration = self.declarations.get(&declaration_id)?;
 
         Some(
             declaration
@@ -209,10 +211,13 @@ impl Graph {
     /// # Panics
     ///
     /// Will panic if the declaration ID passed doesn't belong to a namespace declaration
-    pub fn add_member(&self, owner_id: &DeclarationId, member_declaration_id: DeclarationId, member_str_id: StringId) {
-        let mut write_lock = self.declarations.write().unwrap();
-
-        if let Some(declaration) = write_lock.get_mut(owner_id) {
+    pub fn add_member(
+        &mut self,
+        owner_id: &DeclarationId,
+        member_declaration_id: DeclarationId,
+        member_str_id: StringId,
+    ) {
+        if let Some(declaration) = self.declarations.get_mut(owner_id) {
             match declaration {
                 Declaration::Class(it) => it.add_member(member_str_id, member_declaration_id),
                 Declaration::Module(it) => it.add_member(member_str_id, member_declaration_id),
@@ -249,9 +254,8 @@ impl Graph {
     /// # Panics
     ///
     /// Panics if acquiring a write lock fails
-    pub fn record_resolved_reference(&self, reference_id: ReferenceId, declaration_id: DeclarationId) {
-        let mut write_lock = self.declarations.write().unwrap();
-        if let Some(declaration) = write_lock.get_mut(&declaration_id) {
+    pub fn record_resolved_reference(&mut self, reference_id: ReferenceId, declaration_id: DeclarationId) {
+        if let Some(declaration) = self.declarations.get_mut(&declaration_id) {
             declaration.add_reference(reference_id);
         }
     }
@@ -296,8 +300,6 @@ impl Graph {
             return;
         };
 
-        let mut write_lock = self.declarations.write().unwrap();
-
         // TODO: Remove method references from method declarations once method inference is implemented
         for ref_id in document.method_references() {
             self.method_references.remove(ref_id);
@@ -306,7 +308,7 @@ impl Graph {
         for ref_id in document.constant_references() {
             if let Some(constant_ref) = self.constant_references.remove(ref_id)
                 && let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
-                && let Some(declaration) = write_lock.get_mut(resolved.declaration_id())
+                && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
             {
                 declaration.remove_reference(ref_id);
             }
@@ -318,20 +320,20 @@ impl Graph {
         for def_id in document.definitions() {
             if let Some(_definition) = self.definitions.remove(def_id)
                 && let Some(declaration_id) = self.definitions_to_declarations.remove(def_id)
-                && let Some(declaration) = write_lock.get_mut(&declaration_id)
+                && let Some(declaration) = self.declarations.get_mut(&declaration_id)
                 && declaration.remove_definition(def_id)
                 && declaration.has_no_definitions()
             {
                 let unqualified_str_id = StringId::from(&declaration.unqualified_name());
                 members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                write_lock.remove(&declaration_id);
+                self.declarations.remove(&declaration_id);
             }
         }
 
         // Clean up any members that pointed to declarations that were removed
         for (owner_id, member_str_id) in members_to_delete {
             // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
-            if let Some(owner) = write_lock.get_mut(&owner_id) {
+            if let Some(owner) = self.declarations.get_mut(&owner_id) {
                 match owner {
                     Declaration::Class(owner) => {
                         owner.remove_member(&member_str_id);
@@ -451,8 +453,7 @@ impl Graph {
         let mut definition_types: HashMap<&str, usize> = HashMap::new();
         let mut multi_definition_count = 0;
 
-        let read_lock = self.declarations.read().unwrap();
-        for declaration in read_lock.values() {
+        for declaration in self.declarations.values() {
             // Check documentation
             if let Some(definitions) = self.get(declaration.name()) {
                 let has_docs = definitions.iter().any(|def| !def.comments().is_empty());
@@ -478,7 +479,7 @@ impl Graph {
 
         println!();
         println!("Query statistics");
-        let total_declarations = read_lock.len();
+        let total_declarations = self.declarations.len();
         println!("  Total declarations:         {total_declarations}");
         println!(
             "  With documentation:         {} ({:.1}%)",
@@ -523,8 +524,13 @@ mod tests {
         assert!(context.graph().documents.is_empty());
         assert!(context.graph().definitions.is_empty());
         // Object is left
-        let read_lock = context.graph().declarations.read().unwrap();
-        assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo"))
+                .is_none()
+        );
 
         context.graph().assert_integrity();
     }
@@ -542,6 +548,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "");
 
         assert!(context.graph().definitions.is_empty());
+
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(context.graph().documents.len(), 1);
     }
@@ -558,8 +565,13 @@ mod tests {
         assert_eq!(context.graph().documents.len(), 1);
 
         {
-            let read_lock = context.graph().declarations.read().unwrap();
-            assert!(read_lock.get(&DeclarationId::from("Foo")).is_some());
+            assert!(
+                context
+                    .graph()
+                    .declarations()
+                    .get(&DeclarationId::from("Foo"))
+                    .is_some()
+            );
         }
 
         // Update with empty content to remove definitions but keep the URI
@@ -571,8 +583,13 @@ mod tests {
         assert_eq!(context.graph().documents.len(), 1);
 
         {
-            let read_lock = context.graph().declarations.read().unwrap();
-            assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
+            assert!(
+                context
+                    .graph()
+                    .declarations()
+                    .get(&DeclarationId::from("Foo"))
+                    .is_none()
+            );
         }
 
         context.graph().assert_integrity();
@@ -597,8 +614,7 @@ mod tests {
         assert_eq!(context.graph().method_references.len(), 1);
         assert_eq!(context.graph().constant_references.len(), 2);
         {
-            let read_lock = context.graph().declarations.read().unwrap();
-            let declaration = read_lock.get(&DeclarationId::from("Foo")).unwrap();
+            let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
             assert_eq!(declaration.references().len(), 1);
         }
 
@@ -610,8 +626,7 @@ mod tests {
         assert!(context.graph().method_references.is_empty());
         assert!(context.graph().constant_references.is_empty());
         {
-            let read_lock = context.graph().declarations.read().unwrap();
-            let declaration = read_lock.get(&DeclarationId::from("Foo")).unwrap();
+            let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
             assert!(declaration.references().is_empty());
         }
 
@@ -626,8 +641,7 @@ mod tests {
         context.resolve();
 
         assert_eq!(context.graph().definitions.len(), 1);
-        let read_lock = context.graph().declarations.read().unwrap();
-        let declaration = read_lock.get(&DeclarationId::from("Foo")).unwrap();
+        let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         let document = context.graph().documents.get(&UriId::from("file:///foo.rb")).unwrap();
         assert_eq!(document.uri(), "file:///foo.rb");
@@ -647,8 +661,7 @@ mod tests {
         context.resolve();
 
         assert_eq!(context.graph().definitions.len(), 1);
-        let read_lock = context.graph().declarations.read().unwrap();
-        let declaration = read_lock.get(&DeclarationId::from("Foo")).unwrap();
+        let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         assert_eq!(
             context
@@ -774,8 +787,7 @@ mod tests {
         context.resolve();
 
         {
-            let read_lock = context.graph().declarations.read().unwrap();
-            if let Declaration::Module(foo) = read_lock.get(&DeclarationId::from("Foo")).unwrap() {
+            if let Declaration::Module(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() {
                 assert!(foo.members().contains_key(&StringId::from("Bar")));
             } else {
                 panic!("Expected Foo to be a module");
@@ -791,8 +803,7 @@ mod tests {
         });
         context.resolve();
 
-        let read_lock = context.graph().declarations.read().unwrap();
-        if let Declaration::Module(foo) = read_lock.get(&DeclarationId::from("Foo")).unwrap() {
+        if let Declaration::Module(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() {
             assert!(!foo.members().contains_key(&StringId::from("Bar")));
         } else {
             panic!("Expected Foo to be a module");

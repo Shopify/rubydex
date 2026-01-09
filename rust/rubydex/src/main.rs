@@ -89,8 +89,7 @@ fn main() {
         println!("{}", dot::generate(&graph));
     } else {
         println!("Indexed {} files", graph.documents().len());
-        let read_lock = graph.declarations().read().unwrap();
-        println!("Found {} names", read_lock.len());
+        println!("Found {} names", graph.declarations().len());
         println!("Found {} definitions", graph.definitions().len());
         println!("Found {} URIs", graph.documents().len());
     }

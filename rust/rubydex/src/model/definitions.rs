@@ -140,7 +140,7 @@ impl Definition {
 
 /// Represents a mixin: include, prepend, or extend.
 /// During resolution, `Extend` mixins are attached to the singleton class.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Mixin {
     Include(NameId),
     Prepend(NameId),

@@ -139,8 +139,8 @@ pub struct DeclarationsIter {
 pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) -> *mut DeclarationsIter {
     // Snapshot the IDs at iterator creation to avoid borrowing across FFI calls
     let ids = with_graph(pointer, |graph| {
-        let read_lock = graph.declarations().read().unwrap();
-        read_lock
+        graph
+            .declarations()
             .keys()
             .map(|name_id| **name_id)
             .collect::<Vec<i64>>()
@@ -314,8 +314,7 @@ pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: 
     with_graph(pointer, |graph| {
         // TODO: We should perform name resolution instead of accessing the graph with the canonical ID
         let decl_id = DeclarationId::from(name_str.as_str());
-        let read_lock = graph.declarations().read().unwrap();
-        if read_lock.contains_key(&decl_id) {
+        if graph.declarations().contains_key(&decl_id) {
             Box::into_raw(Box::new(*decl_id)).cast_const()
         } else {
             ptr::null()
