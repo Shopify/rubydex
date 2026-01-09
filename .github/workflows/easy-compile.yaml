@@ -19,7 +19,7 @@ jobs:
       - name: "Checkout code"
         uses: "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd"
       - name: "Setup Ruby"
-        uses: "ruby/setup-ruby@8aeb6ff8030dd539317f8e1769a044873b56ea71"
+        uses: ruby/setup-ruby@d5f787ce339eb0767271bc01d922e85644c2c8ab # v1.280.0
         with:
           ruby-version: "3.2.9"
           bundler-cache: true
@@ -41,7 +41,7 @@ jobs:
       - name: "Checkout code"
         uses: "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd"
       - name: "Setup Ruby"
-        uses: "ruby/setup-ruby@8aeb6ff8030dd539317f8e1769a044873b56ea71"
+        uses: ruby/setup-ruby@d5f787ce339eb0767271bc01d922e85644c2c8ab # v1.280.0
         with:
           ruby-version: "${{ matrix.rubies }}"
           bundler-cache: true
@@ -59,7 +59,7 @@ jobs:
     runs-on: "${{ matrix.os }}"
     steps:
       - name: "Setup Ruby"
-        uses: "ruby/setup-ruby@8aeb6ff8030dd539317f8e1769a044873b56ea71"
+        uses: ruby/setup-ruby@d5f787ce339eb0767271bc01d922e85644c2c8ab # v1.280.0
       - name: "Run easy compile"
         uses: "shopify-playground/edouard-playground/.github/actions/easy_compile@main"
         with:
@@ -75,7 +75,7 @@ jobs:
     runs-on: "shopify-ubuntu-latest"
     steps:
       - name: "Setup Ruby"
-        uses: "ruby/setup-ruby@8aeb6ff8030dd539317f8e1769a044873b56ea71"
+        uses: ruby/setup-ruby@d5f787ce339eb0767271bc01d922e85644c2c8ab # v1.280.0
       - name: "Run easy compile"
         uses: "shopify-playground/edouard-playground/.github/actions/easy_compile@main"
         with:

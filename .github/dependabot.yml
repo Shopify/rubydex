@@ -31,3 +31,11 @@ updates:
           - "minor"
           - "patch"
     open-pull-requests-limit: 100
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "chore"
+      - "dependencies"
+      - "gh-actions"
