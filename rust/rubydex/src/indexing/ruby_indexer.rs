@@ -4,10 +4,10 @@ use crate::diagnostic::Diagnostics;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
-    AnonymousNamespaceDefinition, AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition,
-    ClassVariableDefinition, ConstantDefinition, Definition, DefinitionFlags, GlobalVariableAliasDefinition,
-    GlobalVariableDefinition, InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin,
-    ModuleDefinition, Parameter, ParameterStruct, SingletonClassDefinition,
+    AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
+    ConstantDefinition, Definition, DefinitionFlags, GlobalVariableAliasDefinition, GlobalVariableDefinition,
+    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter,
+    ParameterStruct, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -570,39 +570,10 @@ impl<'a> RubyIndexer<'a> {
         Some(definition_id)
     }
 
-    fn handle_anonymous_namespace_definition(
-        &mut self,
-        location: &ruby_prism::Location,
-        body_node: Option<ruby_prism::Node>,
-    ) {
-        let offset = Offset::from_prism_location(location);
-        let (comments, _flags) = self.find_comments_for(offset.start());
-        let lexical_nesting_id = self.parent_lexical_scope_id();
-
-        let definition = Definition::Anonymous(Box::new(AnonymousNamespaceDefinition::new(
-            self.uri_id,
-            offset,
-            comments,
-            lexical_nesting_id,
-        )));
-
-        let definition_id = self.local_graph.add_definition(definition);
-
-        self.add_member_to_current_lexical_scope(definition_id);
-
-        if let Some(body) = body_node {
-            self.nesting_stack.push(Nesting::Owner(definition_id));
-            self.visibility_stack.push(Visibility::Public);
-            self.visit(&body);
-            self.visibility_stack.pop();
-            self.nesting_stack.pop();
-        }
-    }
-
     fn handle_class_definition(
         &mut self,
         location: &ruby_prism::Location,
-        name_node: &ruby_prism::Node,
+        name_node: Option<&ruby_prism::Node>,
         body_node: Option<ruby_prism::Node>,
         superclass_node: Option<ruby_prism::Node>,
         nesting_type: fn(DefinitionId) -> Nesting,
@@ -624,7 +595,17 @@ impl<'a> RubyIndexer<'a> {
             );
         }
 
-        if let Some(name_id) = self.index_constant_reference(name_node, false) {
+        let name_id = if let Some(name_node) = name_node {
+            self.index_constant_reference(name_node, false)
+        } else {
+            let string_id = self
+                .local_graph
+                .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
+
+            Some(self.local_graph.add_name(Name::new(string_id, None, None)))
+        };
+
+        if let Some(name_id) = name_id {
             let definition = Definition::Class(Box::new(ClassDefinition::new(
                 name_id,
                 self.uri_id,
@@ -652,7 +633,7 @@ impl<'a> RubyIndexer<'a> {
     fn handle_module_definition(
         &mut self,
         location: &ruby_prism::Location,
-        name_node: &ruby_prism::Node,
+        name_node: Option<&ruby_prism::Node>,
         body_node: Option<ruby_prism::Node>,
         nesting_type: fn(DefinitionId) -> Nesting,
     ) {
@@ -660,9 +641,19 @@ impl<'a> RubyIndexer<'a> {
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
-        if let Some(constant_ref_id) = self.index_constant_reference(name_node, false) {
+        let name_id = if let Some(name_node) = name_node {
+            self.index_constant_reference(name_node, false)
+        } else {
+            let string_id = self
+                .local_graph
+                .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
+
+            Some(self.local_graph.add_name(Name::new(string_id, None, None)))
+        };
+
+        if let Some(name_id) = name_id {
             let definition = Definition::Module(Box::new(ModuleDefinition::new(
-                constant_ref_id,
+                name_id,
                 self.uri_id,
                 offset,
                 comments,
@@ -702,7 +693,7 @@ impl<'a> RubyIndexer<'a> {
 
         // Handle `Module.new`
         if receiver_name == b"Module" || receiver_name == b"::Module" {
-            self.handle_module_definition(&node.location(), node, call_node.block(), Nesting::Owner);
+            self.handle_module_definition(&node.location(), Some(node), call_node.block(), Nesting::Owner);
             return true;
         }
 
@@ -710,7 +701,7 @@ impl<'a> RubyIndexer<'a> {
         if receiver_name == b"Class" || receiver_name == b"::Class" {
             self.handle_class_definition(
                 &node.location(),
-                node,
+                Some(node),
                 call_node.block(),
                 call_node.arguments().and_then(|args| args.arguments().iter().next()),
                 Nesting::Owner,
@@ -745,7 +736,6 @@ impl<'a> RubyIndexer<'a> {
             .expect("owner definition should exist");
 
         match owner {
-            Definition::Anonymous(namespace) => namespace.add_member(member_id),
             Definition::Class(class) => class.add_member(member_id),
             Definition::SingletonClass(singleton_class) => singleton_class.add_member(member_id),
             Definition::Module(module) => module.add_member(member_id),
@@ -833,7 +823,6 @@ impl<'a> RubyIndexer<'a> {
             };
 
             match definition {
-                Definition::Anonymous(namespace) => namespace.add_mixin(mixin),
                 Definition::Class(class_def) => class_def.add_mixin(mixin),
                 Definition::Module(module_def) => module_def.add_mixin(mixin),
                 Definition::SingletonClass(singleton_class_def) => singleton_class_def.add_mixin(mixin),
@@ -942,7 +931,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
         self.handle_class_definition(
             &node.location(),
-            &node.constant_path(),
+            Some(&node.constant_path()),
             node.body(),
             node.superclass(),
             Nesting::LexicalScope,
@@ -952,7 +941,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
         self.handle_module_definition(
             &node.location(),
-            &node.constant_path(),
+            Some(&node.constant_path()),
             node.body(),
             Nesting::LexicalScope,
         );
@@ -1136,7 +1125,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&node.location());
         let (comments, flags) = self.find_comments_for(offset.start());
-        let parent_nesting_id = self.parent_nesting_id();
+        let parent_nesting_id = self.current_nesting_definition_id();
         let parameters = self.collect_parameters(node);
         let is_singleton = node.receiver().is_some();
 
@@ -1313,7 +1302,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     offset,
                     comments,
                     flags,
-                    self.parent_nesting_id(),
+                    self.current_nesting_definition_id(),
                 )));
 
                 let definition_id = self.local_graph.add_definition(definition);
@@ -1382,12 +1371,19 @@ impl Visit<'_> for RubyIndexer<'_> {
                     {
                         let receiver_name = receiver.location().as_slice();
 
-                        if receiver_name == b"Class"
-                            || receiver_name == b"::Class"
-                            || receiver_name == b"Module"
-                            || receiver_name == b"::Module"
-                        {
-                            self.handle_anonymous_namespace_definition(&node.location(), node.block());
+                        if receiver_name == b"Class" || receiver_name == b"::Class" {
+                            self.handle_class_definition(
+                                &node.location(),
+                                None,
+                                node.block(),
+                                node.arguments().and_then(|args| args.arguments().iter().next()),
+                                Nesting::Owner,
+                            );
+                            return;
+                        }
+
+                        if receiver_name == b"Module" || receiver_name == b"::Module" {
+                            self.handle_module_definition(&node.location(), None, node.block(), Nesting::Owner);
                             return;
                         }
                     }
@@ -1585,7 +1581,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             offset,
             comments,
             flags,
-            self.parent_nesting_id(),
+            self.current_nesting_definition_id(),
         )));
 
         let definition_id = self.local_graph.add_definition(definition);
@@ -1635,7 +1631,7 @@ mod tests {
     use crate::{
         model::{
             definitions::{Definition, Mixin, Parameter},
-            ids::StringId,
+            ids::{StringId, UriId},
             visibility::Visibility,
         },
         test_utils::LocalGraphTest,
@@ -3850,6 +3846,48 @@ mod tests {
     }
 
     #[test]
+    fn index_alias_method_ignores_method_nesting() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                alias_method :new_to_s, :to_s
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "3:5-3:34", MethodAlias, |alias_method| {
+                assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_ignores_method_nesting() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                alias new_to_s to_s
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "3:5-3:24", MethodAlias, |alias_method| {
+                assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
     fn superclasses_are_indexed_as_constant_ref_ids() {
         let context = index_source({
             "
@@ -4655,7 +4693,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-9:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-4:6", Anonymous, |anonymous| {
+            assert_definition_at!(&context, "2:3-4:6", Class, |anonymous| {
                 assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
 
                 assert_definition_at!(&context, "3:5-3:17", Method, |bar| {
@@ -4663,7 +4701,7 @@ mod tests {
                 });
             });
 
-            assert_definition_at!(&context, "6:3-8:6", Anonymous, |anonymous| {
+            assert_definition_at!(&context, "6:3-8:6", Module, |anonymous| {
                 assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
 
                 assert_definition_at!(&context, "7:5-7:17", Method, |baz| {
@@ -4688,10 +4726,10 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-5:6", Anonymous, |anonymous_class| {
+            assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
                 assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
 
-                assert_definition_at!(&context, "3:5-4:8", Anonymous, |anonymous_module| {
+                assert_definition_at!(&context, "3:5-4:8", Module, |anonymous_module| {
                     assert_eq!(foo.id(), anonymous_module.lexical_nesting_id().unwrap());
                 });
             });
@@ -4713,7 +4751,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-5:6", Anonymous, |anonymous_class| {
+            assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
                 assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
 
                 assert_definition_at!(&context, "3:5-4:8", Module, |bar| {
@@ -4737,7 +4775,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-4:6", Anonymous, |anonymous_class| {
+            assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
                 assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
 
                 assert_includes_eq!(&context, anonymous_class, vec!["Bar"]);
@@ -4787,6 +4825,53 @@ mod tests {
         assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
             assert_definition_at!(&context, "4:7-4:12", ClassVariable, |var| {
                 assert_eq!(foo.id(), var.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_singleton_method_in_anonymous_namespace() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                def self.bar
+                end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
+            let receiver = bar.receiver().unwrap();
+            let name_ref = context.graph().names().get(&receiver).unwrap();
+            let uri_id = UriId::from("file:///foo.rb");
+            assert_eq!(StringId::from(&format!("{uri_id}:13<anonymous>")), *name_ref.str());
+            assert!(name_ref.nesting().is_none());
+            assert!(name_ref.parent_scope().is_none());
+        });
+    }
+
+    #[test]
+    fn index_nested_method_definitions() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                def baz; end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "2:3-4:6", Method, |bar| {
+                assert_definition_at!(&context, "3:5-3:17", Method, |baz| {
+                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                    assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
+                });
             });
         });
     }

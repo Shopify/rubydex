@@ -246,9 +246,6 @@ fn handle_remaining_definitions(
 ) {
     for id in other_ids {
         match graph.definitions().get(&id).unwrap() {
-            Definition::Anonymous(_) => {
-                // Anonymous namespaces are discarded
-            }
             Definition::Method(method_definition) => {
                 let str_id = *method_definition.str_id();
                 let owner_id = if let Some(receiver) = method_definition.receiver() {
@@ -436,10 +433,8 @@ fn handle_remaining_definitions(
                 });
             }
             Definition::GlobalVariableAlias(alias) => {
-                let owner_id = resolve_lexical_owner(graph, *alias.lexical_nesting_id());
-
-                create_declaration(graph, *alias.new_name_str_id(), id, owner_id, |name| {
-                    Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, owner_id)))
+                create_declaration(graph, *alias.new_name_str_id(), id, *OBJECT_ID, |name| {
+                    Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, *OBJECT_ID)))
                 });
             }
         }
@@ -486,9 +481,32 @@ fn resolve_class_variable_owner(graph: &Graph, lexical_nesting_id: Option<Defini
 
 /// Resolves owner from lexical nesting.
 fn resolve_lexical_owner(graph: &Graph, lexical_nesting_id: Option<DefinitionId>) -> DeclarationId {
-    *lexical_nesting_id
-        .and_then(|id| graph.definitions_to_declarations().get(&id))
-        .unwrap_or(&OBJECT_ID)
+    let Some(id) = lexical_nesting_id else {
+        return *OBJECT_ID;
+    };
+
+    // If no declaration exists yet for this definition, walk up the lexical chain.
+    // This handles the case where attr_* definitions inside methods are processed
+    // before the method definition itself.
+    let Some(declaration_id) = graph.definitions_to_declarations().get(&id) else {
+        let definition = graph.definitions().get(&id).unwrap();
+        return resolve_lexical_owner(graph, *definition.lexical_nesting_id());
+    };
+
+    let declarations = graph.declarations().read().unwrap();
+
+    // If the associated declaration is a namespace that can own things, we found the right owner. Otherwise, we might
+    // have found something nested inside something else (like a method), in which case we have to recurse until we find
+    // the appropriate owner
+    if matches!(
+        declarations.get(declaration_id).unwrap(),
+        Declaration::Class(_) | Declaration::Module(_) | Declaration::SingletonClass(_)
+    ) {
+        *declaration_id
+    } else {
+        let definition = graph.definitions().get(&id).unwrap();
+        resolve_lexical_owner(graph, *definition.lexical_nesting_id())
+    }
 }
 
 /// Gets or creates a singleton class declaration for a given class/module declaration.
@@ -3094,5 +3112,70 @@ mod tests {
                 // "BasicObject"
             ]
         );
+    }
+
+    #[test]
+    fn resolving_global_variable_alias_inside_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def setup
+                alias $bar $baz
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Global variable aliases should still be owned by Object, regardless of where defined
+        let read_lock = context.graph().declarations().read().unwrap();
+        let object = read_lock.get(&DeclarationId::from("Object")).unwrap();
+        assert_members(object, &["$bar"]);
+    }
+
+    #[test]
+    fn resolving_method_defined_inside_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def setup
+                def inner_method; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let read_lock = context.graph().declarations().read().unwrap();
+        let foo_class = read_lock.get(&DeclarationId::from("Foo")).unwrap();
+        // inner_method should be owned by Foo, not by setup
+        assert_members(foo_class, &["setup", "inner_method"]);
+    }
+
+    #[test]
+    fn resolving_attr_accessors_inside_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.setup
+                attr_reader :reader_attr
+                attr_writer :writer_attr
+                attr_accessor :accessor_attr
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let read_lock = context.graph().declarations().read().unwrap();
+        let foo_singleton_class = read_lock.get(&DeclarationId::from("Foo::<Foo>")).unwrap();
+        assert_members(foo_singleton_class, &["setup"]);
+
+        // All attr_* should be owned by Foo, not by setup
+        let foo_class = read_lock.get(&DeclarationId::from("Foo")).unwrap();
+        assert_members(foo_class, &["reader_attr", "writer_attr", "accessor_attr"]);
     }
 }

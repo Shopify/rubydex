@@ -25,12 +25,10 @@ pub enum DefinitionKind {
     ClassVariable = 10,
     MethodAlias = 11,
     GlobalVariableAlias = 12,
-    Anonymous = 13,
 }
 
 pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
     match defn {
-        Definition::Anonymous(_) => DefinitionKind::Anonymous,
         Definition::Class(_) => DefinitionKind::Class,
         Definition::SingletonClass(_) => DefinitionKind::SingletonClass,
         Definition::Module(_) => DefinitionKind::Module,
