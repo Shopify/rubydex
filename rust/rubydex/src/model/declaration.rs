@@ -259,6 +259,12 @@ impl Declaration {
         });
     }
 
+    pub fn remove_reference(&mut self, reference_id: &ReferenceId) {
+        all_declarations!(self, it => {
+            it.references.remove(reference_id);
+        });
+    }
+
     // Deletes a definition from this declaration
     pub fn remove_definition(&mut self, definition_id: &DefinitionId) -> bool {
         all_declarations!(self, it => {
