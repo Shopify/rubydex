@@ -1160,21 +1160,59 @@ impl Visit<'_> for RubyIndexer<'_> {
             None
         };
 
-        let method = Definition::Method(Box::new(MethodDefinition::new(
-            str_id,
-            self.uri_id,
-            offset,
-            comments,
-            flags,
-            parent_nesting_id,
-            parameters,
-            visibility,
-            receiver,
-        )));
+        let definition_id = if receiver.is_none() && visibility == Visibility::ModuleFunction {
+            // module_function creates two method definitions:
+            // 1. Public singleton method (class/module method)
+            let method = Definition::Method(Box::new(MethodDefinition::new(
+                str_id,
+                self.uri_id,
+                offset.clone(),
+                comments.clone(),
+                flags.clone(),
+                parent_nesting_id,
+                parameters.clone(),
+                Visibility::Public,
+                self.current_owner_name_id(),
+            )));
+            let definition_id = self.local_graph.add_definition(method);
 
-        let definition_id = self.local_graph.add_definition(method);
+            self.add_member_to_current_owner(definition_id);
 
-        self.add_member_to_current_owner(definition_id);
+            // 2. Private instance method
+            let method = Definition::Method(Box::new(MethodDefinition::new(
+                str_id,
+                self.uri_id,
+                offset,
+                comments,
+                flags,
+                parent_nesting_id,
+                parameters,
+                Visibility::Private,
+                receiver,
+            )));
+            let definition_id = self.local_graph.add_definition(method);
+
+            self.add_member_to_current_owner(definition_id);
+
+            definition_id
+        } else {
+            let method = Definition::Method(Box::new(MethodDefinition::new(
+                str_id,
+                self.uri_id,
+                offset,
+                comments,
+                flags,
+                parent_nesting_id,
+                parameters,
+                visibility,
+                receiver,
+            )));
+            let definition_id = self.local_graph.add_definition(method);
+
+            self.add_member_to_current_owner(definition_id);
+
+            definition_id
+        };
 
         if let Some(body) = node.body() {
             self.nesting_stack.push(Nesting::Method(definition_id));
@@ -1198,6 +1236,12 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let offset = Offset::from_prism_location(&location);
                 let (comments, flags) = self.find_comments_for(offset.start());
 
+                // module_function makes attr_* methods private (without creating singleton methods)
+                let visibility = match self.current_visibility() {
+                    Visibility::ModuleFunction => Visibility::Private,
+                    v => *v,
+                };
+
                 let definition = match kind {
                     AttrKind::Accessor => Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
                         str_id,
@@ -1206,7 +1250,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         comments,
                         flags,
                         parent_nesting_id,
-                        *self.current_visibility(),
+                        visibility,
                     ))),
                     AttrKind::Reader => Definition::AttrReader(Box::new(AttrReaderDefinition::new(
                         str_id,
@@ -1215,7 +1259,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         comments,
                         flags,
                         parent_nesting_id,
-                        *self.current_visibility(),
+                        visibility,
                     ))),
                     AttrKind::Writer => Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
                         str_id,
@@ -1224,7 +1268,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         comments,
                         flags,
                         parent_nesting_id,
-                        *self.current_visibility(),
+                        visibility,
                     ))),
                 };
 
@@ -1333,7 +1377,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.visit_call_node_parts(node);
                 }
             }
-            "private" | "protected" | "public" => {
+            "private" | "protected" | "public" | "module_function" => {
                 if let Some(_receiver) = node.receiver() {
                     self.visit_call_node_parts(node);
                     return;
@@ -2687,6 +2731,106 @@ mod tests {
 
         assert_definition_at!(&context, "7:1-7:12", Method, |def| {
             assert_name_eq!(&context, "m3", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_module_function() {
+        let context = index_source({
+            "
+            module Foo
+              def bar; end
+
+              module_function
+
+              def baz; end
+              attr_reader :attribute
+
+              public
+
+              def qux; end
+
+              module_function def boop; end
+
+              def zip; end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:3-2:15", Method, |def| {
+            assert_name_eq!(&context, "bar", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        let definitions = context.all_definitions_at("6:3-6:15");
+        assert_eq!(
+            definitions.len(),
+            2,
+            "module_function should create two definitions for baz"
+        );
+
+        let instance_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
+            .expect("should have instance method definition");
+        let Definition::Method(instance_method) = instance_method else {
+            panic!()
+        };
+        assert_name_eq!(&context, "baz", instance_method);
+        assert_eq!(instance_method.visibility(), &Visibility::Private);
+
+        let singleton_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
+            .expect("should have singleton method definition");
+        let Definition::Method(singleton_method) = singleton_method else {
+            panic!()
+        };
+        assert_name_eq!(&context, "baz", singleton_method);
+        assert_eq!(singleton_method.visibility(), &Visibility::Public);
+
+        assert_definition_at!(&context, "7:16-7:25", AttrReader, |def| {
+            assert_name_eq!(&context, "attribute", def);
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "11:3-11:15", Method, |def| {
+            assert_name_eq!(&context, "qux", def);
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        let definitions = context.all_definitions_at("13:19-13:32");
+        assert_eq!(
+            definitions.len(),
+            2,
+            "module_function should create two definitions for boop"
+        );
+
+        let instance_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
+            .expect("boop: should have instance method definition");
+        let Definition::Method(instance_method) = instance_method else {
+            panic!()
+        };
+        assert_name_eq!(&context, "boop", instance_method);
+        assert_eq!(instance_method.visibility(), &Visibility::Private);
+
+        let singleton_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
+            .expect("boop: should have singleton method definition");
+        let Definition::Method(singleton_method) = singleton_method else {
+            panic!()
+        };
+        assert_name_eq!(&context, "boop", singleton_method);
+        assert_eq!(singleton_method.visibility(), &Visibility::Public);
+
+        assert_definition_at!(&context, "15:3-15:15", Method, |def| {
+            assert_name_eq!(&context, "zip", def);
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }

@@ -43,7 +43,7 @@ impl LocalGraphTest {
     ///
     /// Panics if a definition cannot be found at the given location.
     #[must_use]
-    pub fn definition_at<'a>(&'a self, location: &str) -> &'a Definition {
+    pub fn all_definitions_at<'a>(&'a self, location: &str) -> Vec<&'a Definition> {
         let (uri, offset) = self.parse_location(&format!("{}:{}", self.uri(), location));
         let uri_id = UriId::from(&uri);
 
@@ -73,6 +73,16 @@ impl LocalGraphTest {
                     .collect::<Vec<_>>()
             }
         );
+
+        definitions
+    }
+
+    /// # Panics
+    ///
+    /// Panics if no definition or multiple definitions are found at the given location.
+    #[must_use]
+    pub fn definition_at<'a>(&'a self, location: &str) -> &'a Definition {
+        let definitions = self.all_definitions_at(location);
         assert!(
             definitions.len() < 2,
             "found more than one definition matching {location}"
