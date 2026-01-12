@@ -77,8 +77,8 @@ macro_rules! namespace_declaration {
             name: String,
             /// The list of definition IDs that compose this declaration
             definition_ids: Vec<DefinitionId>,
-            /// The list of references that are made to this declaration
-            references: Vec<ReferenceId>,
+            /// The set of references that are made to this declaration
+            references: IdentityHashSet<ReferenceId>,
             /// The ID of the owner of this declaration. For singleton classes, this is the ID of the attached object
             owner_id: DeclarationId,
             /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
@@ -102,7 +102,7 @@ macro_rules! namespace_declaration {
                     name,
                     definition_ids: Vec::new(),
                     members: IdentityHashMap::default(),
-                    references: Vec::new(),
+                    references: IdentityHashSet::default(),
                     owner_id,
                     ancestors: RefCell::new(Ancestors::Partial(Vec::new())),
                     descendants: RefCell::new(IdentityHashSet::default()),
@@ -175,8 +175,8 @@ macro_rules! simple_declaration {
             name: String,
             /// The list of definition IDs that compose this declaration
             definition_ids: Vec<DefinitionId>,
-            /// The list of references that are made to this declaration
-            references: Vec<ReferenceId>,
+            /// The set of references that are made to this declaration
+            references: IdentityHashSet<ReferenceId>,
             /// The ID of the owner of this declaration
             owner_id: DeclarationId,
         }
@@ -187,7 +187,7 @@ macro_rules! simple_declaration {
                 Self {
                     name,
                     definition_ids: Vec::new(),
-                    references: Vec::new(),
+                    references: IdentityHashSet::default(),
                     owner_id,
                 }
             }
@@ -228,7 +228,7 @@ impl Declaration {
     }
 
     #[must_use]
-    pub fn references(&self) -> &[ReferenceId] {
+    pub fn references(&self) -> &IdentityHashSet<ReferenceId> {
         all_declarations!(self, it => &it.references)
     }
 
@@ -255,7 +255,7 @@ impl Declaration {
 
     pub fn add_reference(&mut self, id: ReferenceId) {
         all_declarations!(self, it => {
-            it.references.push(id);
+            it.references.insert(id);
         });
     }
 
