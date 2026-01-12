@@ -1,11 +1,13 @@
-use crate::model::ids::DefinitionId;
+use crate::model::ids::{DefinitionId, ReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
-// definitions discovered in it
+// definitions and references discovered in it
 #[derive(Debug)]
 pub struct Document {
     uri: String,
     definition_ids: Vec<DefinitionId>,
+    method_reference_ids: Vec<ReferenceId>,
+    constant_reference_ids: Vec<ReferenceId>,
 }
 
 impl Document {
@@ -14,6 +16,8 @@ impl Document {
         Self {
             uri,
             definition_ids: Vec::new(),
+            method_reference_ids: Vec::new(),
+            constant_reference_ids: Vec::new(),
         }
     }
 
@@ -35,6 +39,24 @@ impl Document {
 
         self.definition_ids.push(definition_id);
     }
+
+    #[must_use]
+    pub fn method_references(&self) -> &[ReferenceId] {
+        &self.method_reference_ids
+    }
+
+    pub fn add_method_reference(&mut self, reference_id: ReferenceId) {
+        self.method_reference_ids.push(reference_id);
+    }
+
+    #[must_use]
+    pub fn constant_references(&self) -> &[ReferenceId] {
+        &self.constant_reference_ids
+    }
+
+    pub fn add_constant_reference(&mut self, reference_id: ReferenceId) {
+        self.constant_reference_ids.push(reference_id);
+    }
 }
 
 #[cfg(test)]
@@ -51,5 +73,18 @@ mod tests {
         document.add_definition(def_id);
 
         assert_eq!(document.definitions().len(), 1);
+    }
+
+    #[test]
+    fn tracking_references() {
+        let mut document = Document::new("file:///foo.rb".to_string());
+        let method_ref = ReferenceId::new(1);
+        let constant_ref = ReferenceId::new(2);
+
+        document.add_method_reference(method_ref);
+        document.add_constant_reference(constant_ref);
+
+        assert_eq!(document.method_references(), &[method_ref]);
+        assert_eq!(document.constant_references(), &[constant_ref]);
     }
 }
