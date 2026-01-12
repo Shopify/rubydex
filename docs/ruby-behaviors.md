@@ -8,11 +8,14 @@ This document describes various Ruby language behaviors, compiled from observati
 2. [Lexical Scoping and Constant Resolution](#lexical-scoping-and-constant-resolution)
 3. [Definitions vs Declarations](#definitions-vs-declarations)
 4. [Method Parameters](#method-parameters)
-5. [Attribute Methods](#attribute-methods)
-6. [Variable Scoping](#variable-scoping)
-7. [Constant References](#constant-references)
-8. [Constant Aliases](#constant-aliases)
-9. [Singleton Classes](#singleton-classes)
+5. [Method Visibility](#method-visibility)
+6. [Method Aliasing](#method-aliasing)
+7. [Attribute Methods](#attribute-methods)
+8. [Variable Scoping](#variable-scoping)
+9. [Mixins](#mixins)
+10. [Constant References](#constant-references)
+11. [Constant Aliases](#constant-aliases)
+12. [Singleton Classes](#singleton-classes)
 
 ## Namespace Qualification
 
@@ -248,6 +251,168 @@ Results in:
 - `Foo#bar` - instance method
 - `Foo.baz` or `Foo::baz` - singleton method
 
+## Method Visibility
+
+Ruby provides three visibility levels for methods: `public`, `private`, and `protected`.
+
+### Default Visibility
+
+Methods defined at the **top level** default to `private`:
+
+```ruby
+def foo; end  # private by default at top level
+
+public
+
+def bar; end  # now public (after public modifier)
+```
+
+Methods defined **inside a class or module** default to `public`:
+
+```ruby
+class Foo
+  def bar; end  # public by default
+end
+```
+
+### Visibility Modifiers
+
+Visibility can be changed using `public`, `private`, or `protected`:
+
+```ruby
+class Foo
+  def m1; end      # public (default)
+
+  private
+
+  def m2; end      # private (after modifier)
+
+  protected def m3; end  # protected (inline modifier)
+end
+```
+
+### Visibility Resets in Nested Scopes
+
+**Important:** Visibility modifiers do NOT propagate into nested class or module definitions:
+
+```ruby
+private
+
+class Foo
+  def m1; end      # public (resets in new scope)
+
+  private
+
+  module Bar
+    def m2; end    # public (resets again)
+  end
+
+  def m3; end      # private (still in Foo's private scope)
+end
+```
+
+### Visibility Does NOT Apply to `def self.method`
+
+Visibility modifiers have **no effect** on singleton methods defined with `def self.method`:
+
+```ruby
+class Foo
+  private
+
+  def self.bar; end  # STILL PUBLIC (visibility ignored)
+  # private_class_method :bar can turn `bar` private
+end
+
+Foo.bar  # Works fine
+```
+
+**Important:** This does NOT apply inside `class << self` blocks - visibility works normally there:
+
+```ruby
+class Foo
+  class << self
+    private
+
+    def bar; end  # Actually private
+  end
+end
+
+Foo.bar  # private method 'bar' called for class Foo (NoMethodError)
+```
+
+## Method Aliasing
+
+Ruby provides two ways to create method aliases: the `alias` keyword and the `alias_method` method.
+
+### The `alias` Keyword
+
+The `alias` keyword creates a new name for an existing method:
+
+```ruby
+class Foo
+  def bar
+    "bar"
+  end
+
+  alias baz bar  # baz is now an alias for bar
+end
+
+Foo.new.baz  # => "bar"
+```
+
+Aliases can use symbols or bare method names:
+
+```ruby
+class Foo
+  def original; end
+
+  alias :new_name :original    # symbol syntax
+  alias another_name original  # bare name syntax
+end
+```
+
+### `alias_method`
+
+`alias_method` is a method from `Module` that creates aliases at runtime:
+
+```ruby
+class Foo
+  def bar; end
+
+  alias_method :baz, :bar           # symbol syntax
+  alias_method "qux", "bar"         # string syntax
+end
+```
+
+Unlike `alias`, `alias_method` requires symbols or strings, not bare method names.
+
+### Top-Level Aliases
+
+Aliases can be defined at the top level but it **only** works with the `alias` keyword:
+
+```ruby
+def foo; end
+
+alias bar foo  # Creates top-level method alias
+alias_method :bar, :foo  # NoMethodError
+```
+
+### Global Variable Aliases
+
+The `alias` keyword can also create aliases for global variables:
+
+```ruby
+$foo = 123
+
+alias $bar $foo  # $bar is now an alias for $foo
+
+$bar  # => 123
+$bar = 456
+$foo  # => 456 (they share the same value)
+```
+
+This is different from simply assigning `$bar = $foo`, which would copy the value rather than create an alias.
+
 ## Attribute Methods
 
 Ruby provides special methods for creating getter and setter methods automatically.
@@ -469,6 +634,188 @@ Foo.another_demo
 
 Foo.instance_variables  # => [:@ivar2]
 Bar.class_variables     # => [:@@cvar2]
+```
+
+## Mixins
+
+Ruby provides three ways to mix modules into classes or other modules: `include`, `prepend`, and `extend`.
+
+### Include
+
+`include` adds module methods as instance methods, inserted **after** the class in the ancestor chain:
+
+```ruby
+module Foo; end
+
+class Bar
+  include Foo
+end
+
+Bar.ancestors  # => [Bar, Foo, Object, Kernel, BasicObject]
+```
+
+### Prepend
+
+`prepend` adds module methods as instance methods, inserted **before** the class in the ancestor chain:
+
+```ruby
+module Foo; end
+
+class Bar
+  prepend Foo
+end
+
+Bar.ancestors  # => [Foo, Bar, Object, Kernel, BasicObject]
+```
+
+### Extend
+
+`extend` adds module methods as **singleton methods** (class methods when used in a class):
+
+```ruby
+module Foo
+  def bar; end
+end
+
+class Baz
+  extend Foo
+end
+
+Baz.bar  # Works (class method)
+Baz.new.bar  # NoMethodError (not an instance method)
+```
+
+#### Extend vs Include in Singleton Class
+
+`extend Foo` is functionally equivalent to `class << self; include Foo; end` - both add methods to the singleton class. However, they trigger **different hooks**:
+
+```ruby
+module Foo
+  def self.included(base)
+    puts "included hook called on #{base}"
+  end
+
+  def self.extended(base)
+    puts "extended hook called on #{base}"
+  end
+end
+
+class UsingExtend
+  extend Foo  # Triggers: "extended hook called on UsingExtend"
+end
+
+class UsingSingletonInclude
+  class << self
+    include Foo  # Triggers: "included hook called on #<Class:UsingSingletonInclude>"
+  end
+end
+```
+
+Both classes get the same methods, but:
+
+- `extend` calls the `extended` hook
+- `include` in singleton class calls the `included` hook
+
+### Multiple Mixins
+
+Multiple modules can be mixed in a single call:
+
+```ruby
+class Foo
+  include Bar, Baz   # Baz is included first, then Bar
+  prepend Qux, Quux  # Quux is prepended first, then Qux
+end
+```
+
+### Mixin Deduplication
+
+Ruby **removes duplicate modules** from the ancestor chain:
+
+```ruby
+module A; end
+
+module B
+  include A
+end
+
+class Foo
+  include A
+  include B
+end
+
+Foo.ancestors  # => [Foo, B, A, Object, ...]
+# A appears only once, not twice
+```
+
+**Indirect duplicates** are also removed:
+
+```ruby
+module A; end
+
+module B
+  include A
+end
+
+module C
+  include A
+end
+
+module Foo
+  include B
+  include C
+end
+
+Foo.ancestors  # => [Foo, C, B, A]
+# A appears only once despite being in both B and C
+```
+
+### Duplicate Mixins Across Parent and Child
+
+When both parent and child include the same module, the module appears **twice** in the ancestor chain:
+
+```ruby
+module A; end
+
+module B
+  include A
+end
+
+class Parent
+  include B
+end
+
+class Child < Parent
+  include B
+end
+
+Child.ancestors  # => [Child, Parent, B, A, Object, ...]
+# B and A appear once (child's include is deduplicated against parent)
+```
+
+### Top-Level Mixins
+
+Mixins at the top level affect `Object`:
+
+```ruby
+include Foo  # Makes Foo's methods available everywhere
+```
+
+**Note:** `include self`, `prepend self`, or `extend self` at the top level is invalid and will produce a warning.
+
+### Extend Self Pattern
+
+A common pattern is `extend self` to make module methods callable on the module itself:
+
+```ruby
+module Foo
+  extend self
+
+  def bar
+    "bar"
+  end
+end
+
+Foo.bar  # => "bar"
 ```
 
 ## Constant References
