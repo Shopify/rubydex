@@ -866,10 +866,12 @@ impl Visit<'_> for RubyIndexer<'_> {
 
     fn visit_constant_path_and_write_node(&mut self, node: &ruby_prism::ConstantPathAndWriteNode) {
         self.visit_constant_path_node(&node.target());
+        self.visit(&node.value());
     }
 
     fn visit_constant_path_operator_write_node(&mut self, node: &ruby_prism::ConstantPathOperatorWriteNode) {
         self.visit_constant_path_node(&node.target());
+        self.visit(&node.value());
     }
 
     fn visit_constant_path_or_write_node(&mut self, node: &ruby_prism::ConstantPathOrWriteNode) {
@@ -3270,6 +3272,21 @@ mod tests {
                 "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14"
             ]
         );
+    }
+
+    #[test]
+    fn index_constant_path_and_write_visits_value() {
+        let context = index_source({
+            "
+            C1::C2 &&= C3
+            C4::C5 += C6
+            C7::C8 ||= C9
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_references_eq!(&context, vec!["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
     }
 
     #[test]
