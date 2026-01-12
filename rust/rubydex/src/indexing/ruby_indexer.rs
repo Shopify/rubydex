@@ -31,7 +31,6 @@ enum Nesting {
     LexicalScope(DefinitionId),
     /// An owner entry that will be associated with all members encountered, but will not produce a new lexical scope
     /// (e.g.: Module.new or Class.new)
-    #[allow(dead_code)]
     Owner(DefinitionId),
     /// A method entry that is used to set the correct owner for instance variables, but cannot own anything itself
     Method(DefinitionId),
@@ -277,15 +276,39 @@ impl<'a> RubyIndexer<'a> {
         parameters
     }
 
-    /// Gets the `NameId` of the current owner (class/module/singleton class).
+    /// Gets the `NameId` of the current lexical scope (class/module/singleton class).
     /// Used to resolve `self` to a concrete `NameId` during indexing.
     ///
-    /// Iterates through the definitions stack in reverse to find the first class/module/singleton
-    /// class, skipping methods.
+    /// Iterates through the definitions stack in reverse to find the first class/module/singleton class, skipping
+    /// methods. Ignores `Class.new` and other owners that do not produce lexical scopes
     ///
     /// # Panics
     ///
     /// Panics if the definition is not a class, module, or singleton class
+    fn current_lexical_scope_name_id(&self) -> Option<NameId> {
+        self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
+            Nesting::LexicalScope(id) => {
+                if let Some(definition) = self.local_graph.definitions().get(id) {
+                    match definition {
+                        Definition::Class(class_def) => Some(*class_def.name_id()),
+                        Definition::Module(module_def) => Some(*module_def.name_id()),
+                        Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
+                        Definition::Method(_) => None,
+                        _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
+                    }
+                } else {
+                    None
+                }
+            }
+            Nesting::Method(_) | Nesting::Owner(_) => None,
+        })
+    }
+
+    /// Gets the `NameId` of the current owner (class/module/singleton class), including `Class.new`/`Module.new`.
+    /// Used to resolve `self` in singleton method definitions (e.g., `def self.bar`).
+    ///
+    /// Unlike `current_lexical_scope_name_id`, this method considers `Nesting::Owner` entries,
+    /// because `self` inside a `Class.new` block refers to the new class being created.
     fn current_owner_name_id(&self) -> Option<NameId> {
         self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
             Nesting::LexicalScope(id) | Nesting::Owner(id) => {
@@ -367,6 +390,26 @@ impl<'a> RubyIndexer<'a> {
 
                 constant.name_loc()
             }
+            ruby_prism::Node::ConstantPathWriteNode { .. } => {
+                let constant = node.as_constant_path_write_node().unwrap();
+                let target = constant.target();
+
+                if let Some(parent) = target.parent() {
+                    // Ignore parent scopes that are not constants, like `foo::Bar`
+                    match parent {
+                        ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
+                        _ => {
+                            return None;
+                        }
+                    }
+
+                    parent_scope_id = self.index_constant_reference(&parent, true);
+                } else {
+                    top_level_ref = true;
+                }
+
+                target.name_loc()
+            }
             ruby_prism::Node::ConstantReadNode { .. } => node.location(),
             ruby_prism::Node::ConstantAndWriteNode { .. } => node.as_constant_and_write_node().unwrap().name_loc(),
             ruby_prism::Node::ConstantOperatorWriteNode { .. } => {
@@ -407,7 +450,7 @@ impl<'a> RubyIndexer<'a> {
         let nesting = if top_level_ref {
             None
         } else {
-            self.current_owner_name_id()
+            self.current_lexical_scope_name_id()
         };
 
         let string_id = self.local_graph.intern_string(name);
@@ -481,7 +524,7 @@ impl<'a> RubyIndexer<'a> {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
         // Class variables use the enclosing class/module (skipping methods) as lexical nesting
-        let lexical_nesting_id = self.current_nesting_definition_id();
+        let lexical_nesting_id = self.parent_lexical_scope_id();
         let uri_id = self.uri_id;
 
         let definition = Definition::ClassVariable(Box::new(ClassVariableDefinition::new(
@@ -527,6 +570,148 @@ impl<'a> RubyIndexer<'a> {
         Some(definition_id)
     }
 
+    fn handle_class_definition(
+        &mut self,
+        location: &ruby_prism::Location,
+        name_node: Option<&ruby_prism::Node>,
+        body_node: Option<ruby_prism::Node>,
+        superclass_node: Option<ruby_prism::Node>,
+        nesting_type: fn(DefinitionId) -> Nesting,
+    ) {
+        let offset = Offset::from_prism_location(location);
+        let (comments, flags) = self.find_comments_for(offset.start());
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+        let superclass = superclass_node
+            .as_ref()
+            .and_then(|n| self.index_constant_reference(n, true));
+
+        if let Some(superclass_node) = superclass_node
+            && superclass.is_none()
+        {
+            self.local_graph.add_diagnostic(
+                Diagnostics::DynamicAncestor,
+                Offset::from_prism_location(&superclass_node.location()),
+                "Dynamic superclass".to_string(),
+            );
+        }
+
+        let name_id = if let Some(name_node) = name_node {
+            self.index_constant_reference(name_node, false)
+        } else {
+            let string_id = self
+                .local_graph
+                .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
+
+            Some(self.local_graph.add_name(Name::new(string_id, None, None)))
+        };
+
+        if let Some(name_id) = name_id {
+            let definition = Definition::Class(Box::new(ClassDefinition::new(
+                name_id,
+                self.uri_id,
+                offset,
+                comments,
+                flags,
+                lexical_nesting_id,
+                superclass,
+            )));
+
+            let definition_id = self.local_graph.add_definition(definition);
+
+            self.add_member_to_current_lexical_scope(definition_id);
+
+            if let Some(body) = body_node {
+                self.nesting_stack.push(nesting_type(definition_id));
+                self.visibility_stack.push(Visibility::Public);
+                self.visit(&body);
+                self.visibility_stack.pop();
+                self.nesting_stack.pop();
+            }
+        }
+    }
+
+    fn handle_module_definition(
+        &mut self,
+        location: &ruby_prism::Location,
+        name_node: Option<&ruby_prism::Node>,
+        body_node: Option<ruby_prism::Node>,
+        nesting_type: fn(DefinitionId) -> Nesting,
+    ) {
+        let offset = Offset::from_prism_location(location);
+        let (comments, flags) = self.find_comments_for(offset.start());
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+
+        let name_id = if let Some(name_node) = name_node {
+            self.index_constant_reference(name_node, false)
+        } else {
+            let string_id = self
+                .local_graph
+                .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
+
+            Some(self.local_graph.add_name(Name::new(string_id, None, None)))
+        };
+
+        if let Some(name_id) = name_id {
+            let definition = Definition::Module(Box::new(ModuleDefinition::new(
+                name_id,
+                self.uri_id,
+                offset,
+                comments,
+                flags,
+                lexical_nesting_id,
+            )));
+
+            let definition_id = self.local_graph.add_definition(definition);
+
+            self.add_member_to_current_lexical_scope(definition_id);
+
+            if let Some(body) = body_node {
+                self.nesting_stack.push(nesting_type(definition_id));
+                self.visibility_stack.push(Visibility::Public);
+                self.visit(&body);
+                self.visibility_stack.pop();
+                self.nesting_stack.pop();
+            }
+        }
+    }
+
+    /// Handle dynamic class or module definitions, like `Module.new`, `Class.new`, `Data.define` and so on
+    fn handle_dynamic_class_or_module(&mut self, node: &ruby_prism::Node, value: &ruby_prism::Node) -> bool {
+        let Some(call_node) = value.as_call_node() else {
+            return false;
+        };
+
+        if call_node.name().as_slice() != b"new" {
+            return false;
+        }
+
+        let Some(receiver) = call_node.receiver() else {
+            return false;
+        };
+
+        let receiver_name = receiver.location().as_slice();
+
+        // Handle `Module.new`
+        if receiver_name == b"Module" || receiver_name == b"::Module" {
+            self.handle_module_definition(&node.location(), Some(node), call_node.block(), Nesting::Owner);
+            return true;
+        }
+
+        // Handle `Class.new`
+        if receiver_name == b"Class" || receiver_name == b"::Class" {
+            self.handle_class_definition(
+                &node.location(),
+                Some(node),
+                call_node.block(),
+                call_node.arguments().and_then(|args| args.arguments().iter().next()),
+                Nesting::Owner,
+            );
+            return true;
+        }
+
+        false
+    }
+
     /// Returns the definition ID of the current nesting (class, module, or singleton class),
     /// but skips methods in the definitions stack.
     fn current_nesting_definition_id(&self) -> Option<DefinitionId> {
@@ -542,6 +727,28 @@ impl<'a> RubyIndexer<'a> {
     /// class, skipping methods, and adds the member to it.
     fn add_member_to_current_owner(&mut self, member_id: DefinitionId) {
         let Some(owner_id) = self.current_nesting_definition_id() else {
+            return;
+        };
+
+        let owner = self
+            .local_graph
+            .get_definition_mut(owner_id)
+            .expect("owner definition should exist");
+
+        match owner {
+            Definition::Class(class) => class.add_member(member_id),
+            Definition::SingletonClass(singleton_class) => singleton_class.add_member(member_id),
+            Definition::Module(module) => module.add_member(member_id),
+            _ => unreachable!("find above only matches anonymous/class/module/singleton"),
+        }
+    }
+
+    /// Adds a member to the current lexical scope
+    ///
+    /// Iterates through the definitions stack in reverse to find the first class/module/singleton class, skipping
+    /// methods, and adds the member to it. Ignores owner nestings such as Class.new
+    fn add_member_to_current_lexical_scope(&mut self, member_id: DefinitionId) {
+        let Some(owner_id) = self.parent_lexical_scope_id() else {
             return;
         };
 
@@ -583,7 +790,7 @@ impl<'a> RubyIndexer<'a> {
 
                     // FIXME: Ideally we would want to save the mixin as `self` but we can only save mixins with a name.
                     // We'll just use the current owner name id for now (what `self` resolves to).
-                    self.current_owner_name_id()
+                    self.current_lexical_scope_name_id()
                 } else if let Some(constant_ref_id) = self.index_constant_reference(&arg, true) {
                     Some(constant_ref_id)
                 } else {
@@ -722,73 +929,22 @@ impl CommentGroup {
 
 impl Visit<'_> for RubyIndexer<'_> {
     fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'_>) {
-        let offset = Offset::from_prism_location(&node.location());
-        let (comments, flags) = self.find_comments_for(offset.start());
-        let lexical_nesting_id = self.parent_lexical_scope_id();
-        let superclass = node.superclass().and_then(|n| self.index_constant_reference(&n, true));
-
-        if let Some(superclass_node) = node.superclass()
-            && superclass.is_none()
-        {
-            self.local_graph.add_diagnostic(
-                Diagnostics::DynamicAncestor,
-                Offset::from_prism_location(&superclass_node.location()),
-                "Dynamic superclass".to_string(),
-            );
-        }
-
-        if let Some(name_id) = self.index_constant_reference(&node.constant_path(), false) {
-            let definition = Definition::Class(Box::new(ClassDefinition::new(
-                name_id,
-                self.uri_id,
-                offset,
-                comments,
-                flags,
-                lexical_nesting_id,
-                superclass,
-            )));
-
-            let definition_id = self.local_graph.add_definition(definition);
-
-            self.add_member_to_current_owner(definition_id);
-
-            if let Some(body) = node.body() {
-                self.nesting_stack.push(Nesting::LexicalScope(definition_id));
-                self.visibility_stack.push(Visibility::Public);
-                self.visit(&body);
-                self.visibility_stack.pop();
-                self.nesting_stack.pop();
-            }
-        }
+        self.handle_class_definition(
+            &node.location(),
+            Some(&node.constant_path()),
+            node.body(),
+            node.superclass(),
+            Nesting::LexicalScope,
+        );
     }
 
     fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode) {
-        let offset = Offset::from_prism_location(&node.location());
-        let (comments, flags) = self.find_comments_for(offset.start());
-        let lexical_nesting_id = self.parent_lexical_scope_id();
-
-        if let Some(constant_ref_id) = self.index_constant_reference(&node.constant_path(), false) {
-            let definition = Definition::Module(Box::new(ModuleDefinition::new(
-                constant_ref_id,
-                self.uri_id,
-                offset,
-                comments,
-                flags,
-                lexical_nesting_id,
-            )));
-
-            let definition_id = self.local_graph.add_definition(definition);
-
-            self.add_member_to_current_owner(definition_id);
-
-            if let Some(body) = node.body() {
-                self.nesting_stack.push(Nesting::LexicalScope(definition_id));
-                self.visibility_stack.push(Visibility::Public);
-                self.visit(&body);
-                self.visibility_stack.pop();
-                self.nesting_stack.pop();
-            }
-        }
+        self.handle_module_definition(
+            &node.location(),
+            Some(&node.constant_path()),
+            node.body(),
+            Nesting::LexicalScope,
+        );
     }
 
     fn visit_singleton_class_node(&mut self, node: &ruby_prism::SingletonClassNode) {
@@ -797,7 +953,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         // Determine the attached_target for the singleton class
         let attached_target = if expression.as_self_node().is_some() {
             // `class << self` - resolve self to current class/module's NameId
-            self.current_owner_name_id()
+            self.current_lexical_scope_name_id()
         } else if matches!(
             expression,
             ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }
@@ -881,8 +1037,13 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
+        let value = node.value();
+        if self.handle_dynamic_class_or_module(&node.as_node(), &value) {
+            return;
+        }
+
         self.add_constant_definition(&node.as_node(), false);
-        self.visit(&node.value());
+        self.visit(&value);
     }
 
     fn visit_constant_path_and_write_node(&mut self, node: &ruby_prism::ConstantPathAndWriteNode) {
@@ -901,8 +1062,13 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
+        let value = node.value();
+        if self.handle_dynamic_class_or_module(&node.as_node(), &value) {
+            return;
+        }
+
         self.add_constant_definition(&node.target().as_node(), false);
-        self.visit(&node.value());
+        self.visit(&value);
     }
 
     fn visit_constant_read_node(&mut self, node: &ruby_prism::ConstantReadNode<'_>) {
@@ -959,7 +1125,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let str_id = self.local_graph.intern_string(name);
         let offset = Offset::from_prism_location(&node.location());
         let (comments, flags) = self.find_comments_for(offset.start());
-        let parent_nesting_id = self.parent_nesting_id();
+        let parent_nesting_id = self.current_nesting_definition_id();
         let parameters = self.collect_parameters(node);
         let is_singleton = node.receiver().is_some();
 
@@ -971,7 +1137,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let receiver = if let Some(recv_node) = node.receiver() {
             match recv_node {
-                // def self.foo - receiver is the current class/module's NameId
+                // def self.foo - receiver is the current owner's NameId (includes Class.new/Module.new)
                 ruby_prism::Node::SelfNode { .. } => self.current_owner_name_id(),
                 // def Foo.bar or def Foo::Bar.baz - receiver is the constant's NameId
                 ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {
@@ -1136,7 +1302,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     offset,
                     comments,
                     flags,
-                    self.parent_nesting_id(),
+                    self.current_nesting_definition_id(),
                 )));
 
                 let definition_id = self.local_graph.add_definition(definition);
@@ -1199,6 +1365,31 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
                     *last_visibility = visibility;
                 }
+            }
+            "new" => {
+                if let Some(receiver) = node.receiver() {
+                    {
+                        let receiver_name = receiver.location().as_slice();
+
+                        if receiver_name == b"Class" || receiver_name == b"::Class" {
+                            self.handle_class_definition(
+                                &node.location(),
+                                None,
+                                node.block(),
+                                node.arguments().and_then(|args| args.arguments().iter().next()),
+                                Nesting::Owner,
+                            );
+                            return;
+                        }
+
+                        if receiver_name == b"Module" || receiver_name == b"::Module" {
+                            self.handle_module_definition(&node.location(), None, node.block(), Nesting::Owner);
+                            return;
+                        }
+                    }
+                }
+
+                self.visit_call_node_parts(node);
             }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
@@ -1390,7 +1581,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             offset,
             comments,
             flags,
-            self.parent_nesting_id(),
+            self.current_nesting_definition_id(),
         )));
 
         let definition_id = self.local_graph.add_definition(definition);
@@ -1440,6 +1631,7 @@ mod tests {
     use crate::{
         model::{
             definitions::{Definition, Mixin, Parameter},
+            ids::{StringId, UriId},
             visibility::Visibility,
         },
         test_utils::LocalGraphTest,
@@ -3654,6 +3846,48 @@ mod tests {
     }
 
     #[test]
+    fn index_alias_method_ignores_method_nesting() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                alias_method :new_to_s, :to_s
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "3:5-3:34", MethodAlias, |alias_method| {
+                assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_ignores_method_nesting() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                alias new_to_s to_s
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "3:5-3:24", MethodAlias, |alias_method| {
+                assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
     fn superclasses_are_indexed_as_constant_ref_ids() {
         let context = index_source({
             "
@@ -4162,6 +4396,482 @@ mod tests {
                 assert_eq!(old_name, "$qux");
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_module_new() {
+        let context = index_source({
+            "
+            module Foo
+              Bar = Module.new do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context.graph().names().get(include).unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_module_new_with_constant_path() {
+        let context = index_source({
+            "
+            module Foo
+              Zip::Bar = Module.new do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_name_id_to_string_eq!(&context, "Zip::Bar", bar);
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context.graph().names().get(include).unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new() {
+        let context = index_source({
+            "
+            module Foo
+              Bar = Class.new(Parent) do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            let superclass_name = context.graph().names().get(&bar.superclass_ref().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Parent"), *superclass_name.str());
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context.graph().names().get(include).unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new_no_parent() {
+        let context = index_source({
+            "
+            module Foo
+              Bar = Class.new do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context.graph().names().get(include).unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new_with_constant_path() {
+        let context = index_source({
+            "
+            module Foo
+              Zip::Bar = Class.new(Parent) do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_name_id_to_string_eq!(&context, "Zip::Bar", bar);
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            let superclass_name = context.graph().names().get(&bar.superclass_ref().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Parent"), *superclass_name.str());
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context.graph().names().get(include).unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_top_level_class_and_module_new() {
+        let context = index_source({
+            "
+            module Foo
+              Bar = ::Class.new do
+              end
+
+              Baz = ::Module.new do
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-3:6", Class, |bar| {
+                assert_definition_at!(&context, "5:3-6:6", Module, |baz| {
+                    assert_name_id_to_string_eq!(&context, "Bar", bar);
+                    assert_name_id_to_string_eq!(&context, "Baz", baz);
+                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                    assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
+                    assert_eq!(foo.members()[0], bar.id());
+                    assert_eq!(foo.members()[1], baz.id());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_anonymous_class_and_module_new() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                def bar; end
+              end
+
+              Module.new do
+                def baz; end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-9:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-4:6", Class, |anonymous| {
+                assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
+
+                assert_definition_at!(&context, "3:5-3:17", Method, |bar| {
+                    assert_eq!(anonymous.id(), bar.lexical_nesting_id().unwrap());
+                });
+            });
+
+            assert_definition_at!(&context, "6:3-8:6", Module, |anonymous| {
+                assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
+
+                assert_definition_at!(&context, "7:5-7:17", Method, |baz| {
+                    assert_eq!(anonymous.id(), baz.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_nested_class_and_module_new() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                Module.new do
+                end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
+                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
+
+                assert_definition_at!(&context, "3:5-4:8", Module, |anonymous_module| {
+                    assert_eq!(foo.id(), anonymous_module.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_named_module_nested_inside_anonymous() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                module Bar
+                end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
+                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
+
+                assert_definition_at!(&context, "3:5-4:8", Module, |bar| {
+                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_anonymous_namespace_mixins() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                include Bar
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
+                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
+
+                assert_includes_eq!(&context, anonymous_class, vec!["Bar"]);
+            });
+        });
+    }
+
+    #[test]
+    fn index_singleton_method_in_class_new() {
+        let context = index_source({
+            "
+            module Foo
+              A = Class.new do
+                def self.bar
+                end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
+            let receiver = bar.receiver().unwrap();
+            let name_ref = context.graph().names().get(&receiver).unwrap();
+            assert_eq!(StringId::from("A"), *name_ref.str());
+
+            let nesting_name = context.graph().names().get(&name_ref.nesting().unwrap()).unwrap();
+            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+        });
+    }
+
+    #[test]
+    fn index_class_variable_in_class_new() {
+        let context = index_source({
+            "
+            module Foo
+              A = Class.new do
+                def bar
+                  @@var = 123
+                end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
+            assert_definition_at!(&context, "4:7-4:12", ClassVariable, |var| {
+                assert_eq!(foo.id(), var.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_singleton_method_in_anonymous_namespace() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                def self.bar
+                end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
+            let receiver = bar.receiver().unwrap();
+            let name_ref = context.graph().names().get(&receiver).unwrap();
+            let uri_id = UriId::from("file:///foo.rb");
+            assert_eq!(StringId::from(&format!("{uri_id}:13<anonymous>")), *name_ref.str());
+            assert!(name_ref.nesting().is_none());
+            assert!(name_ref.parent_scope().is_none());
+        });
+    }
+
+    #[test]
+    fn index_nested_method_definitions() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                def baz; end
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "2:3-4:6", Method, |bar| {
+                assert_definition_at!(&context, "3:5-3:17", Method, |baz| {
+                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                    assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
+                });
             });
         });
     }
