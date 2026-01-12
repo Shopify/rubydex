@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard, RwLock};
+use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
@@ -150,6 +150,10 @@ macro_rules! namespace_declaration {
                 *ancestors_lock = ancestors;
             }
 
+            fn ancestors(&self) -> RwLockReadGuard<'_, Ancestors> {
+                self.ancestors.read().unwrap()
+            }
+
             #[must_use]
             pub fn clone_ancestors(&self) -> Ancestors {
                 self.ancestors.read().unwrap().clone()
@@ -165,6 +169,10 @@ macro_rules! namespace_declaration {
 
             pub fn add_descendant(&self, descendant_id: DeclarationId) {
                 self.descendants.lock().unwrap().insert(descendant_id);
+            }
+
+            fn remove_descendant(&self, descendant_id: &DeclarationId) {
+                self.descendants.lock().unwrap().remove(descendant_id);
             }
 
             pub fn descendants(&self) -> MutexGuard<'_, IdentityHashSet<DeclarationId>> {
@@ -311,6 +319,57 @@ impl Declaration {
     #[must_use]
     pub fn unqualified_name(&self) -> String {
         all_declarations!(self, it => it.name.rsplit("::").next().unwrap_or(&it.name).to_string())
+    }
+
+    pub fn remove_descendant(declaration: &Declaration, descendant_id: &DeclarationId) {
+        match declaration {
+            Declaration::Class(c) => c.remove_descendant(descendant_id),
+            Declaration::Module(m) => m.remove_descendant(descendant_id),
+            Declaration::SingletonClass(s) => s.remove_descendant(descendant_id),
+            _ => {}
+        }
+    }
+
+    pub fn for_each_ancestor<F>(declaration: &Declaration, mut f: F)
+    where
+        F: FnMut(&Ancestor),
+    {
+        match declaration {
+            Declaration::Class(c) => c.ancestors().iter().for_each(&mut f),
+            Declaration::Module(m) => m.ancestors().iter().for_each(&mut f),
+            Declaration::SingletonClass(s) => s.ancestors().iter().for_each(&mut f),
+            _ => {}
+        }
+    }
+
+    pub fn for_each_descendant<F>(declaration: &Declaration, mut f: F)
+    where
+        F: FnMut(&DeclarationId),
+    {
+        match declaration {
+            Declaration::Class(c) => c.descendants().iter().for_each(&mut f),
+            Declaration::Module(m) => m.descendants().iter().for_each(&mut f),
+            Declaration::SingletonClass(s) => s.descendants().iter().for_each(&mut f),
+            _ => {}
+        }
+    }
+
+    pub fn clear_ancestors(declaration: &Declaration) {
+        match declaration {
+            Declaration::Class(c) => c.set_ancestors(Ancestors::Partial(vec![])),
+            Declaration::Module(m) => m.set_ancestors(Ancestors::Partial(vec![])),
+            Declaration::SingletonClass(s) => s.set_ancestors(Ancestors::Partial(vec![])),
+            _ => {}
+        }
+    }
+
+    pub fn clear_descendants(declaration: &Declaration) {
+        match declaration {
+            Declaration::Class(c) => c.descendants().clear(),
+            Declaration::Module(m) => m.descendants().clear(),
+            Declaration::SingletonClass(s) => s.descendants().clear(),
+            _ => {}
+        }
     }
 }
 

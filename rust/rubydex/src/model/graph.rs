@@ -3,10 +3,10 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::Declaration;
+use crate::model::declaration::{Ancestor, Declaration};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
-use crate::model::identity_maps::IdentityHashMap;
+use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{NameRef, ResolvedName};
 // use crate::model::integrity::IntegrityChecker;
@@ -316,18 +316,29 @@ impl Graph {
 
         // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
         let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
+        let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
+        let mut declarations_to_invalidate_ancestor_chains: Vec<DeclarationId> = Vec::new();
 
         for def_id in document.definitions() {
             if let Some(_definition) = self.definitions.remove(def_id)
                 && let Some(declaration_id) = self.definitions_to_declarations.remove(def_id)
                 && let Some(declaration) = self.declarations.get_mut(&declaration_id)
                 && declaration.remove_definition(def_id)
-                && declaration.has_no_definitions()
             {
-                let unqualified_str_id = StringId::from(&declaration.unqualified_name());
-                members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                self.declarations.remove(&declaration_id);
+                declarations_to_invalidate_ancestor_chains.push(declaration_id);
+
+                if declaration.has_no_definitions() {
+                    let unqualified_str_id = StringId::from(&declaration.unqualified_name());
+                    members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
+                    declarations_to_delete.push(declaration_id);
+                }
             }
+        }
+
+        self.invalidate_ancestor_chains(declarations_to_invalidate_ancestor_chains);
+
+        for declaration_id in declarations_to_delete {
+            self.declarations.remove(&declaration_id);
         }
 
         // Clean up any members that pointed to declarations that were removed
@@ -347,6 +358,37 @@ impl Graph {
                     _ => {} // Nothing happens
                 }
             }
+        }
+    }
+
+    fn invalidate_ancestor_chains(&self, initial_ids: Vec<DeclarationId>) {
+        let declarations = &self.declarations;
+        let mut queue = initial_ids;
+        let mut visited = IdentityHashSet::<DeclarationId>::default();
+
+        while let Some(declaration_id) = queue.pop() {
+            if !visited.insert(declaration_id) {
+                continue;
+            }
+
+            let Some(decl) = declarations.get(&declaration_id) else {
+                continue;
+            };
+
+            Declaration::for_each_ancestor(decl, |ancestor| {
+                if let Ancestor::Complete(ancestor_id) = ancestor
+                    && let Some(ancestor_decl) = declarations.get(ancestor_id)
+                {
+                    Declaration::remove_descendant(ancestor_decl, &declaration_id);
+                }
+            });
+
+            Declaration::for_each_descendant(decl, |descendant_id| {
+                queue.push(*descendant_id);
+            });
+
+            Declaration::clear_ancestors(decl);
+            Declaration::clear_descendants(decl);
         }
     }
 
@@ -522,7 +564,9 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{model::comment::Comment, test_utils::GraphTest};
+    use crate::model::comment::Comment;
+    use crate::model::declaration::Ancestors;
+    use crate::{resolution, test_utils::GraphTest};
 
     #[test]
     fn deleting_a_uri() {
@@ -642,6 +686,67 @@ mod tests {
         }
 
         context.graph().assert_integrity();
+    }
+
+    #[test]
+    fn invalidating_ancestor_chains_when_document_changes() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///a.rb", "class Foo; include Bar; end");
+        context.index_uri("file:///b.rb", "class Foo; end");
+        context.index_uri("file:///c.rb", "module Bar; end");
+        context.index_uri("file:///d.rb", "class Baz < Foo; end");
+        context.resolve();
+
+        let foo_ancestors = resolution::ancestors_of(context.graph_mut(), DeclarationId::from("Foo"));
+        let baz_ancestors = resolution::ancestors_of(context.graph_mut(), DeclarationId::from("Baz"));
+        assert!(matches!(foo_ancestors, Ancestors::Complete(_)));
+        assert!(matches!(baz_ancestors, Ancestors::Complete(_)));
+
+        {
+            let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap() else {
+                panic!("Expected Bar to be a module");
+            };
+            assert!(bar.descendants().contains(&DeclarationId::from("Foo")));
+
+            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() else {
+                panic!("Expected Foo to be a class");
+            };
+            assert!(foo.descendants().contains(&DeclarationId::from("Baz")));
+        }
+
+        context.index_uri("file:///a.rb", "");
+
+        {
+            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() else {
+                panic!("Expected Foo to be a class");
+            };
+            assert!(matches!(foo.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
+            assert!(foo.descendants().is_empty());
+
+            let Declaration::Class(baz) = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap() else {
+                panic!("Expected Baz to be a class");
+            };
+            assert!(matches!(baz.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
+            assert!(baz.descendants().is_empty());
+
+            let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap() else {
+                panic!("Expected Bar to be a module");
+            };
+            assert!(!bar.descendants().contains(&DeclarationId::from("Foo")));
+        }
+
+        context.resolve();
+
+        let baz_ancestors = resolution::ancestors_of(context.graph_mut(), DeclarationId::from("Baz"));
+        assert!(matches!(baz_ancestors, Ancestors::Complete(_)));
+
+        {
+            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() else {
+                panic!("Expected Foo to be a class");
+            };
+            assert!(foo.descendants().contains(&DeclarationId::from("Baz")));
+        }
     }
 
     #[test]
