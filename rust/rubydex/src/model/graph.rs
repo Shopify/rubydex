@@ -296,6 +296,13 @@ impl Graph {
             return;
         };
 
+        for ref_id in document.method_references() {
+            self.method_references.remove(ref_id);
+        }
+        for ref_id in document.constant_references() {
+            self.constant_references.remove(ref_id);
+        }
+
         // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
         let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
         let mut write_lock = self.declarations.write().unwrap();
@@ -557,6 +564,34 @@ mod tests {
             let read_lock = context.graph().declarations.read().unwrap();
             assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
         }
+
+        context.graph().assert_integrity();
+    }
+
+    #[test]
+    fn updating_index_with_deleted_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            Foo
+            bar
+            BAZ
+            ",
+        );
+
+        assert_eq!(context.graph().documents.len(), 1);
+        assert_eq!(context.graph().method_references.len(), 1);
+        assert_eq!(context.graph().constant_references.len(), 2);
+
+        // Update with empty content to remove definitions but keep the URI
+        context.index_uri("file:///foo.rb", "");
+
+        // URI remains if the file was not deleted, but references got erased
+        assert_eq!(context.graph().documents.len(), 1);
+        assert!(context.graph().method_references.is_empty());
+        assert!(context.graph().constant_references.is_empty());
 
         context.graph().assert_integrity();
     }
