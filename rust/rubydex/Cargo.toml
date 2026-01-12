@@ -20,6 +20,7 @@ url = "2.5.4"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 clap = { version = "4.5.16", features = ["derive"] }
 glob = "0.3.2"
+bitflags = "2.9"
 bytecount = "0.6.9"
 libc = "0.2"
 line-index = "0.1.2"

@@ -126,6 +126,18 @@ static VALUE sr_definition_name(VALUE self) {
     return str;
 }
 
+// Definition#deprecated? -> bool
+static VALUE sr_definition_deprecated(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    bool deprecated = sat_definition_is_deprecated(graph, data->id);
+    return deprecated ? Qtrue : Qfalse;
+}
+
 void initialize_definition(VALUE mod) {
     mRubydex = mod;
 
@@ -138,6 +150,7 @@ void initialize_definition(VALUE mod) {
     rb_define_method(cDefinition, "location", sr_definition_location, 0);
     rb_define_method(cDefinition, "comments", sr_definition_comments, 0);
     rb_define_method(cDefinition, "name", sr_definition_name, 0);
+    rb_define_method(cDefinition, "deprecated?", sr_definition_deprecated, 0);
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
     rb_define_alloc_func(cClassDefinition, sr_handle_alloc);

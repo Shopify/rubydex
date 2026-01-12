@@ -134,6 +134,32 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_definition_deprecated
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        # @deprecated
+        class Deprecated; end
+
+        class NotDeprecated; end
+
+        # Multi-line comment
+        # @deprecated Use something else
+        def deprecated_method; end
+
+        # Not @deprecated
+        def not_deprecated_method; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      assert(graph.documents.first.definitions.find { |d| d.name == "Deprecated" }.deprecated?)
+      refute(graph.documents.first.definitions.find { |d| d.name == "NotDeprecated" }.deprecated?)
+      assert(graph.documents.first.definitions.find { |d| d.name == "deprecated_method" }.deprecated?)
+      refute(graph.documents.first.definitions.find { |d| d.name == "not_deprecated_method" }.deprecated?)
+    end
+  end
+
   private
 
   # Comment locations on Windows include the carriage return. This means that the end column is off by one when compared
