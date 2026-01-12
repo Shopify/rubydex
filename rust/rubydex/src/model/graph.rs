@@ -292,34 +292,45 @@ impl Graph {
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
     // document (identified by `uri_id`) changes or when a document is closed and we need to clean up the memory
     fn remove_definitions_for_uri(&mut self, uri_id: UriId) {
+        let Some(document) = self.documents.remove(&uri_id) else {
+            return;
+        };
+
         // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
-        // let mut members_to_delete: Vec<(DeclarationId, NameId)> = Vec::new();
+        let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
+        let mut write_lock = self.declarations.write().unwrap();
 
-        if let Some(document) = self.documents.remove(&uri_id) {
-            for def_id in document.definitions() {
-                // let declaration_id = self.definitions_to_declarations.get(def_id).unwrap();
-
-                if let Some(_definition) = self.definitions.remove(def_id)
-                // && let Some(declaration) = self.declarations.get_mut(declaration_id)
-                // && declaration.remove_definition(def_id)
-                // && declaration.has_no_definitions()
-                {
-                    // let unqualified_name_id = NameId::from(&declaration.unqualified_name());
-                    // if let Some(owner_id) = declaration.owner_id() {
-                    //     members_to_delete.push((*owner_id, unqualified_name_id));
-                    // }
-                    // self.declarations.remove(declaration_id);
-                }
+        for def_id in document.definitions() {
+            if let Some(_definition) = self.definitions.remove(def_id)
+                && let Some(declaration_id) = self.definitions_to_declarations.get(def_id)
+                && let Some(declaration) = write_lock.get_mut(declaration_id)
+                && declaration.remove_definition(def_id)
+                && declaration.has_no_definitions()
+            {
+                let unqualified_str_id = StringId::from(&declaration.unqualified_name());
+                members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
+                write_lock.remove(declaration_id);
             }
         }
 
-        // // Clean up any members that pointed to declarations that were removed
-        // for (owner_id, member_name_id) in members_to_delete {
-        //     // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
-        //     if let Some(owner) = self.declarations.get_mut(&owner_id) {
-        //         owner.remove_member(&member_name_id);
-        //     }
-        // }
+        // Clean up any members that pointed to declarations that were removed
+        for (owner_id, member_str_id) in members_to_delete {
+            // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
+            if let Some(owner) = write_lock.get_mut(&owner_id) {
+                match owner {
+                    Declaration::Class(owner) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    Declaration::SingletonClass(owner) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    Declaration::Module(owner) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    _ => {} // Nothing happens
+                }
+            }
+        }
     }
 
     /// Asserts that the index is in a valid state.
@@ -508,16 +519,44 @@ mod tests {
         let mut context = GraphTest::new();
 
         context.index_uri("file:///foo.rb", "module Foo; end");
+
+        assert_eq!(context.graph().definitions.len(), 1);
+        assert_eq!(context.graph().documents.len(), 1);
+
         // Update with empty content to remove definitions but keep the URI
         context.index_uri("file:///foo.rb", "");
-        context.resolve();
 
         assert!(context.graph().definitions.is_empty());
-        // Object is left
-        let read_lock = context.graph().declarations.read().unwrap();
-        assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
         // URI remains if the file was not deleted, but definitions got erased
         assert_eq!(context.graph().documents.len(), 1);
+    }
+
+    #[test]
+    fn updating_index_with_deleted_definitions_after_resolution() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.resolve();
+
+        assert_eq!(context.graph().definitions.len(), 1);
+        assert_eq!(context.graph().documents.len(), 1);
+
+        {
+            let read_lock = context.graph().declarations.read().unwrap();
+            assert!(read_lock.get(&DeclarationId::from("Foo")).is_some());
+        }
+
+        // Update with empty content to remove definitions but keep the URI
+        context.index_uri("file:///foo.rb", "");
+
+        assert!(context.graph().definitions.is_empty());
+        // URI remains if the file was not deleted, but definitions and declarations got erased
+        assert_eq!(context.graph().documents.len(), 1);
+
+        {
+            let read_lock = context.graph().declarations.read().unwrap();
+            assert!(read_lock.get(&DeclarationId::from("Foo")).is_none());
+        }
 
         context.graph().assert_integrity();
     }
