@@ -815,7 +815,9 @@ impl<'a> RubyIndexer<'a> {
 
         let definition = self.local_graph.get_definition_mut(lexical_nesting_id).unwrap();
 
-        for id in reference_ids {
+        // Mixin operations with multiple arguments are inserted in reverse, so that they are processed in the expected
+        // order by resolution
+        for id in reference_ids.into_iter().rev() {
             let mixin = match mixin_type {
                 MixinType::Include => Mixin::Include(id),
                 MixinType::Prepend => Mixin::Prepend(id),
@@ -3991,7 +3993,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-            assert_includes_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+            assert_includes_eq!(&context, def, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4009,7 +4011,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-            assert_includes_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+            assert_includes_eq!(&context, def, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4042,7 +4044,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-            assert_prepends_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+            assert_prepends_eq!(&context, def, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4060,7 +4062,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-            assert_prepends_eq!(&context, def, vec!["Bar", "Baz", "Qux"]);
+            assert_prepends_eq!(&context, def, vec!["Baz", "Bar", "Qux"]);
         });
     }
 

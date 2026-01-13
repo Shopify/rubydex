@@ -2470,6 +2470,23 @@ mod tests {
     }
 
     #[test]
+    fn multiple_mixins_in_same_prepend() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+            module B; end
+
+            class Foo
+              prepend A, B
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Foo", ["A", "B", "Foo", "Object"]);
+    }
+
+    #[test]
     fn prepends_involving_parent_scopes() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
@@ -2889,6 +2906,23 @@ mod tests {
         context.resolve();
         assert_ancestors_eq!(context, "Foo", ["A", "Foo", "Parent", "A", "Object"]);
         assert_ancestors_eq!(context, "Bar", ["Bar", "Parent", "A", "Object"]);
+    }
+
+    #[test]
+    fn multiple_mixins_in_same_include() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+            module B; end
+
+            class Foo
+              include A, B
+            end
+            "
+        });
+        context.resolve();
+        assert_ancestors_eq!(context, "Foo", ["Foo", "A", "B", "Object"]);
     }
 
     #[test]
