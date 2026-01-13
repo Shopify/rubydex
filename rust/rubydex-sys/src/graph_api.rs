@@ -90,7 +90,7 @@ pub unsafe extern "C" fn rdx_index_all(
     }
 
     with_graph(pointer, |graph| {
-        let errors = indexing::index_files(graph, file_paths);
+        let errors = indexing::index_files(graph, &file_paths);
 
         if !errors.is_empty() {
             let error_messages = errors

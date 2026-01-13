@@ -1,160 +1,92 @@
-use crate::{
-    errors::Errors,
-    job_queue::{Job, JobQueue},
-};
-use crossbeam_channel::{Sender, unbounded};
+use crate::errors::Errors;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
-pub struct FileDiscoveryJob {
-    path: PathBuf,
-    queue: Arc<JobQueue>,
-    paths_tx: Sender<PathBuf>,
-    errors_tx: Sender<Errors>,
-}
-
-impl FileDiscoveryJob {
-    #[must_use]
-    pub fn new(path: PathBuf, queue: Arc<JobQueue>, paths_tx: Sender<PathBuf>, errors_tx: Sender<Errors>) -> Self {
-        Self {
-            path,
-            queue,
-            paths_tx,
-            errors_tx,
-        }
-    }
-}
-
-impl FileDiscoveryJob {
-    fn handle_file(&self, path: &Path) {
-        if path.extension().is_some_and(|ext| ext == "rb") {
-            self.paths_tx
-                .send(path.to_path_buf())
-                .expect("file receiver dropped before run completion");
-        }
-    }
-
-    fn handle_symlink(&self, path: &PathBuf) {
-        let Ok(canonicalized) = fs::canonicalize(path) else {
-            self.send_error(Errors::FileError(format!(
-                "Failed to canonicalize symlink: `{}`",
-                path.display(),
-            )));
-
-            return;
-        };
-
-        self.queue.push(Box::new(FileDiscoveryJob::new(
-            canonicalized,
-            Arc::clone(&self.queue),
-            self.paths_tx.clone(),
-            self.errors_tx.clone(),
-        )));
-    }
-
-    fn send_error(&self, error: Errors) {
-        self.errors_tx
-            .send(error)
-            .expect("error receiver dropped before run completion");
-    }
-}
-
-impl Job for FileDiscoveryJob {
-    fn run(&self) {
-        if self.path.is_dir() {
-            let Ok(read_dir) = self.path.read_dir() else {
-                self.send_error(Errors::FileError(format!(
-                    "Failed to read directory `{}`",
-                    self.path.display(),
-                )));
-
-                return;
-            };
-
-            for result in read_dir {
-                let Ok(entry) = result else {
-                    self.send_error(Errors::FileError(format!(
-                        "Failed to read directory `{}`: {result:?}",
-                        self.path.display(),
-                    )));
-
-                    continue;
-                };
-
-                let kind = entry.file_type().unwrap();
-
-                if kind.is_dir() {
-                    self.queue.push(Box::new(FileDiscoveryJob::new(
-                        entry.path(),
-                        Arc::clone(&self.queue),
-                        self.paths_tx.clone(),
-                        self.errors_tx.clone(),
-                    )));
-                } else if kind.is_file() {
-                    self.handle_file(&entry.path());
-                } else if kind.is_symlink() {
-                    self.handle_symlink(&entry.path());
-                } else {
-                    self.send_error(Errors::FileError(format!(
-                        "Path `{}` is not a file or directory",
-                        entry.path().display()
-                    )));
-                }
-            }
-        } else if self.path.is_file() {
-            self.handle_file(&self.path);
-        } else if self.path.is_symlink() {
-            self.handle_symlink(&self.path);
-        } else {
-            self.send_error(Errors::FileError(format!(
-                "Path `{}` is not a file or directory",
-                self.path.display()
-            )));
-        }
-    }
-}
-
-/// Recursively collects all Ruby files for the given workspace and dependencies, returning a vector of document instances
-///
-/// # Errors
-///
-/// Returns a `MultipleErrors` if any of the paths do not exist
-///
-/// # Panics
-///
-/// Panics if the errors receiver is dropped before the run completion
+/// Recursively collects all Ruby files for the given paths.
 #[must_use]
 pub fn collect_file_paths(paths: Vec<String>) -> (Vec<PathBuf>, Vec<Errors>) {
-    let queue = Arc::new(JobQueue::new());
-    let (files_tx, files_rx) = unbounded();
-    let (errors_tx, errors_rx) = unbounded();
+    let mut files = Vec::new();
+    let mut errors = Vec::new();
 
     for path in paths {
         let Ok(canonicalized) = fs::canonicalize(&path) else {
-            errors_tx
-                .send(Errors::FileError(format!("Path `{path}` does not exist")))
-                .expect("errors receiver dropped before run completion");
-
+            errors.push(Errors::FileError(format!("Path `{path}` does not exist")));
             continue;
         };
 
-        queue.push(Box::new(FileDiscoveryJob::new(
-            canonicalized,
-            Arc::clone(&queue),
-            files_tx.clone(),
-            errors_tx.clone(),
-        )));
+        collect_from_path(&canonicalized, &mut files, &mut errors);
     }
 
-    JobQueue::run(&queue);
+    (files, errors)
+}
 
-    drop(files_tx);
-    drop(errors_tx);
+/// Recursively collects Ruby files from a single path.
+fn collect_from_path(path: &Path, files: &mut Vec<PathBuf>, errors: &mut Vec<Errors>) {
+    if path.is_file() {
+        if path.extension().is_some_and(|ext| ext == "rb") {
+            files.push(path.to_path_buf());
+        }
+    } else if path.is_dir() {
+        let Ok(read_dir) = path.read_dir() else {
+            errors.push(Errors::FileError(format!(
+                "Failed to read directory `{}`",
+                path.display(),
+            )));
+            return;
+        };
 
-    (files_rx.iter().collect(), errors_rx.iter().collect())
+        for result in read_dir {
+            let Ok(entry) = result else {
+                errors.push(Errors::FileError(format!(
+                    "Failed to read directory entry in `{}`: {result:?}",
+                    path.display(),
+                )));
+                continue;
+            };
+
+            let entry_path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                errors.push(Errors::FileError(format!(
+                    "Failed to get file type for `{}`",
+                    entry_path.display(),
+                )));
+                continue;
+            };
+
+            if kind.is_dir() {
+                collect_from_path(&entry_path, files, errors);
+            } else if kind.is_file() {
+                if entry_path.extension().is_some_and(|ext| ext == "rb") {
+                    files.push(entry_path);
+                }
+            } else if kind.is_symlink() {
+                if let Ok(resolved) = fs::canonicalize(&entry_path) {
+                    collect_from_path(&resolved, files, errors);
+                } else {
+                    errors.push(Errors::FileError(format!(
+                        "Failed to resolve symlink `{}`",
+                        entry_path.display(),
+                    )));
+                }
+            }
+        }
+    } else if path.is_symlink() {
+        if let Ok(resolved) = fs::canonicalize(path) {
+            collect_from_path(&resolved, files, errors);
+        } else {
+            errors.push(Errors::FileError(format!(
+                "Failed to resolve symlink `{}`",
+                path.display(),
+            )));
+        }
+    } else {
+        errors.push(Errors::FileError(format!(
+            "Path `{}` is not a file or directory",
+            path.display()
+        )));
+    }
 }
 
 #[cfg(test)]

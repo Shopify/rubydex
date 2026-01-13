@@ -4,8 +4,15 @@ use crate::model::graph::Graph;
 use crate::model::ids::DeclarationId;
 
 /// Searches declarations in parallel using rayon.
+///
+/// # Panics
+///
+/// Panics if the declarations read lock has been poisoned.
 pub fn declaration_search(graph: &Graph, query: &str) -> Vec<DeclarationId> {
-    let declarations = graph.declarations().read().unwrap();
+    let declarations = graph
+        .declarations()
+        .read()
+        .expect("Failed to get read lock on declarations");
 
     declarations
         .par_iter()
