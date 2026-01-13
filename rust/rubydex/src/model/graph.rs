@@ -328,19 +328,10 @@ impl Graph {
         // Clean up any members that pointed to declarations that were removed
         for (owner_id, member_str_id) in members_to_delete {
             // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
-            if let Some(owner) = write_lock.get_mut(&owner_id) {
-                match owner {
-                    Declaration::Class(owner) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    Declaration::SingletonClass(owner) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    Declaration::Module(owner) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    _ => {} // Nothing happens
-                }
+            if let Some(owner) = write_lock.get_mut(&owner_id)
+                && let Some(namespace) = owner.as_namespace_mut()
+            {
+                namespace.remove_member(&member_str_id);
             }
         }
     }

@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
@@ -97,6 +97,11 @@ impl SimpleDeclaration {
         self.definition_ids.is_empty()
     }
 
+    /// Adds a definition ID to this declaration.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if `definition_id` is already present.
     pub fn add_definition(&mut self, definition_id: DefinitionId) {
         debug_assert!(
             !self.definition_ids.contains(&definition_id),
@@ -208,35 +213,36 @@ impl NamespaceDeclaration {
         self.members.get(string_id)
     }
 
+    /// Sets the ancestor chain for this declaration.
     pub fn set_ancestors(&self, ancestors: Ancestors) {
-        *self.ancestors.write().unwrap() = ancestors;
+        *self.ancestors.write() = ancestors;
     }
 
-    #[must_use]
+    /// Returns a read guard to the ancestor chain.
     pub fn ancestors(&self) -> RwLockReadGuard<'_, Ancestors> {
-        self.ancestors.read().unwrap()
+        self.ancestors.read()
     }
 
+    /// Returns a clone of the ancestor chain.
     #[must_use]
     pub fn clone_ancestors(&self) -> Ancestors {
-        self.ancestors.read().unwrap().clone()
+        self.ancestors.read().clone()
     }
 
+    /// Returns whether the ancestor chain is fully linearized.
     #[must_use]
     pub fn has_complete_ancestors(&self) -> bool {
-        matches!(
-            *self.ancestors.read().unwrap(),
-            Ancestors::Complete(_) | Ancestors::Cyclic(_)
-        )
+        matches!(*self.ancestors.read(), Ancestors::Complete(_) | Ancestors::Cyclic(_))
     }
 
+    /// Adds a descendant to this declaration's set of descendants.
     pub fn add_descendant(&self, descendant_id: DeclarationId) {
-        self.descendants.lock().unwrap().insert(descendant_id);
+        self.descendants.lock().insert(descendant_id);
     }
 
-    #[must_use]
+    /// Returns a mutex guard to the set of descendants.
     pub fn descendants(&self) -> MutexGuard<'_, IdentityHashSet<DeclarationId>> {
-        self.descendants.lock().unwrap()
+        self.descendants.lock()
     }
 
     pub fn extend(&mut self, other: &NamespaceDeclaration) {
