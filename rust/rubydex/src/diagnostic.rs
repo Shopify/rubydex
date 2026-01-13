@@ -77,7 +77,7 @@ macro_rules! rules {
     (
         $( $variant:ident );* $(;)?
     ) => {
-        #[derive(Debug, Copy, Clone)]
+        #[derive(Debug, Copy, Clone, PartialEq, Eq)]
         pub enum Rule {
             $(
                 $variant,

@@ -1306,6 +1306,7 @@ fn set_singleton_class_id(declaration: &mut Declaration, id: DeclarationId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::Rule;
     use crate::model::ids::UriId;
     use crate::test_utils::GraphTest;
 
@@ -1475,6 +1476,50 @@ mod tests {
         assert_owner(decl, owner);
     }
 
+    fn format_diagnostics(context: &GraphTest, ignore_rules: &[Rule]) -> Vec<String> {
+        let mut diagnostics = context
+            .graph()
+            .diagnostics()
+            .iter()
+            .filter(|d| !ignore_rules.contains(d.rule()))
+            .collect::<Vec<_>>();
+
+        diagnostics.sort_by_key(|d| {
+            let uri = context.graph().documents().get(d.uri_id()).unwrap().uri();
+            (uri, d.offset())
+        });
+
+        diagnostics
+            .iter()
+            .map(|d| {
+                let uri = context.graph().documents().get(d.uri_id()).unwrap().uri();
+                let source = context.get_source(uri).unwrap();
+
+                d.formatted(source)
+            })
+            .collect()
+    }
+
+    macro_rules! assert_diagnostics_eq {
+        ($context:expr, $expected_diagnostics:expr) => {{
+            assert_eq!($expected_diagnostics, format_diagnostics($context, &[]));
+        }};
+        ($context:expr, $expected_diagnostics:expr, $ignore_rules:expr) => {{
+            assert_eq!($expected_diagnostics, format_diagnostics($context, $ignore_rules));
+        }};
+    }
+
+    macro_rules! assert_no_diagnostics {
+        ($context:expr) => {{
+            let diagnostics = format_diagnostics($context, &[]);
+            assert!(diagnostics.is_empty(), "expected no diagnostics, got {:?}", diagnostics);
+        }};
+        ($context:expr, $ignore_rules:expr) => {{
+            let diagnostics = format_diagnostics($context, $ignore_rules);
+            assert!(diagnostics.is_empty(), "expected no diagnostics, got {:?}", diagnostics);
+        }};
+    }
+
     #[test]
     fn resolving_top_level_references() {
         let mut context = GraphTest::new();
@@ -1494,6 +1539,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_reference_to!(context, "Bar", "file:///bar.rb:2:2-2:5");
         assert_constant_reference_to!(context, "Bar", "file:///bar.rb:3:0-3:3");
@@ -1536,6 +1583,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_constant_reference_to!(context, "Baz", "file:///bar.rb:4:4-4:7");
     }
 
@@ -1552,6 +1602,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
         assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:4:5-4:8");
     }
 
@@ -1564,6 +1617,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         let reference = context.graph().constant_references().values().next().unwrap();
 
@@ -1588,6 +1643,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["Bar", "Baz"]);
@@ -1624,6 +1681,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["initialize", "@name"]);
         assert_owner(foo, "Object");
@@ -1654,6 +1713,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
         assert_owner(foo, "Object");
@@ -1677,6 +1738,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
@@ -1728,6 +1791,8 @@ mod tests {
                 .get(&DeclarationId::from("Foo::Bar::Baz"))
                 .is_none()
         );
+
+        assert_no_diagnostics!(&context);
     }
 
     #[test]
@@ -1787,6 +1852,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
         assert_owner(foo, "Object");
@@ -1816,6 +1883,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
@@ -1858,6 +1927,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
         assert_owner(foo, "Object");
@@ -1894,6 +1965,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["@@bar", "@@baz"]);
         assert_owner(foo, "Object");
@@ -1912,6 +1985,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["bar", "@@baz"]);
@@ -1938,6 +2013,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &[]);
 
@@ -1954,6 +2031,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         // TODO: this should push an error diagnostic
         assert!(
@@ -1985,6 +2064,7 @@ mod tests {
                 .get(&DeclarationId::from("Foo::<Foo>"))
                 .is_some()
         );
+        assert_no_diagnostics!(&context);
 
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(&DeclarationId::from("Foo::<Foo>"), singleton_class_id(foo).unwrap(),);
@@ -2011,6 +2091,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         let foo_singleton = context
             .graph()
@@ -2049,6 +2131,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Qux", ["Qux", "Baz", "Bar", "Foo", "Object"]);
     }
 
@@ -2074,6 +2159,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         assert_descendants!(context, "Foo", ["Bar"]);
         assert_descendants!(context, "Bar", ["Baz", "Qux"]);
     }
@@ -2089,6 +2176,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
     }
 
@@ -2107,6 +2197,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:5:2-5:7");
     }
 
@@ -2121,6 +2214,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         assert!(matches!(
             ancestors_of(context.graph_mut(), DeclarationId::from("Bar")),
@@ -2146,6 +2241,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_constant_reference_to!(context, "Foo::Bar::Baz::CONST", "file:///foo.rb:8:2-8:7");
     }
 
@@ -2179,6 +2277,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         assert_instance_variable(&context, "Foo::<Foo>::@foo", "Foo::<Foo>");
         assert_instance_variable(&context, "Foo::@bar", "Foo");
         assert_instance_variable(&context, "Foo::<Foo>::@baz", "Foo::<Foo>");
@@ -2210,6 +2310,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         assert_instance_variable(&context, "Foo::<Foo>::@foo", "Foo::<Foo>");
         assert_instance_variable(&context, "Bar::<Bar>::@baz", "Bar::<Bar>");
     }
@@ -2229,6 +2331,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
         assert_instance_variable(&context, "Bar::Baz::<Baz>::@baz", "Bar::Baz::<Baz>");
@@ -2252,6 +2356,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>::@bar", "Foo::<Foo>::<<Foo>>");
         assert_instance_variable(
             &context,
@@ -2269,6 +2375,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         // Top-level instance variables belong to `<main>`, not `Object`.
         // We can't represent `<main>` yet, so no declaration is created.
@@ -2289,6 +2397,11 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["dynamic-singleton-definition: Dynamic receiver for singleton method definition (2:3-4:6)",]
+        );
 
         // Instance variable in method with unresolved receiver should not create a declaration
         let baz_decl = context.graph().declarations().get(&DeclarationId::from("Object::@baz"));
@@ -2312,6 +2425,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo_class, &["foo", "bar"]);
     }
@@ -2326,6 +2441,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         let foo_class = context
             .graph()
@@ -2349,6 +2466,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Baz", ["Baz", "Foo::Bar", "Object"]);
     }
 
@@ -2368,6 +2488,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
     }
 
@@ -2388,6 +2511,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Baz", ["Foo::Bar", "Foo", "Baz", "Object"]);
     }
 
@@ -2407,6 +2533,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
         assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
         assert_ancestors_eq!(context, "Qux", ["Qux", "Foo", "Bar", "Baz", "Object"]);
@@ -2432,6 +2561,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "B", ["B"]);
         assert_ancestors_eq!(context, "A", Vec::<&str>::new());
         assert_ancestors_eq!(context, "C", ["B", "C", "Object"]);
@@ -2453,6 +2585,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_descendants!(context, "Foo", ["Bar", "Baz"]);
         assert_descendants!(context, "Bar", ["Baz"]);
     }
@@ -2468,6 +2603,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
 
@@ -2486,6 +2624,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
     }
 
@@ -2511,6 +2652,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "A", ["A"]);
         assert_ancestors_eq!(context, "B", ["A", "B"]);
         assert_ancestors_eq!(context, "C", ["A", "C"]);
@@ -2531,6 +2675,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["A", "B", "Foo", "Object"]);
     }
 
@@ -2562,6 +2709,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["A::B::C", "D", "Foo"]);
         assert_ancestors_eq!(context, "Bar", ["A::B::C", "D", "Bar"]);
     }
@@ -2587,6 +2736,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Child", ["A", "B", "Child", "A", "B", "Parent", "Object"]);
     }
 
@@ -2608,6 +2760,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         let bar = context
             .graph()
@@ -2638,6 +2792,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Bar", ["Bar", "Foo"]);
     }
 
@@ -2656,6 +2813,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Baz", ["Baz", "Foo::Bar", "Foo", "Object"]);
     }
 
@@ -2675,6 +2835,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
         assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
         assert_ancestors_eq!(context, "Qux", ["Qux", "Foo", "Bar", "Baz", "Object"]);
@@ -2700,6 +2863,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "B", ["B"]);
         assert_ancestors_eq!(context, "A", Vec::<&str>::new());
         assert_ancestors_eq!(context, "C", ["C", "B", "Object"]);
@@ -2717,6 +2883,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
 
@@ -2735,6 +2904,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Bar", ["Bar", "Foo"]);
     }
 
@@ -2760,6 +2932,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "A", ["A"]);
         assert_ancestors_eq!(context, "B", ["B", "A"]);
         assert_ancestors_eq!(context, "C", ["C", "A"]);
@@ -2793,6 +2968,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["Foo", "D", "A::B::C"]);
         assert_ancestors_eq!(context, "Bar", ["Bar", "D", "A::B::C"]);
     }
@@ -2818,6 +2996,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Child", ["Child", "Parent", "B", "A", "Object"]);
     }
 
@@ -2839,6 +3020,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         let bar = context
             .graph()
@@ -2874,6 +3057,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
         assert_constant_reference_to!(context, "Foo::Bar", "file:///foo.rb:8:5-8:8");
     }
 
@@ -2896,6 +3082,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["A", "Foo", "Object"]);
         assert_ancestors_eq!(context, "Bar", ["A", "Bar", "A", "Object"]);
     }
@@ -2939,6 +3128,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["B", "A", "Foo", "A", "C", "Object"]);
         assert_ancestors_eq!(context, "Bar", ["B", "A", "Bar", "C", "A", "Object"]);
         assert_ancestors_eq!(context, "Baz", ["B", "A", "Baz", "C", "Object"]);
@@ -2966,6 +3158,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["A", "Foo", "Parent", "A", "Object"]);
         assert_ancestors_eq!(context, "Bar", ["Bar", "Parent", "A", "Object"]);
     }
@@ -2984,6 +3179,9 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "Foo", ["Foo", "A", "B", "Object"]);
     }
 
@@ -3002,6 +3200,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         assert_descendants!(context, "Bar", ["Baz"]);
         assert_descendants!(context, "Foo", ["Bar", "Baz"]);
@@ -3031,6 +3231,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         // Note: the commented out parts require RBS indexing
         assert_ancestors_eq!(
@@ -3098,6 +3300,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         // Note: the commented out parts require RBS indexing
         assert_ancestors_eq!(
             context,
@@ -3153,6 +3357,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         // TODO: the commented out parts require RBS indexing
         assert_ancestors_eq!(
@@ -3224,6 +3430,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         // Global variable aliases should still be owned by Object, regardless of where defined
         let object = context
             .graph()
@@ -3247,6 +3455,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         // inner_method should be owned by Foo, not by setup
         assert_members(foo_class, &["setup", "inner_method"]);
@@ -3267,6 +3477,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         let foo_singleton_class = context
             .graph()
