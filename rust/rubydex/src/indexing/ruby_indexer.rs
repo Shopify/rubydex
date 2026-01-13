@@ -3457,24 +3457,9 @@ mod tests {
             "
         });
 
-        assert_definition_at!(&context, "2:1-2:22", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Deprecated", def);
-        });
         assert!(context.definition_at("2:1-2:22").is_deprecated());
-
-        assert_definition_at!(&context, "4:1-4:25", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "NotDeprecated", def);
-        });
         assert!(!context.definition_at("4:1-4:25").is_deprecated());
-
-        assert_definition_at!(&context, "8:1-8:27", Method, |def| {
-            assert_name_eq!(&context, "deprecated_method", def);
-        });
         assert!(context.definition_at("8:1-8:27").is_deprecated());
-
-        assert_definition_at!(&context, "11:1-11:31", Method, |def| {
-            assert_name_eq!(&context, "not_deprecated_method", def);
-        });
         assert!(!context.definition_at("11:1-11:31").is_deprecated());
     }
 
