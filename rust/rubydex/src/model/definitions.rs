@@ -37,7 +37,7 @@ use crate::{
 };
 
 bitflags! {
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct DefinitionFlags: u8 {
         const DEPRECATED = 0b0001;
     }
@@ -565,7 +565,13 @@ impl MethodDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        let mut formatted_id = format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id);
+
+        if let Some(receiver) = self.receiver {
+            formatted_id.push_str(&receiver.to_string());
+        }
+
+        DefinitionId::from(&formatted_id)
     }
 
     #[must_use]
@@ -609,7 +615,7 @@ impl MethodDefinition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Parameter {
     RequiredPositional(ParameterStruct),
     OptionalPositional(ParameterStruct),
@@ -622,7 +628,7 @@ pub enum Parameter {
     Block(ParameterStruct),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParameterStruct {
     offset: Offset,
     str: StringId,

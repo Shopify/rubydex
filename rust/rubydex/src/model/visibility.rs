@@ -6,6 +6,7 @@ pub enum Visibility {
     Public,
     Protected,
     Private,
+    ModuleFunction,
 }
 
 impl Visibility {
@@ -22,6 +23,7 @@ impl Visibility {
             "public" => Self::Public,
             "protected" => Self::Protected,
             "private" => Self::Private,
+            "module_function" => Self::ModuleFunction,
             _ => panic!("Invalid visibility: {str}"),
         }
     }
@@ -33,6 +35,7 @@ impl Display for Visibility {
             Self::Public => write!(f, "public"),
             Self::Protected => write!(f, "protected"),
             Self::Private => write!(f, "private"),
+            Self::ModuleFunction => write!(f, "module_function"),
         }
     }
 }
