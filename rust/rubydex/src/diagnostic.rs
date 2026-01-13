@@ -1,4 +1,4 @@
-use crate::{model::ids::UriId, offset::Offset};
+use crate::{model::ids::{DiagnosticId, UriId}, offset::Offset};
 
 #[derive(Debug)]
 pub struct Diagnostic {
@@ -24,6 +24,11 @@ impl Diagnostic {
     #[must_use]
     pub fn make(diagnostics: Diagnostics, uri_id: UriId, offset: Offset, message: String) -> Self {
         Self::new(diagnostics.code(), uri_id, offset, message, diagnostics.severity())
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DiagnosticId {
+        DiagnosticId::from(&format!("{}{}{}{}", *self.uri_id, self.offset.start(), self.code, self.message))
     }
 
     #[must_use]

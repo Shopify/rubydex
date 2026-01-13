@@ -30,3 +30,8 @@ pub type ReferenceId = Id<ReferenceMarker>;
 pub struct NameMarker;
 /// `NameId` represents an ID for any constant name that we find as part of a reference or definition
 pub type NameId = Id<NameMarker>;
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub struct DiagnosticMarker;
+/// `DiagnosticId` represents the ID of a diagnostic found in a specific file
+pub type DiagnosticId = Id<DiagnosticMarker>;

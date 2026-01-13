@@ -1,4 +1,4 @@
-use crate::model::ids::{DefinitionId, ReferenceId};
+use crate::model::ids::{DefinitionId, DiagnosticId, ReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
 // definitions and references discovered in it
@@ -8,6 +8,7 @@ pub struct Document {
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<ReferenceId>,
     constant_reference_ids: Vec<ReferenceId>,
+    diagnostic_ids: Vec<DiagnosticId>,
 }
 
 impl Document {
@@ -18,6 +19,7 @@ impl Document {
             definition_ids: Vec::new(),
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
+            diagnostic_ids: Vec::new(),
         }
     }
 
@@ -56,6 +58,15 @@ impl Document {
 
     pub fn add_constant_reference(&mut self, reference_id: ReferenceId) {
         self.constant_reference_ids.push(reference_id);
+    }
+
+    #[must_use]
+    pub fn diagnostic_ids(&self) -> &[DiagnosticId] {
+        &self.diagnostic_ids
+    }
+
+    pub fn add_diagnostic_id(&mut self, diagnostic_id: DiagnosticId) {
+        self.diagnostic_ids.push(diagnostic_id);
     }
 }
 

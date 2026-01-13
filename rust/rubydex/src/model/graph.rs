@@ -7,7 +7,7 @@ use crate::model::declaration::Declaration;
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, DiagnosticId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{NameRef, ResolvedName};
 // use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ConstantReference, MethodRef};
@@ -38,8 +38,7 @@ pub struct Graph {
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
-
-    diagnostics: Vec<Diagnostic>,
+    diagnostics: IdentityHashMap<DiagnosticId, Diagnostic>,
 }
 
 impl Graph {
@@ -54,7 +53,7 @@ impl Graph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
-            diagnostics: Vec::new(),
+            diagnostics: IdentityHashMap::default(),
         }
     }
 
@@ -162,8 +161,8 @@ impl Graph {
     }
 
     #[must_use]
-    pub fn diagnostics(&self) -> &Vec<Diagnostic> {
-        &self.diagnostics
+    pub fn diagnostics(&self) -> Vec<&Diagnostic> {
+        self.diagnostics.values().collect()
     }
 
     /// # Panics
@@ -266,8 +265,13 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references, diagnostics) =
+        let (uri_id, mut document, definitions, strings, names, constant_references, method_references, diagnostics) =
             local_graph.into_parts();
+
+        for diagnostic in diagnostics {
+            document.add_diagnostic_id(diagnostic.id());
+            self.diagnostics.insert(diagnostic.id(), diagnostic);
+        }
 
         self.documents.insert(uri_id, document);
         self.definitions.extend(definitions);
@@ -275,7 +279,6 @@ impl Graph {
         self.names.extend(names);
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
-        self.diagnostics.extend(diagnostics);
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
@@ -295,6 +298,10 @@ impl Graph {
         let Some(document) = self.documents.remove(&uri_id) else {
             return;
         };
+
+        for diagnostic_id in document.diagnostic_ids() {
+            self.diagnostics.remove(diagnostic_id);
+        }
 
         let mut write_lock = self.declarations.write().unwrap();
 
@@ -614,6 +621,21 @@ mod tests {
         }
 
         context.graph().assert_integrity();
+    }
+
+    #[test]
+    fn updating_index_with_deleted_diagnostics() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo");
+        assert!(!context.graph().diagnostics().is_empty());
+        let document = context.graph().documents().get(&UriId::from("file:///foo.rb")).unwrap();
+        assert!(!document.diagnostic_ids().is_empty());
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        assert!(context.graph().diagnostics().is_empty());
+        let document = context.graph().documents().get(&UriId::from("file:///foo.rb")).unwrap();
+        assert!(document.diagnostic_ids().is_empty());
     }
 
     #[test]
