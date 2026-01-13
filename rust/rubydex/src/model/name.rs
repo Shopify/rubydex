@@ -1,6 +1,6 @@
 use crate::model::ids::{DeclarationId, NameId, StringId};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Name {
     /// The unqualified name of the constant
     str: StringId,
@@ -55,7 +55,7 @@ impl Name {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedName {
     name: Name,
     declaration_id: DeclarationId,
@@ -79,7 +79,7 @@ impl ResolvedName {
 }
 
 /// A usage of a constant name. This could be a constant reference or a definition like a class or module
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NameRef {
     /// This name has not yet been resolved. We don't yet know what this name refers to or if it refers to an existing
     /// declaration

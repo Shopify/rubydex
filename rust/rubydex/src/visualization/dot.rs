@@ -39,8 +39,7 @@ pub fn generate(graph: &Graph) -> String {
 }
 
 fn write_declaration_nodes(output: &mut String, graph: &Graph) {
-    let read_lock = graph.declarations().read().unwrap();
-    let mut declarations: Vec<_> = read_lock.values().collect();
+    let mut declarations: Vec<_> = graph.declarations().values().collect();
     declarations.sort_by(|a, b| a.name().cmp(b.name()));
 
     for declaration in declarations {
@@ -65,8 +64,8 @@ fn write_definition_nodes(output: &mut String, graph: &Graph) {
         .definitions()
         .iter()
         .filter_map(|(def_id, definition)| {
-            let read_lock = graph.declarations().read().unwrap();
-            read_lock
+            graph
+                .declarations()
                 .get(graph.definitions_to_declarations().get(def_id).unwrap())
                 .map(|declaration| {
                     let def_type = definition.kind();
