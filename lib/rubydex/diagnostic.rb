@@ -2,19 +2,19 @@
 
 module Rubydex
   class Diagnostic
+    #: Symbol
+    attr_reader :rule
+
     #: String
     attr_reader :message
-
-    #: Integer
-    attr_reader :code
 
     #: Location
     attr_reader :location
 
-    #: (message: String, code: Integer, location: Location) -> void
-    def initialize(message:, code:, location:)
+    #: (rule: Symbol, message: String, location: Location) -> void
+    def initialize(rule:, message:, location:)
+      @rule = rule
       @message = message
-      @code = code
       @location = location
     end
   end

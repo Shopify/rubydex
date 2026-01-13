@@ -1,4 +1,4 @@
-use crate::diagnostic::{Diagnostic, Diagnostics};
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
@@ -130,8 +130,8 @@ impl LocalGraph {
         &self.diagnostics
     }
 
-    pub fn add_diagnostic(&mut self, diagnostics: Diagnostics, offset: Offset, message: String) {
-        let diagnostic = Diagnostic::make(diagnostics, self.uri_id, offset, message);
+    pub fn add_diagnostic(&mut self, rule: Rule, offset: Offset, message: String) {
+        let diagnostic = Diagnostic::make(rule, self.uri_id, offset, message);
         self.diagnostics.push(diagnostic);
     }
 

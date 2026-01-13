@@ -2,7 +2,7 @@ use crate::{model::ids::UriId, offset::Offset};
 
 #[derive(Debug)]
 pub struct Diagnostic {
-    code: u16,
+    rule: Rule,
     uri_id: UriId,
     offset: Offset,
     message: String,
@@ -10,9 +10,9 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     #[must_use]
-    pub fn new(code: u16, uri_id: UriId, offset: Offset, message: String) -> Self {
+    pub fn new(rule: Rule, uri_id: UriId, offset: Offset, message: String) -> Self {
         Self {
-            code,
+            rule,
             uri_id,
             offset,
             message,
@@ -20,13 +20,13 @@ impl Diagnostic {
     }
 
     #[must_use]
-    pub fn make(diagnostics: Diagnostics, uri_id: UriId, offset: Offset, message: String) -> Self {
-        Self::new(diagnostics.code(), uri_id, offset, message)
+    pub fn make(rule: Rule, uri_id: UriId, offset: Offset, message: String) -> Self {
+        Self::new(rule, uri_id, offset, message)
     }
 
     #[must_use]
-    pub fn code(&self) -> u16 {
-        self.code
+    pub fn rule(&self) -> &Rule {
+        &self.rule
     }
 
     #[must_use]
@@ -45,39 +45,56 @@ impl Diagnostic {
     }
 }
 
-macro_rules! diagnostics {
-    ( $( ($code:expr, $name:ident); )* ) => {
+fn camel_to_snake(s: &str) -> String {
+    let mut snake = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i != 0 {
+                snake.push('-');
+            }
+            for lc in ch.to_lowercase() {
+                snake.push(lc);
+            }
+        } else {
+            snake.push(ch);
+        }
+    }
+    snake
+}
+
+macro_rules! rules {
+    (
+        $( $variant:ident );* $(;)?
+    ) => {
         #[derive(Debug, Copy, Clone)]
-        pub enum Diagnostics {
+        pub enum Rule {
             $(
-                $name,
+                $variant,
             )*
         }
 
-        impl Diagnostics {
-            pub fn code(&self) -> u16 {
-                match self {
-                $(
-                    Diagnostics::$name => $code,
-                )*
-                }
+        impl std::fmt::Display for Rule {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", match self {
+                    $(
+                        Rule::$variant => camel_to_snake(stringify!($variant)),
+                    )*
+                })
             }
         }
     }
 }
 
-diagnostics! {
-    // 0000 -> 1000 - Internal errors
+rules! {
+    // Parsing
+    ParseError;
+    ParseWarning;
 
-    // 2000 - Parsing errors
-    (2000, ParseError);
-    (2001, ParseWarning);
+    // Indexing
+    DynamicConstantReference;
+    DynamicSingletonDefinition;
+    DynamicAncestor;
+    TopLevelMixinSelf;
 
-    // 3000 - Indexing errors
-    (3001, DynamicConstantReference);
-    (3002, DynamicSingletonDefinition);
-    (3003, DynamicAncestor);
-    (3004, TopLevelMixinSelf);
-
-    // 4000 - Resolution errors
+    // Resolution
 }
