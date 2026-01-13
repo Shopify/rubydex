@@ -4,6 +4,7 @@
 #include "document.h"
 #include "location.h"
 #include "reference.h"
+#include "ruby/internal/globals.h"
 #include "rustbindings.h"
 #include "utils.h"
 
@@ -303,6 +304,22 @@ static VALUE sr_graph_resolve(VALUE self) {
     return self;
 }
 
+// Graph#set_encoding: (String) -> void
+// Sets the encoding used for transforming byte offsets into LSP code unit line/column positions
+static VALUE sr_graph_set_encoding(VALUE self, VALUE encoding) {
+    Check_Type(encoding, T_STRING);
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    char *encoding_string = StringValueCStr(encoding);
+    if (!rdx_graph_set_encoding(graph, encoding_string)) {
+        rb_raise(rb_eArgError, "invalid encoding `%s` (should be utf8, utf16 or utf32)", encoding_string);
+    }
+
+    return Qnil;
+}
+
 // Graph#diagnostics -> Array[Rubydex::Diagnostic]
 static VALUE sr_graph_diagnostics(VALUE self) {
     void *graph;
@@ -351,4 +368,5 @@ void initialize_graph(VALUE mRubydex) {
     rb_define_method(cGraph, "diagnostics", sr_graph_diagnostics, 0);
     rb_define_method(cGraph, "[]", sr_graph_aref, 1);
     rb_define_method(cGraph, "search", sr_graph_search, 1);
+    rb_define_method(cGraph, "set_encoding", sr_graph_set_encoding, 1);
 }
