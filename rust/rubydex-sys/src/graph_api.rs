@@ -1,5 +1,6 @@
 //! This file provides the C API for the Graph object
 
+use crate::name_api::{self, NameRefData};
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::utils;
 use libc::{c_char, c_void};
@@ -60,6 +61,26 @@ pub unsafe extern "C" fn rdx_graph_declarations_search(
     });
 
     Box::into_raw(Box::new(DeclarationsIter { ids, index: 0 }))
+}
+
+/// # Safety
+///
+/// Assumes that the `name_ref_data` pointer is valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_resolve_constant(
+    pointer: GraphPointer,
+    name_ref_data: *mut NameRefData,
+) -> *const i64 {
+    with_graph(pointer, |graph| {
+        let Some(name_id) = name_api::convert_name_data_to_ref(graph, unsafe { &*name_ref_data }) else {
+            return ptr::null();
+        };
+
+        match resolution::resolve_single_constant(graph, name_id) {
+            Some(id) => Box::into_raw(Box::new(*id)).cast_const(),
+            None => ptr::null(),
+        }
+    })
 }
 
 /// Indexes all given file paths in parallel using the provided Graph pointer

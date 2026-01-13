@@ -9,7 +9,7 @@ use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
-use crate::model::name::{NameRef, ResolvedName};
+use crate::model::name::{Name, NameRef, ResolvedName};
 // use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::stats;
@@ -175,6 +175,27 @@ impl Graph {
     #[must_use]
     pub fn diagnostics(&self) -> &Vec<Diagnostic> {
         &self.diagnostics
+    }
+
+    /// Registers a name in the graph unless already registered. In regular indexing, this only happens in the local
+    /// graph. This method is only used to back the `Graph#resolve_constant` Ruby API because every name must be
+    /// registered in the graph to properly resolve
+    pub fn add_name(&mut self, name: Name) -> NameId {
+        let name_id = name.id();
+
+        self.names
+            .entry(name_id)
+            .or_insert_with(|| NameRef::Unresolved(Box::new(name)));
+
+        name_id
+    }
+
+    /// Interns a string in the graph. In regular indexing, this only happens in the local graph. This method is only
+    /// used to back the Ruby API because all strings must be registered in the graph to perform resolution
+    pub fn intern_string(&mut self, string: String) -> StringId {
+        let string_id = StringId::from(&string);
+        self.strings.entry(string_id).or_insert_with(|| string);
+        string_id
     }
 
     /// # Panics

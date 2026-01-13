@@ -25,7 +25,7 @@ pub enum Unit {
     Ancestors(DeclarationId),
 }
 
-enum Outcome {
+pub enum Outcome {
     /// The constant was successfully resolved to the given declaration ID. The second optional tuple element is a
     /// declaration that still needs to have its ancestors linearized
     Resolved(DeclarationId, Option<DeclarationId>),
@@ -146,6 +146,15 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+    }
+
+    /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
+    /// the Ruby API
+    pub fn resolve_single_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
+        match self.resolve_constant(name_id) {
+            Outcome::Resolved(id, _) => Some(id),
+            Outcome::Unresolved(_) | Outcome::Retry => None,
+        }
     }
 
     /// Handles a unit of work for resolving a constant definition

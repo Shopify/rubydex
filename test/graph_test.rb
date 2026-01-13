@@ -221,6 +221,57 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_resolve_constant
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Bar; end
+
+        module Foo
+          CONST = 123
+
+          class Bar::Baz
+            CONST
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      # The CONST reference
+      name_ref = Rubydex::NameRef.new(
+        "CONST",
+        nesting: Rubydex::NameRef.new(
+          "Baz",
+          nesting: Rubydex::NameRef.new("Foo"),
+          parent_scope: Rubydex::NameRef.new(
+            "Bar",
+            nesting: Rubydex::NameRef.new("Foo"),
+          ),
+        ),
+      )
+      const = graph.resolve_constant(name_ref)
+      assert_equal("Foo::CONST", const.name)
+    end
+  end
+
+  def test_graph_resolve_with_invalid_argument
+    graph = Rubydex::Graph.new
+
+    assert_raises(TypeError) do
+      graph.resolve_constant("not a NameRef")
+    end
+
+    assert_raises(TypeError) do
+      graph.resolve_constant(Rubydex::NameRef.new("Name", nesting: "not a NameRef"))
+    end
+
+    assert_raises(TypeError) do
+      graph.resolve_constant(Rubydex::NameRef.new("Name", parent_scope: "not a NameRef"))
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)

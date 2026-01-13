@@ -9,6 +9,7 @@
 #include "utils.h"
 
 static VALUE cGraph;
+static VALUE cNameRef;
 static VALUE eIndexingError;
 
 // Free function for the custom Graph allocator. We always have to call into Rust to free data allocated by it
@@ -19,6 +20,56 @@ static void graph_free(void *ptr) {
 }
 
 const rb_data_type_t graph_type = {"Graph", {0, graph_free, 0}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
+
+// Recursively builds a NameRefData tree from a Ruby NameRef object. Returns false on argument errors so that we can
+// free and avoid leaking memory before raising an error
+static bool build_name_ref_data(VALUE name_ref, NameRefData *data) {
+    data->str = NULL;
+    data->nesting = NULL;
+    data->parent_scope = NULL;
+
+    if (NIL_P(name_ref)) {
+        return true;
+    }
+
+    if (!rb_obj_is_kind_of(name_ref, cNameRef)) {
+        return false;
+    }
+
+    VALUE str = rb_ivar_get(name_ref, rb_intern("@str"));
+    data->str = StringValueCStr(str);
+
+    VALUE nesting = rb_ivar_get(name_ref, rb_intern("@nesting"));
+
+    if (!NIL_P(nesting)) {
+        data->nesting = ALLOC(NameRefData);
+        if (!build_name_ref_data(nesting, data->nesting)) {
+            return false;
+        }
+    }
+
+    VALUE parent_scope = rb_ivar_get(name_ref, rb_intern("@parent_scope"));
+
+    if (!NIL_P(parent_scope)) {
+        data->parent_scope = ALLOC(NameRefData);
+        if (!build_name_ref_data(parent_scope, data->parent_scope)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Recursively frees a NameRefData tree
+static void free_name_ref_data(NameRefData *data) {
+    if (data == NULL) {
+        return;
+    }
+
+    free_name_ref_data(data->nesting);
+    free_name_ref_data(data->parent_scope);
+    xfree(data);
+}
 
 // Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
 // as a void pointer
@@ -320,6 +371,38 @@ static VALUE sr_graph_set_encoding(VALUE self, VALUE encoding) {
     return Qnil;
 }
 
+// Graph#resolve_constant: (NameRef) -> Declaration?
+// Runs the resolver on a single constant reference to determine what it points to
+static VALUE sr_graph_resolve_constant(VALUE self, VALUE name_ref) {
+    if (!rb_obj_is_kind_of(name_ref, cNameRef)) {
+        rb_raise(rb_eTypeError, "expected a NameRef");
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    NameRefData *name_ref_data = ALLOC(NameRefData);
+
+    // Populate the `NameRefData` recursively. If any type errors happen, we free to avoid memory leaks and then raise
+    if (!build_name_ref_data(name_ref, name_ref_data)) {
+        free_name_ref_data(name_ref_data);
+        rb_raise(rb_eTypeError, "expected a NameRef");
+    }
+
+    const int64_t *id_ptr = rdx_graph_resolve_constant(graph, name_ref_data);
+    free_name_ref_data(name_ref_data);
+
+    if (id_ptr == NULL) {
+        return Qnil;
+    }
+
+    int64_t id = *id_ptr;
+    free_i64(id_ptr);
+    VALUE argv[] = {self, LL2NUM(id)};
+
+    return rb_class_new_instance(2, argv, cDeclaration);
+}
+
 // Graph#diagnostics -> Array[Rubydex::Diagnostic]
 static VALUE sr_graph_diagnostics(VALUE self) {
     void *graph;
@@ -356,11 +439,13 @@ static VALUE sr_graph_diagnostics(VALUE self) {
 void initialize_graph(VALUE mRubydex) {
     VALUE eRubydexError = rb_const_get(mRubydex, rb_intern("Error"));
     eIndexingError = rb_define_class_under(mRubydex, "IndexingError", eRubydexError);
+    cNameRef = rb_define_class_under(mRubydex, "NameRef", rb_cObject);
 
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, sr_graph_alloc);
     rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
     rb_define_method(cGraph, "resolve", sr_graph_resolve, 0);
+    rb_define_method(cGraph, "resolve_constant", sr_graph_resolve_constant, 1);
     rb_define_method(cGraph, "declarations", sr_graph_declarations, 0);
     rb_define_method(cGraph, "documents", sr_graph_documents, 0);
     rb_define_method(cGraph, "constant_references", sr_graph_constant_references, 0);
