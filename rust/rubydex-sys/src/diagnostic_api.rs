@@ -3,31 +3,12 @@
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
-use rubydex::diagnostic::Severity;
 use std::{ffi::CString, mem, ptr};
-
-/// C-compatible enum representing diagnostic severity levels.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum DiagnosticSeverity {
-    Error = 0,
-    Warning = 1,
-}
-
-impl From<&Severity> for DiagnosticSeverity {
-    fn from(severity: &Severity) -> Self {
-        match severity {
-            Severity::Error => DiagnosticSeverity::Error,
-            Severity::Warning => DiagnosticSeverity::Warning,
-        }
-    }
-}
 
 /// C-compatible struct representing a diagnostic entry.
 #[repr(C)]
 pub struct DiagnosticEntry {
     pub message: *const c_char,
-    pub severity: DiagnosticSeverity,
     pub code: u16,
     pub location: *mut Location,
 }
@@ -70,7 +51,6 @@ pub unsafe extern "C" fn rdx_graph_diagnostics(pointer: GraphPointer) -> *mut Di
 
                 DiagnosticEntry {
                     message: CString::new(diagnostic.message()).unwrap().into_raw().cast_const(),
-                    severity: DiagnosticSeverity::from(diagnostic.severity()),
                     code: diagnostic.code(),
                     location,
                 }

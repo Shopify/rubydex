@@ -6,24 +6,22 @@ pub struct Diagnostic {
     uri_id: UriId,
     offset: Offset,
     message: String,
-    severity: Severity,
 }
 
 impl Diagnostic {
     #[must_use]
-    pub fn new(code: u16, uri_id: UriId, offset: Offset, message: String, severity: Severity) -> Self {
+    pub fn new(code: u16, uri_id: UriId, offset: Offset, message: String) -> Self {
         Self {
             code,
             uri_id,
             offset,
             message,
-            severity,
         }
     }
 
     #[must_use]
     pub fn make(diagnostics: Diagnostics, uri_id: UriId, offset: Offset, message: String) -> Self {
-        Self::new(diagnostics.code(), uri_id, offset, message, diagnostics.severity())
+        Self::new(diagnostics.code(), uri_id, offset, message)
     }
 
     #[must_use]
@@ -45,31 +43,10 @@ impl Diagnostic {
     pub fn message(&self) -> &str {
         &self.message
     }
-
-    #[must_use]
-    pub fn severity(&self) -> &Severity {
-        &self.severity
-    }
-}
-
-#[derive(Debug)]
-pub enum Severity {
-    Error,
-    Warning,
-}
-
-impl Severity {
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Severity::Error => "Error",
-            Severity::Warning => "Warning",
-        }
-    }
 }
 
 macro_rules! diagnostics {
-    ( $( ($code:expr, $name:ident, $severity:expr); )* ) => {
+    ( $( ($code:expr, $name:ident); )* ) => {
         #[derive(Debug, Copy, Clone)]
         pub enum Diagnostics {
             $(
@@ -85,14 +62,6 @@ macro_rules! diagnostics {
                 )*
                 }
             }
-
-            pub fn severity(&self) -> Severity {
-                match self {
-                    $(
-                        Diagnostics::$name => $severity,
-                    )*
-                }
-            }
         }
     }
 }
@@ -101,14 +70,14 @@ diagnostics! {
     // 0000 -> 1000 - Internal errors
 
     // 2000 - Parsing errors
-    (2000, ParseError, Severity::Error);
-    (2001, ParseWarning, Severity::Warning);
+    (2000, ParseError);
+    (2001, ParseWarning);
 
     // 3000 - Indexing errors
-    (3001, DynamicConstantReference, Severity::Warning);
-    (3002, DynamicSingletonDefinition, Severity::Warning);
-    (3003, DynamicAncestor, Severity::Warning);
-    (3004, TopLevelMixinSelf, Severity::Warning);
+    (3001, DynamicConstantReference);
+    (3002, DynamicSingletonDefinition);
+    (3003, DynamicAncestor);
+    (3004, TopLevelMixinSelf);
 
     // 4000 - Resolution errors
 }

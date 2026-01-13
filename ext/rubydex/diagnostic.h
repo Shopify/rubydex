@@ -8,6 +8,4 @@ extern VALUE cDiagnostic;
 
 void initialize_diagnostic(VALUE mRubydex);
 
-VALUE severity_symbol(DiagnosticSeverity severity);
-
 #endif // RUBYDEX_DIAGNOSTIC_H

@@ -820,7 +820,7 @@ mod tests {
             .map(|d| {
                 format!(
                     "{}: {} ({})",
-                    d.severity().as_str(),
+                    d.code(),
                     d.message(),
                     context.graph().documents().get(d.uri_id()).unwrap().uri()
                 )
@@ -831,9 +831,9 @@ mod tests {
 
         assert_eq!(
             vec![
-                "Error: expected an `end` to close the `class` statement (file:///foo1.rb)",
-                "Error: unexpected end-of-input, assuming it is closing the parent top level context (file:///foo1.rb)",
-                "Warning: assigned but unused variable - foo (file:///foo2.rb)",
+                "2000: expected an `end` to close the `class` statement (file:///foo1.rb)",
+                "2000: unexpected end-of-input, assuming it is closing the parent top level context (file:///foo1.rb)",
+                "2001: assigned but unused variable - foo (file:///foo2.rb)",
             ],
             diagnostics,
         );
