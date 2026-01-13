@@ -4,11 +4,7 @@ use std::{
 };
 
 use crate::model::{
-    declaration::{
-        Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantDeclaration, Declaration,
-        GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        SingletonClassDeclaration,
-    },
+    declaration::{Ancestor, Ancestors, Declaration, NamespaceDeclaration, SimpleDeclaration},
     definitions::{Definition, Mixin},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
@@ -83,15 +79,15 @@ pub fn resolve_all(graph: &mut Graph) {
         let mut write_lock = graph.declarations().write().unwrap();
         write_lock.insert(
             *OBJECT_ID,
-            Declaration::Class(Box::new(ClassDeclaration::new("Object".to_string(), *OBJECT_ID))),
+            Declaration::Class(Box::new(NamespaceDeclaration::new("Object".to_string(), *OBJECT_ID))),
         );
         write_lock.insert(
             *MODULE_ID,
-            Declaration::Class(Box::new(ClassDeclaration::new("Module".to_string(), *OBJECT_ID))),
+            Declaration::Class(Box::new(NamespaceDeclaration::new("Module".to_string(), *OBJECT_ID))),
         );
         write_lock.insert(
             *CLASS_ID,
-            Declaration::Class(Box::new(ClassDeclaration::new("Class".to_string(), *OBJECT_ID))),
+            Declaration::Class(Box::new(NamespaceDeclaration::new("Class".to_string(), *OBJECT_ID))),
         );
     }
 
@@ -142,22 +138,22 @@ fn handle_definition_unit(
     let outcome = match graph.definitions().get(&id).unwrap() {
         Definition::Class(class) => {
             handle_constant_declaration(graph, *class.name_id(), id, false, |name, owner_id| {
-                Declaration::Class(Box::new(ClassDeclaration::new(name, owner_id)))
+                Declaration::Class(Box::new(NamespaceDeclaration::new(name, owner_id)))
             })
         }
         Definition::Module(module) => {
             handle_constant_declaration(graph, *module.name_id(), id, false, |name, owner_id| {
-                Declaration::Module(Box::new(ModuleDeclaration::new(name, owner_id)))
+                Declaration::Module(Box::new(NamespaceDeclaration::new(name, owner_id)))
             })
         }
         Definition::Constant(constant) => {
             handle_constant_declaration(graph, *constant.name_id(), id, false, |name, owner_id| {
-                Declaration::Constant(Box::new(ConstantDeclaration::new(name, owner_id)))
+                Declaration::Constant(Box::new(SimpleDeclaration::new(name, owner_id)))
             })
         }
         Definition::SingletonClass(singleton) => {
             handle_constant_declaration(graph, *singleton.name_id(), id, true, |name, owner_id| {
-                Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(name, owner_id)))
+                Declaration::SingletonClass(Box::new(NamespaceDeclaration::new(name, owner_id)))
             })
         }
         _ => panic!("Expected constant definitions"),
@@ -267,34 +263,34 @@ fn handle_remaining_definitions(
                 };
 
                 create_declaration(graph, str_id, id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                    Declaration::Method(Box::new(SimpleDeclaration::new(name, owner_id)))
                 });
             }
             Definition::AttrAccessor(attr) => {
                 let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
 
                 create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                    Declaration::Method(Box::new(SimpleDeclaration::new(name, owner_id)))
                 });
             }
             Definition::AttrReader(attr) => {
                 let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
 
                 create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                    Declaration::Method(Box::new(SimpleDeclaration::new(name, owner_id)))
                 });
             }
             Definition::AttrWriter(attr) => {
                 let owner_id = resolve_lexical_owner(graph, *attr.lexical_nesting_id());
 
                 create_declaration(graph, *attr.str_id(), id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                    Declaration::Method(Box::new(SimpleDeclaration::new(name, owner_id)))
                 });
             }
             Definition::GlobalVariable(var) => {
                 let owner_id = *OBJECT_ID;
                 create_declaration(graph, *var.str_id(), id, owner_id, |name| {
-                    Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, owner_id)))
+                    Declaration::GlobalVariable(Box::new(SimpleDeclaration::new(name, owner_id)))
                 });
             }
             Definition::InstanceVariable(var) => {
@@ -332,9 +328,7 @@ fn handle_remaining_definitions(
                                 );
                             }
                             create_declaration(graph, str_id, id, owner_id, |name| {
-                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                    name, owner_id,
-                                )))
+                                Declaration::InstanceVariable(Box::new(SimpleDeclaration::new(name, owner_id)))
                             });
                             continue;
                         }
@@ -351,20 +345,14 @@ fn handle_remaining_definitions(
                             drop(declarations);
                             // Method in singleton class - owner is the singleton class itself
                             create_declaration(graph, str_id, id, method_owner_id, |name| {
-                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                    name,
-                                    method_owner_id,
-                                )))
+                                Declaration::InstanceVariable(Box::new(SimpleDeclaration::new(name, method_owner_id)))
                             });
                         } else {
                             drop(declarations);
                             // Regular instance method
                             // Create an instance variable declaration for the method's owner
                             create_declaration(graph, str_id, id, method_owner_id, |name| {
-                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                    name,
-                                    method_owner_id,
-                                )))
+                                Declaration::InstanceVariable(Box::new(SimpleDeclaration::new(name, method_owner_id)))
                             });
                         }
                     }
@@ -385,7 +373,7 @@ fn handle_remaining_definitions(
                             );
                         }
                         create_declaration(graph, str_id, id, owner_id, |name| {
-                            Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
+                            Declaration::InstanceVariable(Box::new(SimpleDeclaration::new(name, owner_id)))
                         });
                     }
                     // If in a singleton class body directly, the owner is the singleton class's singleton class
@@ -405,7 +393,7 @@ fn handle_remaining_definitions(
                             );
                         }
                         create_declaration(graph, str_id, id, owner_id, |name| {
-                            Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(name, owner_id)))
+                            Declaration::InstanceVariable(Box::new(SimpleDeclaration::new(name, owner_id)))
                         });
                     }
                     _ => {
@@ -417,7 +405,7 @@ fn handle_remaining_definitions(
                 // TODO: add diagnostic on the else branch. Defining class variables at the top level crashes
                 if let Some(owner_id) = resolve_class_variable_owner(graph, *var.lexical_nesting_id()) {
                     create_declaration(graph, *var.str_id(), id, owner_id, |name| {
-                        Declaration::ClassVariable(Box::new(ClassVariableDeclaration::new(name, owner_id)))
+                        Declaration::ClassVariable(Box::new(SimpleDeclaration::new(name, owner_id)))
                     });
                 }
             }
@@ -428,12 +416,12 @@ fn handle_remaining_definitions(
                 let owner_id = resolve_lexical_owner(graph, *alias.lexical_nesting_id());
 
                 create_declaration(graph, *alias.new_name_str_id(), id, owner_id, |name| {
-                    Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                    Declaration::Method(Box::new(SimpleDeclaration::new(name, owner_id)))
                 });
             }
             Definition::GlobalVariableAlias(alias) => {
                 create_declaration(graph, *alias.new_name_str_id(), id, *OBJECT_ID, |name| {
-                    Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, *OBJECT_ID)))
+                    Declaration::GlobalVariable(Box::new(SimpleDeclaration::new(name, *OBJECT_ID)))
                 });
             }
         }
@@ -538,7 +526,7 @@ fn get_or_create_singleton_class(graph: &Graph, attached_id: DeclarationId) -> D
 
     write_lock
         .entry(decl_id)
-        .or_insert_with(|| Declaration::SingletonClass(Box::new(SingletonClassDeclaration::new(name, attached_id))));
+        .or_insert_with(|| Declaration::SingletonClass(Box::new(NamespaceDeclaration::new(name, attached_id))));
 
     decl_id
 }
@@ -1084,12 +1072,9 @@ fn search_top_level(graph: &Graph, str_id: StringId) -> Outcome {
 }
 
 fn members_of(decl: &Declaration) -> &IdentityHashMap<StringId, DeclarationId> {
-    match decl {
-        Declaration::Class(it) => it.members(),
-        Declaration::SingletonClass(it) => it.members(),
-        Declaration::Module(it) => it.members(),
-        _ => panic!("Tried to get members for a declaration that isn't a namespace"),
-    }
+    decl.as_namespace()
+        .expect("Tried to get members for a declaration that isn't a namespace")
+        .members()
 }
 
 /// Returns a complexity score for a given name, which is used to sort names for resolution. The complexity is based
@@ -1259,48 +1244,38 @@ fn linearize_parent_class(graph: &Graph, definitions: &[&Definition], context: &
 }
 
 fn add_descendant(declaration: &Declaration, descendant_id: DeclarationId) {
-    match declaration {
-        Declaration::Class(class) => class.add_descendant(descendant_id),
-        Declaration::Module(module) => module.add_descendant(descendant_id),
-        Declaration::SingletonClass(singleton) => singleton.add_descendant(descendant_id),
-        _ => panic!("Tried to add descendant for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to add descendant for a declaration that isn't a namespace")
+        .add_descendant(descendant_id);
 }
 
 fn clone_ancestors(declaration: &Declaration) -> Ancestors {
-    match declaration {
-        Declaration::Class(class) => class.clone_ancestors(),
-        Declaration::Module(module) => module.clone_ancestors(),
-        Declaration::SingletonClass(singleton) => singleton.clone_ancestors(),
-        _ => panic!("Tried to get ancestors for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to get ancestors for a declaration that isn't a namespace")
+        .clone_ancestors()
 }
 
 fn has_complete_ancestors(declaration: &Declaration) -> bool {
-    match declaration {
-        Declaration::Class(class) => class.has_complete_ancestors(),
-        Declaration::Module(module) => module.has_complete_ancestors(),
-        Declaration::SingletonClass(singleton) => singleton.has_complete_ancestors(),
-        _ => panic!("Tried to check complete ancestors for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to check complete ancestors for a declaration that isn't a namespace")
+        .has_complete_ancestors()
 }
 
 fn set_ancestors(declaration: &Declaration, ancestors: Ancestors) {
-    match declaration {
-        Declaration::Class(class) => class.set_ancestors(ancestors),
-        Declaration::Module(module) => module.set_ancestors(ancestors),
-        Declaration::SingletonClass(singleton) => singleton.set_ancestors(ancestors),
-        _ => panic!("Tried to set ancestors for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to set ancestors for a declaration that isn't a namespace")
+        .set_ancestors(ancestors);
 }
 
 fn get_member(declaration: &Declaration, str_id: StringId) -> Option<&DeclarationId> {
-    match declaration {
-        Declaration::Class(class) => class.get_member(&str_id),
-        Declaration::Module(module) => module.get_member(&str_id),
-        Declaration::SingletonClass(singleton) => singleton.get_member(&str_id),
-        _ => panic!("Tried to get member for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to get member for a declaration that isn't a namespace")
+        .get_member(&str_id)
 }
 
 fn mixins_of(definition: &Definition) -> Option<&[Mixin]> {
@@ -1313,21 +1288,17 @@ fn mixins_of(definition: &Definition) -> Option<&[Mixin]> {
 }
 
 fn singleton_class_id(declaration: &Declaration) -> Option<&DeclarationId> {
-    match declaration {
-        Declaration::Class(class) => class.singleton_class_id(),
-        Declaration::Module(module) => module.singleton_class_id(),
-        Declaration::SingletonClass(singleton) => singleton.singleton_class_id(),
-        _ => panic!("Tried to get singleton class ID for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to get singleton class ID for a declaration that isn't a namespace")
+        .singleton_class_id()
 }
 
 fn set_singleton_class_id(declaration: &mut Declaration, id: DeclarationId) {
-    match declaration {
-        Declaration::Class(class) => class.set_singleton_class_id(id),
-        Declaration::Module(module) => module.set_singleton_class_id(id),
-        Declaration::SingletonClass(singleton) => singleton.set_singleton_class_id(id),
-        _ => panic!("Tried to set singleton class ID for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace_mut()
+        .expect("Tried to set singleton class ID for a declaration that isn't a namespace")
+        .set_singleton_class_id(id);
 }
 
 #[cfg(test)]
