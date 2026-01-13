@@ -34,6 +34,8 @@ pub struct Graph {
     strings: IdentityHashMap<StringId, String>,
     // Map of names
     names: IdentityHashMap<NameId, NameRef>,
+    // Usage counts for names
+    name_counts: IdentityHashMap<NameId, usize>,
     // Map of constant references
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
@@ -52,6 +54,7 @@ impl Graph {
             documents: IdentityHashMap::default(),
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
+            name_counts: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             diagnostics: Vec::new(),
@@ -189,6 +192,24 @@ impl Graph {
         &self.names
     }
 
+    fn track_name(&mut self, name_id: NameId) {
+        *self.name_counts.entry(name_id).or_insert(0) += 1;
+    }
+
+    fn untrack_name(
+        name_counts: &mut IdentityHashMap<NameId, usize>,
+        names: &mut IdentityHashMap<NameId, NameRef>,
+        name_id: NameId,
+    ) {
+        if let Some(count) = name_counts.get_mut(&name_id) {
+            *count -= 1;
+            if *count == 0 {
+                name_counts.remove(&name_id);
+                names.remove(&name_id);
+            }
+        }
+    }
+
     /// Register a member relationship from a declaration to another declaration through its unqualified name id. For example, in
     ///
     /// ```ruby
@@ -270,10 +291,25 @@ impl Graph {
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
+
+        for definition in definitions.values() {
+            if let Some(name_id) = definition.name_id() {
+                self.track_name(*name_id);
+            }
+        }
         self.definitions.extend(definitions);
+
         self.strings.extend(strings);
-        self.names.extend(names);
+
+        for (name_id, name_ref) in names {
+            self.names.entry(name_id).or_insert(name_ref);
+        }
+
+        for reference in constant_references.values() {
+            self.track_name(*reference.name_id());
+        }
         self.constant_references.extend(constant_references);
+
         self.method_references.extend(method_references);
         self.diagnostics.extend(diagnostics);
     }
@@ -304,11 +340,13 @@ impl Graph {
         }
 
         for ref_id in document.constant_references() {
-            if let Some(constant_ref) = self.constant_references.remove(ref_id)
-                && let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
-                && let Some(declaration) = write_lock.get_mut(resolved.declaration_id())
-            {
-                declaration.remove_reference(ref_id);
+            if let Some(constant_ref) = self.constant_references.remove(ref_id) {
+                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
+                    && let Some(declaration) = write_lock.get_mut(resolved.declaration_id())
+                {
+                    declaration.remove_reference(ref_id);
+                }
+                Self::untrack_name(&mut self.name_counts, &mut self.names, *constant_ref.name_id());
             }
         }
 
@@ -316,15 +354,20 @@ impl Graph {
         let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
 
         for def_id in document.definitions() {
-            if let Some(_definition) = self.definitions.remove(def_id)
-                && let Some(declaration_id) = self.definitions_to_declarations.remove(def_id)
-                && let Some(declaration) = write_lock.get_mut(&declaration_id)
-                && declaration.remove_definition(def_id)
-                && declaration.has_no_definitions()
-            {
-                let unqualified_str_id = StringId::from(&declaration.unqualified_name());
-                members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                write_lock.remove(&declaration_id);
+            if let Some(definition) = self.definitions.remove(def_id) {
+                if let Some(declaration_id) = self.definitions_to_declarations.remove(def_id)
+                    && let Some(declaration) = write_lock.get_mut(&declaration_id)
+                    && declaration.remove_definition(def_id)
+                    && declaration.has_no_definitions()
+                {
+                    let unqualified_str_id = StringId::from(&declaration.unqualified_name());
+                    members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
+                    write_lock.remove(&declaration_id);
+                }
+
+                if let Some(name_id) = definition.name_id() {
+                    Self::untrack_name(&mut self.name_counts, &mut self.names, *name_id);
+                }
             }
         }
 
@@ -576,6 +619,39 @@ mod tests {
         }
 
         context.graph().assert_integrity();
+    }
+
+    #[test]
+    fn shared_names_are_refcounted() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo1.rb",
+            "
+            module Foo; end
+            module Foo; end
+            Foo
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
+            module Foo; end
+            Foo
+            ",
+        );
+        context.resolve();
+
+        assert_eq!(context.graph().names().len(), 1);
+        assert_eq!(context.graph().name_counts.values().sum::<usize>(), 5);
+
+        context.index_uri("file:///foo1.rb", "");
+        assert_eq!(context.graph().names().len(), 1);
+        assert_eq!(context.graph().name_counts.values().sum::<usize>(), 2);
+
+        context.index_uri("file:///foo2.rb", "");
+        assert!(context.graph().names().is_empty());
+        assert!(context.graph().name_counts.is_empty());
     }
 
     #[test]
