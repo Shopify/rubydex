@@ -1244,48 +1244,38 @@ fn linearize_parent_class(graph: &Graph, definitions: &[&Definition], context: &
 }
 
 fn add_descendant(declaration: &Declaration, descendant_id: DeclarationId) {
-    match declaration {
-        Declaration::Class(class) => class.add_descendant(descendant_id),
-        Declaration::Module(module) => module.add_descendant(descendant_id),
-        Declaration::SingletonClass(singleton) => singleton.add_descendant(descendant_id),
-        _ => panic!("Tried to add descendant for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to add descendant for a declaration that isn't a namespace")
+        .add_descendant(descendant_id);
 }
 
 fn clone_ancestors(declaration: &Declaration) -> Ancestors {
-    match declaration {
-        Declaration::Class(class) => class.clone_ancestors(),
-        Declaration::Module(module) => module.clone_ancestors(),
-        Declaration::SingletonClass(singleton) => singleton.clone_ancestors(),
-        _ => panic!("Tried to get ancestors for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to get ancestors for a declaration that isn't a namespace")
+        .clone_ancestors()
 }
 
 fn has_complete_ancestors(declaration: &Declaration) -> bool {
-    match declaration {
-        Declaration::Class(class) => class.has_complete_ancestors(),
-        Declaration::Module(module) => module.has_complete_ancestors(),
-        Declaration::SingletonClass(singleton) => singleton.has_complete_ancestors(),
-        _ => panic!("Tried to check complete ancestors for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to check complete ancestors for a declaration that isn't a namespace")
+        .has_complete_ancestors()
 }
 
 fn set_ancestors(declaration: &Declaration, ancestors: Ancestors) {
-    match declaration {
-        Declaration::Class(class) => class.set_ancestors(ancestors),
-        Declaration::Module(module) => module.set_ancestors(ancestors),
-        Declaration::SingletonClass(singleton) => singleton.set_ancestors(ancestors),
-        _ => panic!("Tried to set ancestors for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to set ancestors for a declaration that isn't a namespace")
+        .set_ancestors(ancestors);
 }
 
 fn get_member(declaration: &Declaration, str_id: StringId) -> Option<&DeclarationId> {
-    match declaration {
-        Declaration::Class(class) => class.get_member(&str_id),
-        Declaration::Module(module) => module.get_member(&str_id),
-        Declaration::SingletonClass(singleton) => singleton.get_member(&str_id),
-        _ => panic!("Tried to get member for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to get member for a declaration that isn't a namespace")
+        .get_member(&str_id)
 }
 
 fn mixins_of(definition: &Definition) -> Option<&[Mixin]> {
@@ -1298,21 +1288,17 @@ fn mixins_of(definition: &Definition) -> Option<&[Mixin]> {
 }
 
 fn singleton_class_id(declaration: &Declaration) -> Option<&DeclarationId> {
-    match declaration {
-        Declaration::Class(class) => class.singleton_class_id(),
-        Declaration::Module(module) => module.singleton_class_id(),
-        Declaration::SingletonClass(singleton) => singleton.singleton_class_id(),
-        _ => panic!("Tried to get singleton class ID for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace()
+        .expect("Tried to get singleton class ID for a declaration that isn't a namespace")
+        .singleton_class_id()
 }
 
 fn set_singleton_class_id(declaration: &mut Declaration, id: DeclarationId) {
-    match declaration {
-        Declaration::Class(class) => class.set_singleton_class_id(id),
-        Declaration::Module(module) => module.set_singleton_class_id(id),
-        Declaration::SingletonClass(singleton) => singleton.set_singleton_class_id(id),
-        _ => panic!("Tried to set singleton class ID for a declaration that isn't a namespace"),
-    }
+    declaration
+        .as_namespace_mut()
+        .expect("Tried to set singleton class ID for a declaration that isn't a namespace")
+        .set_singleton_class_id(id);
 }
 
 #[cfg(test)]
