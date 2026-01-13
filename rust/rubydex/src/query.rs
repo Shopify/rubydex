@@ -1,42 +1,21 @@
-use std::thread;
+use rayon::prelude::*;
 
 use crate::model::graph::Graph;
 use crate::model::ids::DeclarationId;
 
-/// # Panics
-///
-/// Will panic if any of the threads panic
+/// Searches declarations in parallel using rayon.
 pub fn declaration_search(graph: &Graph, query: &str) -> Vec<DeclarationId> {
-    let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let declarations = graph.declarations().read().unwrap();
-    let ids: Vec<DeclarationId> = declarations.keys().copied().collect();
-    let chunk_size = ids.len().div_ceil(num_threads);
 
-    if chunk_size == 0 {
-        return Vec::new();
-    }
-
-    thread::scope(|s| {
-        let handles: Vec<_> = ids
-            .chunks(chunk_size)
-            .map(|chunk| {
-                s.spawn(|| {
-                    chunk
-                        .iter()
-                        .filter(|id| {
-                            let declaration = declarations.get(id).unwrap();
-                            // When the query is empty, we return everything as per the LSP specification.
-                            // Otherwise, we compute the match score and return anything with a score greater than zero
-                            query.is_empty() || match_score(query, declaration.name()) > 0
-                        })
-                        .copied()
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
-    })
+    declarations
+        .par_iter()
+        .filter(|(_, declaration)| {
+            // When the query is empty, we return everything as per the LSP specification.
+            // Otherwise, we compute the match score and return anything with a score greater than zero
+            query.is_empty() || match_score(query, declaration.name()) > 0
+        })
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 #[must_use]
