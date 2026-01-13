@@ -450,6 +450,7 @@ impl Graph {
 
         let mut declarations_with_docs = 0;
         let mut total_doc_size = 0;
+        let mut declarations_types: HashMap<&str, usize> = HashMap::new();
         let mut definition_types: HashMap<&str, usize> = HashMap::new();
         let mut multi_definition_count = 0;
 
@@ -463,6 +464,8 @@ impl Graph {
                     total_doc_size += doc_size;
                 }
             }
+
+            *declarations_types.entry(declaration.kind()).or_insert(0) += 1;
 
             // Count definitions by type
             let definition_count = declaration.definitions().len();
@@ -497,6 +500,14 @@ impl Graph {
             multi_definition_count,
             stats::percentage(multi_definition_count, total_declarations)
         );
+
+        println!();
+        println!("Declaration breakdown:");
+        let mut types: Vec<_> = declarations_types.iter().collect();
+        types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+        for (kind, count) in types {
+            println!("  {kind:20} {count:6}");
+        }
 
         println!();
         println!("Definition breakdown:");
