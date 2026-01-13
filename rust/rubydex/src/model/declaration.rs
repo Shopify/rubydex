@@ -109,6 +109,13 @@ impl SimpleDeclaration {
         self.references.push(id);
     }
 
+    pub fn remove_reference(&mut self, reference_id: &ReferenceId) {
+        if let Some(pos) = self.references.iter().position(|id| id == reference_id) {
+            self.references.swap_remove(pos);
+            self.references.shrink_to_fit();
+        }
+    }
+
     pub fn remove_definition(&mut self, definition_id: &DefinitionId) -> bool {
         if let Some(pos) = self.definition_ids.iter().position(|id| id == definition_id) {
             self.definition_ids.swap_remove(pos);
@@ -351,6 +358,10 @@ impl Declaration {
 
     pub fn add_reference(&mut self, id: ReferenceId) {
         self.as_simple_mut().add_reference(id);
+    }
+
+    pub fn remove_reference(&mut self, reference_id: &ReferenceId) {
+        self.as_simple_mut().remove_reference(reference_id);
     }
 
     // Deletes a definition from this declaration
