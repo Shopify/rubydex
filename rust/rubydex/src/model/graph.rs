@@ -317,14 +317,14 @@ impl Graph {
 
         for def_id in document.definitions() {
             if let Some(_definition) = self.definitions.remove(def_id)
-                && let Some(declaration_id) = self.definitions_to_declarations.get(def_id)
-                && let Some(declaration) = write_lock.get_mut(declaration_id)
+                && let Some(declaration_id) = self.definitions_to_declarations.remove(def_id)
+                && let Some(declaration) = write_lock.get_mut(&declaration_id)
                 && declaration.remove_definition(def_id)
                 && declaration.has_no_definitions()
             {
                 let unqualified_str_id = StringId::from(&declaration.unqualified_name());
                 members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                write_lock.remove(declaration_id);
+                write_lock.remove(&declaration_id);
             }
         }
 
@@ -554,6 +554,7 @@ mod tests {
         context.resolve();
 
         assert_eq!(context.graph().definitions.len(), 1);
+        assert_eq!(context.graph().definitions_to_declarations().len(), 1);
         assert_eq!(context.graph().documents.len(), 1);
 
         {
@@ -565,6 +566,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "");
 
         assert!(context.graph().definitions.is_empty());
+        assert!(context.graph().definitions_to_declarations().is_empty());
         // URI remains if the file was not deleted, but definitions and declarations got erased
         assert_eq!(context.graph().documents.len(), 1);
 
