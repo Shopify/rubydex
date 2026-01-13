@@ -6,6 +6,7 @@ pub mod listing;
 pub mod model;
 pub mod offset;
 pub mod position;
+pub mod query;
 pub mod resolution;
 pub mod stats;
 pub mod visualization;

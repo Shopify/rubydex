@@ -152,6 +152,20 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_search
+    with_context do |context|
+      context.write!("foo.rb", "class Foo; end")
+      context.write!("bar.rb", "class Bar; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      results = graph.search("Fo")
+      assert_equal(["Foo"], results.map(&:name))
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)

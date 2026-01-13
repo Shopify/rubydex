@@ -109,6 +109,32 @@ static VALUE sr_graph_declarations(VALUE self) {
     return self;
 }
 
+// Graph#search: () -> Enumerator[Declaration]
+// Returns an enumerator that yields all declarations lazily
+static VALUE sr_graph_search(VALUE self, VALUE query) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize(self, rb_str_new2("search"), 1, &query);
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    const char *c_query = StringValueCStr(query);
+
+    void *iter = rdx_graph_declarations_search(graph, c_query);
+
+    if (iter == NULL) {
+        // The only case where the iterator will be NULL instead of a list is if the query cannot be converted to a Rust
+        // string
+        rb_raise(rb_eRuntimeError, "Converting query to Rust string failed");
+    }
+
+    VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
+    rb_ensure(graph_declarations_yield, args, graph_declarations_ensure, args);
+
+    return self;
+}
+
 // Body function for rb_ensure in Graph#documents
 static VALUE graph_documents_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
@@ -326,4 +352,5 @@ void initialize_graph(VALUE mRubydex) {
     rb_define_method(cGraph, "method_references", sr_graph_method_references, 0);
     rb_define_method(cGraph, "diagnostics", sr_graph_diagnostics, 0);
     rb_define_method(cGraph, "[]", sr_graph_aref, 1);
+    rb_define_method(cGraph, "search", sr_graph_search, 1);
 }
