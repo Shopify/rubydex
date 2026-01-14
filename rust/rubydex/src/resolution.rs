@@ -174,7 +174,10 @@ fn handle_definition_unit(
             unit_queue.push_back(unit_id);
             unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
         }
-        Outcome::Resolved(_, None) => *made_progress = true,
+        Outcome::Resolved(id, None) => {
+            unit_queue.push_back(Unit::Ancestors(id));
+            *made_progress = true;
+        }
         Outcome::Resolved(_, Some(id_needing_linearization)) => {
             unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             *made_progress = true;
