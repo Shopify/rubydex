@@ -21,11 +21,11 @@ end
 desc "Lint Rust code"
 task :lint_rust do
   sh "cargo clippy --all-targets --all-features -- -D warnings", chdir: "rust"
-  sh "rustfmt --check **/*.rs", chdir: "rust"
+  sh "cargo fmt --check", chdir: "rust"
 end
 
 desc "Format and auto fix violations for Rust code"
 task :format_rust do
   sh "cargo clippy --all-targets --all-features --fix --allow-dirty", chdir: "rust"
-  sh "rustfmt **/*.rs", chdir: "rust"
+  sh "cargo fmt", chdir: "rust"
 end
