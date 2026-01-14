@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration, DeclarationKind, Namespace};
 use crate::model::definitions::{Definition, DefinitionKind};
@@ -130,7 +130,33 @@ impl Graph {
                     new_declaration.add_definition(definition_id);
                     self.declarations.insert(declaration_id, new_declaration);
                 } else {
-                    occupied_entry.get_mut().add_definition(definition_id);
+                    let declaration = occupied_entry.get_mut();
+                    let definition = self.definitions.get(&definition_id).unwrap();
+                    let definition_declaration_kind = DeclarationKind::from_definition_kind(definition.kind());
+                    // Only emit when the existing declaration is a concrete namespace and the new definition
+                    // is an incompatible kind: a different namespace, or a non-promotable constant.
+                    // We skip constants/aliases becoming namespaces and promotable constants (dynamic values
+                    // that might represent a class).
+                    let is_namespace = matches!(declaration.kind(), DeclarationKind::Class | DeclarationKind::Module);
+                    let is_mismatch = definition_declaration_kind != declaration.kind();
+                    let is_non_promotable_constant = matches!(definition, Definition::Constant(c) if !c.flags().is_promotable());
+                    let should_emit = is_namespace && is_mismatch
+                        && (matches!(definition_declaration_kind, DeclarationKind::Class | DeclarationKind::Module)
+                            || is_non_promotable_constant);
+                    if should_emit {
+                        declaration.add_diagnostic(Diagnostic::new(
+                            Rule::KindRedefinition,
+                            *definition.uri_id(),
+                            definition.offset().clone(),
+                            format!(
+                                "Redefining `{}` as `{}`, previously defined as `{}`",
+                                declaration.name(),
+                                definition_declaration_kind,
+                                declaration.kind()
+                            ),
+                        ));
+                    }
+                    declaration.add_definition(definition_id);
                 }
             }
             Entry::Vacant(vacant_entry) => {
@@ -371,6 +397,8 @@ impl Graph {
     pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
         &self.method_references
     }
+
+    // Diagnostics
 
     #[must_use]
     pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
