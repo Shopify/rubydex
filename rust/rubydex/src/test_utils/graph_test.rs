@@ -4,6 +4,7 @@ use super::normalize_indentation;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
+use crate::model::ids::UriId;
 use crate::offset::Offset;
 use crate::position::Position;
 use crate::resolution;
@@ -135,11 +136,10 @@ impl GraphTest {
         );
     }
 
-    fn line_index_for(&self, uri: &str) -> LineIndex {
-        let source = self
-            .get_source(uri)
-            .unwrap_or_else(|| panic!("Source not found for URI: {uri}"));
-        LineIndex::new(source)
+    fn line_index_for(&self, uri: &str) -> &LineIndex {
+        let uri_id = UriId::from(uri);
+        let document = self.graph.documents().get(&uri_id).unwrap();
+        document.line_index()
     }
 
     fn parse_location_positions(location: &str) -> (String, Position, Position) {

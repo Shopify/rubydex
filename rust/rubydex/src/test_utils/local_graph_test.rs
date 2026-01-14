@@ -1,5 +1,3 @@
-use line_index::LineIndex;
-
 use super::normalize_indentation;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
@@ -74,7 +72,7 @@ impl LocalGraphTest {
 
                 offsets
                     .iter()
-                    .map(|offset| offset.to_display_range(&self.source))
+                    .map(|offset| offset.to_display_range(self.graph.document()))
                     .collect::<Vec<_>>()
             }
         );
@@ -107,7 +105,7 @@ impl LocalGraphTest {
     #[must_use]
     pub fn parse_location(&self, location: &str) -> (String, Offset) {
         let (uri, start_position, end_position) = Self::parse_location_positions(location);
-        let line_index = LineIndex::new(&self.source);
+        let line_index = self.graph.document().line_index();
 
         let start_offset = line_index.offset(start_position).unwrap_or(0.into());
         let end_offset = line_index.offset(end_position).unwrap_or(0.into());

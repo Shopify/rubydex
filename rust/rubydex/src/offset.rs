@@ -5,7 +5,7 @@
 //! between byte offsets and line/column positions.
 
 #[cfg(any(test, feature = "test_utils"))]
-use line_index::LineIndex;
+use crate::model::document::Document;
 
 /// Represents a byte offset range within a specific file.
 ///
@@ -61,8 +61,8 @@ impl Offset {
     /// Converts an offset to a display range like `1:1-1:5`
     #[cfg(any(test, feature = "test_utils"))]
     #[must_use]
-    pub fn to_display_range(&self, source: &str) -> String {
-        let line_index = LineIndex::new(source);
+    pub fn to_display_range(&self, document: &Document) -> String {
+        let line_index = document.line_index();
         let start = line_index.line_col(self.start().into());
         let end = line_index.line_col(self.end().into());
         format!("{}:{}-{}:{}", start.line + 1, start.col + 1, end.line + 1, end.col + 1)

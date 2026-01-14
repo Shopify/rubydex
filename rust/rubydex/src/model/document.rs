@@ -1,3 +1,5 @@
+use line_index::LineIndex;
+
 use crate::model::ids::{DefinitionId, ReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
@@ -5,6 +7,7 @@ use crate::model::ids::{DefinitionId, ReferenceId};
 #[derive(Debug)]
 pub struct Document {
     uri: String,
+    line_index: LineIndex,
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<ReferenceId>,
     constant_reference_ids: Vec<ReferenceId>,
@@ -12,9 +15,10 @@ pub struct Document {
 
 impl Document {
     #[must_use]
-    pub fn new(uri: String) -> Self {
+    pub fn new(uri: String, source: &str) -> Self {
         Self {
             uri,
+            line_index: LineIndex::new(source),
             definition_ids: Vec::new(),
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
@@ -24,6 +28,11 @@ impl Document {
     #[must_use]
     pub fn uri(&self) -> &str {
         &self.uri
+    }
+
+    #[must_use]
+    pub fn line_index(&self) -> &LineIndex {
+        &self.line_index
     }
 
     #[must_use]
@@ -66,7 +75,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cannot add the same exact definition to a document twice. Duplicate definition IDs")]
     fn inserting_duplicate_definitions() {
-        let mut document = Document::new("file:///foo.rb".to_string());
+        let mut document = Document::new("file:///foo.rb".to_string(), "class Foo; end");
         let def_id = DefinitionId::new(123);
 
         document.add_definition(def_id);
@@ -77,7 +86,7 @@ mod tests {
 
     #[test]
     fn tracking_references() {
-        let mut document = Document::new("file:///foo.rb".to_string());
+        let mut document = Document::new("file:///foo.rb".to_string(), "class Foo; end");
         let method_ref = ReferenceId::new(1);
         let constant_ref = ReferenceId::new(2);
 
