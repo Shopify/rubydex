@@ -1146,8 +1146,14 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .find_map(|ancestor_id| {
                     if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        let declaration = self.graph.declarations().get(ancestor_id).unwrap();
-                        Self::member(declaration, str_id).map(|id| Outcome::Resolved(*id, None))
+                        self.graph
+                            .declarations()
+                            .get(ancestor_id)
+                            .unwrap()
+                            .as_namespace()
+                            .unwrap()
+                            .member(&str_id)
+                            .map(|id| Outcome::Resolved(*id, None))
                     } else {
                         None
                     }
@@ -1157,8 +1163,14 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .find_map(|ancestor_id| {
                     if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        let declaration = self.graph.declarations().get(ancestor_id).unwrap();
-                        Self::member(declaration, str_id).map(|id| Outcome::Resolved(*id, Some(declaration_id)))
+                        self.graph
+                            .declarations()
+                            .get(ancestor_id)
+                            .unwrap()
+                            .as_namespace()
+                            .unwrap()
+                            .member(&str_id)
+                            .map(|id| Outcome::Resolved(*id, Some(declaration_id)))
                     } else {
                         None
                     }
@@ -1175,7 +1187,7 @@ impl<'a> Resolver<'a> {
             if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(nesting_id).unwrap() {
                 if let Some(declaration) = self.graph.declarations().get(nesting_name_ref.declaration_id())
                     && !matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
-                    && let Some(member) = Self::member(declaration, str_id)
+                    && let Some(member) = declaration.as_namespace().unwrap().member(&str_id)
                 {
                     return Outcome::Resolved(*member, None);
                 }
@@ -1191,7 +1203,15 @@ impl<'a> Resolver<'a> {
 
     /// Look for the constant at the top level (member of Object)
     fn search_top_level(&self, str_id: StringId) -> Outcome {
-        match Self::member(self.graph.declarations().get(&OBJECT_ID).unwrap(), str_id) {
+        match self
+            .graph
+            .declarations()
+            .get(&OBJECT_ID)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .member(&str_id)
+        {
             Some(member_id) => Outcome::Resolved(*member_id, None),
             None => Outcome::Unresolved(None),
         }
@@ -1423,19 +1443,6 @@ impl<'a> Resolver<'a> {
             Definition::SingletonClass(class) => Some(class.mixins().to_vec()),
             Definition::Module(module) => Some(module.mixins().to_vec()),
             _ => None,
-        }
-    }
-
-    /// # Panics
-    ///
-    /// Panics if the declaration is not a namespace
-    #[must_use]
-    fn member(declaration: &Declaration, str_id: StringId) -> Option<&DeclarationId> {
-        match declaration {
-            Declaration::Namespace(Namespace::Class(class)) => class.get_member(&str_id),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.get_member(&str_id),
-            Declaration::Namespace(Namespace::Module(module)) => module.get_member(&str_id),
-            _ => panic!("Tried to get member for a declaration that isn't a namespace"),
         }
     }
 

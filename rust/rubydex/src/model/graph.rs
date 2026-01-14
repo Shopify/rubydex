@@ -1082,8 +1082,8 @@ mod tests {
             .as_namespace()
             .unwrap();
 
-        assert!(foo.get_member(StringId::from("Array")).is_some());
-        assert!(foo.get_member(StringId::from("Array()")).is_none());
+        assert!(foo.member(&StringId::from("Array")).is_some());
+        assert!(foo.member(&StringId::from("Array()")).is_none());
     }
 
     #[test]
@@ -1115,7 +1115,7 @@ mod tests {
             .unwrap()
             .as_namespace()
             .unwrap();
-        assert!(foo.get_member(StringId::from("Array()")).is_some());
-        assert!(foo.get_member(StringId::from("Array")).is_none());
+        assert!(foo.member(&StringId::from("Array()")).is_some());
+        assert!(foo.member(&StringId::from("Array")).is_none());
     }
 }

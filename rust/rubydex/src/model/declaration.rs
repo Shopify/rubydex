@@ -149,7 +149,7 @@ macro_rules! namespace_declaration {
             }
 
             #[must_use]
-            pub fn get_member(&self, string_id: &StringId) -> Option<&DeclarationId> {
+            pub fn member(&self, string_id: &StringId) -> Option<&DeclarationId> {
                 self.members.get(string_id)
             }
 
@@ -366,15 +366,6 @@ impl Namespace {
         all_namespaces!(self, it => &it.members)
     }
 
-    #[must_use]
-    pub fn get_member(&self, str_id: StringId) -> Option<&DeclarationId> {
-        match self {
-            Namespace::Class(class) => class.get_member(&str_id),
-            Namespace::Module(module) => module.get_member(&str_id),
-            Namespace::SingletonClass(singleton) => singleton.get_member(&str_id),
-        }
-    }
-
     /// # Panics
     ///
     /// Panics if the declaration is not a namespace or a constant
@@ -407,6 +398,11 @@ impl Namespace {
 
     pub fn clear_descendants(&self) {
         all_namespaces!(self, it => it.descendants().clear());
+    }
+
+    #[must_use]
+    pub fn member(&self, str_id: &StringId) -> Option<&DeclarationId> {
+        all_namespaces!(self, it => it.member(str_id))
     }
 }
 
