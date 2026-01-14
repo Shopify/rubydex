@@ -172,7 +172,10 @@ impl Graph {
 
     #[must_use]
     pub fn diagnostics(&self) -> Vec<&Diagnostic> {
-        self.documents.values().flat_map(|doc| doc.diagnostics()).collect()
+        let document_diagnostics = self.documents.values().flat_map(Document::diagnostics);
+        let declaration_diagnostics = self.declarations.values().flat_map(Declaration::diagnostics);
+
+        document_diagnostics.chain(declaration_diagnostics).collect()
     }
 
     /// Interns a string in the graph unless already interned. This method is only used to back the

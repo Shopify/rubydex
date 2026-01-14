@@ -1,3 +1,4 @@
+use crate::diagnostic::Diagnostic;
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
@@ -102,6 +103,8 @@ macro_rules! namespace_declaration {
             descendants: IdentityHashSet<DeclarationId>,
             /// The singleton class associated with this declaration
             singleton_class_id: Option<DeclarationId>,
+            /// Diagnostics associated with this declaration
+            diagnostics: Vec<Diagnostic>,
         }
 
         impl $name {
@@ -116,6 +119,7 @@ macro_rules! namespace_declaration {
                     ancestors: Ancestors::Partial(Vec::new()),
                     descendants: IdentityHashSet::default(),
                     singleton_class_id: None,
+                    diagnostics: Vec::new(),
                 }
             }
 
@@ -123,6 +127,7 @@ macro_rules! namespace_declaration {
                 self.definition_ids.extend(other.definitions());
                 self.references.extend(other.references());
                 self.members.extend(other.members());
+                self.diagnostics.extend(other.diagnostics().iter().cloned());
             }
 
             pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
@@ -205,6 +210,8 @@ macro_rules! simple_declaration {
             references: IdentityHashSet<ReferenceId>,
             /// The ID of the owner of this declaration
             owner_id: DeclarationId,
+            /// Diagnostics associated with this declaration
+            diagnostics: Vec<Diagnostic>,
         }
 
         impl $name {
@@ -215,12 +222,14 @@ macro_rules! simple_declaration {
                     definition_ids: Vec::new(),
                     references: IdentityHashSet::default(),
                     owner_id,
+                    diagnostics: Vec::new(),
                 }
             }
 
             pub fn extend(&mut self, other: Declaration) {
                 self.definition_ids.extend(other.definitions());
                 self.references.extend(other.references());
+                self.diagnostics.extend(other.diagnostics().iter().cloned());
             }
         }
     };
@@ -339,6 +348,19 @@ impl Declaration {
             after_colons.rsplit('#').next().unwrap_or(after_colons).to_string()
         })
     }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        all_declarations!(self, it => &it.diagnostics)
+    }
+
+    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+        all_declarations!(self, it => it.diagnostics.push(diagnostic));
+    }
+
+    pub fn clear_diagnostics(&mut self) {
+        all_declarations!(self, it => it.diagnostics.clear());
+    }
 }
 
 #[derive(Debug)]
@@ -371,6 +393,11 @@ impl Namespace {
     #[must_use]
     pub fn members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
         all_namespaces!(self, it => &it.members)
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        all_namespaces!(self, it => &it.diagnostics)
     }
 
     /// # Panics

@@ -2,7 +2,7 @@
 use crate::model::document::Document;
 use crate::{model::ids::UriId, offset::Offset};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Diagnostic {
     rule: Rule,
     uri_id: UriId,
