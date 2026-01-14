@@ -854,28 +854,169 @@ git commit -m "test: add integration tests for AST subset approach"
 
 ## Task 7: Measure and document performance
 
+**Files:**
+- Create: `benchmark/ast_subset_benchmark.rb`
+- Create: `benchmark/results/ast_subset.md`
+
 **Step 1: Create benchmark script**
 
 ```ruby
 # benchmark/ast_subset_benchmark.rb
-require "benchmark"
-require "rubydex"
+# frozen_string_literal: true
 
-# Benchmark:
-# 1. Indexing time with AST serialization
-# 2. JSON serialization overhead
-# 3. Ruby AST walking time
+require "benchmark"
+require "json"
+require "rubydex"
+require_relative "../lib/rubydex/ast_fragment"
+
+# Use a realistic test corpus - index a medium-sized codebase
+TEST_CORPUS = ENV.fetch("BENCHMARK_CORPUS", File.expand_path("../../test/fixtures", __dir__))
+
+def run_benchmark(label, iterations: 5, &block)
+  puts "\n#{label}"
+  puts "-" * 40
+
+  times = iterations.times.map do
+    GC.start
+    Benchmark.realtime(&block)
+  end
+
+  avg = times.sum / times.size
+  min = times.min
+  max = times.max
+
+  puts "  Avg: #{(avg * 1000).round(2)}ms"
+  puts "  Min: #{(min * 1000).round(2)}ms"
+  puts "  Max: #{(max * 1000).round(2)}ms"
+
+  avg
+end
+
+results = {}
+
+# 1. Baseline: Current indexing without plugin infrastructure
+results[:baseline] = run_benchmark("Baseline (no plugin infrastructure)") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  graph.resolve
+end
+
+# 2. Infrastructure only: With AST serialization but no plugins
+results[:infra_only] = run_benchmark("Infrastructure only (no plugins enabled)") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # AST fragments serialized but not processed
+  graph.resolve
+end
+
+# 3. Scenario 1: belongs_to plugin only
+results[:scenario_1] = run_benchmark("Scenario 1: belongs_to plugin") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # Walk AST fragments for belongs_to
+  graph.each_ast_fragment do |file_path, json|
+    fragments = JSON.parse(json)
+    fragments.each do |fragment_data|
+      # belongs_to handling with AST walking...
+    end
+  end
+  graph.resolve
+end
+
+# 4. Scenario 2: class_methods plugin only
+results[:scenario_2] = run_benchmark("Scenario 2: class_methods plugin") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # Walk AST fragments for class_methods
+  graph.each_ast_fragment do |file_path, json|
+    fragments = JSON.parse(json)
+    fragments.each do |fragment_data|
+      # class_methods handling with AST walking...
+    end
+  end
+  graph.resolve
+end
+
+# 5. Scenario 3: RSpec plugin only
+results[:scenario_3] = run_benchmark("Scenario 3: RSpec plugin") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # Walk AST fragments for RSpec
+  graph.each_ast_fragment do |file_path, json|
+    fragments = JSON.parse(json)
+    fragments.each do |fragment_data|
+      # RSpec handling with AST walking...
+    end
+  end
+  graph.resolve
+end
+
+# 6. All plugins enabled
+results[:all_plugins] = run_benchmark("All plugins enabled") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # Walk AST fragments for all plugins
+  graph.each_ast_fragment do |file_path, json|
+    fragments = JSON.parse(json)
+    fragments.each do |fragment_data|
+      # All plugin handling with AST walking...
+    end
+  end
+  graph.resolve
+end
+
+# Print summary
+puts "\n" + "=" * 40
+puts "SUMMARY: Overhead vs Baseline"
+puts "=" * 40
+baseline = results[:baseline]
+results.each do |key, time|
+  next if key == :baseline
+  overhead = ((time - baseline) / baseline * 100).round(2)
+  puts "#{key}: #{overhead > 0 ? '+' : ''}#{overhead}%"
+end
+
+# Additional metrics for AST subset approach
+puts "\n" + "=" * 40
+puts "AST SUBSET SPECIFIC METRICS"
+puts "=" * 40
+
+graph = Rubydex::Graph.new
+graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+
+total_json_size = 0
+total_fragments = 0
+graph.each_ast_fragment do |file_path, json|
+  total_json_size += json.bytesize
+  total_fragments += JSON.parse(json).size
+end
+
+puts "Total AST fragments: #{total_fragments}"
+puts "Total JSON size: #{(total_json_size / 1024.0).round(2)} KB"
+puts "Avg JSON per fragment: #{total_fragments > 0 ? (total_json_size / total_fragments) : 0} bytes"
 ```
 
-**Step 2: Compare with batched callbacks approach**
+**Step 2: Run benchmark against test fixtures**
 
-**Step 3: Document results**
+Run: `chruby 3.4.3 && bundle exec ruby benchmark/ast_subset_benchmark.rb`
 
-**Step 4: Commit**
+**Step 3: Run benchmark against a larger codebase (optional)**
+
+Run: `BENCHMARK_CORPUS=/path/to/larger/codebase bundle exec ruby benchmark/ast_subset_benchmark.rb`
+
+**Step 4: Document results**
+
+Create `benchmark/results/ast_subset.md` with:
+- Hardware/environment details
+- Results table
+- JSON serialization size analysis
+- Comparison with Option 1 (batched callbacks)
+
+**Step 5: Commit**
 
 ```bash
 git add benchmark/
-git commit -m "perf: add benchmarks for AST subset approach"
+git commit -m "perf: add performance benchmarks for AST subset approach"
 ```
 
 ---

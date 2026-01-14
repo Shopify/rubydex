@@ -601,23 +601,143 @@ git commit -m "test: add integration tests for batched callbacks approach"
 
 ## Task 7: Measure and document performance
 
+**Files:**
+- Create: `benchmark/batched_callbacks_benchmark.rb`
+- Create: `benchmark/results/batched_callbacks.md`
+
 **Step 1: Create benchmark script**
 
 ```ruby
 # benchmark/batched_callbacks_benchmark.rb
+# frozen_string_literal: true
+
 require "benchmark"
 require "rubydex"
 
-# Benchmark indexing with and without DSL event capture
+# Use a realistic test corpus - index a medium-sized codebase
+TEST_CORPUS = ENV.fetch("BENCHMARK_CORPUS", File.expand_path("../../test/fixtures", __dir__))
+
+def run_benchmark(label, iterations: 5, &block)
+  puts "\n#{label}"
+  puts "-" * 40
+
+  times = iterations.times.map do
+    GC.start
+    Benchmark.realtime(&block)
+  end
+
+  avg = times.sum / times.size
+  min = times.min
+  max = times.max
+
+  puts "  Avg: #{(avg * 1000).round(2)}ms"
+  puts "  Min: #{(min * 1000).round(2)}ms"
+  puts "  Max: #{(max * 1000).round(2)}ms"
+
+  avg
+end
+
+results = {}
+
+# 1. Baseline: Current indexing without plugin infrastructure
+results[:baseline] = run_benchmark("Baseline (no plugin infrastructure)") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  graph.resolve
+end
+
+# 2. Infrastructure only: With DSL event capture but no plugins
+results[:infra_only] = run_benchmark("Infrastructure only (no plugins enabled)") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # DSL events captured but not processed
+  graph.resolve
+end
+
+# 3. Scenario 1: belongs_to plugin only
+results[:scenario_1] = run_benchmark("Scenario 1: belongs_to plugin") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # Process belongs_to events
+  graph.each_dsl_file do |file_path, events|
+    events.each do |event|
+      # belongs_to handling...
+    end
+  end
+  graph.resolve
+end
+
+# 4. Scenario 2: class_methods plugin only
+results[:scenario_2] = run_benchmark("Scenario 2: class_methods plugin") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # Process class_methods events
+  graph.each_dsl_file do |file_path, events|
+    events.each do |event|
+      # class_methods handling...
+    end
+  end
+  graph.resolve
+end
+
+# 5. Scenario 3: RSpec plugin only
+results[:scenario_3] = run_benchmark("Scenario 3: RSpec plugin") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # Process RSpec events
+  graph.each_dsl_file do |file_path, events|
+    events.each do |event|
+      # RSpec handling...
+    end
+  end
+  graph.resolve
+end
+
+# 6. All plugins enabled
+results[:all_plugins] = run_benchmark("All plugins enabled") do
+  graph = Rubydex::Graph.new
+  graph.index_all(Dir.glob("#{TEST_CORPUS}/**/*.rb"))
+  # Process all events
+  graph.each_dsl_file do |file_path, events|
+    events.each do |event|
+      # All plugin handling...
+    end
+  end
+  graph.resolve
+end
+
+# Print summary
+puts "\n" + "=" * 40
+puts "SUMMARY: Overhead vs Baseline"
+puts "=" * 40
+baseline = results[:baseline]
+results.each do |key, time|
+  next if key == :baseline
+  overhead = ((time - baseline) / baseline * 100).round(2)
+  puts "#{key}: #{overhead > 0 ? '+' : ''}#{overhead}%"
+end
 ```
 
-**Step 2: Run benchmarks and document results**
+**Step 2: Run benchmark against test fixtures**
 
-**Step 3: Commit benchmark and results**
+Run: `chruby 3.4.3 && bundle exec ruby benchmark/batched_callbacks_benchmark.rb`
+
+**Step 3: Run benchmark against a larger codebase (optional)**
+
+Run: `BENCHMARK_CORPUS=/path/to/larger/codebase bundle exec ruby benchmark/batched_callbacks_benchmark.rb`
+
+**Step 4: Document results**
+
+Create `benchmark/results/batched_callbacks.md` with:
+- Hardware/environment details
+- Results table
+- Analysis of where time is spent (Rust vs Ruby phase)
+
+**Step 5: Commit**
 
 ```bash
 git add benchmark/
-git commit -m "perf: add benchmarks for batched callbacks approach"
+git commit -m "perf: add performance benchmarks for batched callbacks approach"
 ```
 
 ---
@@ -629,8 +749,3 @@ git commit -m "perf: add benchmarks for batched callbacks approach"
 2. **Event ordering** - Events are captured in tree traversal order, which preserves the nesting relationship. When Ruby processes them, it can maintain a stack to track context.
 
 3. **Block enter/leave** - For RSpec-style DSLs, we need to know when we enter and leave blocks. Consider adding `DslBlockEnter` and `DslBlockLeave` events, or use the `has_block` flag with careful ordering.
-
-4. **Performance measurement** - Compare:
-   - Baseline: indexing without DSL capture
-   - With DSL capture: additional overhead
-   - Ruby processing time: sequential GVL-bound phase
