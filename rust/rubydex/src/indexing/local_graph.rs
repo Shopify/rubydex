@@ -131,7 +131,7 @@ impl LocalGraph {
     }
 
     pub fn add_diagnostic(&mut self, rule: Rule, offset: Offset, message: String) {
-        let diagnostic = Diagnostic::make(rule, self.uri_id, offset, message);
+        let diagnostic = Diagnostic::new(rule, self.uri_id, offset, message);
         self.diagnostics.push(diagnostic);
     }
 

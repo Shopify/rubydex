@@ -20,11 +20,6 @@ impl Diagnostic {
     }
 
     #[must_use]
-    pub fn make(rule: Rule, uri_id: UriId, offset: Offset, message: String) -> Self {
-        Self::new(rule, uri_id, offset, message)
-    }
-
-    #[must_use]
     pub fn rule(&self) -> &Rule {
         &self.rule
     }
