@@ -566,7 +566,7 @@ mod tests {
     use super::*;
     use crate::model::comment::Comment;
     use crate::model::declaration::Ancestors;
-    use crate::{resolution, test_utils::GraphTest};
+    use crate::test_utils::GraphTest;
 
     #[test]
     fn deleting_a_uri() {
@@ -698,10 +698,11 @@ mod tests {
         context.index_uri("file:///d.rb", "class Baz < Foo; end");
         context.resolve();
 
-        let foo_ancestors = resolution::ancestors_of(context.graph_mut(), DeclarationId::from("Foo"));
-        let baz_ancestors = resolution::ancestors_of(context.graph_mut(), DeclarationId::from("Baz"));
-        assert!(matches!(foo_ancestors, Ancestors::Complete(_)));
-        assert!(matches!(baz_ancestors, Ancestors::Complete(_)));
+        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert!(matches!(foo_declaration.ancestors(), Ancestors::Complete(_)));
+
+        let baz_declaration = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap();
+        assert!(matches!(baz_declaration.ancestors(), Ancestors::Complete(_)));
 
         {
             let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
@@ -743,8 +744,8 @@ mod tests {
 
         context.resolve();
 
-        let baz_ancestors = resolution::ancestors_of(context.graph_mut(), DeclarationId::from("Baz"));
-        assert!(matches!(baz_ancestors, Ancestors::Complete(_)));
+        let baz_declaration = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap();
+        assert!(matches!(baz_declaration.ancestors(), Ancestors::Complete(_)));
 
         {
             let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()

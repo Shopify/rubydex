@@ -552,7 +552,7 @@ fn get_or_create_singleton_class(graph: &mut Graph, attached_id: DeclarationId) 
 ///
 /// Can panic if there's inconsistent data in the graph
 #[must_use]
-pub fn ancestors_of(graph: &mut Graph, declaration_id: DeclarationId) -> Ancestors {
+fn ancestors_of(graph: &mut Graph, declaration_id: DeclarationId) -> Ancestors {
     let mut context = LinearizationContext::new();
     linearize_ancestors(graph, declaration_id, &mut context)
 }
@@ -583,7 +583,7 @@ fn linearize_ancestors(
         // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
         // again
         if has_complete_ancestors(declaration) {
-            let cached = clone_ancestors(declaration);
+            let cached = declaration.ancestors();
             propagate_descendants(graph, &mut context.descendants, &cached);
             context.descendants.remove(&declaration_id);
             return cached;
@@ -1263,15 +1263,6 @@ fn add_descendant(declaration: &Declaration, descendant_id: DeclarationId) {
     }
 }
 
-fn clone_ancestors(declaration: &Declaration) -> Ancestors {
-    match declaration {
-        Declaration::Class(class) => class.clone_ancestors(),
-        Declaration::Module(module) => module.clone_ancestors(),
-        Declaration::SingletonClass(singleton) => singleton.clone_ancestors(),
-        _ => panic!("Tried to get ancestors for a declaration that isn't a namespace"),
-    }
-}
-
 fn has_complete_ancestors(declaration: &Declaration) -> bool {
     match declaration {
         Declaration::Class(class) => class.has_complete_ancestors(),
@@ -1394,7 +1385,13 @@ mod tests {
 
     macro_rules! assert_ancestors_eq {
         ($context:expr, $name:expr, $expected:expr) => {
-            match ancestors_of($context.graph_mut(), DeclarationId::from($name)) {
+            let declaration = $context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from($name))
+                .unwrap();
+
+            match declaration.ancestors() {
                 Ancestors::Cyclic(ancestors) | Ancestors::Complete(ancestors) => {
                     assert_eq!(
                         $expected
@@ -2242,10 +2239,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert!(matches!(
-            ancestors_of(context.graph_mut(), DeclarationId::from("Bar")),
-            Ancestors::Partial(_)
-        ));
+        let declaration = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
+        assert!(matches!(declaration.ancestors(), Ancestors::Partial(_)));
     }
 
     #[test]
