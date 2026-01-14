@@ -1889,22 +1889,16 @@ mod tests {
         }};
     }
 
+    fn format_diagnostics(context: &LocalGraphTest) -> Vec<String> {
+        let mut diagnostics = context.graph().diagnostics().iter().collect::<Vec<_>>();
+
+        diagnostics.sort_by_key(|d| d.offset());
+        diagnostics.iter().map(|d| d.formatted(context.source())).collect()
+    }
+
     macro_rules! assert_diagnostics_eq {
         ($context:expr, $expected_diagnostics:expr) => {{
-            let actual_diagnostics: Vec<String> = $context
-                .graph()
-                .diagnostics()
-                .iter()
-                .map(|d| {
-                    format!(
-                        "{}: {} ({})",
-                        d.rule(),
-                        d.message(),
-                        $context.offset_to_display_range(d.offset())
-                    )
-                })
-                .collect();
-            assert_eq!($expected_diagnostics, actual_diagnostics);
+            assert_eq!($expected_diagnostics, format_diagnostics($context));
         }};
     }
 
@@ -1913,17 +1907,7 @@ mod tests {
             assert!(
                 $context.graph().diagnostics().is_empty(),
                 "expected no diagnostics, got {:?}",
-                $context
-                    .graph()
-                    .diagnostics()
-                    .iter()
-                    .map(|d| format!(
-                        "{}: {} ({})",
-                        d.rule(),
-                        d.message(),
-                        $context.offset_to_display_range(d.offset())
-                    ))
-                    .collect::<Vec<_>>()
+                format_diagnostics($context)
             );
         }};
     }
@@ -3649,8 +3633,8 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "parse-warning: assigned but unused variable - foo (5:1-5:4)",
                 "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
+                "parse-warning: assigned but unused variable - foo (5:1-5:4)",
             ]
         );
 

@@ -39,6 +39,11 @@ impl LocalGraphTest {
         &self.graph
     }
 
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
     /// # Panics
     ///
     /// Panics if a definition cannot be found at the given location.
@@ -69,7 +74,7 @@ impl LocalGraphTest {
 
                 offsets
                     .iter()
-                    .map(|offset| self.offset_to_display_range(offset))
+                    .map(|offset| offset.to_display_range(&self.source))
                     .collect::<Vec<_>>()
             }
         );
@@ -108,14 +113,6 @@ impl LocalGraphTest {
         let end_offset = line_index.offset(end_position).unwrap_or(0.into());
 
         (uri, Offset::new(start_offset.into(), end_offset.into()))
-    }
-
-    #[must_use]
-    pub fn offset_to_display_range(&self, offset: &Offset) -> String {
-        let line_index = LineIndex::new(&self.source);
-        let start = line_index.line_col(offset.start().into());
-        let end = line_index.line_col(offset.end().into());
-        format!("{}:{}-{}:{}", start.line + 1, start.col + 1, end.line + 1, end.col + 1)
     }
 
     fn parse_location_positions(location: &str) -> (String, Position, Position) {

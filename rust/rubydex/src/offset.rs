@@ -4,11 +4,14 @@
 //! within a file. It can be used to track positions in source code and convert
 //! between byte offsets and line/column positions.
 
+#[cfg(any(test, feature = "test_utils"))]
+use line_index::LineIndex;
+
 /// Represents a byte offset range within a specific file.
 ///
 /// An `Offset` tracks a contiguous span of bytes from `start` to `end` within a file. This is useful for
 /// representing the location of tokens, AST nodes, or other text spans in source code.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Offset {
     /// The starting byte offset (inclusive)
     start: u32,
@@ -53,5 +56,15 @@ impl Offset {
     #[must_use]
     pub fn end(&self) -> u32 {
         self.end
+    }
+
+    /// Converts an offset to a display range like `1:1-1:5`
+    #[cfg(any(test, feature = "test_utils"))]
+    #[must_use]
+    pub fn to_display_range(&self, source: &str) -> String {
+        let line_index = LineIndex::new(source);
+        let start = line_index.line_col(self.start().into());
+        let end = line_index.line_col(self.end().into());
+        format!("{}:{}-{}:{}", start.line + 1, start.col + 1, end.line + 1, end.col + 1)
     }
 }

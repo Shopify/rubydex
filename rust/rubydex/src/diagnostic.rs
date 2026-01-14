@@ -43,6 +43,17 @@ impl Diagnostic {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    #[cfg(any(test, feature = "test_utils"))]
+    #[must_use]
+    pub fn formatted(&self, source: &str) -> String {
+        format!(
+            "{}: {} ({})",
+            self.rule(),
+            self.message(),
+            self.offset().to_display_range(source)
+        )
+    }
 }
 
 fn camel_to_snake(s: &str) -> String {
@@ -66,7 +77,7 @@ macro_rules! rules {
     (
         $( $variant:ident );* $(;)?
     ) => {
-        #[derive(Debug, Copy, Clone)]
+        #[derive(Debug, Copy, Clone, PartialEq, Eq)]
         pub enum Rule {
             $(
                 $variant,
