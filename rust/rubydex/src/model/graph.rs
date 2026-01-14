@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration, DeclarationKind, Namespace};
 use crate::model::definitions::{Definition, DefinitionKind};
@@ -76,8 +76,36 @@ impl Graph {
     where
         F: FnOnce() -> Declaration,
     {
-        let declaration = self.declarations.entry(declaration_id).or_insert_with(constructor);
-        declaration.add_definition(definition_id);
+        let entry = self.declarations.entry(declaration_id);
+
+        match entry {
+            Entry::Occupied(mut entry) => {
+                let declaration = entry.get_mut();
+
+                let definition = self.definitions.get(&definition_id).unwrap();
+                let definition_declaration_kind = DeclarationKind::from_definition_kind(definition.kind());
+                if definition_declaration_kind != declaration.kind() {
+                    declaration.add_diagnostic(Diagnostic::new(
+                        Rule::KindRedefinition,
+                        *definition.uri_id(),
+                        definition.offset().clone(),
+                        format!(
+                            "Redefining `{}` as `{}`, previously defined as `{}`",
+                            declaration.name(),
+                            definition_declaration_kind,
+                            declaration.kind()
+                        ),
+                    ));
+                }
+
+                declaration.add_definition(definition_id);
+            }
+            Entry::Vacant(entry) => {
+                let mut declaration = constructor();
+                declaration.add_definition(definition_id);
+                entry.insert(declaration);
+            }
+        }
     }
 
     /// # Panics
@@ -266,6 +294,8 @@ impl Graph {
     pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
         &self.method_references
     }
+
+    // Diagnostics
 
     #[must_use]
     pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
