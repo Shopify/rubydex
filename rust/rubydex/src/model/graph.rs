@@ -172,9 +172,16 @@ impl Graph {
         &self.method_references
     }
 
+    // Diagnostics
+
     #[must_use]
     pub fn diagnostics(&self) -> &Vec<Diagnostic> {
         &self.diagnostics
+    }
+
+    #[must_use]
+    pub fn diagnostics_mut(&mut self) -> &mut Vec<Diagnostic> {
+        &mut self.diagnostics
     }
 
     /// Interns a string in the graph unless already interned. This method is only used to back the

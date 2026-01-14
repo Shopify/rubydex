@@ -105,4 +105,5 @@ rules! {
     TopLevelMixinSelf;
 
     // Resolution
+    KindRedefinition;
 }

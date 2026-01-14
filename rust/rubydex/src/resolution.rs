@@ -3,17 +3,20 @@ use std::{
     hash::BuildHasher,
 };
 
-use crate::model::{
-    declaration::{
-        Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
-        Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        Namespace, SingletonClassDeclaration,
+use crate::{
+    diagnostic::{Diagnostic, Rule},
+    model::{
+        declaration::{
+            Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration,
+            ConstantDeclaration, Declaration, DeclarationKind, GlobalVariableDeclaration, InstanceVariableDeclaration,
+            MethodDeclaration, ModuleDeclaration, Namespace, SingletonClassDeclaration,
+        },
+        definitions::{Definition, Mixin},
+        graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
+        identity_maps::{IdentityHashMap, IdentityHashSet},
+        ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+        name::{Name, NameRef},
     },
-    definitions::{Definition, Mixin},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
-    identity_maps::{IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
-    name::{Name, NameRef},
 };
 
 pub enum Unit {
@@ -146,6 +149,8 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+
+        self.validate_declarations();
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -1479,6 +1484,45 @@ impl<'a> Resolver<'a> {
             Definition::Module(module) => Some(module.mixins().to_vec()),
             _ => None,
         }
+    }
+
+    fn validate_declarations(&mut self) {
+        let mut all_diagnostics = Vec::new();
+
+        for declaration in self.graph.declarations().values() {
+            all_diagnostics.extend(self.validate_kind(declaration));
+        }
+
+        self.graph.diagnostics_mut().extend(all_diagnostics);
+    }
+
+    fn validate_kind(&self, declaration: &Declaration) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        if declaration.definitions().len() > 1 {
+            let first_definition = self.graph.definitions().get(&declaration.definitions()[0]).unwrap();
+            let first_definition_declaration_kind = DeclarationKind::from_definition_kind(first_definition.kind());
+
+            for definition in declaration.definitions().iter().skip(1) {
+                let definition = self.graph.definitions().get(definition).unwrap();
+                let definition_declaration_kind = DeclarationKind::from_definition_kind(definition.kind());
+                if definition_declaration_kind != first_definition_declaration_kind {
+                    diagnostics.push(Diagnostic::new(
+                        Rule::KindRedefinition,
+                        *definition.uri_id(),
+                        definition.offset().clone(),
+                        format!(
+                            "Redefining `{}` as `{}`, previously defined as `{}`",
+                            declaration.name(),
+                            definition_declaration_kind,
+                            first_definition_declaration_kind
+                        ),
+                    ));
+                }
+            }
+        }
+
+        diagnostics
     }
 }
 
@@ -4034,7 +4078,13 @@ mod tests {
             "
         });
         context.resolve();
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "kind-redefinition: Redefining `Outer::NESTED` as `class`, previously defined as `constant alias` (9:1-11:4)"
+            ],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
         assert_constant_alias_target_eq!(context, "Outer::NESTED", "Outer::Inner");
@@ -4417,5 +4467,46 @@ mod tests {
 
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", vec!["FOO"]);
+    }
+
+    // Diagnostics tests
+
+    #[test]
+    fn resolution_diagnostics_for_kind_redefinition() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            class Foo; end
+
+            class Bar; end
+            module Bar; end
+
+            class Baz; end
+            Baz = 123
+
+            module Qux; end
+            module Qux; end
+
+            def foo; end
+            attr_reader :foo
+
+            class Qaz
+              class Array; end
+              def Array; end
+            end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "kind-redefinition: Redefining `Foo` as `class`, previously defined as `module` (2:1-2:15)",
+                "kind-redefinition: Redefining `Bar` as `module`, previously defined as `class` (5:1-5:16)",
+                "kind-redefinition: Redefining `Baz` as `constant`, previously defined as `class` (8:1-8:4)",
+            ]
+        );
     }
 }
