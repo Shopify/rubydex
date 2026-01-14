@@ -16,7 +16,7 @@ fn prints_help() {
 }
 
 #[test]
-fn dir_argument_variants() {
+fn paths_argument_variants() {
     let mut zero = Command::cargo_bin("rubydex_cli").unwrap();
     zero.assert().success().stderr(predicate::str::is_empty());
 
@@ -24,11 +24,22 @@ fn dir_argument_variants() {
     one.arg(".");
     one.assert().success().stderr(predicate::str::is_empty());
 
-    let mut two = Command::cargo_bin("rubydex_cli").unwrap();
-    two.args(["foo", "bar"]);
-    two.assert()
-        .failure()
-        .stderr(predicate::str::contains("unexpected argument").or(predicate::str::contains("error:")));
+    with_context(|context| {
+        context.write("dir1/file1.rb", "class Class1\nend\n");
+        context.write("dir1/file2.rb", "class Class2\nend\n");
+        context.write("dir2/file1.rb", "class Class3\nend\n");
+        context.write("dir2/file2.rb", "class Class4\nend\n"); // not indexed
+
+        let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
+        cmd.args([
+            context.absolute_path_to("dir1").to_str().unwrap(),
+            context.absolute_path_to("dir2/file1.rb").to_str().unwrap(),
+        ]);
+        cmd.assert()
+            .success()
+            .stderr(predicate::str::is_empty())
+            .stdout(predicate::str::contains("Indexed 3 files"))
+    });
 }
 
 #[test]

@@ -16,8 +16,8 @@ use rubydex::{
 #[command(name = "rubydex_cli", about = "A Static Analysis Toolkit for Ruby", version)]
 #[allow(clippy::struct_excessive_bools)]
 struct Args {
-    #[arg(value_name = "DIR", default_value = ".")]
-    dir: String,
+    #[arg(value_name = "PATHS", default_value = ".")]
+    paths: Vec<String>,
 
     #[arg(
         long = "check-integrity",
@@ -39,7 +39,7 @@ fn main() {
         Timer::set_global_timer(Timer::new());
     }
 
-    let (file_paths, errors) = time_it!(listing, { listing::collect_file_paths(vec![args.dir]) });
+    let (file_paths, errors) = time_it!(listing, { listing::collect_file_paths(args.paths) });
 
     for error in errors {
         eprintln!("{error}");
