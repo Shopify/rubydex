@@ -6,7 +6,8 @@ use libc::{c_char, c_void};
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::DeclarationId;
-use rubydex::{indexing, listing, query, resolution};
+use rubydex::resolution::Resolver;
+use rubydex::{indexing, listing, query};
 use std::ffi::CString;
 use std::{mem, ptr};
 
@@ -111,7 +112,8 @@ pub unsafe extern "C" fn rdx_index_all(
 #[unsafe(no_mangle)]
 pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
     with_graph(pointer, |graph| {
-        resolution::resolve_all(graph);
+        let mut resolver = Resolver::new(graph);
+        resolver.resolve_all();
     });
 }
 
