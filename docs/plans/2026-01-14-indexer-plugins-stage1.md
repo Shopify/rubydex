@@ -1,86 +1,125 @@
-# Indexer Plugins - Stage 1: Ruby API Foundation
+# Indexer Plugins - Stage 1: Plugin API Foundation
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add Ruby APIs to insert method/class definitions and query class members.
+**Goal:** Add Ruby APIs to insert synthetic definitions (methods, classes, modules), manage mixin relationships, and register include hooks for plugin-based DSL support.
 
-**Architecture:** Extend the existing FFI pipeline (Rust → C → Ruby) with new functions for inserting definitions and querying members. Low-level API style matching Rust internals.
+**Architecture:** Extend the existing FFI pipeline (Rust → C → Ruby) with new functions. The Graph stores synthetic definitions in separate vectors that get processed during `resolve()`. Tests use the existing `with_context` helper for temp files.
 
-**Tech Stack:** Rust (rubydex, rubydex-sys), C extension, Ruby
+**Tech Stack:** Rust (rubydex, rubydex-sys), C extension (ext/rubydex), Ruby (minitest)
 
 ---
 
-## Task 1: Expose Declaration#members in Ruby
+## API Summary
 
-Add a method to query the members (methods, constants, etc.) owned by a class/module declaration.
+| API | Purpose | Parameters |
+|-----|---------|------------|
+| `Declaration#members` | Query members of a class/module | none |
+| `Graph#add_method` | Insert synthetic method | `owner:`, `name:`, `file_path:`, `line:`, `column:` |
+| `Graph#add_class` | Insert synthetic class | `name:`, `parent:` (optional), `file_path:`, `line:`, `column:` |
+| `Graph#add_module` | Insert synthetic module | `name:`, `file_path:`, `line:`, `column:` |
+| `Graph#add_mixin` | Insert mixin relationship | `target:`, `module_name:`, `type:` (`:include`/`:extend`/`:prepend`) |
+| `Graph#register_included_hook` | Auto-extend on include | `module_name:`, `extend_module:` |
+
+---
+
+## Task 1: Declaration#members - Ruby test
+
+**Files:**
+- Modify: `test/declaration_test.rb`
+
+**Step 1: Write the failing test**
+
+Add to `test/declaration_test.rb`:
+
+```ruby
+def test_members_returns_methods_defined_in_class
+  with_context do |context|
+    context.write!("file.rb", <<~RUBY)
+      class Post
+        def save; end
+        def validate; end
+      end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    post = graph["Post"]
+    member_names = post.members.map(&:unqualified_name)
+    assert_equal 2, member_names.size
+    assert_includes member_names, "save"
+    assert_includes member_names, "validate"
+  end
+end
+
+def test_members_returns_empty_for_class_with_no_methods
+  with_context do |context|
+    context.write!("file.rb", "class Post; end")
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    post = graph["Post"]
+    assert_equal 0, post.members.count
+  end
+end
+
+def test_members_returns_nested_constants
+  with_context do |context|
+    context.write!("file.rb", <<~RUBY)
+      module Foo
+        class Bar; end
+        module Baz; end
+      end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    foo = graph["Foo"]
+    member_names = foo.members.map(&:unqualified_name)
+    assert_equal 2, member_names.size
+    assert_includes member_names, "Bar"
+    assert_includes member_names, "Baz"
+  end
+end
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `chruby 3.4.3 && bundle exec ruby -Itest test/declaration_test.rb -n /members/`
+Expected: FAIL with "undefined method `members'"
+
+**Step 3: Commit test**
+
+```bash
+git add test/declaration_test.rb
+git commit -m "test: add Declaration#members tests (red)"
+```
+
+---
+
+## Task 2: Declaration#members - Rust implementation
 
 **Files:**
 - Modify: `rust/rubydex-sys/src/declaration_api.rs`
-- Modify: `ext/rubydex/declaration.c`
-- Create: `test/declaration_members_test.rb`
 
-**Step 1: Write the failing Ruby test**
+**Step 1: Add MembersIter struct and functions**
 
-```ruby
-# test/declaration_members_test.rb
-# frozen_string_literal: true
-
-require "test_helper"
-
-class DeclarationMembersTest < Minitest::Test
-  def setup
-    @graph = Rubydex::Graph.new
-  end
-
-  def test_members_returns_enumerator
-    @graph.index_all([fixture_path("post_with_method.rb")])
-    @graph.resolve
-
-    post = @graph["Post"]
-    assert_respond_to post, :members
-    assert_kind_of Enumerator, post.members
-  end
-
-  def test_members_yields_member_declarations
-    @graph.index_all([fixture_path("post_with_method.rb")])
-    @graph.resolve
-
-    post = @graph["Post"]
-    member_names = post.members.map(&:unqualified_name)
-    assert_includes member_names, "save"
-  end
-
-  private
-
-  def fixture_path(name)
-    File.expand_path("fixtures/#{name}", __dir__)
-  end
-end
-```
-
-**Step 2: Create the test fixture**
-
-```ruby
-# test/fixtures/post_with_method.rb
-class Post
-  def save
-    true
-  end
-end
-```
-
-**Step 3: Run test to verify it fails**
-
-Run: `chruby 3.4.3 && bundle exec ruby -Itest test/declaration_members_test.rb`
-Expected: FAIL with "undefined method `members'"
-
-**Step 4: Add Rust FFI function for members iterator**
+Add to `rust/rubydex-sys/src/declaration_api.rs`:
 
 ```rust
-// rust/rubydex-sys/src/declaration_api.rs (add after existing code)
+/// Iterator over member declaration IDs for a namespace
+pub struct MembersIter {
+    ids: Box<[i64]>,
+    index: usize,
+}
 
 /// Creates a new iterator over member declaration IDs for a given namespace declaration.
-/// Returns an iterator of (declaration_id, kind) pairs for each member.
 ///
 /// # Safety
 ///
@@ -93,39 +132,29 @@ pub unsafe extern "C" fn rdx_declaration_members_iter_new(
 ) -> *mut MembersIter {
     with_graph(pointer, |graph| {
         let decl_id = DeclarationId::new(decl_id);
-        if let Some(decl) = graph.declarations().get(&decl_id) {
-            let members: Vec<i64> = match decl {
-                rubydex::model::declaration::Declaration::Class(c) => {
-                    c.members().values().map(|id| **id).collect()
-                }
-                rubydex::model::declaration::Declaration::Module(m) => {
-                    m.members().values().map(|id| **id).collect()
-                }
-                rubydex::model::declaration::Declaration::SingletonClass(s) => {
-                    s.members().values().map(|id| **id).collect()
-                }
+        let members: Vec<i64> = if let Some(decl) = graph.declarations().get(&decl_id) {
+            match decl {
+                Declaration::Class(c) => c.members().values().map(|id| **id).collect(),
+                Declaration::Module(m) => m.members().values().map(|id| **id).collect(),
+                Declaration::SingletonClass(s) => s.members().values().map(|id| **id).collect(),
                 _ => Vec::new(),
-            };
-            Box::into_raw(Box::new(MembersIter {
-                ids: members.into_boxed_slice(),
-                index: 0,
-            }))
+            }
         } else {
-            Box::into_raw(Box::new(MembersIter {
-                ids: Vec::new().into_boxed_slice(),
-                index: 0,
-            }))
-        }
+            Vec::new()
+        };
+        Box::into_raw(Box::new(MembersIter {
+            ids: members.into_boxed_slice(),
+            index: 0,
+        }))
     })
 }
 
-/// Iterator over member declaration IDs
-#[derive(Debug)]
-pub struct MembersIter {
-    ids: Box<[i64]>,
-    index: usize,
-}
-
+/// Advances the iterator and writes the next ID into `out_id`.
+/// Returns `true` if an ID was written, `false` if exhausted.
+///
+/// # Safety
+/// - `iter` must be valid pointer from `rdx_declaration_members_iter_new`
+/// - `out_id` must be a valid, writable pointer
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_members_iter_next(iter: *mut MembersIter, out_id: *mut i64) -> bool {
     if iter.is_null() || out_id.is_null() {
@@ -140,24 +169,71 @@ pub unsafe extern "C" fn rdx_members_iter_next(iter: *mut MembersIter, out_id: *
     true
 }
 
+/// Returns the total number of members in the iterator.
+///
+/// # Safety
+/// - `iter` must be valid pointer from `rdx_declaration_members_iter_new`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_members_iter_len(iter: *const MembersIter) -> usize {
-    if iter.is_null() { 0 } else { unsafe { (*iter).ids.len() } }
+    if iter.is_null() {
+        0
+    } else {
+        unsafe { (*iter).ids.len() }
+    }
 }
 
+/// Frees an iterator created by `rdx_declaration_members_iter_new`.
+///
+/// # Safety
+/// - `iter` must be a pointer from `rdx_declaration_members_iter_new`
+/// - `iter` must not be used after being freed
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_members_iter_free(iter: *mut MembersIter) {
     if !iter.is_null() {
-        unsafe { let _ = Box::from_raw(iter); }
+        unsafe {
+            let _ = Box::from_raw(iter);
+        }
     }
 }
 ```
 
-**Step 5: Add C bindings for members**
+**Step 2: Compile Rust**
+
+Run: `cd rust && cargo build`
+Expected: PASS
+
+**Step 3: Commit Rust changes**
+
+```bash
+git add rust/rubydex-sys/src/declaration_api.rs
+git commit -m "feat(rust): add members iterator for declarations"
+```
+
+---
+
+## Task 3: Declaration#members - C bindings
+
+**Files:**
+- Modify: `ext/rubydex/rustbindings.h`
+- Modify: `ext/rubydex/declaration.c`
+
+**Step 1: Update rustbindings.h**
+
+Add declarations:
 
 ```c
-// ext/rubydex/declaration.c (add to existing file)
+typedef struct MembersIter MembersIter;
+struct MembersIter *rdx_declaration_members_iter_new(GraphPointer pointer, int64_t decl_id);
+bool rdx_members_iter_next(struct MembersIter *iter, int64_t *out_id);
+size_t rdx_members_iter_len(const struct MembersIter *iter);
+void rdx_members_iter_free(struct MembersIter *iter);
+```
 
+**Step 2: Add C implementation in declaration.c**
+
+Add to `ext/rubydex/declaration.c`:
+
+```c
 // Body function for rb_ensure in Declaration#members
 static VALUE declaration_members_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
@@ -165,6 +241,9 @@ static VALUE declaration_members_yield(VALUE args) {
 
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
     int64_t id = 0;
     while (rdx_members_iter_next(iter, &id)) {
@@ -176,20 +255,21 @@ static VALUE declaration_members_yield(VALUE args) {
     return Qnil;
 }
 
-// Ensure function for rb_ensure in Declaration#members
+// Ensure function to free iterator
 static VALUE declaration_members_ensure(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
     rdx_members_iter_free(iter);
     return Qnil;
 }
 
-// Size function for Declaration#members enumerator
+// Size function for enumerator
 static VALUE declaration_members_size(VALUE self, VALUE _args, VALUE _eobj) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
     void *iter = rdx_declaration_members_iter_new(graph, data->id);
     size_t len = rdx_members_iter_len(iter);
     rdx_members_iter_free(iter);
@@ -217,127 +297,204 @@ static VALUE sr_declaration_members(VALUE self) {
 }
 ```
 
-**Step 6: Register the members method**
+**Step 3: Register the method**
+
+In `initialize_declaration` function, add:
 
 ```c
-// ext/rubydex/declaration.c - in initialize_declaration function, add:
 rb_define_method(cDeclaration, "members", sr_declaration_members, 0);
 ```
 
-**Step 7: Update rustbindings.h**
+**Step 4: Compile and run tests**
 
-```c
-// ext/rubydex/rustbindings.h (add declarations)
-typedef struct MembersIter MembersIter;
-MembersIter *rdx_declaration_members_iter_new(void *graph, int64_t decl_id);
-bool rdx_members_iter_next(MembersIter *iter, int64_t *out_id);
-size_t rdx_members_iter_len(const MembersIter *iter);
-void rdx_members_iter_free(MembersIter *iter);
-```
-
-**Step 8: Compile and run tests**
-
-Run: `chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/declaration_members_test.rb`
+Run: `chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/declaration_test.rb -n /members/`
 Expected: PASS
 
-**Step 9: Commit**
+**Step 5: Commit**
 
 ```bash
-git add rust/rubydex-sys/src/declaration_api.rs ext/rubydex/declaration.c ext/rubydex/rustbindings.h test/declaration_members_test.rb test/fixtures/post_with_method.rb
-git commit -m "feat: add Declaration#members to query class/module members"
+git add ext/rubydex/rustbindings.h ext/rubydex/declaration.c
+git commit -m "feat: add Declaration#members Ruby API"
 ```
 
 ---
 
-## Task 2: Add Graph#add_method for inserting method definitions
-
-Add ability to insert synthetic method definitions from Ruby.
+## Task 4: Graph synthetic definition storage - Rust
 
 **Files:**
-- Modify: `rust/rubydex-sys/src/graph_api.rs`
-- Modify: `ext/rubydex/graph.c`
-- Modify: `ext/rubydex/rustbindings.h`
-- Create: `test/graph_add_method_test.rb`
+- Modify: `rust/rubydex/src/model/graph.rs`
 
-**Step 1: Write the failing Ruby test**
+**Step 1: Add synthetic storage fields to Graph struct**
+
+Add to the Graph struct fields:
+
+```rust
+/// Synthetic method definitions added by plugins: (def_id, owner_fqn)
+synthetic_methods: Vec<(DefinitionId, String)>,
+/// Synthetic class definitions added by plugins
+synthetic_classes: Vec<DefinitionId>,
+/// Synthetic module definitions added by plugins
+synthetic_modules: Vec<DefinitionId>,
+/// Synthetic mixin relationships: (target_decl_id, mixin)
+synthetic_mixins: Vec<(DeclarationId, Mixin)>,
+/// Included hooks: trigger_module_fqn -> vec of modules to extend
+included_hooks: HashMap<String, Vec<String>>,
+```
+
+**Step 2: Initialize in Graph::new()**
+
+Add to `Graph::new()`:
+
+```rust
+synthetic_methods: Vec::new(),
+synthetic_classes: Vec::new(),
+synthetic_modules: Vec::new(),
+synthetic_mixins: Vec::new(),
+included_hooks: HashMap::new(),
+```
+
+**Step 3: Add accessor methods**
+
+```rust
+pub fn synthetic_methods(&self) -> &[(DefinitionId, String)] {
+    &self.synthetic_methods
+}
+
+pub fn synthetic_classes(&self) -> &[DefinitionId] {
+    &self.synthetic_classes
+}
+
+pub fn synthetic_modules(&self) -> &[DefinitionId] {
+    &self.synthetic_modules
+}
+
+pub fn synthetic_mixins(&self) -> &[(DeclarationId, Mixin)] {
+    &self.synthetic_mixins
+}
+
+pub fn included_hooks(&self) -> &HashMap<String, Vec<String>> {
+    &self.included_hooks
+}
+```
+
+**Step 4: Compile**
+
+Run: `cd rust && cargo build`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add rust/rubydex/src/model/graph.rs
+git commit -m "feat(rust): add synthetic definition storage to Graph"
+```
+
+---
+
+## Task 5: Graph#add_method - Ruby test
+
+**Files:**
+- Modify: `test/graph_test.rb`
+
+**Step 1: Write the failing test**
+
+Add to `test/graph_test.rb`:
 
 ```ruby
-# test/graph_add_method_test.rb
-# frozen_string_literal: true
+def test_add_method_creates_synthetic_method
+  with_context do |context|
+    context.write!("post.rb", "class Post; end")
 
-require "test_helper"
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
 
-class GraphAddMethodTest < Minitest::Test
-  def setup
-    @graph = Rubydex::Graph.new
-  end
-
-  def test_add_method_creates_method_declaration
-    @graph.index_all([fixture_path("empty_post.rb")])
-    @graph.resolve
+    # Post starts with 0 members
+    post = graph["Post"]
+    assert_equal 0, post.members.count
 
     # Add synthetic method
-    @graph.add_method(
+    result = graph.add_method(
       owner: "Post",
       name: "author",
-      file_path: fixture_path("empty_post.rb"),
-      line: 2,
-      column: 2
+      file_path: context.absolute_path_to("post.rb"),
+      line: 1,
+      column: 0
     )
+    assert result
 
-    # Re-resolve to pick up the new method
-    @graph.resolve
+    graph.resolve
 
-    # Verify the method exists
-    post = @graph["Post"]
-    member_names = post.members.map(&:unqualified_name)
-    assert_includes member_names, "author"
+    # Now Post has 1 member
+    assert_equal 1, post.members.count
+    assert_equal "author", post.members.first.unqualified_name
   end
+end
 
-  def test_add_method_with_setter
-    @graph.index_all([fixture_path("empty_post.rb")])
-    @graph.resolve
+def test_add_method_getter_and_setter
+  with_context do |context|
+    context.write!("post.rb", "class Post; end")
 
-    @graph.add_method(owner: "Post", name: "author", file_path: fixture_path("empty_post.rb"), line: 2, column: 2)
-    @graph.add_method(owner: "Post", name: "author=", file_path: fixture_path("empty_post.rb"), line: 2, column: 2)
-    @graph.resolve
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
 
-    post = @graph["Post"]
+    file_path = context.absolute_path_to("post.rb")
+    graph.add_method(owner: "Post", name: "author", file_path: file_path, line: 1, column: 0)
+    graph.add_method(owner: "Post", name: "author=", file_path: file_path, line: 1, column: 0)
+    graph.resolve
+
+    post = graph["Post"]
     member_names = post.members.map(&:unqualified_name)
+    assert_equal 2, member_names.size
     assert_includes member_names, "author"
     assert_includes member_names, "author="
   end
+end
 
-  private
+def test_add_method_to_nonexistent_owner_returns_false
+  with_context do |context|
+    context.write!("post.rb", "class Post; end")
 
-  def fixture_path(name)
-    File.expand_path("fixtures/#{name}", __dir__)
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    result = graph.add_method(
+      owner: "NonExistent",
+      name: "foo",
+      file_path: context.absolute_path_to("post.rb"),
+      line: 1,
+      column: 0
+    )
+    refute result
   end
 end
 ```
 
-**Step 2: Create the test fixture**
+**Step 2: Run test to verify it fails**
 
-```ruby
-# test/fixtures/empty_post.rb
-class Post
-end
-```
-
-**Step 3: Run test to verify it fails**
-
-Run: `chruby 3.4.3 && bundle exec ruby -Itest test/graph_add_method_test.rb`
+Run: `chruby 3.4.3 && bundle exec ruby -Itest test/graph_test.rb -n /add_method/`
 Expected: FAIL with "undefined method `add_method'"
 
-**Step 4: Add Rust function to insert method definition**
+**Step 3: Commit test**
+
+```bash
+git add test/graph_test.rb
+git commit -m "test: add Graph#add_method tests (red)"
+```
+
+---
+
+## Task 6: Graph#add_method - Rust implementation
+
+**Files:**
+- Modify: `rust/rubydex-sys/src/graph_api.rs`
+- Modify: `rust/rubydex/src/model/graph.rs`
+
+**Step 1: Add FFI function to graph_api.rs**
 
 ```rust
-// rust/rubydex-sys/src/graph_api.rs (add after existing functions)
-
-use rubydex::model::definitions::{Definition, MethodDefinition};
-use rubydex::model::ids::UriId;
-use rubydex::offset::Offset;
-
 /// Adds a synthetic method definition to the graph.
 ///
 /// # Safety
@@ -364,69 +521,108 @@ pub unsafe extern "C" fn rdx_graph_add_method(
     };
 
     with_graph(pointer, |graph| {
-        // Create a synthetic method definition
-        let uri_id = UriId::from(path.as_str());
-
-        // We need to find or create the owner declaration first
-        let owner_decl_id = DeclarationId::from(owner.as_str());
-
-        // Check owner exists
-        if !graph.declarations().contains_key(&owner_decl_id) {
-            return false;
-        }
-
-        // Create synthetic offset (line/column based)
-        let start = (line - 1) * 1000 + column; // Rough byte offset approximation
-        let offset = Offset::new(start, start + name.len() as u32, line, column);
-
-        // Add the synthetic method definition
-        graph.add_synthetic_method(&owner, &name, uri_id, offset);
-        true
+        graph.add_synthetic_method(&owner, &name, &path, line, column)
     })
 }
 ```
 
-**Step 5: Add Graph method in Rust for synthetic methods**
+**Step 2: Add Graph method in graph.rs**
 
 ```rust
-// rust/rubydex/src/model/graph.rs (add method to Graph impl)
-
-/// Adds a synthetic method definition created by plugins
-pub fn add_synthetic_method(&mut self, owner_name: &str, method_name: &str, uri_id: UriId, offset: Offset) {
-    use crate::model::definitions::{Definition, MethodDefinition};
-    use crate::model::ids::{DefinitionId, StringId};
+/// Adds a synthetic method definition created by plugins.
+/// Returns true if the owner exists and method was added, false otherwise.
+pub fn add_synthetic_method(
+    &mut self,
+    owner_name: &str,
+    method_name: &str,
+    file_path: &str,
+    line: u32,
+    column: u32,
+) -> bool {
+    use crate::model::definitions::{Definition, DefinitionFlags, MethodDefinition};
     use crate::model::visibility::Visibility;
 
+    // Check owner exists
+    let owner_decl_id = DeclarationId::from(owner_name);
+    if !self.declarations().contains_key(&owner_decl_id) {
+        return false;
+    }
+
+    let uri_id = UriId::from(file_path);
     let name_str_id = self.intern_string(method_name.to_string());
     let fqn = format!("{}#{}", owner_name, method_name);
 
-    // Create definition ID from synthetic location
-    let def_id = DefinitionId::synthetic(&fqn, *uri_id);
+    // Create synthetic offset
+    let start = (line.saturating_sub(1)) * 1000 + column;
+    let offset = Offset::new(start, start + method_name.len() as u32, line, column);
 
-    // Create the method definition
-    let definition = Definition::Method(MethodDefinition::new(
+    // Create definition ID
+    let def_id = DefinitionId::new(self.next_synthetic_id());
+
+    let definition = Definition::Method(Box::new(MethodDefinition::new(
         name_str_id,
+        uri_id,
         offset,
         Vec::new(), // no comments
-        crate::model::definitions::DefinitionFlags::SYNTHETIC,
-        None, // no owner_id yet - will be set during resolution
-        uri_id,
+        DefinitionFlags::empty(),
+        None, // owner set during resolution
         Visibility::Public,
         Vec::new(), // no parameters
-    ));
+    )));
 
     self.definitions_mut().insert(def_id, definition);
+    self.synthetic_methods.push((def_id, owner_name.to_string()));
+    true
+}
 
-    // Mark as needing re-resolution
-    self.synthetic_definitions.push((def_id, owner_name.to_string()));
+/// Returns next synthetic definition ID (negative to avoid collision)
+fn next_synthetic_id(&mut self) -> i64 {
+    self.synthetic_id_counter -= 1;
+    self.synthetic_id_counter
 }
 ```
 
-**Step 6: Add C binding for add_method**
+**Step 3: Add synthetic_id_counter field to Graph struct**
+
+```rust
+/// Counter for synthetic definition IDs (negative values)
+synthetic_id_counter: i64,
+```
+
+Initialize in `Graph::new()`:
+```rust
+synthetic_id_counter: 0,
+```
+
+**Step 4: Compile**
+
+Run: `cd rust && cargo build`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add rust/rubydex-sys/src/graph_api.rs rust/rubydex/src/model/graph.rs
+git commit -m "feat(rust): add synthetic method support"
+```
+
+---
+
+## Task 7: Graph#add_method - C bindings
+
+**Files:**
+- Modify: `ext/rubydex/rustbindings.h`
+- Modify: `ext/rubydex/graph.c`
+
+**Step 1: Update rustbindings.h**
 
 ```c
-// ext/rubydex/graph.c (add after sr_graph_resolve)
+bool rdx_graph_add_method(GraphPointer pointer, const char *owner_name, const char *method_name, const char *file_path, uint32_t line, uint32_t column);
+```
 
+**Step 2: Add C implementation in graph.c**
+
+```c
 // Graph#add_method: (owner:, name:, file_path:, line:, column:) -> bool
 static VALUE sr_graph_add_method(int argc, VALUE *argv, VALUE self) {
     VALUE kwargs;
@@ -439,7 +635,7 @@ static VALUE sr_graph_add_method(int argc, VALUE *argv, VALUE self) {
     VALUE column = rb_hash_aref(kwargs, ID2SYM(rb_intern("column")));
 
     if (NIL_P(owner) || NIL_P(name) || NIL_P(file_path) || NIL_P(line) || NIL_P(column)) {
-        rb_raise(rb_eArgError, "missing required keyword arguments");
+        rb_raise(rb_eArgError, "missing required keyword arguments: owner, name, file_path, line, column");
     }
 
     void *graph;
@@ -458,147 +654,157 @@ static VALUE sr_graph_add_method(int argc, VALUE *argv, VALUE self) {
 }
 ```
 
-**Step 7: Register the add_method function**
+**Step 3: Register the method**
 
+In `initialize_graph` function, add:
 ```c
-// ext/rubydex/graph.c - in initialize_graph function, add:
 rb_define_method(cGraph, "add_method", sr_graph_add_method, -1);
 ```
 
-**Step 8: Update rustbindings.h**
+**Step 4: Compile and run tests**
 
-```c
-// ext/rubydex/rustbindings.h (add declaration)
-bool rdx_graph_add_method(void *graph, const char *owner_name, const char *method_name, const char *file_path, uint32_t line, uint32_t column);
-```
-
-**Step 9: Compile and run tests**
-
-Run: `chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/graph_add_method_test.rb`
+Run: `chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/graph_test.rb -n /add_method/`
 Expected: PASS
 
-**Step 10: Commit**
+**Step 5: Commit**
 
 ```bash
-git add rust/rubydex-sys/src/graph_api.rs rust/rubydex/src/model/graph.rs ext/rubydex/graph.c ext/rubydex/rustbindings.h test/graph_add_method_test.rb test/fixtures/empty_post.rb
-git commit -m "feat: add Graph#add_method for synthetic method definitions"
+git add ext/rubydex/rustbindings.h ext/rubydex/graph.c
+git commit -m "feat: add Graph#add_method Ruby API"
 ```
 
 ---
 
-## Task 3: Add Graph#add_class for inserting class definitions
-
-Add ability to insert synthetic class definitions (needed for RSpec anonymous classes).
+## Task 8: Process synthetic methods during resolution
 
 **Files:**
-- Modify: `rust/rubydex-sys/src/graph_api.rs`
-- Modify: `rust/rubydex/src/model/graph.rs`
-- Modify: `ext/rubydex/graph.c`
-- Modify: `ext/rubydex/rustbindings.h`
-- Create: `test/graph_add_class_test.rb`
+- Modify: `rust/rubydex/src/resolution.rs`
 
-**Step 1: Write the failing Ruby test**
+**Step 1: Add synthetic method processing to resolver**
 
-```ruby
-# test/graph_add_class_test.rb
-# frozen_string_literal: true
-
-require "test_helper"
-
-class GraphAddClassTest < Minitest::Test
-  def setup
-    @graph = Rubydex::Graph.new
-  end
-
-  def test_add_class_creates_class_declaration
-    @graph.index_all([fixture_path("rspec_example.rb")])
-    @graph.resolve
-
-    # Add synthetic class for RSpec describe block
-    @graph.add_class(
-      name: "RSpec::ExampleGroups::Calculator",
-      parent: "RSpec::Core::ExampleGroup",
-      file_path: fixture_path("rspec_example.rb"),
-      line: 1,
-      column: 0
-    )
-    @graph.resolve
-
-    # Verify the class exists
-    calc_class = @graph["RSpec::ExampleGroups::Calculator"]
-    refute_nil calc_class
-    assert_equal "Calculator", calc_class.unqualified_name
-  end
-
-  def test_add_class_with_nested_context
-    @graph.index_all([fixture_path("rspec_example.rb")])
-    @graph.resolve
-
-    @graph.add_class(
-      name: "RSpec::ExampleGroups::Calculator",
-      parent: "RSpec::Core::ExampleGroup",
-      file_path: fixture_path("rspec_example.rb"),
-      line: 1,
-      column: 0
-    )
-    @graph.add_class(
-      name: "RSpec::ExampleGroups::Calculator::WhenAdding",
-      parent: "RSpec::ExampleGroups::Calculator",
-      file_path: fixture_path("rspec_example.rb"),
-      line: 5,
-      column: 2
-    )
-    @graph.resolve
-
-    nested = @graph["RSpec::ExampleGroups::Calculator::WhenAdding"]
-    refute_nil nested
-    assert_equal "WhenAdding", nested.unqualified_name
-  end
-
-  private
-
-  def fixture_path(name)
-    File.expand_path("fixtures/#{name}", __dir__)
-  end
-end
-```
-
-**Step 2: Create the test fixture**
-
-```ruby
-# test/fixtures/rspec_example.rb
-RSpec.describe "Calculator" do
-  subject { Object.new }
-  let(:value) { 42 }
-
-  context "when adding" do
-    let(:other) { 10 }
-  end
-end
-```
-
-**Step 3: Run test to verify it fails**
-
-Run: `chruby 3.4.3 && bundle exec ruby -Itest test/graph_add_class_test.rb`
-Expected: FAIL with "undefined method `add_class'"
-
-**Step 4: Add Rust function to insert class definition**
+In the resolution logic, after creating declarations, process synthetic methods:
 
 ```rust
-// rust/rubydex-sys/src/graph_api.rs (add after rdx_graph_add_method)
+// Process synthetic methods - add them to their owner declarations
+for (def_id, owner_fqn) in graph.synthetic_methods().to_vec() {
+    let owner_decl_id = DeclarationId::from(owner_fqn.as_str());
 
+    if let Some(decl) = graph.declarations_mut().get_mut(&owner_decl_id) {
+        // Get method name from definition
+        if let Some(def) = graph.definitions().get(&def_id) {
+            let method_name = def.name(); // Assuming this returns the unqualified name
+            let name_str_id = StringId::from(method_name);
+
+            // Create or get method declaration
+            let method_fqn = format!("{}#{}", owner_fqn, method_name);
+            let method_decl_id = DeclarationId::from(method_fqn.as_str());
+
+            // Add member to owner
+            match decl {
+                Declaration::Class(c) => c.add_member(name_str_id, method_decl_id),
+                Declaration::Module(m) => m.add_member(name_str_id, method_decl_id),
+                Declaration::SingletonClass(s) => s.add_member(name_str_id, method_decl_id),
+                _ => {}
+            }
+        }
+    }
+}
+```
+
+**Step 2: Compile and test**
+
+Run: `cd rust && cargo build && cd .. && chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/graph_test.rb -n /add_method/`
+Expected: PASS
+
+**Step 3: Commit**
+
+```bash
+git add rust/rubydex/src/resolution.rs
+git commit -m "feat(rust): process synthetic methods during resolution"
+```
+
+---
+
+## Task 9: Graph#add_class - Test and implementation
+
+**Files:**
+- Modify: `test/graph_test.rb`
+- Modify: `rust/rubydex-sys/src/graph_api.rs`
+- Modify: `rust/rubydex/src/model/graph.rs`
+- Modify: `ext/rubydex/rustbindings.h`
+- Modify: `ext/rubydex/graph.c`
+
+**Step 1: Write the failing test**
+
+Add to `test/graph_test.rb`:
+
+```ruby
+def test_add_class_creates_synthetic_class
+  with_context do |context|
+    context.write!("spec.rb", "# RSpec file")
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    # Class doesn't exist yet
+    assert_nil graph["RSpec::ExampleGroups::Calculator"]
+
+    result = graph.add_class(
+      name: "RSpec::ExampleGroups::Calculator",
+      file_path: context.absolute_path_to("spec.rb"),
+      line: 1,
+      column: 0
+    )
+    assert result
+
+    graph.resolve
+
+    # Now it exists
+    calc = graph["RSpec::ExampleGroups::Calculator"]
+    refute_nil calc
+    assert_equal "Calculator", calc.unqualified_name
+  end
+end
+
+def test_add_class_with_parent
+  with_context do |context|
+    context.write!("spec.rb", "class RSpec::Core::ExampleGroup; end")
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    graph.add_class(
+      name: "RSpec::ExampleGroups::Calculator",
+      parent: "RSpec::Core::ExampleGroup",
+      file_path: context.absolute_path_to("spec.rb"),
+      line: 1,
+      column: 0
+    )
+    graph.resolve
+
+    calc = graph["RSpec::ExampleGroups::Calculator"]
+    refute_nil calc
+    assert_equal "Calculator", calc.unqualified_name
+  end
+end
+```
+
+**Step 2: Run test (should fail)**
+
+Run: `chruby 3.4.3 && bundle exec ruby -Itest test/graph_test.rb -n /add_class/`
+Expected: FAIL
+
+**Step 3: Add Rust FFI function**
+
+```rust
 /// Adds a synthetic class definition to the graph.
-///
-/// # Safety
-///
-/// - `pointer` must be a valid `GraphPointer`
-/// - `class_name`, `parent_name`, `file_path` must be valid UTF-8 C strings
-/// - `parent_name` can be null for classes without explicit parent
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_add_class(
     pointer: GraphPointer,
     class_name: *const c_char,
-    parent_name: *const c_char,
+    parent_name: *const c_char, // can be null
     file_path: *const c_char,
     line: u32,
     column: u32,
@@ -616,71 +822,64 @@ pub unsafe extern "C" fn rdx_graph_add_class(
     };
 
     with_graph(pointer, |graph| {
-        let uri_id = UriId::from(path.as_str());
-        let start = (line - 1) * 1000 + column;
-        let offset = Offset::new(start, start + name.len() as u32, line, column);
-
-        graph.add_synthetic_class(&name, parent.as_deref(), uri_id, offset);
-        true
+        graph.add_synthetic_class(&name, parent.as_deref(), &path, line, column)
     })
 }
 ```
 
-**Step 5: Add Graph method for synthetic classes**
+**Step 4: Add Graph method**
 
 ```rust
-// rust/rubydex/src/model/graph.rs (add method to Graph impl)
-
-/// Adds a synthetic class definition created by plugins
 pub fn add_synthetic_class(
     &mut self,
     class_name: &str,
     parent_name: Option<&str>,
-    uri_id: UriId,
-    offset: Offset,
-) {
+    file_path: &str,
+    line: u32,
+    column: u32,
+) -> bool {
     use crate::model::definitions::{ClassDefinition, Definition, DefinitionFlags};
-    use crate::model::ids::{DefinitionId, NameId, StringId};
 
-    // Extract unqualified name
+    let uri_id = UriId::from(file_path);
     let unqualified = class_name.rsplit("::").next().unwrap_or(class_name);
     let name_str_id = self.intern_string(unqualified.to_string());
 
-    // Create NameId for the class
-    let name_id = NameId::from(class_name);
+    let start = (line.saturating_sub(1)) * 1000 + column;
+    let offset = Offset::new(start, start + class_name.len() as u32, line, column);
 
-    // Create definition ID
-    let def_id = DefinitionId::synthetic(class_name, *uri_id);
+    let def_id = DefinitionId::new(self.next_synthetic_id());
 
     // Create parent reference if provided
     let parent_name_id = parent_name.map(|p| {
-        let parent_unqualified = p.rsplit("::").next().unwrap_or(p);
-        let parent_str_id = self.intern_string(parent_unqualified.to_string());
+        let parent_str_id = self.intern_string(p.rsplit("::").next().unwrap_or(p).to_string());
         self.add_name(crate::model::name::Name::new(parent_str_id, None, None))
     });
 
-    let definition = Definition::Class(ClassDefinition::new(
+    let definition = Definition::Class(Box::new(ClassDefinition::new(
         name_str_id,
-        name_id,
-        offset,
-        Vec::new(), // no comments
-        DefinitionFlags::SYNTHETIC,
-        None, // owner set during resolution
         uri_id,
+        offset,
+        Vec::new(),
+        DefinitionFlags::empty(),
+        None,
         parent_name_id,
-    ));
+    )));
 
     self.definitions_mut().insert(def_id, definition);
     self.synthetic_classes.push(def_id);
+    true
 }
 ```
 
-**Step 6: Add C binding for add_class**
+**Step 5: Add C binding**
 
+rustbindings.h:
 ```c
-// ext/rubydex/graph.c (add after sr_graph_add_method)
+bool rdx_graph_add_class(GraphPointer pointer, const char *class_name, const char *parent_name, const char *file_path, uint32_t line, uint32_t column);
+```
 
-// Graph#add_class: (name:, parent:, file_path:, line:, column:) -> bool
+graph.c:
+```c
 static VALUE sr_graph_add_class(int argc, VALUE *argv, VALUE self) {
     VALUE kwargs;
     rb_scan_args(argc, argv, ":", &kwargs);
@@ -711,147 +910,480 @@ static VALUE sr_graph_add_class(int argc, VALUE *argv, VALUE self) {
 }
 ```
 
-**Step 7: Register the add_class function**
+Register: `rb_define_method(cGraph, "add_class", sr_graph_add_class, -1);`
 
-```c
-// ext/rubydex/graph.c - in initialize_graph function, add:
-rb_define_method(cGraph, "add_class", sr_graph_add_class, -1);
-```
+**Step 6: Compile and test**
 
-**Step 8: Update rustbindings.h**
-
-```c
-// ext/rubydex/rustbindings.h (add declaration)
-bool rdx_graph_add_class(void *graph, const char *class_name, const char *parent_name, const char *file_path, uint32_t line, uint32_t column);
-```
-
-**Step 9: Compile and run tests**
-
-Run: `chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/graph_add_class_test.rb`
+Run: `chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/graph_test.rb -n /add_class/`
 Expected: PASS
 
-**Step 10: Commit**
+**Step 7: Commit**
 
 ```bash
-git add rust/rubydex-sys/src/graph_api.rs rust/rubydex/src/model/graph.rs ext/rubydex/graph.c ext/rubydex/rustbindings.h test/graph_add_class_test.rb test/fixtures/rspec_example.rb
+git add test/graph_test.rb rust/rubydex-sys/src/graph_api.rs rust/rubydex/src/model/graph.rs ext/rubydex/rustbindings.h ext/rubydex/graph.c
 git commit -m "feat: add Graph#add_class for synthetic class definitions"
 ```
 
 ---
 
-## Task 4: Integration test with belongs_to scenario
+## Task 10: Graph#add_module - Test and implementation
 
-Verify the full flow works for the `belongs_to` use case.
+Follow the same pattern as Task 9 for modules.
 
-**Files:**
-- Create: `test/integration/belongs_to_plugin_test.rb`
-- Create: `test/fixtures/belongs_to_example.rb`
-
-**Step 1: Write the integration test**
+**Tests to add:**
 
 ```ruby
-# test/integration/belongs_to_plugin_test.rb
-# frozen_string_literal: true
+def test_add_module_creates_synthetic_module
+  with_context do |context|
+    context.write!("concern.rb", "module MyConcern; end")
 
-require "test_helper"
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
 
-class BelongsToPluginTest < Minitest::Test
-  def setup
-    @graph = Rubydex::Graph.new
-  end
+    # Module doesn't exist yet
+    assert_nil graph["MyConcern::ClassMethods"]
 
-  def test_simulated_belongs_to_plugin
-    # Index the file
-    @graph.index_all([fixture_path("belongs_to_example.rb")])
-    @graph.resolve
-
-    # Simulate what a plugin would do when seeing `belongs_to :author`
-    # The plugin would detect the DSL call and insert synthetic methods
-    @graph.add_method(
-      owner: "Post",
-      name: "author",
-      file_path: fixture_path("belongs_to_example.rb"),
-      line: 2,
-      column: 2
+    result = graph.add_module(
+      name: "MyConcern::ClassMethods",
+      file_path: context.absolute_path_to("concern.rb"),
+      line: 1,
+      column: 0
     )
-    @graph.add_method(
-      owner: "Post",
-      name: "author=",
-      file_path: fixture_path("belongs_to_example.rb"),
-      line: 2,
-      column: 2
-    )
+    assert result
 
-    # Re-resolve
-    @graph.resolve
+    graph.resolve
 
-    # Verify Post now has the synthetic methods
-    post = @graph["Post"]
-    refute_nil post, "Post class should exist"
-
-    member_names = post.members.map(&:unqualified_name)
-    assert_includes member_names, "author", "Post should have author method"
-    assert_includes member_names, "author=", "Post should have author= method"
+    # Now it exists
+    class_methods = graph["MyConcern::ClassMethods"]
+    refute_nil class_methods
+    assert_equal "ClassMethods", class_methods.unqualified_name
   end
+end
 
-  private
+def test_add_module_can_have_methods_added
+  with_context do |context|
+    context.write!("concern.rb", "module MyConcern; end")
 
-  def fixture_path(name)
-    File.expand_path("../fixtures/#{name}", __dir__)
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    file_path = context.absolute_path_to("concern.rb")
+    graph.add_module(name: "MyConcern::ClassMethods", file_path: file_path, line: 1, column: 0)
+    graph.resolve
+
+    # Add method to the synthetic module
+    graph.add_method(owner: "MyConcern::ClassMethods", name: "foo", file_path: file_path, line: 1, column: 0)
+    graph.resolve
+
+    class_methods = graph["MyConcern::ClassMethods"]
+    assert_equal 1, class_methods.members.count
+    assert_equal "foo", class_methods.members.first.unqualified_name
   end
 end
 ```
 
-**Step 2: Create the test fixture**
+**Rust FFI:**
 
-```ruby
-# test/fixtures/belongs_to_example.rb
-class Post
-  belongs_to :author
-end
+```rust
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_add_module(
+    pointer: GraphPointer,
+    module_name: *const c_char,
+    file_path: *const c_char,
+    line: u32,
+    column: u32,
+) -> bool { ... }
 ```
 
-**Step 3: Run the integration test**
-
-Run: `chruby 3.4.3 && bundle exec ruby -Itest test/integration/belongs_to_plugin_test.rb`
-Expected: PASS
-
-**Step 4: Commit**
-
-```bash
-git add test/integration/belongs_to_plugin_test.rb test/fixtures/belongs_to_example.rb
-git commit -m "test: add integration test for belongs_to plugin scenario"
-```
+**Commit:** `git commit -m "feat: add Graph#add_module for synthetic module definitions"`
 
 ---
 
-## Task 5: Run full test suite and cleanup
+## Task 11: Graph#add_mixin - Test and implementation
 
-**Step 1: Run full test suite**
+**Tests:**
 
-Run: `chruby 3.4.3 && bundle exec rake test`
+```ruby
+def test_add_mixin_extend
+  with_context do |context|
+    context.write!("post.rb", <<~RUBY)
+      module Concern; end
+      module Concern::ClassMethods
+        def foo; end
+      end
+      class Post; end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    result = graph.add_mixin(
+      target: "Post",
+      module_name: "Concern::ClassMethods",
+      type: :extend
+    )
+    assert result
+  end
+end
+
+def test_add_mixin_include
+  with_context do |context|
+    context.write!("post.rb", <<~RUBY)
+      module Validations
+        def validate; end
+      end
+      class Post; end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    result = graph.add_mixin(
+      target: "Post",
+      module_name: "Validations",
+      type: :include
+    )
+    assert result
+  end
+end
+
+def test_add_mixin_to_nonexistent_target_returns_false
+  with_context do |context|
+    context.write!("post.rb", "module Foo; end")
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    result = graph.add_mixin(
+      target: "NonExistent",
+      module_name: "Foo",
+      type: :include
+    )
+    refute result
+  end
+end
+```
+
+**Rust:**
+
+```rust
+#[repr(C)]
+pub enum MixinType {
+    Include = 0,
+    Prepend = 1,
+    Extend = 2,
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_add_mixin(
+    pointer: GraphPointer,
+    target_name: *const c_char,
+    module_name: *const c_char,
+    mixin_type: MixinType,
+) -> bool { ... }
+```
+
+**Commit:** `git commit -m "feat: add Graph#add_mixin for synthetic mixin relationships"`
+
+---
+
+## Task 12: Graph#register_included_hook - Test and implementation
+
+**Tests:**
+
+```ruby
+def test_register_included_hook
+  with_context do |context|
+    context.write!("concern.rb", <<~RUBY)
+      module MyConcern; end
+      class Post
+        include MyConcern
+      end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    file_path = context.absolute_path_to("concern.rb")
+
+    # Add ClassMethods module with a method
+    graph.add_module(name: "MyConcern::ClassMethods", file_path: file_path, line: 1, column: 0)
+    graph.add_method(owner: "MyConcern::ClassMethods", name: "foo", file_path: file_path, line: 1, column: 0)
+
+    # Register hook: when MyConcern is included, extend ClassMethods
+    result = graph.register_included_hook(
+      module_name: "MyConcern",
+      extend_module: "MyConcern::ClassMethods"
+    )
+    assert result
+
+    graph.resolve
+
+    # Verify ClassMethods exists with foo
+    class_methods = graph["MyConcern::ClassMethods"]
+    refute_nil class_methods
+    assert_equal 1, class_methods.members.count
+  end
+end
+
+def test_register_included_hook_returns_true
+  with_context do |context|
+    context.write!("concern.rb", "module MyConcern; end")
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    result = graph.register_included_hook(
+      module_name: "MyConcern",
+      extend_module: "MyConcern::ClassMethods"
+    )
+    assert result
+  end
+end
+```
+
+**Rust:**
+
+```rust
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_register_included_hook(
+    pointer: GraphPointer,
+    trigger_module: *const c_char,
+    extend_module: *const c_char,
+) -> bool { ... }
+```
+
+**Graph method:**
+
+```rust
+pub fn register_included_hook(&mut self, trigger_module: &str, extend_module: &str) {
+    self.included_hooks
+        .entry(trigger_module.to_string())
+        .or_default()
+        .push(extend_module.to_string());
+}
+```
+
+**Commit:** `git commit -m "feat: add Graph#register_included_hook for concern-style auto-extend"`
+
+---
+
+## Task 13: Integration test - belongs_to scenario
+
+**Files:**
+- Modify: `test/graph_test.rb`
+
+**Test:**
+
+```ruby
+def test_integration_belongs_to_plugin_simulation
+  with_context do |context|
+    context.write!("post.rb", <<~RUBY)
+      class Post
+        belongs_to :author
+      end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    # Post starts with 0 members (belongs_to is not a method definition)
+    post = graph["Post"]
+    assert_equal 0, post.members.count
+
+    # Simulate plugin adding synthetic methods for belongs_to :author
+    file_path = context.absolute_path_to("post.rb")
+    graph.add_method(owner: "Post", name: "author", file_path: file_path, line: 2, column: 2)
+    graph.add_method(owner: "Post", name: "author=", file_path: file_path, line: 2, column: 2)
+    graph.resolve
+
+    # Now Post has 2 members
+    member_names = post.members.map(&:unqualified_name)
+    assert_equal 2, member_names.size
+    assert_includes member_names, "author"
+    assert_includes member_names, "author="
+  end
+end
+```
+
+**Commit:** `git commit -m "test: add integration test for belongs_to plugin scenario"`
+
+---
+
+## Task 14: Integration test - class_methods scenario
+
+**Test:**
+
+```ruby
+def test_integration_class_methods_plugin_simulation
+  with_context do |context|
+    context.write!("concern.rb", <<~RUBY)
+      module MyConcern
+        extend ActiveSupport::Concern
+
+        class_methods do
+          def foo; end
+        end
+      end
+
+      class Post
+        include MyConcern
+      end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    # MyConcern::ClassMethods doesn't exist initially
+    assert_nil graph["MyConcern::ClassMethods"]
+
+    file_path = context.absolute_path_to("concern.rb")
+
+    # Simulate what a plugin would do when seeing `class_methods do ... end`
+    # 1. Create ClassMethods module
+    graph.add_module(name: "MyConcern::ClassMethods", file_path: file_path, line: 4, column: 2)
+    graph.resolve
+
+    # 2. Add foo method to ClassMethods
+    graph.add_method(owner: "MyConcern::ClassMethods", name: "foo", file_path: file_path, line: 5, column: 4)
+
+    # 3. Register included hook
+    graph.register_included_hook(module_name: "MyConcern", extend_module: "MyConcern::ClassMethods")
+
+    graph.resolve
+
+    # Verify ClassMethods exists with foo method
+    class_methods = graph["MyConcern::ClassMethods"]
+    refute_nil class_methods
+    assert_equal 1, class_methods.members.count
+    assert_equal "foo", class_methods.members.first.unqualified_name
+
+    # Post still exists
+    post = graph["Post"]
+    refute_nil post
+  end
+end
+```
+
+**Commit:** `git commit -m "test: add integration test for class_methods plugin scenario"`
+
+---
+
+## Task 15: Integration test - RSpec scenario
+
+**Test:**
+
+```ruby
+def test_integration_rspec_plugin_simulation
+  with_context do |context|
+    context.write!("spec.rb", <<~RUBY)
+      RSpec.describe "Calculator" do
+        subject { Calculator.new }
+        let(:value) { 42 }
+
+        context "when adding" do
+          let(:other) { 10 }
+        end
+      end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    # No synthetic classes exist yet
+    assert_nil graph["RSpec::ExampleGroups::Calculator"]
+
+    file_path = context.absolute_path_to("spec.rb")
+
+    # Simulate what a plugin would do for RSpec.describe
+    # 1. Create example group class for "Calculator"
+    graph.add_class(name: "RSpec::ExampleGroups::Calculator", file_path: file_path, line: 1, column: 0)
+    graph.resolve
+
+    # 2. Add subject and let methods
+    graph.add_method(owner: "RSpec::ExampleGroups::Calculator", name: "subject", file_path: file_path, line: 2, column: 2)
+    graph.add_method(owner: "RSpec::ExampleGroups::Calculator", name: "value", file_path: file_path, line: 3, column: 2)
+
+    # 3. Create nested context class
+    graph.add_class(
+      name: "RSpec::ExampleGroups::Calculator::WhenAdding",
+      parent: "RSpec::ExampleGroups::Calculator",
+      file_path: file_path,
+      line: 5,
+      column: 2
+    )
+    graph.resolve
+
+    # 4. Add let method to nested context
+    graph.add_method(owner: "RSpec::ExampleGroups::Calculator::WhenAdding", name: "other", file_path: file_path, line: 6, column: 4)
+
+    graph.resolve
+
+    # Verify Calculator class has subject and value
+    calc = graph["RSpec::ExampleGroups::Calculator"]
+    refute_nil calc
+    calc_members = calc.members.map(&:unqualified_name)
+    assert_equal 2, calc_members.size
+    assert_includes calc_members, "subject"
+    assert_includes calc_members, "value"
+
+    # Verify WhenAdding class has other
+    when_adding = graph["RSpec::ExampleGroups::Calculator::WhenAdding"]
+    refute_nil when_adding
+    assert_equal 1, when_adding.members.count
+    assert_equal "other", when_adding.members.first.unqualified_name
+  end
+end
+```
+
+**Commit:** `git commit -m "test: add integration test for RSpec plugin scenario"`
+
+---
+
+## Task 16: Run full test suite
+
+**Step 1: Run all Ruby tests**
+
+Run: `chruby 3.4.3 && bundle exec rake ruby_test`
 Expected: All tests pass
 
-**Step 2: Run linter**
+**Step 2: Run Rust tests**
+
+Run: `cd rust && cargo test`
+Expected: All tests pass
+
+**Step 3: Run linter**
 
 Run: `chruby 3.4.3 && bundle exec rake lint`
-Expected: No new lint errors
+Expected: No errors
 
-**Step 3: Final commit if any fixes needed**
+**Step 4: Final cleanup commit if needed**
 
 ```bash
 git add -A
-git commit -m "chore: cleanup and fix any lint issues"
+git commit -m "chore: fix any lint issues"
 ```
 
 ---
 
 ## Notes for Implementation
 
-1. **Synthetic definitions need special handling in resolution** - The `add_synthetic_method` and `add_synthetic_class` functions store definitions but they need proper resolution. You may need to add fields to `Graph` to track synthetic definitions and process them during `resolve_all`.
+1. **Synthetic definitions use negative IDs** to avoid collision with real definition IDs
 
-2. **DefinitionFlags::SYNTHETIC** - This flag may not exist yet. Add it to `rust/rubydex/src/model/definitions.rs` if needed.
+2. **Resolution must process synthetics** - The resolver needs to create declarations for synthetic definitions and add them as members to their owners
 
-3. **DefinitionId::synthetic** - This constructor may not exist. Add it to create deterministic IDs for synthetic definitions.
+3. **DefinitionId::new()** takes i64 - synthetic IDs should be negative
 
-4. **The test assumes methods are visible via `Declaration#members`** - Make sure synthetic methods get properly linked to their owner during resolution.
+4. **Test pattern** - All tests use `with_context` helper from `test/helpers/context.rb`
+
+5. **Member iteration** - Declaration#members returns Declaration handles, not Definition handles
