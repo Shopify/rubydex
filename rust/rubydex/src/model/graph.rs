@@ -506,6 +506,7 @@ impl Graph {
                     && let Some(declaration) = self.declarations.get_mut(&declaration_id)
                     && declaration.remove_definition(def_id)
                 {
+                    declaration.clear_diagnostics();
                     if declaration.as_namespace().is_some() {
                         declarations_to_invalidate_ancestor_chains.push(declaration_id);
                     }
@@ -1163,6 +1164,18 @@ mod tests {
         } else {
             panic!("Expected Foo to be a module");
         }
+    }
+
+    #[test]
+    fn updating_index_with_deleted_diagnostics() {
+        let mut context = GraphTest::new();
+
+        // TODO: Add resolution error to test diagnostics attached to declarations
+        context.index_uri("file:///foo.rb", "class Foo");
+        assert!(!context.graph().diagnostics().is_empty());
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        assert!(context.graph().diagnostics().is_empty());
     }
 
     #[test]
