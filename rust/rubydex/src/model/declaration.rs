@@ -1,6 +1,7 @@
 use crate::assert_mem_size;
 use crate::diagnostic::Diagnostic;
 use crate::model::{
+    definitions::DefinitionKind,
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
 };
@@ -65,6 +66,27 @@ pub enum DeclarationKind {
     GlobalVariable,
     InstanceVariable,
     ClassVariable,
+}
+
+impl DeclarationKind {
+    #[must_use]
+    pub fn from_definition_kind(definition_kind: DefinitionKind) -> Self {
+        match definition_kind {
+            DefinitionKind::Class => DeclarationKind::Class,
+            DefinitionKind::SingletonClass => DeclarationKind::SingletonClass,
+            DefinitionKind::Module => DeclarationKind::Module,
+            DefinitionKind::Constant => DeclarationKind::Constant,
+            DefinitionKind::ConstantAlias => DeclarationKind::ConstantAlias,
+            DefinitionKind::Method
+            | DefinitionKind::MethodAlias
+            | DefinitionKind::AttrAccessor
+            | DefinitionKind::AttrReader
+            | DefinitionKind::AttrWriter => DeclarationKind::Method,
+            DefinitionKind::InstanceVariable => DeclarationKind::InstanceVariable,
+            DefinitionKind::ClassVariable => DeclarationKind::ClassVariable,
+            DefinitionKind::GlobalVariable | DefinitionKind::GlobalVariableAlias => DeclarationKind::GlobalVariable,
+        }
+    }
 }
 
 impl std::fmt::Display for DeclarationKind {

@@ -3696,7 +3696,13 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "kind-redefinition: Redefining `Outer::NESTED` as `class`, previously defined as `constant alias` (9:1-11:4)"
+            ],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
         assert_constant_alias_target_eq!(context, "Outer::NESTED", "Outer::Inner");
@@ -4359,5 +4365,46 @@ mod tests {
 
         assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
         assert_ancestors_eq!(context, "Baz::Child", ["Baz::Child", "Baz::Base", "Object"]);
+    }
+
+    // Diagnostics tests
+
+    #[test]
+    fn resolution_diagnostics_for_kind_redefinition() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            class Foo; end
+
+            class Bar; end
+            module Bar; end
+
+            class Baz; end
+            Baz = 123
+
+            module Qux; end
+            module Qux; end
+
+            def foo; end
+            attr_reader :foo
+
+            class Qaz
+              class Array; end
+              def Array; end
+            end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "kind-redefinition: Redefining `Foo` as `class`, previously defined as `module` (2:1-2:15)",
+                "kind-redefinition: Redefining `Bar` as `module`, previously defined as `class` (5:1-5:16)",
+                "kind-redefinition: Redefining `Baz` as `constant`, previously defined as `class` (8:1-8:4)",
+            ]
+        );
     }
 }

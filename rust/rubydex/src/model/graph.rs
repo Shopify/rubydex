@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration, DeclarationKind, Namespace};
 use crate::model::definitions::{Definition, DefinitionKind};
@@ -91,7 +91,25 @@ impl Graph {
                     occupied_entry.get().name() == fully_qualified_name,
                     "DeclarationId collision in global graph"
                 );
-                occupied_entry.get_mut().add_definition(definition_id);
+
+                let declaration = occupied_entry.get_mut();
+                let definition = self.definitions.get(&definition_id).unwrap();
+                let definition_declaration_kind = DeclarationKind::from_definition_kind(definition.kind());
+                if definition_declaration_kind != declaration.kind() {
+                    declaration.add_diagnostic(Diagnostic::new(
+                        Rule::KindRedefinition,
+                        *definition.uri_id(),
+                        definition.offset().clone(),
+                        format!(
+                            "Redefining `{}` as `{}`, previously defined as `{}`",
+                            declaration.name(),
+                            definition_declaration_kind,
+                            declaration.kind()
+                        ),
+                    ));
+                }
+
+                declaration.add_definition(definition_id);
             }
         }
 
@@ -278,6 +296,8 @@ impl Graph {
     pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
         &self.method_references
     }
+
+    // Diagnostics
 
     #[must_use]
     pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
