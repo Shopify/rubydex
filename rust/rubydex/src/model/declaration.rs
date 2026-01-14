@@ -404,6 +404,11 @@ impl Namespace {
     pub fn member(&self, str_id: &StringId) -> Option<&DeclarationId> {
         all_namespaces!(self, it => it.member(str_id))
     }
+
+    #[must_use]
+    pub fn singleton_class(&self) -> Option<&DeclarationId> {
+        all_namespaces!(self, it => it.singleton_class_id())
+    }
 }
 
 namespace_declaration!(Class, ClassDeclaration);

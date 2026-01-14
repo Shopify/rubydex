@@ -560,7 +560,7 @@ impl<'a> Resolver<'a> {
             // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
             // and `Module.new`, which now seem like constants, but are actually namespaces
             if !matches!(attached_decl, Declaration::Constant(_) | Declaration::ConstantAlias(_))
-                && let Some(singleton_id) = Self::singleton_class(attached_decl)
+                && let Some(singleton_id) = attached_decl.as_namespace().unwrap().singleton_class()
             {
                 return *singleton_id;
             }
@@ -1446,16 +1446,6 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    #[must_use]
-    fn singleton_class(declaration: &Declaration) -> Option<&DeclarationId> {
-        match declaration {
-            Declaration::Namespace(Namespace::Class(class)) => class.singleton_class_id(),
-            Declaration::Namespace(Namespace::Module(module)) => module.singleton_class_id(),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.singleton_class_id(),
-            _ => panic!("Tried to get singleton class ID for a declaration that isn't a namespace or a constant"),
-        }
-    }
-
     fn set_singleton_class_id(&mut self, declaration_id: DeclarationId, id: DeclarationId) {
         match self.graph.declarations_mut().get_mut(&declaration_id).unwrap() {
             Declaration::Namespace(Namespace::Class(class)) => class.set_singleton_class_id(id),
@@ -2090,7 +2080,7 @@ mod tests {
         assert_owner(foo, "Object");
         assert_eq!(
             &DeclarationId::from("Foo::<Foo>"),
-            Resolver::singleton_class(foo).unwrap()
+            foo.as_namespace().unwrap().singleton_class().unwrap()
         );
 
         assert_members_eq!(context, "Foo::<Foo>", vec!["BAZ", "bar()"]);
@@ -2121,22 +2111,27 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_no_members!(context, "Foo");
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+
+        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(
             &DeclarationId::from("Foo::<Foo>"),
-            Resolver::singleton_class(foo).unwrap()
+            foo_declaration.as_namespace().unwrap().singleton_class().unwrap()
         );
 
         assert_no_members!(context, "Foo::<Foo>");
 
-        let singleton = context
+        let nested_singleton_declaration = context
             .graph()
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>"))
             .unwrap();
         assert_eq!(
             &DeclarationId::from("Foo::<Foo>::<<Foo>>"),
-            Resolver::singleton_class(singleton).unwrap()
+            nested_singleton_declaration
+                .as_namespace()
+                .unwrap()
+                .singleton_class()
+                .unwrap()
         );
 
         assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["baz()"]);
@@ -2170,9 +2165,11 @@ mod tests {
         assert_no_members!(context, "Foo");
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_owner(foo, "Object");
+
+        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(
             &DeclarationId::from("Foo::<Foo>"),
-            Resolver::singleton_class(foo).unwrap()
+            foo_declaration.as_namespace().unwrap().singleton_class().unwrap()
         );
 
         assert_no_members!(context, "Bar");
@@ -2303,10 +2300,10 @@ mod tests {
         );
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(
             &DeclarationId::from("Foo::<Foo>"),
-            Resolver::singleton_class(foo).unwrap()
+            foo_declaration.as_namespace().unwrap().singleton_class().unwrap()
         );
     }
 
