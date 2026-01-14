@@ -1895,14 +1895,7 @@ mod tests {
                 .graph()
                 .diagnostics()
                 .iter()
-                .map(|d| {
-                    format!(
-                        "{}: {} ({})",
-                        d.rule(),
-                        d.message(),
-                        d.offset().to_display_range($context.source())
-                    )
-                })
+                .map(|d| d.formatted($context.source()))
                 .collect();
             assert_eq!($expected_diagnostics, actual_diagnostics);
         }};
@@ -1917,12 +1910,7 @@ mod tests {
                     .graph()
                     .diagnostics()
                     .iter()
-                    .map(|d| format!(
-                        "{}: {} ({})",
-                        d.rule(),
-                        d.message(),
-                        d.offset().to_display_range($context.source())
-                    ))
+                    .map(|d| d.formatted($context.source()))
                     .collect::<Vec<_>>()
             );
         }};
