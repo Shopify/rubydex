@@ -1,6 +1,6 @@
 //! Visit the Ruby AST and create the definitions.
 
-use crate::diagnostic::Diagnostics;
+use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
@@ -83,7 +83,7 @@ impl<'a> RubyIndexer<'a> {
 
         for error in result.errors() {
             self.local_graph.add_diagnostic(
-                Diagnostics::ParseError,
+                Rule::ParseError,
                 Offset::from_prism_location(&error.location()),
                 error.message().to_string(),
             );
@@ -91,7 +91,7 @@ impl<'a> RubyIndexer<'a> {
 
         for warning in result.warnings() {
             self.local_graph.add_diagnostic(
-                Diagnostics::ParseWarning,
+                Rule::ParseWarning,
                 Offset::from_prism_location(&warning.location()),
                 warning.message().to_string(),
             );
@@ -374,7 +374,7 @@ impl<'a> RubyIndexer<'a> {
                         ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {}
                         _ => {
                             self.local_graph.add_diagnostic(
-                                Diagnostics::DynamicConstantReference,
+                                Rule::DynamicConstantReference,
                                 Offset::from_prism_location(&parent.location()),
                                 "Dynamic constant reference".to_string(),
                             );
@@ -589,7 +589,7 @@ impl<'a> RubyIndexer<'a> {
             && superclass.is_none()
         {
             self.local_graph.add_diagnostic(
-                Diagnostics::DynamicAncestor,
+                Rule::DynamicAncestor,
                 Offset::from_prism_location(&superclass_node.location()),
                 "Dynamic superclass".to_string(),
             );
@@ -780,7 +780,7 @@ impl<'a> RubyIndexer<'a> {
                 if arg.as_self_node().is_some() {
                     if parent_nesting_id.is_none() {
                         self.local_graph.add_diagnostic(
-                            Diagnostics::TopLevelMixinSelf,
+                            Rule::TopLevelMixinSelf,
                             Offset::from_prism_location(&arg.location()),
                             "Top level mixin self".to_string(),
                         );
@@ -795,7 +795,7 @@ impl<'a> RubyIndexer<'a> {
                     Some(constant_ref_id)
                 } else {
                     self.local_graph.add_diagnostic(
-                        Diagnostics::DynamicAncestor,
+                        Rule::DynamicAncestor,
                         Offset::from_prism_location(&arg.location()),
                         "Dynamic mixin argument".to_string(),
                     );
@@ -970,7 +970,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let Some(attached_target) = attached_target else {
             self.local_graph.add_diagnostic(
-                Diagnostics::DynamicSingletonDefinition,
+                Rule::DynamicSingletonDefinition,
                 Offset::from_prism_location(&node.location()),
                 "Dynamic singleton class definition".to_string(),
             );
@@ -1149,7 +1149,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 // We still want to visit because it could be a variable reference
                 _ => {
                     self.local_graph.add_diagnostic(
-                        Diagnostics::DynamicSingletonDefinition,
+                        Rule::DynamicSingletonDefinition,
                         Offset::from_prism_location(&node.location()),
                         "Dynamic receiver for singleton method definition".to_string(),
                     );
@@ -1898,7 +1898,7 @@ mod tests {
                 .map(|d| {
                     format!(
                         "{}: {} ({})",
-                        d.severity().as_str(),
+                        d.rule(),
                         d.message(),
                         $context.offset_to_display_range(d.offset())
                     )
@@ -1919,7 +1919,7 @@ mod tests {
                     .iter()
                     .map(|d| format!(
                         "{}: {} ({})",
-                        d.severity().as_str(),
+                        d.rule(),
                         d.message(),
                         $context.offset_to_display_range(d.offset())
                     ))
@@ -1943,8 +1943,8 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "Error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)",
-                "Error: expected an `end` to close the `class` statement (2:1-2:1)"
+                "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)",
+                "parse-error: expected an `end` to close the `class` statement (2:1-2:1)"
             ]
         );
 
@@ -1963,7 +1963,10 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(&context, vec!["Warning: assigned but unused variable - foo (1:1-1:4)"]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
+        );
     }
 
     #[test]
@@ -2065,7 +2068,10 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic constant reference (1:7-1:10)"]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"]
+        );
         assert!(context.graph().definitions().is_empty());
     }
 
@@ -2160,7 +2166,10 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic constant reference (1:8-1:11)"]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["dynamic-constant-reference: Dynamic constant reference (1:8-1:11)"]
+        );
         assert!(context.graph().definitions().is_empty());
     }
 
@@ -2427,7 +2436,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["Warning: Dynamic receiver for singleton method definition (1:1-1:17)"]
+            vec!["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
         );
         assert_eq!(context.graph().definitions().len(), 0);
         assert_method_references_eq!(&context, vec!["foo"]);
@@ -2564,7 +2573,10 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(&context, vec!["Warning: Dynamic singleton class definition (1:1-3:4)"]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
+        );
         assert_eq!(context.graph().definitions().len(), 0);
     }
 
@@ -3637,8 +3649,8 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "Warning: assigned but unused variable - foo (5:1-5:4)",
-                "Warning: Dynamic constant reference (3:6-3:14)",
+                "parse-warning: assigned but unused variable - foo (5:1-5:4)",
+                "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
             ]
         );
 
@@ -3789,7 +3801,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["Error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
+            vec!["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
         );
 
         assert_method_references_eq!(
@@ -3875,18 +3887,18 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "Warning: possibly useless use of != in void context (1:1-1:7)",
-                "Warning: possibly useless use of % in void context (2:1-2:6)",
-                "Warning: possibly useless use of & in void context (3:1-3:6)",
-                "Warning: possibly useless use of * in void context (5:1-5:6)",
-                "Warning: possibly useless use of ** in void context (6:1-6:7)",
-                "Warning: possibly useless use of + in void context (7:1-7:6)",
-                "Warning: possibly useless use of - in void context (8:1-8:6)",
-                "Warning: possibly useless use of / in void context (9:1-9:6)",
-                "Warning: possibly useless use of == in void context (11:1-11:7)",
-                "Warning: possibly useless use of ^ in void context (14:1-14:6)",
-                "Warning: possibly useless use of | in void context (15:1-15:6)",
-                "Warning: possibly useless use of <=> in void context (17:1-17:8)"
+                "parse-warning: possibly useless use of != in void context (1:1-1:7)",
+                "parse-warning: possibly useless use of % in void context (2:1-2:6)",
+                "parse-warning: possibly useless use of & in void context (3:1-3:6)",
+                "parse-warning: possibly useless use of * in void context (5:1-5:6)",
+                "parse-warning: possibly useless use of ** in void context (6:1-6:7)",
+                "parse-warning: possibly useless use of + in void context (7:1-7:6)",
+                "parse-warning: possibly useless use of - in void context (8:1-8:6)",
+                "parse-warning: possibly useless use of / in void context (9:1-9:6)",
+                "parse-warning: possibly useless use of == in void context (11:1-11:7)",
+                "parse-warning: possibly useless use of ^ in void context (14:1-14:6)",
+                "parse-warning: possibly useless use of | in void context (15:1-15:6)",
+                "parse-warning: possibly useless use of <=> in void context (17:1-17:8)"
             ]
         );
 
@@ -3908,7 +3920,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["Warning: possibly useless use of < in void context (1:1-1:6)"]
+            vec!["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
         );
 
         assert_method_references_eq!(&context, vec!["x", "<", "<=>", "y"]);
@@ -3924,7 +3936,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["Warning: possibly useless use of <= in void context (1:1-1:7)"]
+            vec!["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
         );
 
         assert_method_references_eq!(&context, vec!["x", "<=", "<=>", "y"]);
@@ -3940,7 +3952,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["Warning: possibly useless use of > in void context (1:1-1:6)"]
+            vec!["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
         );
 
         assert_method_references_eq!(&context, vec!["x", "<=>", ">", "y"]);
@@ -3956,7 +3968,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["Warning: possibly useless use of >= in void context (1:1-1:7)"]
+            vec!["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
         );
 
         assert_method_references_eq!(&context, vec!["x", "<=>", ">=", "y"]);
@@ -4068,11 +4080,11 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "Warning: Dynamic superclass (1:13-1:24)",
-                "Warning: Dynamic superclass (2:13-2:16)",
-                "Warning: Dynamic superclass (3:21-3:49)",
-                "Warning: Dynamic constant reference (4:13-4:16)",
-                "Warning: Dynamic superclass (4:13-4:21)",
+                "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
+                "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
+                "dynamic-ancestor: Dynamic superclass (3:21-3:49)",
+                "dynamic-constant-reference: Dynamic constant reference (4:13-4:16)",
+                "dynamic-ancestor: Dynamic superclass (4:13-4:21)",
             ]
         );
 
@@ -4251,15 +4263,15 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "Warning: Dynamic constant reference (1:9-1:12)",
-                "Warning: Dynamic mixin argument (1:9-1:17)",
-                "Warning: Dynamic constant reference (2:9-2:12)",
-                "Warning: Dynamic mixin argument (2:9-2:17)",
-                "Warning: Dynamic constant reference (3:8-3:11)",
-                "Warning: Dynamic mixin argument (3:8-3:16)",
-                "Warning: Dynamic mixin argument (5:9-5:12)",
-                "Warning: Dynamic mixin argument (6:9-6:12)",
-                "Warning: Dynamic mixin argument (7:8-7:11)"
+                "dynamic-constant-reference: Dynamic constant reference (1:9-1:12)",
+                "dynamic-ancestor: Dynamic mixin argument (1:9-1:17)",
+                "dynamic-constant-reference: Dynamic constant reference (2:9-2:12)",
+                "dynamic-ancestor: Dynamic mixin argument (2:9-2:17)",
+                "dynamic-constant-reference: Dynamic constant reference (3:8-3:11)",
+                "dynamic-ancestor: Dynamic mixin argument (3:8-3:16)",
+                "dynamic-ancestor: Dynamic mixin argument (5:9-5:12)",
+                "dynamic-ancestor: Dynamic mixin argument (6:9-6:12)",
+                "dynamic-ancestor: Dynamic mixin argument (7:8-7:11)"
             ]
         );
         assert!(context.graph().definitions().is_empty());
@@ -4278,9 +4290,9 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "Warning: Top level mixin self (1:9-1:13)",
-                "Warning: Top level mixin self (2:9-2:13)",
-                "Warning: Top level mixin self (3:8-3:12)"
+                "top-level-mixin-self: Top level mixin self (1:9-1:13)",
+                "top-level-mixin-self: Top level mixin self (2:9-2:13)",
+                "top-level-mixin-self: Top level mixin self (3:8-3:12)"
             ]
         );
 

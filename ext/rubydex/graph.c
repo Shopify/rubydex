@@ -320,14 +320,12 @@ static VALUE sr_graph_diagnostics(VALUE self) {
     for (size_t i = 0; i < array->len; i++) {
         DiagnosticEntry entry = array->items[i];
         VALUE message = entry.message == NULL ? Qnil : rb_utf8_str_new_cstr(entry.message);
-        VALUE severity = severity_symbol(entry.severity);
-        VALUE code = UINT2NUM(entry.code);
+        VALUE rule = rb_str_new2(entry.rule);
         VALUE location = build_location_value(entry.location);
 
         VALUE kwargs = rb_hash_new();
+        rb_hash_aset(kwargs, ID2SYM(rb_intern("rule")), rule);
         rb_hash_aset(kwargs, ID2SYM(rb_intern("message")), message);
-        rb_hash_aset(kwargs, ID2SYM(rb_intern("severity")), severity);
-        rb_hash_aset(kwargs, ID2SYM(rb_intern("code")), code);
         rb_hash_aset(kwargs, ID2SYM(rb_intern("location")), location);
 
         VALUE diagnostic = rb_class_new_instance_kw(1, &kwargs, cDiagnostic, RB_PASS_KEYWORDS);
