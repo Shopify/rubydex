@@ -1685,6 +1685,26 @@ mod tests {
         );
     }
 
+    macro_rules! assert_singleton_class_eq {
+        ($context:expr, $declaration_id:expr, $expected_singleton_class_name:expr) => {
+            let declaration = $context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from($declaration_id))
+                .unwrap();
+
+            assert_eq!(
+                $expected_singleton_class_name,
+                $context
+                    .graph()
+                    .declarations()
+                    .get(declaration.as_namespace().unwrap().singleton_class().unwrap())
+                    .unwrap()
+                    .name()
+            );
+        };
+    }
+
     fn assert_instance_variable(context: &GraphTest, fqn: &str, owner: &str) {
         let decl = context
             .graph()
@@ -2078,10 +2098,7 @@ mod tests {
         assert_no_members!(context, "Foo");
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_owner(foo, "Object");
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>"),
-            foo.as_namespace().unwrap().singleton_class().unwrap()
-        );
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
 
         assert_members_eq!(context, "Foo::<Foo>", vec!["BAZ", "bar()"]);
         let singleton = context
@@ -2111,28 +2128,10 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_no_members!(context, "Foo");
-
-        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>"),
-            foo_declaration.as_namespace().unwrap().singleton_class().unwrap()
-        );
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
 
         assert_no_members!(context, "Foo::<Foo>");
-
-        let nested_singleton_declaration = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>::<<Foo>>"),
-            nested_singleton_declaration
-                .as_namespace()
-                .unwrap()
-                .singleton_class()
-                .unwrap()
-        );
+        assert_singleton_class_eq!(context, "Foo::<Foo>", "Foo::<Foo>::<<Foo>>");
 
         assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["baz()"]);
         let nested_singleton = context
@@ -2165,12 +2164,7 @@ mod tests {
         assert_no_members!(context, "Foo");
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_owner(foo, "Object");
-
-        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>"),
-            foo_declaration.as_namespace().unwrap().singleton_class().unwrap()
-        );
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
 
         assert_no_members!(context, "Bar");
         let bar = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
@@ -2291,6 +2285,9 @@ mod tests {
         });
 
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert!(
             context
                 .graph()
@@ -2298,13 +2295,8 @@ mod tests {
                 .get(&DeclarationId::from("Foo::<Foo>"))
                 .is_some()
         );
-        assert_no_diagnostics!(&context);
 
-        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>"),
-            foo_declaration.as_namespace().unwrap().singleton_class().unwrap()
-        );
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
     }
 
     #[test]
