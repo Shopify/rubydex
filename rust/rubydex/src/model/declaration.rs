@@ -236,6 +236,20 @@ impl Declaration {
     }
 
     #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Declaration::Class(_) => "Class",
+            Declaration::SingletonClass(_) => "SingletonClass",
+            Declaration::Module(_) => "Module",
+            Declaration::Constant(_) => "Constant",
+            Declaration::Method(_) => "Method",
+            Declaration::GlobalVariable(_) => "GlobalVariable",
+            Declaration::InstanceVariable(_) => "InstanceVariable",
+            Declaration::ClassVariable(_) => "ClassVariable",
+        }
+    }
+
+    #[must_use]
     pub fn references(&self) -> &IdentityHashSet<ReferenceId> {
         all_declarations!(self, it => &it.references)
     }
