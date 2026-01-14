@@ -1720,17 +1720,29 @@ mod tests {
         };
     }
 
-    fn assert_instance_variable(context: &GraphTest, fqn: &str, owner: &str) {
-        let decl = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from(fqn))
-            .unwrap_or_else(|| panic!("{fqn} declaration should exist"));
-        assert!(
-            matches!(decl, Declaration::InstanceVariable(_)),
-            "{fqn} should be InstanceVariable, got {decl:?}"
-        );
-        assert_owner_eq!(context, fqn, owner);
+    macro_rules! assert_instance_variables_eq {
+        ($context:expr, $declaration_id:expr, $expected_instance_variables:expr) => {
+            let mut actual_instance_variables = $context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from($declaration_id))
+                .unwrap()
+                .as_namespace()
+                .unwrap()
+                .members()
+                .iter()
+                .filter_map(
+                    |(str_id, member_id)| match $context.graph().declarations().get(member_id) {
+                        Some(Declaration::InstanceVariable(_)) => Some($context.graph().strings().get(str_id).unwrap()),
+                        _ => None,
+                    },
+                )
+                .collect::<Vec<_>>();
+
+            actual_instance_variables.sort();
+
+            assert_eq!($expected_instance_variables, actual_instance_variables);
+        };
     }
 
     fn format_diagnostics(context: &GraphTest, ignore_rules: &[Rule]) -> Vec<String> {
@@ -2468,12 +2480,10 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>#@foo", "Foo::<Foo>");
-        assert_instance_variable(&context, "Foo#@bar", "Foo");
-        assert_instance_variable(&context, "Foo::<Foo>#@baz", "Foo::<Foo>");
+        assert_instance_variables_eq!(context, "Foo", vec!["@bar"]);
         // @qux in `class << self; def qux` - self is Foo when called, so @qux belongs to Foo's singleton class
-        assert_instance_variable(&context, "Foo::<Foo>#@qux", "Foo::<Foo>");
-        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>#@nested", "Foo::<Foo>::<<Foo>>");
+        assert_instance_variables_eq!(context, "Foo::<Foo>", vec!["@baz", "@foo", "@qux"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["@nested"]);
     }
 
     #[test]
@@ -2501,8 +2511,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>#@foo", "Foo::<Foo>");
-        assert_instance_variable(&context, "Bar::<Bar>#@baz", "Bar::<Bar>");
+        assert_instance_variables_eq!(context, "Foo::<Foo>", vec!["@foo"]);
+        assert_instance_variables_eq!(context, "Bar::<Bar>", vec!["@baz"]);
     }
 
     #[test]
@@ -2524,7 +2534,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
-        assert_instance_variable(&context, "Bar::Baz::<Baz>#@baz", "Bar::Baz::<Baz>");
+        assert_instance_variables_eq!(context, "Bar::Baz::<Baz>", vec!["@baz"]);
     }
 
     #[test]
@@ -2547,12 +2557,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>#@bar", "Foo::<Foo>::<<Foo>>");
-        assert_instance_variable(
-            &context,
-            "Foo::<Foo>::<<Foo>>::<<<Foo>>>#@baz",
-            "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
-        );
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["@bar"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", vec!["@baz"]);
     }
 
     #[test]
