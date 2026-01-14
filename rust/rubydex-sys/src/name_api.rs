@@ -1,34 +1,85 @@
-use libc::c_char;
-use rubydex::model::{graph::Graph, ids::NameId, name::Name};
+use rubydex::model::{
+    graph::Graph,
+    ids::{NameId, StringId},
+    name::Name,
+};
 
-use crate::utils;
+/// Takes a constant name and a nesting stack (e.g.: `["Foo", "Bar::Baz", "Qux"]`) and transforms it into a `NameId`,
+/// registering each required part in the graph. Returns the `NameId` and a list of name ids that need to be untracked
+/// afterwards
+///
+/// # Panics
+///
+/// Should not panic because `const_name` will always be turned into a name
+pub fn nesting_stack_to_name_id(graph: &mut Graph, const_name: &str, nesting: Vec<String>) -> (NameId, Vec<NameId>) {
+    let mut current_nesting = None;
+    let mut current_name = None;
+    let mut names_to_untrack = Vec::new();
 
-#[repr(C)]
-pub struct NameRefData {
-    str: *const c_char,
-    nesting: *mut NameRefData,
-    parent_scope: *mut NameRefData,
+    for entry in nesting {
+        for part in entry.split("::").map(String::from) {
+            let str_id = StringId::from(&part);
+            let name_id = graph.add_name(Name::new(str_id, current_name, current_nesting));
+            names_to_untrack.push(name_id);
+            let new_name = Some(name_id);
+            current_name = new_name;
+        }
+
+        current_nesting = current_name;
+        current_name = None;
+    }
+
+    for part in const_name.split("::").map(String::from) {
+        let str_id = StringId::from(&part);
+        let name_id = graph.add_name(Name::new(str_id, current_name, current_nesting));
+        names_to_untrack.push(name_id);
+        let new_name = Some(name_id);
+        current_name = new_name;
+    }
+
+    (
+        current_name.expect("The NameId cannot be None since it contains at least `const_name`"),
+        names_to_untrack,
+    )
 }
 
-/// Converts a `NameRefData` C struct into a `NameId` reference and registers all of the necessary data in the graph to
-/// perform resolution
-pub fn convert_name_data_to_ref(graph: &mut Graph, data: &NameRefData) -> Option<NameId> {
-    let nesting = if data.nesting.is_null() {
-        None
-    } else {
-        convert_name_data_to_ref(graph, unsafe { &*data.nesting })
-    };
+#[cfg(test)]
+mod tests {
+    use rubydex::model::ids::StringId;
 
-    let parent_scope = if data.parent_scope.is_null() {
-        None
-    } else {
-        convert_name_data_to_ref(graph, unsafe { &*data.parent_scope })
-    };
+    use super::*;
 
-    let Ok(str) = (unsafe { utils::convert_char_ptr_to_string(data.str) }) else {
-        return None;
-    };
+    #[test]
+    fn nesting_is_converted_to_name_id() {
+        let mut graph = Graph::new();
 
-    let str_id = graph.intern_string(str);
-    Some(graph.add_name(Name::new(str_id, parent_scope, nesting)))
+        let (name_id, _) = nesting_stack_to_name_id(
+            &mut graph,
+            "Some::CONST",
+            vec!["Foo".into(), "Bar::Zip".into(), "Qux".into()],
+        );
+
+        let const_name = graph.names().get(&name_id).unwrap();
+        assert_eq!(StringId::from("CONST"), *const_name.str());
+
+        let some_name = graph.names().get(&const_name.parent_scope().unwrap()).unwrap();
+        assert_eq!(StringId::from("Some"), *some_name.str());
+        assert_eq!(const_name.nesting(), some_name.nesting());
+
+        let qux_name = graph.names().get(&some_name.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("Qux"), *qux_name.str());
+        assert!(qux_name.parent_scope().is_none());
+
+        let zip_name = graph.names().get(&qux_name.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("Zip"), *zip_name.str());
+
+        let bar_name = graph.names().get(&zip_name.parent_scope().unwrap()).unwrap();
+        assert_eq!(StringId::from("Bar"), *bar_name.str());
+        assert_eq!(zip_name.nesting(), bar_name.nesting());
+
+        let foo_name = graph.names().get(&bar_name.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *foo_name.str());
+        assert!(foo_name.parent_scope().is_none());
+        assert!(foo_name.nesting().is_none());
+    }
 }

@@ -183,19 +183,16 @@ impl Graph {
     pub fn add_name(&mut self, name: Name) -> NameId {
         let name_id = name.id();
 
-        self.names
-            .entry(name_id)
-            .or_insert_with(|| NameRef::Unresolved(Box::new(name)));
+        match self.names.entry(name_id) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().increment_ref_count(1);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(NameRef::Unresolved(Box::new(name)));
+            }
+        }
 
         name_id
-    }
-
-    /// Interns a string in the graph. In regular indexing, this only happens in the local graph. This method is only
-    /// used to back the Ruby API because all strings must be registered in the graph to perform resolution
-    pub fn intern_string(&mut self, string: String) -> StringId {
-        let string_id = StringId::from(&string);
-        self.strings.entry(string_id).or_insert_with(|| string);
-        string_id
     }
 
     /// # Panics
@@ -257,7 +254,7 @@ impl Graph {
         &self.names
     }
 
-    fn untrack_name(&mut self, name_id: NameId) {
+    pub fn untrack_name(&mut self, name_id: NameId) {
         if let Some(name_ref) = self.names.get_mut(&name_id)
             && !name_ref.decrement_ref_count()
         {

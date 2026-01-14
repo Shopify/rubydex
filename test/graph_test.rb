@@ -239,19 +239,7 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      # The CONST reference
-      name_ref = Rubydex::NameRef.new(
-        "CONST",
-        nesting: Rubydex::NameRef.new(
-          "Baz",
-          nesting: Rubydex::NameRef.new("Foo"),
-          parent_scope: Rubydex::NameRef.new(
-            "Bar",
-            nesting: Rubydex::NameRef.new("Foo"),
-          ),
-        ),
-      )
-      const = graph.resolve_constant(name_ref)
+      const = graph.resolve_constant("CONST", ["Foo", "Bar::Baz"])
       assert_equal("Foo::CONST", const.name)
     end
   end
@@ -260,15 +248,39 @@ class GraphTest < Minitest::Test
     graph = Rubydex::Graph.new
 
     assert_raises(TypeError) do
-      graph.resolve_constant("not a NameRef")
+      graph.resolve_constant(123, ["Foo", "Bar::Baz"])
     end
 
     assert_raises(TypeError) do
-      graph.resolve_constant(Rubydex::NameRef.new("Name", nesting: "not a NameRef"))
+      graph.resolve_constant("CONST", ["Foo", 123])
     end
 
     assert_raises(TypeError) do
-      graph.resolve_constant(Rubydex::NameRef.new("Name", parent_scope: "not a NameRef"))
+      graph.resolve_constant("CONST", "Not an array")
+    end
+  end
+
+  def test_graph_resolve_non_existing_constant
+    graph = Rubydex::Graph.new
+    assert_nil(graph.resolve_constant("CONST", ["Foo", "Bar::Baz"]))
+  end
+
+  def test_graph_resolve_constant_alias
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Foo
+          CONST = 1
+        end
+
+        ALIAS = Foo
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      const = graph.resolve_constant("ALIAS::CONST", [])
+      assert_equal("Foo::CONST", const.name)
     end
   end
 
