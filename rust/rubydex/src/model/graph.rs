@@ -210,6 +210,27 @@ impl Graph {
         }
     }
 
+    /// Rebuilds name tracking by scanning all definitions and references.
+    /// This is an alternative to incremental ref-counting - instead of tracking
+    /// counts as entities are added/removed, we scan the entire graph to find
+    /// which names are still in use and remove the rest.
+    pub fn rebuild_names(&mut self) {
+        let mut used_names: std::collections::HashSet<NameId> = std::collections::HashSet::new();
+
+        for def in self.definitions.values() {
+            if let Some(name_id) = def.name_id() {
+                used_names.insert(*name_id);
+            }
+        }
+
+        for reference in self.constant_references.values() {
+            used_names.insert(*reference.name_id());
+        }
+
+        self.names.retain(|id, _| used_names.contains(id));
+        self.name_counts.retain(|id, _| used_names.contains(id));
+    }
+
     /// Register a member relationship from a declaration to another declaration through its unqualified name id. For example, in
     ///
     /// ```ruby
@@ -386,6 +407,66 @@ impl Graph {
                         owner.remove_member(&member_str_id);
                     }
                     _ => {} // Nothing happens
+                }
+            }
+        }
+    }
+
+    /// Variant of remove_definitions_for_uri that skips incremental name tracking.
+    /// Used for benchmarking the rebuild_names approach.
+    #[cfg(test)]
+    fn remove_definitions_for_uri_no_tracking(&mut self, uri_id: UriId) {
+        let Some(document) = self.documents.remove(&uri_id) else {
+            return;
+        };
+
+        let mut write_lock = self.declarations.write().unwrap();
+
+        for ref_id in document.method_references() {
+            self.method_references.remove(ref_id);
+        }
+
+        for ref_id in document.constant_references() {
+            if let Some(constant_ref) = self.constant_references.remove(ref_id) {
+                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
+                    && let Some(declaration) = write_lock.get_mut(resolved.declaration_id())
+                {
+                    declaration.remove_reference(ref_id);
+                }
+                // Skip untrack_name - will use rebuild_names instead
+            }
+        }
+
+        let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
+
+        for def_id in document.definitions() {
+            if let Some(_definition) = self.definitions.remove(def_id) {
+                if let Some(declaration_id) = self.definitions_to_declarations.remove(def_id)
+                    && let Some(declaration) = write_lock.get_mut(&declaration_id)
+                    && declaration.remove_definition(def_id)
+                    && declaration.has_no_definitions()
+                {
+                    let unqualified_str_id = StringId::from(&declaration.unqualified_name());
+                    members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
+                    write_lock.remove(&declaration_id);
+                }
+                // Skip untrack_name - will use rebuild_names instead
+            }
+        }
+
+        for (owner_id, member_str_id) in members_to_delete {
+            if let Some(owner) = write_lock.get_mut(&owner_id) {
+                match owner {
+                    Declaration::Class(owner) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    Declaration::SingletonClass(owner) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    Declaration::Module(owner) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -914,6 +995,92 @@ mod tests {
                 "Warning: assigned but unused variable - foo (file:///foo2.rb)",
             ],
             diagnostics,
+        );
+    }
+
+    fn load_corpus() -> (Graph, Vec<std::path::PathBuf>) {
+        let corpus_path = std::env::var("CORPUS_PATH").unwrap_or_else(|_| {
+            eprintln!("Set CORPUS_PATH env var to the corpus directory");
+            eprintln!("Example: CORPUS_PATH=tmp/corpus/medium cargo test ...");
+            std::process::exit(1);
+        });
+
+        let pattern = format!("{corpus_path}/**/*.rb");
+        let paths: Vec<_> = glob::glob(&pattern)
+            .expect("Failed to read glob pattern")
+            .filter_map(Result::ok)
+            .collect();
+
+        eprintln!("Found {} files in corpus", paths.len());
+
+        let mut graph = Graph::new();
+        for path in &paths {
+            let uri = format!("file://{}", path.display());
+            let source = std::fs::read_to_string(path).unwrap();
+            let mut indexer = crate::indexing::ruby_indexer::RubyIndexer::new(uri, &source);
+            indexer.index();
+            graph.extend(indexer.local_graph());
+        }
+        crate::resolution::resolve_all(&mut graph);
+
+        eprintln!(
+            "Indexed: {} definitions, {} names, {} references",
+            graph.definitions.len(),
+            graph.names.len(),
+            graph.constant_references.len()
+        );
+
+        (graph, paths)
+    }
+
+    #[test]
+    #[ignore] // Run with: cargo test -p rubydex --release benchmark_refcount -- --ignored --nocapture
+    fn benchmark_refcount() {
+        use std::time::Instant;
+
+        let (mut graph, paths) = load_corpus();
+        let names_before = graph.names.len();
+
+        let test_uri = format!("file://{}", paths[0].display());
+        let test_uri_id = UriId::from(test_uri.as_str());
+
+        let start = Instant::now();
+        graph.remove_definitions_for_uri(test_uri_id);
+        let duration = start.elapsed();
+
+        let names_after = graph.names.len();
+        eprintln!(
+            "\n=== Ref-counting approach ===\nTime: {:?}\nNames: {} -> {} ({} removed)\n",
+            duration,
+            names_before,
+            names_after,
+            names_before - names_after
+        );
+    }
+
+    #[test]
+    #[ignore] // Run with: cargo test -p rubydex --release benchmark_rebuild -- --ignored --nocapture
+    fn benchmark_rebuild() {
+        use std::time::Instant;
+
+        let (mut graph, paths) = load_corpus();
+        let names_before = graph.names.len();
+
+        let test_uri = format!("file://{}", paths[0].display());
+        let test_uri_id = UriId::from(test_uri.as_str());
+
+        let start = Instant::now();
+        graph.remove_definitions_for_uri_no_tracking(test_uri_id);
+        graph.rebuild_names();
+        let duration = start.elapsed();
+
+        let names_after = graph.names.len();
+        eprintln!(
+            "\n=== Rebuild approach ===\nTime: {:?}\nNames: {} -> {} ({} removed)\n",
+            duration,
+            names_before,
+            names_after,
+            names_before - names_after
         );
     }
 }
