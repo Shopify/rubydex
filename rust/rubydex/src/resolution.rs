@@ -1771,12 +1771,12 @@ mod tests {
     }
 
     fn format_diagnostics(context: &GraphTest, ignore_rules: &[Rule]) -> Vec<String> {
-        let mut diagnostics = context
+        let mut diagnostics: Vec<_> = context
             .graph()
             .diagnostics()
-            .iter()
+            .into_iter()
             .filter(|d| !ignore_rules.contains(d.rule()))
-            .collect::<Vec<_>>();
+            .collect();
 
         diagnostics.sort_by_key(|d| {
             let uri = context.graph().documents().get(d.uri_id()).unwrap().uri();

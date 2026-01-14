@@ -40,7 +40,6 @@ pub struct Graph {
     // Map of method references that still need to be resolved
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
 
-    diagnostics: Vec<Diagnostic>,
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
 }
@@ -57,7 +56,6 @@ impl Graph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
-            diagnostics: Vec::new(),
             position_encoding: Encoding::default(),
         }
     }
@@ -173,8 +171,8 @@ impl Graph {
     }
 
     #[must_use]
-    pub fn diagnostics(&self) -> &Vec<Diagnostic> {
-        &self.diagnostics
+    pub fn diagnostics(&self) -> Vec<&Diagnostic> {
+        self.documents.values().flat_map(|doc| doc.diagnostics()).collect()
     }
 
     /// Interns a string in the graph unless already interned. This method is only used to back the
@@ -418,7 +416,7 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references, diagnostics) =
+        let (uri_id, document, definitions, strings, names, constant_references, method_references) =
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
@@ -445,7 +443,6 @@ impl Graph {
         }
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
-        self.diagnostics.extend(diagnostics);
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
@@ -1170,7 +1167,7 @@ mod tests {
             "
         });
 
-        let mut diagnostics = context
+        let mut diagnostics: Vec<String> = context
             .graph()
             .diagnostics()
             .iter()
@@ -1182,7 +1179,7 @@ mod tests {
                     context.graph().documents().get(d.uri_id()).unwrap().uri()
                 )
             })
-            .collect::<Vec<_>>();
+            .collect();
 
         diagnostics.sort();
 
