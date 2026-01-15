@@ -1,6 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     hash::BuildHasher,
+    ops::Deref,
 };
 
 use crate::{
@@ -1460,8 +1461,7 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
-        // mismatch error. TODO: We should add a diagnostic here
+        // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass mismatch error.
         (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), partial)
     }
 
@@ -1491,6 +1491,7 @@ impl<'a> Resolver<'a> {
 
         for declaration in self.graph.declarations().values() {
             all_diagnostics.extend(self.validate_kind(declaration));
+            all_diagnostics.extend(self.validate_superclass(declaration));
         }
 
         self.graph.diagnostics_mut().extend(all_diagnostics);
@@ -1519,6 +1520,67 @@ impl<'a> Resolver<'a> {
                         ),
                     ));
                 }
+            }
+        }
+
+        diagnostics
+    }
+
+    fn validate_superclass(&self, declaration: &Declaration) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        let mut explicit_parents = declaration
+            .definitions()
+            .iter()
+            .filter_map(|definition_id| {
+                let definition = self.graph.definitions().get(definition_id).unwrap();
+                if let Definition::Class(class) = definition {
+                    if let Some(superclass) = class.superclass_ref() {
+                        let name = self
+                            .graph
+                            .names()
+                            .get(self.graph.constant_references().get(superclass).unwrap().name_id())
+                            .unwrap();
+                        match name {
+                            NameRef::Resolved(resolved) => Some((resolved, superclass, definition)),
+                            NameRef::Unresolved(_) => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Dedup explicit parents that resolve to the same declaration
+        explicit_parents.dedup_by(|(name_a, _, _), (name_b, _, _)| name_a.declaration_id() == name_b.declaration_id());
+
+        if explicit_parents.len() > 1 {
+            let (first_parent_name, _first_superclass, _first_definition) = explicit_parents[0];
+
+            for (parent_name, superclass, definition) in explicit_parents.iter().skip(1) {
+                diagnostics.push(Diagnostic::new(
+                    Rule::ParentRedefinition,
+                    *definition.uri_id(),
+                    self.graph
+                        .constant_references()
+                        .get(superclass)
+                        .unwrap()
+                        .offset()
+                        .clone(),
+                    format!(
+                        "Parent of class `{}` redefined from `{}` to `{}`",
+                        declaration.name(),
+                        self.graph
+                            .strings()
+                            .get(first_parent_name.name().str())
+                            .unwrap()
+                            .deref(),
+                        self.graph.strings().get(parent_name.name().str()).unwrap().deref()
+                    ),
+                ));
             }
         }
 
@@ -4507,6 +4569,37 @@ mod tests {
                 "kind-redefinition: Redefining `Bar` as `module`, previously defined as `class` (5:1-5:16)",
                 "kind-redefinition: Redefining `Baz` as `constant`, previously defined as `class` (8:1-8:4)",
             ]
+        );
+    }
+
+    #[test]
+    fn resolution_diagnostics_for_parent_redefinition() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent1; end
+            class Parent2; end
+
+            class Child1; end
+            class Child1; end
+            class Child1 < Object; end
+            class Child1 < ::Object; end
+
+            class Child2; end
+            class Child2 < Parent1; end
+            class ::Child2 < ::Parent1; end
+
+            class Child3; end
+            class Child3 < Parent1; end
+            class Child3 < Parent2; end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["parent-redefinition: Parent of class `Child3` redefined from `Parent1` to `Parent2` (15:16-15:23)",]
         );
     }
 }
