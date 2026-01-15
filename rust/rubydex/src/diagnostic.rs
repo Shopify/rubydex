@@ -110,4 +110,5 @@ rules! {
     NonClassSuperclass;
     CircularDependency;
     NonModuleMixin;
+    UnresolvedConstantReference;
 }
