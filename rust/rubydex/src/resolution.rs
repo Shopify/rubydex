@@ -1420,7 +1420,7 @@ impl<'a> Resolver<'a> {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
 
-                let (picked_parent, partial) = self.get_parent_class(attached_id, &definition_ids);
+                let (picked_parent, _parent_info, partial) = self.get_parent_class(attached_id, &definition_ids);
                 (self.get_or_create_singleton_class(picked_parent), partial)
             }
             _ => {
@@ -1435,7 +1435,7 @@ impl<'a> Resolver<'a> {
         &mut self,
         declaration_id: DeclarationId,
         definition_ids: &[DefinitionId],
-    ) -> (DeclarationId, bool) {
+    ) -> (DeclarationId, Option<(ReferenceId, DefinitionId)>, bool) {
         let mut explicit_parents = Vec::new();
         let mut partial = false;
 
@@ -1523,11 +1523,12 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass mismatch error.
-        match explicit_parents.first() {
-            Some((parent, _superclass, _definition)) => (*parent, partial),
-            None => (*OBJECT_ID, partial),
-        }
+        explicit_parents.first().map_or(
+            (*OBJECT_ID, None, partial),
+            |(parent_id, superclass_ref_id, definition_id)| {
+                (*parent_id, Some((*superclass_ref_id, *definition_id)), partial)
+            },
+        )
     }
 
     fn linearize_parent_class(
@@ -1536,9 +1537,35 @@ impl<'a> Resolver<'a> {
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Ancestors {
-        let (picked_parent, partial) = self.get_parent_class(declaration_id, definition_ids);
+        let (picked_parent, parent_info, partial) = self.get_parent_class(declaration_id, definition_ids);
 
         let result = self.linearize_ancestors(picked_parent, context);
+
+        if matches!(result, Ancestors::Cyclic(_))
+            && let Some((superclass_ref_id, definition_id)) = parent_info
+        {
+            let diagnostic = Diagnostic::new(
+                Rule::CircularDependency,
+                *self.graph.definitions().get(&definition_id).unwrap().uri_id(),
+                self.graph
+                    .constant_references()
+                    .get(&superclass_ref_id)
+                    .unwrap()
+                    .offset()
+                    .clone(),
+                format!(
+                    "Circular dependency: `{}` is parent of itself",
+                    self.graph.declarations().get(&declaration_id).unwrap().name()
+                ),
+            );
+
+            self.graph
+                .declarations_mut()
+                .get_mut(&declaration_id)
+                .unwrap()
+                .add_diagnostic(diagnostic);
+        }
+
         if partial { result.to_partial() } else { result }
     }
 
@@ -2474,7 +2501,14 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "circular-dependency: Circular dependency: `Foo` is parent of itself (1:13-1:16)",
+                "circular-dependency: Circular dependency: `Bar` is parent of itself (2:13-2:16)",
+                "circular-dependency: Circular dependency: `Baz` is parent of itself (3:13-3:16)"
+            ]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
     }
