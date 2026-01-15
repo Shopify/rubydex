@@ -4,11 +4,10 @@ use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
-    AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition,
-    GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition, InstanceVariableDefinition,
-    MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct, PrependDefinition,
-    SingletonClassDefinition,
+    ClassDefinition, ClassVariableDefinition, ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags,
+    ExtendDefinition, GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition,
+    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, MethodFlags, Mixin, ModuleDefinition,
+    Parameter, ParameterStruct, PrependDefinition, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -1218,6 +1217,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let str_id = self.local_graph.intern_string(format!("{name}()"));
         let offset = Offset::from_prism_location(&node.location());
         let (comments, flags) = self.find_comments_for(offset.start());
+        let flags = MethodFlags::from(flags);
         let parent_nesting_id = self.current_nesting_definition_id();
         let parameters = self.collect_parameters(node);
         let is_singleton = node.receiver().is_some();
@@ -1324,7 +1324,6 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
             Self::each_string_or_symbol_arg(call, |name, location| {
-                let str_id = self.local_graph.intern_string(format!("{name}()"));
                 let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
                 let (comments, flags) = self.find_comments_for(offset.start());
@@ -1335,38 +1334,86 @@ impl Visit<'_> for RubyIndexer<'_> {
                     v => *v,
                 };
 
-                let definition = match kind {
-                    AttrKind::Accessor => Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        flags,
-                        parent_nesting_id,
-                        visibility,
-                    ))),
-                    AttrKind::Reader => Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        flags,
-                        parent_nesting_id,
-                        visibility,
-                    ))),
-                    AttrKind::Writer => Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        flags,
-                        parent_nesting_id,
-                        visibility,
-                    ))),
-                };
+                match kind {
+                    AttrKind::Accessor => {
+                        let writer_name = format!("{name}=()");
+                        let reader_str_id = self.local_graph.intern_string(format!("{name}()"));
+                        let writer_str_id = self.local_graph.intern_string(writer_name);
 
-                let definition_id = self.local_graph.add_definition(definition);
-                self.add_member_to_current_owner(definition_id);
+                        let reader_definition = Definition::Method(Box::new(MethodDefinition::new(
+                            reader_str_id,
+                            self.uri_id,
+                            offset.clone(),
+                            comments.clone(),
+                            MethodFlags::from(flags.clone())
+                                | MethodFlags::ATTRIBUTE_READER
+                                | MethodFlags::ATTRIBUTE_WRITER,
+                            parent_nesting_id,
+                            Vec::new(),
+                            visibility,
+                            None,
+                        )));
+
+                        let reader_definition_id = self.local_graph.add_definition(reader_definition);
+                        self.add_member_to_current_owner(reader_definition_id);
+
+                        let writer_definition = Definition::Method(Box::new(MethodDefinition::new(
+                            writer_str_id,
+                            self.uri_id,
+                            offset,
+                            comments,
+                            MethodFlags::from(flags) | MethodFlags::ATTRIBUTE_READER | MethodFlags::ATTRIBUTE_WRITER,
+                            parent_nesting_id,
+                            Vec::new(),
+                            visibility,
+                            None,
+                        )));
+
+                        let writer_definition_id = self.local_graph.add_definition(writer_definition);
+                        self.add_member_to_current_owner(writer_definition_id);
+                    }
+                    AttrKind::Reader => {
+                        let str_id = self.local_graph.intern_string(format!("{name}()"));
+
+                        let definition = Definition::Method(Box::new(MethodDefinition::new(
+                            str_id,
+                            self.uri_id,
+                            offset,
+                            comments,
+                            MethodFlags::from(flags) | MethodFlags::ATTRIBUTE_READER,
+                            parent_nesting_id,
+                            Vec::new(),
+                            visibility,
+                            None,
+                        )));
+
+                        let definition_id = self.local_graph.add_definition(definition);
+                        self.add_member_to_current_owner(definition_id);
+                    }
+                    AttrKind::Writer => {
+                        let writer_name = format!("{name}=()");
+                        let reader_str_id = self.local_graph.intern_string(format!("{name}()"));
+                        let writer_str_id = self.local_graph.intern_string(writer_name);
+
+                        let definition = Definition::Method(Box::new(MethodDefinition::new(
+                            writer_str_id,
+                            self.uri_id,
+                            offset.clone(),
+                            comments,
+                            MethodFlags::from(flags) | MethodFlags::ATTRIBUTE_WRITER,
+                            parent_nesting_id,
+                            vec![Parameter::RequiredPositional(ParameterStruct::new(
+                                offset,
+                                reader_str_id,
+                            ))],
+                            visibility,
+                            None,
+                        )));
+
+                        let definition_id = self.local_graph.add_definition(definition);
+                        self.add_member_to_current_owner(definition_id);
+                    }
+                }
             });
         };
 
@@ -2894,9 +2941,10 @@ mod tests {
         assert_name_eq!(&context, "baz()", singleton_method);
         assert_eq!(singleton_method.visibility(), &Visibility::Public);
 
-        assert_definition_at!(&context, "7:16-7:25", AttrReader, |def| {
+        assert_definition_at!(&context, "7:16-7:25", Method, |def| {
             assert_name_eq!(&context, "attribute()", def);
             assert_eq!(def.visibility(), &Visibility::Private);
+            assert!(def.flags().is_reader());
         });
 
         assert_definition_at!(&context, "11:3-11:15", Method, |def| {
@@ -3067,7 +3115,7 @@ mod tests {
             attr_accessor :foo
 
             class Foo
-              attr_accessor :bar, :baz
+              attr_accessor :bar, :qux
             end
 
             foo.attr_accessor :not_indexed
@@ -3075,29 +3123,67 @@ mod tests {
         });
 
         assert_no_diagnostics!(&context);
-        assert_eq!(context.graph().definitions().len(), 4);
+        assert_eq!(context.graph().definitions().len(), 7);
 
-        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-            assert_name_eq!(&context, "foo()", def);
-            assert!(def.lexical_nesting_id().is_none());
+        let definitions = context.all_definitions_at("1:16-1:19");
+        let Definition::Method(foo_reader) = definitions.last().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "foo()", foo_reader);
+        assert!(foo_reader.lexical_nesting_id().is_none());
+        assert!(foo_reader.flags().is_accessor());
+
+        let Definition::Method(foo_writer) = definitions.first().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "foo=()", foo_writer);
+        assert!(foo_writer.lexical_nesting_id().is_none());
+        assert!(foo_writer.flags().is_accessor());
+
+        let definitions = context.all_definitions_at("4:18-4:21");
+        let Definition::Method(bar_reader) = definitions.last().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "bar()", bar_reader);
+        assert!(bar_reader.flags().is_accessor());
+
+        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+            assert_eq!(parent_nesting.id(), bar_reader.lexical_nesting_id().unwrap());
+            assert_eq!(parent_nesting.members()[0], bar_reader.id());
         });
 
-        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-            assert_name_eq!(&context, "bar()", def);
+        let Definition::Method(bar_writer) = definitions.first().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "bar=()", bar_writer);
+        assert!(bar_writer.flags().is_accessor());
 
-            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[0], def.id());
-            });
+        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+            assert_eq!(parent_nesting.id(), bar_writer.lexical_nesting_id().unwrap());
+            assert_eq!(parent_nesting.members()[1], bar_writer.id());
         });
 
-        assert_definition_at!(&context, "4:24-4:27", AttrAccessor, |def| {
-            assert_name_eq!(&context, "baz()", def);
+        let definitions = context.all_definitions_at("4:24-4:27");
+        let Definition::Method(qux_reader) = definitions.last().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "qux()", qux_reader);
+        assert!(qux_reader.flags().is_accessor());
 
-            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[1], def.id());
-            });
+        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+            assert_eq!(parent_nesting.id(), qux_reader.lexical_nesting_id().unwrap());
+            assert_eq!(parent_nesting.members()[2], qux_reader.id());
+        });
+
+        let Definition::Method(qux_writer) = definitions.first().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "qux=()", qux_writer);
+        assert!(qux_writer.flags().is_accessor());
+
+        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+            assert_eq!(parent_nesting.id(), qux_writer.lexical_nesting_id().unwrap());
+            assert_eq!(parent_nesting.members()[3], qux_writer.id());
         });
     }
 
@@ -3116,13 +3202,15 @@ mod tests {
         assert_no_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
-        assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
+        assert_definition_at!(&context, "1:14-1:17", Method, |def| {
             assert_name_eq!(&context, "foo()", def);
             assert!(def.lexical_nesting_id().is_none());
+            assert!(def.flags().is_reader());
         });
 
-        assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
+        assert_definition_at!(&context, "4:16-4:19", Method, |def| {
             assert_name_eq!(&context, "bar()", def);
+            assert!(def.flags().is_reader());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3130,8 +3218,9 @@ mod tests {
             });
         });
 
-        assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
+        assert_definition_at!(&context, "4:22-4:25", Method, |def| {
             assert_name_eq!(&context, "baz()", def);
+            assert!(def.flags().is_reader());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3155,13 +3244,15 @@ mod tests {
         assert_no_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
-        assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
-            assert_name_eq!(&context, "foo()", def);
+        assert_definition_at!(&context, "1:14-1:17", Method, |def| {
+            assert_name_eq!(&context, "foo=()", def);
             assert!(def.lexical_nesting_id().is_none());
+            assert!(def.flags().is_writer());
         });
 
-        assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
-            assert_name_eq!(&context, "bar()", def);
+        assert_definition_at!(&context, "4:16-4:19", Method, |def| {
+            assert_name_eq!(&context, "bar=()", def);
+            assert!(def.flags().is_writer());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3169,8 +3260,9 @@ mod tests {
             });
         });
 
-        assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
-            assert_name_eq!(&context, "baz()", def);
+        assert_definition_at!(&context, "4:22-4:25", Method, |def| {
+            assert_name_eq!(&context, "baz=()", def);
+            assert!(def.flags().is_writer());
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3194,41 +3286,60 @@ mod tests {
         });
 
         assert_no_diagnostics!(&context);
-        assert_eq!(context.graph().definitions().len(), 6);
+        assert_eq!(context.graph().definitions().len(), 7);
 
-        assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
+        assert_definition_at!(&context, "1:6-1:10", Method, |def| {
             assert_name_eq!(&context, "a1()", def);
             assert!(def.lexical_nesting_id().is_none());
+            assert!(def.flags().is_reader());
         });
 
-        assert_definition_at!(&context, "1:13-1:15", AttrReader, |def| {
+        assert_definition_at!(&context, "1:13-1:15", Method, |def| {
             assert_name_eq!(&context, "a2()", def);
             assert!(def.lexical_nesting_id().is_none());
+            assert!(def.flags().is_reader());
         });
 
-        assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
-            assert_name_eq!(&context, "a3()", def);
+        let definitions = context.all_definitions_at("4:8-4:12");
+        let Definition::Method(a3_reader) = definitions.last().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "a3()", a3_reader);
+        assert!(a3_reader.flags().is_accessor());
 
-            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[0], def.id());
-            });
+        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+            assert_eq!(parent_nesting.id(), a3_reader.lexical_nesting_id().unwrap());
+            assert_eq!(parent_nesting.members()[0], a3_reader.id());
         });
 
-        assert_definition_at!(&context, "5:9-5:11", AttrReader, |def| {
+        let Definition::Method(a3_writer) = definitions.first().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "a3=()", a3_writer);
+        assert!(a3_writer.flags().is_accessor());
+
+        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+            assert_eq!(parent_nesting.id(), a3_writer.lexical_nesting_id().unwrap());
+            assert_eq!(parent_nesting.members()[1], a3_writer.id());
+        });
+
+        assert_definition_at!(&context, "5:9-5:11", Method, |def| {
             assert_name_eq!(&context, "a4()", def);
+            assert!(def.flags().is_reader());
 
-            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[1], def.id());
-            });
-        });
-
-        assert_definition_at!(&context, "6:9-6:11", AttrReader, |def| {
-            assert_name_eq!(&context, "a5()", def);
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "6:9-6:11", Method, |def| {
+            assert_name_eq!(&context, "a5()", def);
+            assert!(def.flags().is_reader());
+
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[3], def.id());
             });
         });
     }
@@ -3249,19 +3360,31 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-            assert_name_eq!(&context, "foo()", def);
-            assert_eq!(def.visibility(), &Visibility::Private);
-        });
+        let definitions = context.all_definitions_at("1:16-1:19");
+        let Definition::Method(foo_reader) = definitions.last().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "foo()", foo_reader);
+        assert_eq!(foo_reader.visibility(), &Visibility::Private);
+        assert!(foo_reader.flags().is_accessor());
 
-        assert_definition_at!(&context, "3:24-3:27", AttrReader, |def| {
+        let Definition::Method(foo_writer) = definitions.first().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "foo=()", foo_writer);
+        assert_eq!(foo_writer.visibility(), &Visibility::Private);
+        assert!(foo_writer.flags().is_accessor());
+
+        assert_definition_at!(&context, "3:24-3:27", Method, |def| {
             assert_name_eq!(&context, "bar()", def);
             assert_eq!(def.visibility(), &Visibility::Protected);
+            assert!(def.flags().is_reader());
         });
 
-        assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
-            assert_name_eq!(&context, "baz()", def);
+        assert_definition_at!(&context, "7:14-7:17", Method, |def| {
+            assert_name_eq!(&context, "baz=()", def);
             assert_eq!(def.visibility(), &Visibility::Public);
+            assert!(def.flags().is_writer());
         });
     }
 
@@ -3293,24 +3416,46 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-            assert_name_eq!(&context, "foo()", def);
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
+        let definitions = context.all_definitions_at("4:18-4:21");
+        let Definition::Method(foo_reader) = definitions.first().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "foo()", foo_reader);
+        assert_eq!(foo_reader.visibility(), &Visibility::Public);
+        assert!(foo_reader.flags().is_accessor());
 
-        assert_definition_at!(&context, "9:20-9:23", AttrAccessor, |def| {
-            assert_name_eq!(&context, "bar()", def);
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
+        let Definition::Method(foo_writer) = definitions.last().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "foo=()", foo_writer);
+        assert_eq!(foo_writer.visibility(), &Visibility::Public);
+        assert!(foo_writer.flags().is_accessor());
 
-        assert_definition_at!(&context, "13:18-13:21", AttrReader, |def| {
+        let definitions = context.all_definitions_at("9:20-9:23");
+        let Definition::Method(bar_reader) = definitions.first().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "bar()", bar_reader);
+        assert_eq!(bar_reader.visibility(), &Visibility::Public);
+        assert!(bar_reader.flags().is_accessor());
+
+        let Definition::Method(bar_writer) = definitions.last().unwrap() else {
+            panic!("should be a method");
+        };
+        assert_name_eq!(&context, "bar=()", bar_writer);
+        assert_eq!(bar_writer.visibility(), &Visibility::Public);
+        assert!(bar_writer.flags().is_accessor());
+
+        assert_definition_at!(&context, "13:18-13:21", Method, |def| {
             assert_name_eq!(&context, "baz()", def);
             assert_eq!(def.visibility(), &Visibility::Private);
+            assert!(def.flags().is_reader());
         });
 
-        assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
-            assert_name_eq!(&context, "qux()", def);
+        assert_definition_at!(&context, "18:16-18:19", Method, |def| {
+            assert_name_eq!(&context, "qux=()", def);
             assert_eq!(def.visibility(), &Visibility::Private);
+            assert!(def.flags().is_writer());
         });
     }
 
@@ -4661,8 +4806,10 @@ mod tests {
             assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                        assert_definition_at!(&context, "8:18-8:23", Method, |hello| {
                             assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert!(hello.flags().is_reader());
+
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4720,8 +4867,10 @@ mod tests {
             assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                        assert_definition_at!(&context, "8:18-8:23", Method, |hello| {
                             assert_name_id_to_string_eq!(&context, "Zip::Bar", bar);
+                            assert!(hello.flags().is_reader());
+
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4779,8 +4928,10 @@ mod tests {
             assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                        assert_definition_at!(&context, "8:18-8:23", Method, |hello| {
                             assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert!(hello.flags().is_reader());
+
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4840,8 +4991,10 @@ mod tests {
             assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                        assert_definition_at!(&context, "8:18-8:23", Method, |hello| {
                             assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert!(hello.flags().is_reader());
+
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4899,8 +5052,10 @@ mod tests {
             assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                        assert_definition_at!(&context, "8:18-8:23", Method, |hello| {
                             assert_name_id_to_string_eq!(&context, "Zip::Bar", bar);
+                            assert!(hello.flags().is_reader());
+
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
