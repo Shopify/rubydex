@@ -82,9 +82,10 @@ macro_rules! namespace_declaration {
             references: IdentityHashSet<ReferenceId>,
             /// The ID of the owner of this declaration. For singleton classes, this is the ID of the attached object
             owner_id: DeclarationId,
-            /// The constants owned by this declaration
-            constant_members: IdentityHashMap<StringId, DeclarationId>,
-            /// All other things owned by this declaration (methods, instance variables, class v)
+            /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
+            /// the namespace. Note that this is a hashmap of unqualified name IDs to declaration IDs. That assists the
+            /// traversal of the graph when trying to resolve constant references or trying to discover which methods exist in a
+            /// class
             members: IdentityHashMap<StringId, DeclarationId>,
             /// The linearized ancestor chain for this declaration. These are the other declarations that this
             /// declaration inherits from
@@ -101,7 +102,6 @@ macro_rules! namespace_declaration {
                 Self {
                     name,
                     definition_ids: Vec::new(),
-                    constant_members: IdentityHashMap::default(),
                     members: IdentityHashMap::default(),
                     references: IdentityHashSet::default(),
                     owner_id,
@@ -123,24 +123,6 @@ macro_rules! namespace_declaration {
 
             pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
                 self.singleton_class_id.as_ref()
-            }
-
-            #[must_use]
-            pub fn constant_members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
-                &self.constant_members
-            }
-
-            pub fn add_constant_member(&mut self, string_id: StringId, declaration_id: DeclarationId) {
-                self.constant_members.insert(string_id, declaration_id);
-            }
-
-            pub fn remove_constant_member(&mut self, string_id: &StringId) -> Option<DeclarationId> {
-                self.constant_members.remove(string_id)
-            }
-
-            #[must_use]
-            pub fn get_constant_member(&self, string_id: &StringId) -> Option<&DeclarationId> {
-                self.constant_members.get(string_id)
             }
 
             #[must_use]
@@ -383,6 +365,15 @@ impl Namespace {
             Namespace::Class(class) => class.members(),
             Namespace::Module(module) => module.members(),
             Namespace::SingletonClass(singleton) => singleton.members(),
+        }
+    }
+
+    #[must_use]
+    pub fn get_member(&self, str_id: StringId) -> Option<&DeclarationId> {
+        match self {
+            Namespace::Class(class) => class.get_member(&str_id),
+            Namespace::Module(module) => module.get_member(&str_id),
+            Namespace::SingletonClass(singleton) => singleton.get_member(&str_id),
         }
     }
 

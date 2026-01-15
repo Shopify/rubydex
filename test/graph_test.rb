@@ -180,7 +180,7 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      foo = graph["Foo::@叫聲😍x"].definitions.first
+      foo = graph["Foo\#@叫聲😍x"].definitions.first
 
       # UTF-8: code units => number of bytes
       loc = foo.location
