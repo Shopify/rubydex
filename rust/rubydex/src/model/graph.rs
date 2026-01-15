@@ -287,6 +287,28 @@ impl Graph {
 
     /// # Panics
     ///
+    /// Will panic if the declaration ID passed doesn't belong to a namespace declaration
+    pub fn add_constant_member(
+        &mut self,
+        owner_id: &DeclarationId,
+        member_declaration_id: DeclarationId,
+        member_str_id: StringId,
+    ) {
+        if let Some(declaration) = self.declarations.get_mut(owner_id) {
+            match declaration {
+                Declaration::Class(it) => it.add_constant_member(member_str_id, member_declaration_id),
+                Declaration::Module(it) => it.add_constant_member(member_str_id, member_declaration_id),
+                Declaration::SingletonClass(it) => it.add_constant_member(member_str_id, member_declaration_id),
+                Declaration::Constant(_) => {
+                    // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
+                }
+                _ => panic!("Tried to add member to a declaration that isn't a namespace"),
+            }
+        }
+    }
+
+    /// # Panics
+    ///
     /// This function will panic when trying to record a resolve name for a name ID that does not exist
     pub fn record_resolved_name(&mut self, name_id: NameId, declaration_id: DeclarationId) {
         match self.names.entry(name_id) {
@@ -380,8 +402,8 @@ impl Graph {
             }
         }
 
-        // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
-        let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
+        // Vector of (owner_declaration_id, member_name_id, is_constant_member) to delete after processing all definitions
+        let mut members_to_delete: Vec<(DeclarationId, StringId, bool)> = Vec::new();
         let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
         let mut declarations_to_invalidate_ancestor_chains: Vec<DeclarationId> = Vec::new();
 
@@ -397,7 +419,17 @@ impl Graph {
 
                     if declaration.has_no_definitions() {
                         let unqualified_str_id = StringId::from(&declaration.unqualified_name());
-                        members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
+                        members_to_delete.push((
+                            *declaration.owner_id(),
+                            unqualified_str_id,
+                            matches!(
+                                declaration,
+                                Declaration::Constant(_)
+                                    | Declaration::Class(_)
+                                    | Declaration::Module(_)
+                                    | Declaration::SingletonClass(_)
+                            ),
+                        ));
                         declarations_to_delete.push(declaration_id);
                     }
                 }
@@ -415,18 +447,30 @@ impl Graph {
         }
 
         // Clean up any members that pointed to declarations that were removed
-        for (owner_id, member_str_id) in members_to_delete {
+        for (owner_id, member_str_id, is_constant_member) in members_to_delete {
             // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
             if let Some(owner) = self.declarations.get_mut(&owner_id) {
                 match owner {
                     Declaration::Namespace(Namespace::Class(owner)) => {
-                        owner.remove_member(&member_str_id);
+                        if is_constant_member {
+                            owner.remove_constant_member(&member_str_id);
+                        } else {
+                            owner.remove_member(&member_str_id);
+                        }
                     }
                     Declaration::Namespace(Namespace::SingletonClass(owner)) => {
-                        owner.remove_member(&member_str_id);
+                        if is_constant_member {
+                            owner.remove_constant_member(&member_str_id);
+                        } else {
+                            owner.remove_member(&member_str_id);
+                        }
                     }
                     Declaration::Namespace(Namespace::Module(owner)) => {
-                        owner.remove_member(&member_str_id);
+                        if is_constant_member {
+                            owner.remove_constant_member(&member_str_id);
+                        } else {
+                            owner.remove_member(&member_str_id);
+                        }
                     }
                     _ => {} // Nothing happens
                 }
@@ -1049,7 +1093,7 @@ mod tests {
             if let Declaration::Namespace(Namespace::Module(foo)) =
                 context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
             {
-                assert!(foo.members().contains_key(&StringId::from("Bar")));
+                assert!(foo.constant_members().contains_key(&StringId::from("Bar")));
             } else {
                 panic!("Expected Foo to be a module");
             }
@@ -1067,7 +1111,7 @@ mod tests {
         if let Declaration::Namespace(Namespace::Module(foo)) =
             context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
         {
-            assert!(!foo.members().contains_key(&StringId::from("Bar")));
+            assert!(!foo.constant_members().contains_key(&StringId::from("Bar")));
         } else {
             panic!("Expected Foo to be a module");
         }
@@ -1113,5 +1157,65 @@ mod tests {
             ],
             diagnostics,
         );
+    }
+
+    #[test]
+    fn removing_method_def_with_conflicting_constant_name() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              class Array; end
+            end
+            "
+        });
+        context.index_uri("file:///foo2.rb", {
+            "
+            class Foo
+              def Array; end
+            end
+            "
+        });
+
+        context.resolve();
+        // Removing the method should not remove the constant
+        context.index_uri("file:///foo2.rb", "");
+
+        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert!(Declaration::members_of(foo).is_empty());
+
+        let constant_members = Declaration::constant_members_of(foo);
+        assert_eq!(1, constant_members.len());
+        assert!(constant_members.contains_key(&StringId::from("Array")));
+    }
+
+    #[test]
+    fn removing_constant_with_conflicting_method_name() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              class Array; end
+            end
+            "
+        });
+        context.index_uri("file:///foo2.rb", {
+            "
+            class Foo
+              def Array; end
+            end
+            "
+        });
+
+        context.resolve();
+        // Removing the method should not remove the constant
+        context.index_uri("file:///foo.rb", "");
+
+        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert!(Declaration::constant_members_of(foo).is_empty());
+
+        let members = Declaration::members_of(foo);
+        assert_eq!(1, members.len());
+        assert!(members.contains_key(&StringId::from("Array")));
     }
 }

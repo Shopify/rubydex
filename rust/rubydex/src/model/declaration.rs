@@ -82,10 +82,9 @@ macro_rules! namespace_declaration {
             references: IdentityHashSet<ReferenceId>,
             /// The ID of the owner of this declaration. For singleton classes, this is the ID of the attached object
             owner_id: DeclarationId,
-            /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
-            /// the namespace. Note that this is a hashmap of unqualified name IDs to declaration IDs. That assists the
-            /// traversal of the graph when trying to resolve constant references or trying to discover which methods exist in a
-            /// class
+            /// The constants owned by this declaration
+            constant_members: IdentityHashMap<StringId, DeclarationId>,
+            /// All other things owned by this declaration (methods, instance variables, class v)
             members: IdentityHashMap<StringId, DeclarationId>,
             /// The linearized ancestor chain for this declaration. These are the other declarations that this
             /// declaration inherits from
@@ -102,6 +101,7 @@ macro_rules! namespace_declaration {
                 Self {
                     name,
                     definition_ids: Vec::new(),
+                    constant_members: IdentityHashMap::default(),
                     members: IdentityHashMap::default(),
                     references: IdentityHashSet::default(),
                     owner_id,
@@ -123,6 +123,24 @@ macro_rules! namespace_declaration {
 
             pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
                 self.singleton_class_id.as_ref()
+            }
+
+            #[must_use]
+            pub fn constant_members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
+                &self.constant_members
+            }
+
+            pub fn add_constant_member(&mut self, string_id: StringId, declaration_id: DeclarationId) {
+                self.constant_members.insert(string_id, declaration_id);
+            }
+
+            pub fn remove_constant_member(&mut self, string_id: &StringId) -> Option<DeclarationId> {
+                self.constant_members.remove(string_id)
+            }
+
+            #[must_use]
+            pub fn get_constant_member(&self, string_id: &StringId) -> Option<&DeclarationId> {
+                self.constant_members.get(string_id)
             }
 
             #[must_use]
@@ -314,12 +332,13 @@ impl Declaration {
         all_declarations!(self, it => &it.owner_id)
     }
 
-    // This will change once we fix fully qualified names to not use `::` as separators for everything. Also, we may
-    // want to actually store this in the struct. Currently, it is only used to cleanup a member that got deleted from
-    // the graph, so we're avoiding the extra memory cost by computing it on demand.
+    // Splits the fully qualified name either in the last `::` or the `#` to return the simple name of this declaration
     #[must_use]
     pub fn unqualified_name(&self) -> String {
-        all_declarations!(self, it => it.name.rsplit("::").next().unwrap_or(&it.name).to_string())
+        all_declarations!(self, it => {
+            let after_colons = it.name.rsplit("::").next().unwrap_or(&it.name);
+            after_colons.rsplit('#').next().unwrap_or(after_colons).to_string()
+        })
     }
 }
 
@@ -489,7 +508,7 @@ mod tests {
         assert_eq!(decl.unqualified_name(), "Bar");
 
         let decl = Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-            "Foo::Bar::baz".to_string(),
+            "Foo::Bar#baz".to_string(),
             DeclarationId::from("Foo::Bar"),
         ))));
         assert_eq!(decl.unqualified_name(), "baz");

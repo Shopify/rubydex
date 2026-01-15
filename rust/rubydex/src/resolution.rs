@@ -487,7 +487,7 @@ impl<'a> Resolver<'a> {
         let fully_qualified_name = {
             let owner = self.graph.declarations().get(&owner_id).unwrap();
             let name_str = self.graph.strings().get(&str_id).unwrap();
-            format!("{}::{name_str}", owner.name())
+            format!("{}#{name_str}", owner.name())
         };
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
@@ -1655,7 +1655,8 @@ mod tests {
 
         for member in members {
             assert!(
-                actual_members.contains_key(&StringId::from(*member)),
+                constant_members.contains_key(&StringId::from(*member))
+                    || other_members.contains_key(&StringId::from(*member)),
                 "Expected member '{member}' not found"
             );
         }
@@ -2496,12 +2497,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>::@foo", "Foo::<Foo>");
-        assert_instance_variable(&context, "Foo::@bar", "Foo");
-        assert_instance_variable(&context, "Foo::<Foo>::@baz", "Foo::<Foo>");
+        assert_instance_variable(&context, "Foo::<Foo>#@foo", "Foo::<Foo>");
+        assert_instance_variable(&context, "Foo#@bar", "Foo");
+        assert_instance_variable(&context, "Foo::<Foo>#@baz", "Foo::<Foo>");
         // @qux in `class << self; def qux` - self is Foo when called, so @qux belongs to Foo's singleton class
-        assert_instance_variable(&context, "Foo::<Foo>::@qux", "Foo::<Foo>");
-        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>::@nested", "Foo::<Foo>::<<Foo>>");
+        assert_instance_variable(&context, "Foo::<Foo>#@qux", "Foo::<Foo>");
+        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>#@nested", "Foo::<Foo>::<<Foo>>");
     }
 
     #[test]
@@ -2529,8 +2530,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>::@foo", "Foo::<Foo>");
-        assert_instance_variable(&context, "Bar::<Bar>::@baz", "Bar::<Bar>");
+        assert_instance_variable(&context, "Foo::<Foo>#@foo", "Foo::<Foo>");
+        assert_instance_variable(&context, "Bar::<Bar>#@baz", "Bar::<Bar>");
     }
 
     #[test]
@@ -2552,7 +2553,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
-        assert_instance_variable(&context, "Bar::Baz::<Baz>::@baz", "Bar::Baz::<Baz>");
+        assert_instance_variable(&context, "Bar::Baz::<Baz>#@baz", "Bar::Baz::<Baz>");
     }
 
     #[test]
@@ -2575,10 +2576,10 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>::@bar", "Foo::<Foo>::<<Foo>>");
+        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>#@bar", "Foo::<Foo>::<<Foo>>");
         assert_instance_variable(
             &context,
-            "Foo::<Foo>::<<Foo>>::<<<Foo>>>::@baz",
+            "Foo::<Foo>::<<Foo>>::<<<Foo>>>#@baz",
             "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
         );
     }
@@ -4324,5 +4325,41 @@ mod tests {
 
         let const_key = StringId::from("CONST");
         assert!(!bar_members.contains_key(&const_key));
+    }
+
+    #[test]
+    fn distinct_declarations_with_conflicting_string_ids() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def Array(); end
+              class Array; end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+
+        // Both entries exist as unique members
+        assert!(Declaration::members_of(foo).contains_key(&StringId::from("Array")));
+        assert!(Declaration::constant_members_of(foo).contains_key(&StringId::from("Array")));
+
+        // Both declarations exist with unique IDs
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo::Array"))
+                .is_some()
+        );
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo#Array"))
+                .is_some()
+        );
     }
 }
