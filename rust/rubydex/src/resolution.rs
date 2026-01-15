@@ -627,7 +627,7 @@ impl<'a> Resolver<'a> {
 
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
             // again
-            if Self::has_complete_ancestors(declaration) {
+            if Self::has_complete_ancestors(declaration.as_namespace().unwrap()) {
                 let cached = declaration.as_namespace().unwrap().ancestors();
                 self.propagate_descendants(&mut context.descendants, &cached);
                 context.descendants.remove(&declaration_id);
@@ -1438,12 +1438,11 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn has_complete_ancestors(declaration: &Declaration) -> bool {
-        match declaration {
-            Declaration::Namespace(Namespace::Class(class)) => class.has_complete_ancestors(),
-            Declaration::Namespace(Namespace::Module(module)) => module.has_complete_ancestors(),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.has_complete_ancestors(),
-            _ => panic!("Tried to check complete ancestors for a declaration that isn't a namespace"),
+    fn has_complete_ancestors(namespace: &Namespace) -> bool {
+        match namespace {
+            Namespace::Class(class) => class.has_complete_ancestors(),
+            Namespace::Module(module) => module.has_complete_ancestors(),
+            Namespace::SingletonClass(singleton) => singleton.has_complete_ancestors(),
         }
     }
 
