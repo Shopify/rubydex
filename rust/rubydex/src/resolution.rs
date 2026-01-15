@@ -1554,6 +1554,24 @@ impl<'a> Resolver<'a> {
             })
             .collect::<Vec<_>>();
 
+        if !explicit_parents.is_empty()
+            && matches!(declaration.as_namespace().unwrap().ancestors(), Ancestors::Cyclic(_))
+        {
+            for (_parent_name, superclass, definition) in &explicit_parents {
+                diagnostics.push(Diagnostic::new(
+                    Rule::CircularDependency,
+                    *definition.uri_id(),
+                    self.graph
+                        .constant_references()
+                        .get(superclass)
+                        .unwrap()
+                        .offset()
+                        .clone(),
+                    format!("Circular dependency: `{}` is parent of itself", declaration.name()),
+                ));
+            }
+        }
+
         // Dedup explicit parents that resolve to the same declaration
         explicit_parents.dedup_by(|(name_a, _, _), (name_b, _, _)| name_a.declaration_id() == name_b.declaration_id());
 
@@ -2530,7 +2548,14 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "circular-dependency: Circular dependency: `Foo` is parent of itself (1:13-1:16)",
+                "circular-dependency: Circular dependency: `Bar` is parent of itself (2:13-2:16)",
+                "circular-dependency: Circular dependency: `Baz` is parent of itself (3:13-3:16)"
+            ]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
     }
