@@ -9,7 +9,6 @@ use crate::position::Position;
 #[cfg(any(test, feature = "test_utils"))]
 pub struct LocalGraphTest {
     uri: String,
-    source: String,
     graph: LocalGraph,
 }
 
@@ -24,7 +23,7 @@ impl LocalGraphTest {
         indexer.index();
         let graph = indexer.local_graph();
 
-        Self { uri, source, graph }
+        Self { uri, graph }
     }
 
     #[must_use]
@@ -35,11 +34,6 @@ impl LocalGraphTest {
     #[must_use]
     pub fn graph(&self) -> &LocalGraph {
         &self.graph
-    }
-
-    #[must_use]
-    pub fn source(&self) -> &str {
-        &self.source
     }
 
     /// # Panics
