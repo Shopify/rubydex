@@ -276,7 +276,16 @@ impl Graph {
         self.documents.insert(uri_id, document);
         self.definitions.extend(definitions);
         self.strings.extend(strings);
-        self.names.extend(names);
+        for (name_id, name_ref) in names {
+            match self.names.entry(name_id) {
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().increment_ref_count(name_ref.ref_count());
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(name_ref);
+                }
+            }
+        }
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
         self.diagnostics.extend(diagnostics);
@@ -753,6 +762,20 @@ mod tests {
             };
             assert!(foo.descendants().contains(&DeclarationId::from("Baz")));
         }
+    }
+
+    #[test]
+    fn name_count_increments_for_duplicates() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.index_uri("file:///foo2.rb", "module Foo; end");
+        context.index_uri("file:///foo3.rb", "Foo");
+        context.resolve();
+
+        assert_eq!(context.graph().names().len(), 1);
+        let name_ref = context.graph().names().values().next().unwrap();
+        assert_eq!(name_ref.ref_count(), 3);
     }
 
     #[test]
