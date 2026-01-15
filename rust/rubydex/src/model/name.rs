@@ -17,6 +17,7 @@ pub struct Name {
     /// The ID of the name for the nesting where we found this name. This effectively turns the structure into a linked
     /// list of names to represent the nesting
     nesting: Option<NameId>,
+    ref_count: usize,
 }
 
 impl Name {
@@ -26,6 +27,7 @@ impl Name {
             str,
             parent_scope,
             nesting,
+            ref_count: 1,
         }
     }
 
@@ -118,6 +120,35 @@ impl NameRef {
         match self {
             NameRef::Unresolved(name) => name.nesting(),
             NameRef::Resolved(resolved_name) => resolved_name.name.nesting(),
+        }
+    }
+
+    #[must_use]
+    pub fn ref_count(&self) -> usize {
+        match self {
+            NameRef::Unresolved(name) => name.ref_count,
+            NameRef::Resolved(resolved_name) => resolved_name.name.ref_count,
+        }
+    }
+
+    pub fn increment_ref_count(&mut self, count: usize) {
+        match self {
+            NameRef::Unresolved(name) => name.ref_count += count,
+            NameRef::Resolved(resolved_name) => resolved_name.name.ref_count += count,
+        }
+    }
+
+    #[must_use]
+    pub fn decrement_ref_count(&mut self) -> bool {
+        match self {
+            NameRef::Unresolved(name) => {
+                name.ref_count -= 1;
+                name.ref_count > 0
+            }
+            NameRef::Resolved(resolved_name) => {
+                resolved_name.name.ref_count -= 1;
+                resolved_name.name.ref_count > 0
+            }
         }
     }
 }

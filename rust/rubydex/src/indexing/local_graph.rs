@@ -1,3 +1,5 @@
+use std::collections::hash_map::Entry;
+
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
@@ -92,7 +94,14 @@ impl LocalGraph {
 
     pub fn add_name(&mut self, name: Name) -> NameId {
         let name_id = name.id();
-        self.names.insert(name_id, NameRef::Unresolved(Box::new(name)));
+        match self.names.entry(name_id) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().increment_ref_count(1);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(NameRef::Unresolved(Box::new(name)));
+            }
+        }
         name_id
     }
 
