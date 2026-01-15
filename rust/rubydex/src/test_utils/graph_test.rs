@@ -8,21 +8,16 @@ use crate::model::ids::UriId;
 use crate::offset::Offset;
 use crate::position::Position;
 use crate::resolution;
-use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct GraphTest {
     graph: Graph,
-    sources: HashMap<String, String>,
 }
 
 impl GraphTest {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            graph: Graph::new(),
-            sources: HashMap::new(),
-        }
+        Self { graph: Graph::new() }
     }
 
     #[must_use]
@@ -40,19 +35,11 @@ impl GraphTest {
     pub fn index_uri(&mut self, uri: &str, source: &str) {
         let source = normalize_indentation(source);
         let local_index = Self::index_source(uri, &source);
-        self.sources.insert(uri.to_string(), source);
         self.graph.update(local_index);
     }
 
     pub fn delete_uri(&mut self, uri: &str) {
-        self.sources.remove(uri);
         self.graph.delete_uri(uri);
-    }
-
-    /// Gets the source code for a URI
-    #[must_use]
-    pub fn get_source(&self, uri: &str) -> Option<&str> {
-        self.sources.get(uri).map(String::as_str)
     }
 
     pub fn resolve(&mut self) {
