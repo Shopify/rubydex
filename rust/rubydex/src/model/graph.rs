@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration, Namespace};
+use crate::model::declaration::{Ancestor, Declaration, DeclarationKind, Namespace};
 use crate::model::definitions::{Definition, DefinitionKind};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
@@ -710,7 +710,7 @@ impl Graph {
 
         let mut declarations_with_docs = 0;
         let mut total_doc_size = 0;
-        let mut declarations_types: HashMap<&str, usize> = HashMap::new();
+        let mut declarations_types: HashMap<DeclarationKind, usize> = HashMap::new();
         let mut definition_types: HashMap<DefinitionKind, usize> = HashMap::new();
         let mut multi_definition_count = 0;
 
@@ -766,7 +766,7 @@ impl Graph {
         let mut types: Vec<_> = declarations_types.iter().collect();
         types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
         for (kind, count) in types {
-            println!("  {kind:20} {count:6}");
+            println!("  {kind:20} {count:6}", kind = kind.to_string());
         }
 
         println!();
