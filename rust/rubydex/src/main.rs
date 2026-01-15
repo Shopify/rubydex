@@ -4,7 +4,7 @@ use std::mem;
 use rubydex::{
     indexing, listing,
     model::graph::Graph,
-    resolution,
+    resolution::Resolver,
     stats::{
         memory::MemoryStats,
         timer::{Timer, time_it},
@@ -53,7 +53,8 @@ fn main() {
     }
 
     time_it!(resolution, {
-        resolution::resolve_all(&mut graph);
+        let mut resolver = Resolver::new(&mut graph);
+        resolver.resolve_all();
     });
 
     // Run integrity checks if requested

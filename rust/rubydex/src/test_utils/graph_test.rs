@@ -7,7 +7,7 @@ use crate::model::graph::Graph;
 use crate::model::ids::UriId;
 use crate::offset::Offset;
 use crate::position::Position;
-use crate::resolution;
+use crate::resolution::Resolver;
 
 #[derive(Default)]
 pub struct GraphTest {
@@ -43,7 +43,8 @@ impl GraphTest {
     }
 
     pub fn resolve(&mut self) {
-        resolution::resolve_all(&mut self.graph);
+        let mut resolver = Resolver::new(&mut self.graph);
+        resolver.resolve_all();
     }
 
     /// Parses a location string like `<file:///foo.rb:3:0-3:5>` into `(uri, start_offset, end_offset)`
