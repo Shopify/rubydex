@@ -1514,10 +1514,8 @@ mod tests {
         diagnostics
             .iter()
             .map(|d| {
-                let uri = context.graph().documents().get(d.uri_id()).unwrap().uri();
-                let source = context.get_source(uri).unwrap();
-
-                d.formatted(source)
+                let document = context.graph().documents().get(d.uri_id()).unwrap();
+                d.formatted(document)
             })
             .collect()
     }

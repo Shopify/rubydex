@@ -52,6 +52,11 @@ impl LocalGraph {
         self.uri_id
     }
 
+    #[must_use]
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
     // Definitions
 
     #[must_use]

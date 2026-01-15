@@ -61,7 +61,7 @@ impl<'a> RubyIndexer<'a> {
     #[must_use]
     pub fn new(uri: String, source: &'a str) -> Self {
         let uri_id = UriId::from(&uri);
-        let local_graph = LocalGraph::new(uri_id, Document::new(uri));
+        let local_graph = LocalGraph::new(uri_id, Document::new(uri, source));
 
         Self {
             uri_id,
@@ -1893,7 +1893,10 @@ mod tests {
         let mut diagnostics = context.graph().diagnostics().iter().collect::<Vec<_>>();
 
         diagnostics.sort_by_key(|d| d.offset());
-        diagnostics.iter().map(|d| d.formatted(context.source())).collect()
+        diagnostics
+            .iter()
+            .map(|d| d.formatted(context.graph().document()))
+            .collect()
     }
 
     macro_rules! assert_diagnostics_eq {

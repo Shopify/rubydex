@@ -197,18 +197,14 @@ pub unsafe extern "C" fn rdx_definition_comments(pointer: GraphPointer, definiti
         };
 
         let uri_id = *defn.uri_id();
-        let uri = if let Some(doc) = graph.documents().get(&uri_id) {
-            doc.uri().to_string()
-        } else {
-            panic!("Document not found: {uri_id:?}");
-        };
+        let document = graph.documents().get(&uri_id).expect("document should exist");
 
         let mut entries = defn
             .comments()
             .iter()
             .map(|c| CommentEntry {
                 string: CString::new(c.string().as_str()).unwrap().into_raw().cast_const(),
-                location: create_location_for_uri_and_offset(&uri, c.offset()),
+                location: create_location_for_uri_and_offset(document, c.offset()),
             })
             .collect::<Vec<CommentEntry>>()
             .into_boxed_slice();
@@ -274,14 +270,8 @@ pub unsafe extern "C" fn rdx_definition_location(pointer: GraphPointer, definiti
             panic!("Definition not found: {definition_id:?}");
         };
 
-        let uri_id = *defn.uri_id();
-        let uri = if let Some(doc) = graph.documents().get(&uri_id) {
-            doc.uri().to_string()
-        } else {
-            panic!("Document not found: {uri_id:?}");
-        };
-
-        create_location_for_uri_and_offset(&uri, defn.offset())
+        let document = graph.documents().get(defn.uri_id()).expect("document should exist");
+        create_location_for_uri_and_offset(document, defn.offset())
     })
 }
 

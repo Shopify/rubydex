@@ -1,3 +1,5 @@
+#[cfg(any(test, feature = "test_utils"))]
+use crate::model::document::Document;
 use crate::{model::ids::UriId, offset::Offset};
 
 #[derive(Debug)]
@@ -41,12 +43,12 @@ impl Diagnostic {
 
     #[cfg(any(test, feature = "test_utils"))]
     #[must_use]
-    pub fn formatted(&self, source: &str) -> String {
+    pub fn formatted(&self, document: &Document) -> String {
         format!(
             "{}: {} ({})",
             self.rule(),
             self.message(),
-            self.offset().to_display_range(source)
+            self.offset().to_display_range(document)
         )
     }
 }

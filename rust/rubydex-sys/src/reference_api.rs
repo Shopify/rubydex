@@ -152,13 +152,12 @@ pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, 
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
-        let uri = graph
+        let document = graph
             .documents()
             .get(&reference.uri_id())
-            .expect("Document should exist")
-            .uri()
-            .to_string();
-        create_location_for_uri_and_offset(&uri, reference.offset())
+            .expect("Document should exist");
+
+        create_location_for_uri_and_offset(document, reference.offset())
     })
 }
 
@@ -178,12 +177,11 @@ pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, re
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");
-        let uri = graph
+        let document = graph
             .documents()
             .get(&reference.uri_id())
-            .expect("Document should exist")
-            .uri()
-            .to_string();
-        create_location_for_uri_and_offset(&uri, reference.offset())
+            .expect("Document should exist");
+
+        create_location_for_uri_and_offset(document, reference.offset())
     })
 }
