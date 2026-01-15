@@ -1,10 +1,11 @@
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration};
-use crate::model::definitions::Definition;
+use crate::model::definitions::{Definition, Mixin};
 use crate::model::document::Document;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
@@ -40,6 +41,19 @@ pub struct Graph {
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
 
     diagnostics: Vec<Diagnostic>,
+
+    /// Synthetic method definitions added by plugins: (def_id, owner_fqn)
+    synthetic_methods: Vec<(DefinitionId, String)>,
+    /// Synthetic class definitions added by plugins: (def_id, fqn)
+    synthetic_classes: Vec<(DefinitionId, String)>,
+    /// Synthetic module definitions added by plugins: (def_id, fqn)
+    synthetic_modules: Vec<(DefinitionId, String)>,
+    /// Synthetic mixin relationships: (target_decl_id, mixin)
+    synthetic_mixins: Vec<(DeclarationId, Mixin)>,
+    /// Included hooks: trigger_module_fqn -> vec of modules to extend
+    included_hooks: HashMap<String, Vec<String>>,
+    /// Counter for synthetic definition IDs (negative values)
+    synthetic_id_counter: i64,
 }
 
 impl Graph {
@@ -55,6 +69,12 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             diagnostics: Vec::new(),
+            synthetic_methods: Vec::new(),
+            synthetic_classes: Vec::new(),
+            synthetic_modules: Vec::new(),
+            synthetic_mixins: Vec::new(),
+            included_hooks: HashMap::new(),
+            synthetic_id_counter: 0,
         }
     }
 
@@ -167,6 +187,234 @@ impl Graph {
     #[must_use]
     pub fn diagnostics(&self) -> &Vec<Diagnostic> {
         &self.diagnostics
+    }
+
+    #[must_use]
+    pub fn synthetic_methods(&self) -> &[(DefinitionId, String)] {
+        &self.synthetic_methods
+    }
+
+    #[must_use]
+    pub fn synthetic_classes(&self) -> &[(DefinitionId, String)] {
+        &self.synthetic_classes
+    }
+
+    #[must_use]
+    pub fn synthetic_modules(&self) -> &[(DefinitionId, String)] {
+        &self.synthetic_modules
+    }
+
+    #[must_use]
+    pub fn synthetic_mixins(&self) -> &[(DeclarationId, Mixin)] {
+        &self.synthetic_mixins
+    }
+
+    #[must_use]
+    pub fn included_hooks(&self) -> &HashMap<String, Vec<String>> {
+        &self.included_hooks
+    }
+
+    /// Registers an included hook: when trigger_module is included, extend with extend_module.
+    pub fn register_included_hook(&mut self, trigger_module: &str, extend_module: &str) {
+        self.included_hooks
+            .entry(trigger_module.to_string())
+            .or_default()
+            .push(extend_module.to_string());
+    }
+
+    /// Adds a synthetic mixin relationship created by plugins.
+    /// Returns true if the target exists and mixin was added, false otherwise.
+    pub fn add_synthetic_mixin(&mut self, target_name: &str, module_name: &str, mixin_type: u8) -> bool {
+        use crate::model::name::{Name, NameRef};
+
+        // Check target exists
+        let target_decl_id = DeclarationId::from(target_name);
+        if !self.declarations().contains_key(&target_decl_id) {
+            return false;
+        }
+
+        // Create a name for the module reference
+        let unqualified = module_name.rsplit("::").next().unwrap_or(module_name);
+        let module_str_id = self.intern_string(unqualified.to_string());
+        let name = Name::new(module_str_id, None, None);
+        let name_id = name.id();
+        self.names.insert(name_id, NameRef::Unresolved(Box::new(name)));
+
+        // Create the mixin based on type: 0=Include, 1=Prepend, 2=Extend
+        let mixin = match mixin_type {
+            0 => Mixin::Include(name_id),
+            1 => Mixin::Prepend(name_id),
+            2 => Mixin::Extend(name_id),
+            _ => return false,
+        };
+
+        self.synthetic_mixins.push((target_decl_id, mixin));
+        true
+    }
+
+    /// Returns a mutable reference to the definitions map
+    #[must_use]
+    pub fn definitions_mut(&mut self) -> &mut IdentityHashMap<DefinitionId, Definition> {
+        &mut self.definitions
+    }
+
+    /// Interns a string and returns its ID
+    pub fn intern_string(&mut self, string: String) -> StringId {
+        let string_id = StringId::from(&string);
+        self.strings.insert(string_id, string);
+        string_id
+    }
+
+    /// Returns next synthetic definition ID (negative to avoid collision with hash-based IDs)
+    fn next_synthetic_id(&mut self) -> i64 {
+        self.synthetic_id_counter -= 1;
+        self.synthetic_id_counter
+    }
+
+    /// Adds a synthetic method definition created by plugins.
+    /// Returns true if the owner exists and method was added, false otherwise.
+    pub fn add_synthetic_method(
+        &mut self,
+        owner_name: &str,
+        method_name: &str,
+        file_path: &str,
+        line: u32,
+        column: u32,
+    ) -> bool {
+        use crate::model::definitions::{DefinitionFlags, MethodDefinition};
+        use crate::model::visibility::Visibility;
+        use crate::offset::Offset;
+
+        // Check owner exists
+        let owner_decl_id = DeclarationId::from(owner_name);
+        if !self.declarations().contains_key(&owner_decl_id) {
+            return false;
+        }
+
+        let uri_id = UriId::from(file_path);
+        let name_str_id = self.intern_string(method_name.to_string());
+
+        // Create synthetic offset using line and column
+        // We use a simple encoding: start position based on line/column
+        let start = (line.saturating_sub(1)) * 1000 + column;
+        let offset = Offset::new(start, start + method_name.len() as u32);
+
+        // Create definition ID (negative to avoid collision)
+        let def_id = DefinitionId::new(self.next_synthetic_id());
+
+        let definition = Definition::Method(Box::new(MethodDefinition::new(
+            name_str_id,
+            uri_id,
+            offset,
+            Vec::new(), // no comments
+            DefinitionFlags::empty(),
+            None,                // lexical_nesting_id
+            Vec::new(),          // no parameters
+            Visibility::Public,
+            None,                // no receiver
+        )));
+
+        self.definitions.insert(def_id, definition);
+        self.synthetic_methods.push((def_id, owner_name.to_string()));
+        true
+    }
+
+    /// Adds a synthetic class definition created by plugins.
+    /// Returns true since synthetic classes can always be created.
+    pub fn add_synthetic_class(
+        &mut self,
+        class_name: &str,
+        parent_name: Option<&str>,
+        file_path: &str,
+        line: u32,
+        column: u32,
+    ) -> bool {
+        use crate::model::definitions::{ClassDefinition, DefinitionFlags};
+        use crate::model::name::{Name, NameRef};
+        use crate::offset::Offset;
+
+        let uri_id = UriId::from(file_path);
+        let unqualified = class_name.rsplit("::").next().unwrap_or(class_name);
+        let name_str_id = self.intern_string(unqualified.to_string());
+
+        // Create synthetic offset using line and column
+        let start = (line.saturating_sub(1)) * 1000 + column;
+        let offset = Offset::new(start, start + class_name.len() as u32);
+
+        // Create definition ID (negative to avoid collision)
+        let def_id = DefinitionId::new(self.next_synthetic_id());
+
+        // Create the name for this class definition and insert into names map
+        let name = Name::new(name_str_id, None, None);
+        let name_id = name.id();
+        self.names.insert(name_id, NameRef::Unresolved(Box::new(name)));
+
+        // Create parent reference if provided
+        let parent_name_id = parent_name.map(|p| {
+            let parent_unqualified = p.rsplit("::").next().unwrap_or(p);
+            let parent_str_id = self.intern_string(parent_unqualified.to_string());
+            let parent_name = Name::new(parent_str_id, None, None);
+            let parent_name_id = parent_name.id();
+            self.names.insert(parent_name_id, NameRef::Unresolved(Box::new(parent_name)));
+            parent_name_id
+        });
+
+        let definition = Definition::Class(Box::new(ClassDefinition::new(
+            name_id,
+            uri_id,
+            offset,
+            Vec::new(), // no comments
+            DefinitionFlags::empty(),
+            None, // lexical_nesting_id
+            parent_name_id,
+        )));
+
+        self.definitions.insert(def_id, definition);
+        self.synthetic_classes.push((def_id, class_name.to_string()));
+        true
+    }
+
+    /// Adds a synthetic module definition created by plugins.
+    /// Returns true since synthetic modules can always be created.
+    pub fn add_synthetic_module(
+        &mut self,
+        module_name: &str,
+        file_path: &str,
+        line: u32,
+        column: u32,
+    ) -> bool {
+        use crate::model::definitions::{DefinitionFlags, ModuleDefinition};
+        use crate::model::name::{Name, NameRef};
+        use crate::offset::Offset;
+
+        let uri_id = UriId::from(file_path);
+        let unqualified = module_name.rsplit("::").next().unwrap_or(module_name);
+        let name_str_id = self.intern_string(unqualified.to_string());
+
+        // Create synthetic offset using line and column
+        let start = (line.saturating_sub(1)) * 1000 + column;
+        let offset = Offset::new(start, start + module_name.len() as u32);
+
+        // Create definition ID (negative to avoid collision)
+        let def_id = DefinitionId::new(self.next_synthetic_id());
+
+        // Create the name for this module definition and insert into names map
+        let name = Name::new(name_str_id, None, None);
+        let name_id = name.id();
+        self.names.insert(name_id, NameRef::Unresolved(Box::new(name)));
+
+        let definition = Definition::Module(Box::new(ModuleDefinition::new(
+            name_id,
+            uri_id,
+            offset,
+            Vec::new(), // no comments
+            DefinitionFlags::empty(),
+            None, // lexical_nesting_id
+        )));
+
+        self.definitions.insert(def_id, definition);
+        self.synthetic_modules.push((def_id, module_name.to_string()));
+        true
     }
 
     /// # Panics

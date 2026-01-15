@@ -355,3 +355,150 @@ pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPoin
         ReferencesIter::new(refs.into_boxed_slice())
     })
 }
+
+/// Adds a synthetic method definition to the graph.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer`
+/// - `owner_name`, `method_name`, `file_path` must be valid UTF-8 C strings
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_add_method(
+    pointer: GraphPointer,
+    owner_name: *const c_char,
+    method_name: *const c_char,
+    file_path: *const c_char,
+    line: u32,
+    column: u32,
+) -> bool {
+    let Ok(owner) = (unsafe { utils::convert_char_ptr_to_string(owner_name) }) else {
+        return false;
+    };
+    let Ok(name) = (unsafe { utils::convert_char_ptr_to_string(method_name) }) else {
+        return false;
+    };
+    let Ok(path) = (unsafe { utils::convert_char_ptr_to_string(file_path) }) else {
+        return false;
+    };
+
+    with_graph(pointer, |graph| {
+        graph.add_synthetic_method(&owner, &name, &path, line, column)
+    })
+}
+
+/// Adds a synthetic class definition to the graph.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer`
+/// - `class_name`, `file_path` must be valid UTF-8 C strings
+/// - `parent_name` can be null
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_add_class(
+    pointer: GraphPointer,
+    class_name: *const c_char,
+    parent_name: *const c_char, // can be null
+    file_path: *const c_char,
+    line: u32,
+    column: u32,
+) -> bool {
+    let Ok(name) = (unsafe { utils::convert_char_ptr_to_string(class_name) }) else {
+        return false;
+    };
+    let parent = if parent_name.is_null() {
+        None
+    } else {
+        unsafe { utils::convert_char_ptr_to_string(parent_name).ok() }
+    };
+    let Ok(path) = (unsafe { utils::convert_char_ptr_to_string(file_path) }) else {
+        return false;
+    };
+
+    with_graph(pointer, |graph| {
+        graph.add_synthetic_class(&name, parent.as_deref(), &path, line, column)
+    })
+}
+
+/// Adds a synthetic module definition to the graph.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer`
+/// - `module_name`, `file_path` must be valid UTF-8 C strings
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_add_module(
+    pointer: GraphPointer,
+    module_name: *const c_char,
+    file_path: *const c_char,
+    line: u32,
+    column: u32,
+) -> bool {
+    let Ok(name) = (unsafe { utils::convert_char_ptr_to_string(module_name) }) else {
+        return false;
+    };
+    let Ok(path) = (unsafe { utils::convert_char_ptr_to_string(file_path) }) else {
+        return false;
+    };
+
+    with_graph(pointer, |graph| {
+        graph.add_synthetic_module(&name, &path, line, column)
+    })
+}
+
+/// Mixin type for FFI: Include, Prepend, or Extend
+#[repr(C)]
+pub enum MixinType {
+    Include = 0,
+    Prepend = 1,
+    Extend = 2,
+}
+
+/// Adds a synthetic mixin relationship to the graph.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer`
+/// - `target_name`, `module_name` must be valid UTF-8 C strings
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_add_mixin(
+    pointer: GraphPointer,
+    target_name: *const c_char,
+    module_name: *const c_char,
+    mixin_type: MixinType,
+) -> bool {
+    let Ok(target) = (unsafe { utils::convert_char_ptr_to_string(target_name) }) else {
+        return false;
+    };
+    let Ok(module) = (unsafe { utils::convert_char_ptr_to_string(module_name) }) else {
+        return false;
+    };
+
+    with_graph(pointer, |graph| {
+        graph.add_synthetic_mixin(&target, &module, mixin_type as u8)
+    })
+}
+
+/// Registers an included hook: when trigger_module is included, extend with extend_module.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer`
+/// - `trigger_module`, `extend_module` must be valid UTF-8 C strings
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_register_included_hook(
+    pointer: GraphPointer,
+    trigger_module: *const c_char,
+    extend_module: *const c_char,
+) -> bool {
+    let Ok(trigger) = (unsafe { utils::convert_char_ptr_to_string(trigger_module) }) else {
+        return false;
+    };
+    let Ok(extend) = (unsafe { utils::convert_char_ptr_to_string(extend_module) }) else {
+        return false;
+    };
+
+    with_graph(pointer, |graph| {
+        graph.register_included_hook(&trigger, &extend);
+        true
+    })
+}
