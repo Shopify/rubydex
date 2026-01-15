@@ -3,17 +3,20 @@ use std::{
     hash::BuildHasher,
 };
 
-use crate::model::{
-    declaration::{
-        Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
-        Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        Namespace, SingletonClassDeclaration,
+use crate::{
+    diagnostic::{Diagnostic, Rule},
+    model::{
+        declaration::{
+            Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration,
+            ConstantDeclaration, Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration,
+            MethodDeclaration, ModuleDeclaration, Namespace, SingletonClassDeclaration,
+        },
+        definitions::{Definition, Mixin, Receiver},
+        graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
+        identity_maps::{IdentityHashMap, IdentityHashSet},
+        ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+        name::{Name, NameRef, ParentScope},
     },
-    definitions::{Definition, Mixin, Receiver},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
-    identity_maps::{IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
-    name::{Name, NameRef, ParentScope},
 };
 
 pub enum Unit {
@@ -747,17 +750,19 @@ impl<'a> Resolver<'a> {
             Declaration::Namespace(Namespace::Class(_)) => {
                 let definition_ids = declaration.definitions().to_vec();
 
-                Some(match self.linearize_parent_class(&definition_ids, context) {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        context.partial = true;
-                        ids
-                    }
-                })
+                Some(
+                    match self.linearize_parent_class(declaration_id, &definition_ids, context) {
+                        Ancestors::Complete(ids) => ids,
+                        Ancestors::Cyclic(ids) => {
+                            context.cyclic = true;
+                            ids
+                        }
+                        Ancestors::Partial(ids) => {
+                            context.partial = true;
+                            ids
+                        }
+                    },
+                )
             }
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
@@ -1452,7 +1457,7 @@ impl<'a> Resolver<'a> {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
 
-                let (picked_parent, partial) = self.get_parent_class(&definition_ids);
+                let (picked_parent, partial) = self.get_parent_class(attached_id, &definition_ids);
                 (self.get_or_create_singleton_class(picked_parent), partial)
             }
             _ => {
@@ -1463,7 +1468,11 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (DeclarationId, bool) {
+    fn get_parent_class(
+        &mut self,
+        declaration_id: DeclarationId,
+        definition_ids: &[DefinitionId],
+    ) -> (DeclarationId, bool) {
         let mut explicit_parents = Vec::new();
         let mut partial = false;
 
@@ -1481,7 +1490,7 @@ impl<'a> Resolver<'a> {
 
                 match name {
                     NameRef::Resolved(resolved) => {
-                        explicit_parents.push(*resolved.declaration_id());
+                        explicit_parents.push((*resolved.declaration_id(), *superclass, *definition_id));
                     }
                     NameRef::Unresolved(_) => {
                         partial = true;
@@ -1490,17 +1499,53 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
-        // mismatch error. TODO: We should add a diagnostic here
-        (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), partial)
+        // Dedup explicit parents that resolve to the same declaration
+        explicit_parents.dedup_by(|(name_a, _, _), (name_b, _, _)| name_a == name_b);
+
+        if explicit_parents.len() > 1 {
+            let (first_parent_id, _first_superclass_ref_id, _first_definition_id) = explicit_parents[0];
+
+            for (parent_declaration_id, superclass_ref_id, definition_id) in explicit_parents.iter().skip(1) {
+                let diagnostic = Diagnostic::new(
+                    Rule::ParentRedefinition,
+                    *self.graph.definitions().get(definition_id).unwrap().uri_id(),
+                    self.graph
+                        .constant_references()
+                        .get(superclass_ref_id)
+                        .unwrap()
+                        .offset()
+                        .clone(),
+                    format!(
+                        "Parent of class `{}` redefined from `{}` to `{}`",
+                        self.graph.declarations().get(&declaration_id).unwrap().name(),
+                        self.graph.declarations().get(&first_parent_id).unwrap().name(),
+                        self.graph.declarations().get(parent_declaration_id).unwrap().name()
+                    ),
+                );
+
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&declaration_id)
+                    .unwrap()
+                    .add_diagnostic(diagnostic);
+            }
+        }
+
+        // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass mismatch error.
+        match explicit_parents.first() {
+            Some((parent, _superclass, _definition)) => (*parent, partial),
+            None => (*OBJECT_ID, partial),
+        }
     }
 
     fn linearize_parent_class(
         &mut self,
+        declaration_id: DeclarationId,
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Ancestors {
-        let (picked_parent, partial) = self.get_parent_class(definition_ids);
+        let (picked_parent, partial) = self.get_parent_class(declaration_id, definition_ids);
+
         let result = self.linearize_ancestors(picked_parent, context);
         if partial { result.to_partial() } else { result }
     }
@@ -4405,6 +4450,37 @@ mod tests {
                 "kind-redefinition: Redefining `Bar` as `module`, previously defined as `class` (5:1-5:16)",
                 "kind-redefinition: Redefining `Baz` as `constant`, previously defined as `class` (8:1-8:4)",
             ]
+        );
+    }
+
+    #[test]
+    fn resolution_diagnostics_for_parent_redefinition() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent1; end
+            class Parent2; end
+
+            class Child1; end
+            class Child1; end
+            class Child1 < Object; end
+            class Child1 < ::Object; end
+
+            class Child2; end
+            class Child2 < Parent1; end
+            class ::Child2 < ::Parent1; end
+
+            class Child3; end
+            class Child3 < Parent1; end
+            class Child3 < Parent2; end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["parent-redefinition: Parent of class `Child3` redefined from `Parent1` to `Parent2` (15:16-15:23)",]
         );
     }
 }
