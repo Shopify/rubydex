@@ -160,8 +160,8 @@ mod tests {
     "Name:TestModule" [label="TestModule",shape=hexagon];
     "Name:TestModule" -> "def_{module_def_id}" [dir=both];
 
-    "def_{class_def_id}" [label="Class(TestClass)",shape=ellipse];
-    "def_{module_def_id}" [label="Module(TestModule)",shape=ellipse];
+    "def_{class_def_id}" [label="class(TestClass)",shape=ellipse];
+    "def_{module_def_id}" [label="module(TestModule)",shape=ellipse];
 
     "file:///test.rb" [label="test.rb",shape=box];
     "def_{class_def_id}" -> "file:///test.rb";
