@@ -1642,7 +1642,28 @@ impl<'a> Resolver<'a> {
                         .collect::<Vec<(Mixin, DefinitionId)>>()
                 })
             })
-            .flatten();
+            .flatten()
+            .collect::<Vec<(Mixin, DefinitionId)>>();
+
+        if !mixins.is_empty()
+            && let Some(namespace) = declaration.as_namespace()
+            && matches!(namespace.ancestors(), Ancestors::Cyclic(_))
+        {
+            for (mixin, definition_id) in &mixins {
+                let definition = self.graph.definitions().get(definition_id).unwrap();
+                diagnostics.push(Diagnostic::new(
+                    Rule::CircularDependency,
+                    *definition.uri_id(),
+                    self.graph
+                        .constant_references()
+                        .get(mixin.constant_reference_id())
+                        .unwrap()
+                        .offset()
+                        .clone(),
+                    format!("Circular dependency: `{}` is parent of itself", declaration.name()),
+                ));
+            }
+        }
 
         for (mixin, definition_id) in mixins {
             let constant_reference = self
@@ -3021,7 +3042,10 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["circular-dependency: Circular dependency: `Foo` is parent of itself (2:11-2:14)"]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
@@ -3292,7 +3316,10 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["circular-dependency: Circular dependency: `Foo` is parent of itself (2:11-2:14)"]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
