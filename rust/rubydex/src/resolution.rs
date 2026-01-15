@@ -1557,6 +1557,28 @@ impl<'a> Resolver<'a> {
         // Dedup explicit parents that resolve to the same declaration
         explicit_parents.dedup_by(|(name_a, _, _), (name_b, _, _)| name_a.declaration_id() == name_b.declaration_id());
 
+        for (parent_name, superclass, definition) in &explicit_parents {
+            let parent_declaration = self.graph.declarations().get(parent_name.declaration_id()).unwrap();
+            if parent_declaration.kind() != DeclarationKind::Class {
+                diagnostics.push(Diagnostic::new(
+                    Rule::NonClassSuperclass,
+                    *definition.uri_id(),
+                    self.graph
+                        .constant_references()
+                        .get(superclass)
+                        .unwrap()
+                        .offset()
+                        .clone(),
+                    format!(
+                        "Superclass `{}` of `{}` is not a class (found `{}`)",
+                        parent_declaration.name(),
+                        declaration.name(),
+                        parent_declaration.kind()
+                    ),
+                ));
+            }
+        }
+
         if explicit_parents.len() > 1 {
             let (first_parent_name, _first_superclass, _first_definition) = explicit_parents[0];
 
@@ -4600,6 +4622,30 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec!["parent-redefinition: Parent of class `Child3` redefined from `Parent1` to `Parent2` (15:16-15:23)",]
+        );
+    }
+
+    #[test]
+    fn resolution_diagnostics_for_non_class_superclass() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Parent1; end
+            Parent2 = 42
+
+            class Child1 < Parent1; end
+            class Child2 < Parent2; end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "non-class-superclass: Superclass `Parent1` of `Child1` is not a class (found `module`) (4:16-4:23)",
+                "non-class-superclass: Superclass `Parent2` of `Child2` is not a class (found `constant`) (5:16-5:23)",
+            ]
         );
     }
 }
