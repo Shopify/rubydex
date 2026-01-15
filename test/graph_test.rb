@@ -166,6 +166,61 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_set_encoding
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        class Foo
+          def initialize
+            @叫聲😍x = "喵"
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      foo = graph["Foo::@叫聲😍x"].definitions.first
+
+      # UTF-8: code units => number of bytes
+      loc = foo.location
+      assert_equal(3, loc.start_line)
+      assert_equal(5, loc.start_column)
+      assert_equal(3, loc.end_line)
+      assert_equal(17, loc.end_column)
+
+      # UTF-16: code units => 1 for 1,2 byte characters, 2 for 3,4 byte characters
+      graph.set_encoding("utf16")
+      loc = foo.location
+      assert_equal(3, loc.start_line)
+      assert_equal(5, loc.start_column)
+      assert_equal(3, loc.end_line)
+      assert_equal(11, loc.end_column)
+
+      # UTF-32: code units => 1 for all characters
+      graph.set_encoding("utf32")
+      loc = foo.location
+      assert_equal(3, loc.start_line)
+      assert_equal(5, loc.start_column)
+      assert_equal(3, loc.end_line)
+      assert_equal(10, loc.end_column)
+    end
+  end
+
+  def test_graph_set_encoding_with_invalid_value
+    graph = Rubydex::Graph.new
+
+    error = assert_raises(ArgumentError) do
+      graph.set_encoding("invalid-encoding")
+    end
+
+    assert_match(/invalid encoding `invalid-encoding` \(should be utf8, utf16 or utf32\)/, error.message)
+
+    assert_raises(TypeError) do
+      graph.set_encoding(123)
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)

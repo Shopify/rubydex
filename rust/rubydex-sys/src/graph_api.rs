@@ -3,6 +3,7 @@
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::utils;
 use libc::{c_char, c_void};
+use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::DeclarationId;
 use rubydex::{indexing, listing, query, resolution};
@@ -112,6 +113,31 @@ pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
     with_graph(pointer, |graph| {
         resolution::resolve_all(graph);
     });
+}
+
+/// # Safety
+///
+/// Expects both the graph pointer and encoding string pointer to be valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_set_encoding(pointer: GraphPointer, encoding_str: *const c_char) -> bool {
+    let Ok(encoding) = (unsafe { utils::convert_char_ptr_to_string(encoding_str) }) else {
+        return false;
+    };
+
+    let encoding_variant = match encoding.as_str() {
+        "utf8" => Encoding::Utf8,
+        "utf16" => Encoding::Utf16,
+        "utf32" => Encoding::Utf32,
+        _ => {
+            return false;
+        }
+    };
+
+    with_graph(pointer, |graph| {
+        graph.set_encoding(encoding_variant);
+    });
+
+    true
 }
 
 /// An iterator over declaration IDs

@@ -204,7 +204,7 @@ pub unsafe extern "C" fn rdx_definition_comments(pointer: GraphPointer, definiti
             .iter()
             .map(|c| CommentEntry {
                 string: CString::new(c.string().as_str()).unwrap().into_raw().cast_const(),
-                location: create_location_for_uri_and_offset(document, c.offset()),
+                location: create_location_for_uri_and_offset(graph, document, c.offset()),
             })
             .collect::<Vec<CommentEntry>>()
             .into_boxed_slice();
@@ -271,7 +271,7 @@ pub unsafe extern "C" fn rdx_definition_location(pointer: GraphPointer, definiti
         };
 
         let document = graph.documents().get(defn.uri_id()).expect("document should exist");
-        create_location_for_uri_and_offset(document, defn.offset())
+        create_location_for_uri_and_offset(graph, document, defn.offset())
     })
 }
 

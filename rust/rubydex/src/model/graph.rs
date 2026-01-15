@@ -6,6 +6,7 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
+use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{NameRef, ResolvedName};
@@ -40,6 +41,8 @@ pub struct Graph {
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
 
     diagnostics: Vec<Diagnostic>,
+    /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
+    position_encoding: Encoding,
 }
 
 impl Graph {
@@ -55,6 +58,7 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             diagnostics: Vec::new(),
+            position_encoding: Encoding::default(),
         }
     }
 
@@ -414,6 +418,16 @@ impl Graph {
             Declaration::clear_ancestors(decl);
             Declaration::clear_descendants(decl);
         }
+    }
+
+    /// Sets the encoding that should be used for transforming byte offsets into LSP code unit line/column positions
+    pub fn set_encoding(&mut self, encoding: Encoding) {
+        self.position_encoding = encoding;
+    }
+
+    #[must_use]
+    pub fn encoding(&self) -> &Encoding {
+        &self.position_encoding
     }
 
     /// Asserts that the index is in a valid state.

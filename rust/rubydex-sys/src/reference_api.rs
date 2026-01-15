@@ -157,7 +157,7 @@ pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, 
             .get(&reference.uri_id())
             .expect("Document should exist");
 
-        create_location_for_uri_and_offset(document, reference.offset())
+        create_location_for_uri_and_offset(graph, document, reference.offset())
     })
 }
 
@@ -182,6 +182,6 @@ pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, re
             .get(&reference.uri_id())
             .expect("Document should exist");
 
-        create_location_for_uri_and_offset(document, reference.offset())
+        create_location_for_uri_and_offset(graph, document, reference.offset())
     })
 }

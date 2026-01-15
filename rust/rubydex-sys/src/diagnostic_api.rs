@@ -47,7 +47,7 @@ pub unsafe extern "C" fn rdx_graph_diagnostics(pointer: GraphPointer) -> *mut Di
             .iter()
             .map(|diagnostic| {
                 let document = graph.documents().get(diagnostic.uri_id()).unwrap();
-                let location = create_location_for_uri_and_offset(document, diagnostic.offset());
+                let location = create_location_for_uri_and_offset(graph, document, diagnostic.offset());
 
                 DiagnosticEntry {
                     rule: CString::new(diagnostic.rule().to_string())
