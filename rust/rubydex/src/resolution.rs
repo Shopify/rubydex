@@ -1,6 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     hash::BuildHasher,
+    ops::Deref,
 };
 
 use crate::{
@@ -618,6 +619,7 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
         {
             let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
@@ -683,28 +685,44 @@ impl<'a> Resolver<'a> {
         if let Declaration::Namespace(Namespace::SingletonClass(_)) = declaration {
             let attached_decl = self.graph.declarations().get(declaration.owner_id()).unwrap();
 
+            let attached_mixins = attached_decl
+                .definitions()
+                .iter()
+                .filter_map(|definition_id| {
+                    self.mixins_of(*definition_id)
+                        .map(|mixins| mixins.into_iter().map(|mixin| (mixin, *definition_id)))
+                })
+                .flatten()
+                .collect::<Vec<(Mixin, DefinitionId)>>();
+
             mixins.extend(
-                attached_decl
-                    .definitions()
-                    .iter()
-                    .filter_map(|definition_id| self.mixins_of(*definition_id))
-                    .flatten()
+                attached_mixins
+                    .into_iter()
+                    .map(|(mixin, _)| mixin)
                     .filter(|mixin| matches!(mixin, Mixin::Extend(_))),
             );
         }
 
         // Consider only prepends and includes for the current declaration
+        let decl_mixins = declaration
+            .definitions()
+            .iter()
+            .filter_map(|definition_id| {
+                self.mixins_of(*definition_id)
+                    .map(|mixins| mixins.into_iter().map(|mixin| (mixin, *definition_id)))
+            })
+            .flatten()
+            .collect::<Vec<(Mixin, DefinitionId)>>();
+
         mixins.extend(
-            declaration
-                .definitions()
-                .iter()
-                .filter_map(|definition_id| self.mixins_of(*definition_id))
-                .flatten()
+            decl_mixins
+                .into_iter()
+                .map(|(mixin, _)| mixin)
                 .filter(|mixin| matches!(mixin, Mixin::Prepend(_) | Mixin::Include(_))),
         );
 
         let (linearized_prepends, linearized_includes) =
-            self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
+            self.linearize_mixins(declaration_id, context, mixins, parent_ancestors.as_ref());
 
         // Build the final list
         let mut ancestors = Vec::new();
@@ -789,14 +807,17 @@ impl<'a> Resolver<'a> {
 
     /// Linearize all mixins into a prepend and include list. This function requires the parent ancestors because included
     /// modules are deduplicated against them
+    #[allow(clippy::too_many_lines)]
     fn linearize_mixins(
         &mut self,
+        declaration_id: DeclarationId,
         context: &mut LinearizationContext,
         mixins: Vec<Mixin>,
         parent_ancestors: Option<&Vec<Ancestor>>,
     ) -> (VecDeque<Ancestor>, VecDeque<Ancestor>) {
         let mut linearized_prepends = VecDeque::new();
         let mut linearized_includes = VecDeque::new();
+        let mut diagnostics = Vec::new();
 
         // IMPORTANT! In the slice of mixins we receive, extends are the ones that occurred in the attached object, which we
         // collect ahead of time. This is the reason why we apparently treat an extend like an include, because an extend in
@@ -812,6 +833,20 @@ impl<'a> Resolver<'a> {
                 Mixin::Prepend(_) => {
                     match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
+                            let mixin_declaration = self.graph.declarations().get(resolved.declaration_id()).unwrap();
+
+                            if mixin_declaration.kind() != DeclarationKind::Module {
+                                diagnostics.push(Diagnostic::new(
+                                    Rule::NonModuleMixin,
+                                    constant_reference.uri_id(),
+                                    constant_reference.offset().clone(),
+                                    format!(
+                                        "Mixin `{}` is not a module",
+                                        self.graph.strings().get(resolved.name().str()).unwrap().deref()
+                                    ),
+                                ));
+                            }
+
                             let ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
@@ -847,6 +882,20 @@ impl<'a> Resolver<'a> {
                 Mixin::Include(_) | Mixin::Extend(_) => {
                     match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
+                            let mixin_declaration = self.graph.declarations().get(resolved.declaration_id()).unwrap();
+
+                            if mixin_declaration.kind() != DeclarationKind::Module {
+                                diagnostics.push(Diagnostic::new(
+                                    Rule::NonModuleMixin,
+                                    constant_reference.uri_id(),
+                                    constant_reference.offset().clone(),
+                                    format!(
+                                        "Mixin `{}` is not a module",
+                                        self.graph.strings().get(resolved.name().str()).unwrap().deref()
+                                    ),
+                                ));
+                            }
+
                             let mut ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
@@ -882,6 +931,13 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+
+        self.graph
+            .declarations_mut()
+            .get_mut(&declaration_id)
+            .unwrap()
+            .diagnostics_mut()
+            .extend(diagnostics);
 
         (linearized_prepends, linearized_includes)
     }
@@ -4623,6 +4679,33 @@ mod tests {
             vec![
                 "non-class-superclass: Superclass `Parent1` of `Child1` is not a class (found `module`) (4:16-4:23)",
                 "non-class-superclass: Superclass `Parent2` of `Child2` is not a class (found `constant`) (5:16-5:23)",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolution_diagnostics_for_non_module_mixin() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Mixin; end
+
+            class Child
+              include Mixin;
+              prepend Mixin;
+              extend Mixin;
+            end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "non-module-mixin: Mixin `Mixin` is not a module (4:11-4:16)",
+                "non-module-mixin: Mixin `Mixin` is not a module (5:11-5:16)",
+                // "non-module-mixin: Mixin `Mixin` is not a module (6:10-6:15)", FIXME: we should report this once we linearize the ancestors of singleton classes
             ]
         );
     }

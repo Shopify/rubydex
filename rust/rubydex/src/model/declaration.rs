@@ -405,6 +405,10 @@ impl Declaration {
         all_declarations!(self, it => &it.diagnostics)
     }
 
+    pub fn diagnostics_mut(&mut self) -> &mut Vec<Diagnostic> {
+        all_declarations!(self, it => &mut it.diagnostics)
+    }
+
     pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         all_declarations!(self, it => std::mem::take(&mut it.diagnostics))
     }
