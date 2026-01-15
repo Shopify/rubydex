@@ -235,7 +235,7 @@ fn mcp_server_e2e() {
             &json!({ "name": "Dog" }),
         );
         assert_eq!(decl["name"], "Dog");
-        assert_eq!(decl["kind"], "Class");
+        assert_eq!(decl["kind"], "class");
         assert!(!decl["definitions"].as_array().unwrap().is_empty());
 
         // Verify ancestors are included in get_declaration response

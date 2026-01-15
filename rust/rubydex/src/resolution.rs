@@ -4722,15 +4722,15 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_declaration_exists!(context, "FOO");
-        assert_declaration_kind_eq!(context, "FOO", "Constant");
+        assert_declaration_kind_eq!(context, "FOO", "constant");
         assert_owner_eq!(context, "FOO", "Object");
 
         assert_declaration_exists!(context, "Bar::BAZ");
-        assert_declaration_kind_eq!(context, "Bar::BAZ", "Constant");
+        assert_declaration_kind_eq!(context, "Bar::BAZ", "constant");
         assert_owner_eq!(context, "Bar::BAZ", "Bar");
 
         assert_declaration_exists!(context, "Bar::QUX");
-        assert_declaration_kind_eq!(context, "Bar::QUX", "Constant");
+        assert_declaration_kind_eq!(context, "Bar::QUX", "constant");
         assert_owner_eq!(context, "Bar::QUX", "Bar");
     }
 
@@ -4962,7 +4962,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "FOO", "Constant");
+        assert_declaration_kind_eq!(context, "FOO", "constant");
     }
 
     #[test]
@@ -4996,7 +4996,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Foo", "Constant");
+        assert_declaration_kind_eq!(context, "Foo", "constant");
     }
 
     #[test]
@@ -5031,7 +5031,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Foo", "Class");
+        assert_declaration_kind_eq!(context, "Foo", "class");
     }
 
     #[test]
@@ -5432,9 +5432,9 @@ mod tests {
         });
 
         context.resolve();
-        assert_declaration_kind_eq!(context, "Foo", "Module");
-        assert_declaration_kind_eq!(context, "Foo::Bar", "Module");
-        assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "Constant");
+        assert_declaration_kind_eq!(context, "Foo", "module");
+        assert_declaration_kind_eq!(context, "Foo::Bar", "module");
+        assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "constant");
     }
 
     #[test]
@@ -5451,7 +5451,7 @@ mod tests {
         });
 
         context.resolve();
-        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_kind_eq!(context, "Foo", "module");
         assert_declaration_exists!(context, "Foo::<Foo>#bar()");
     }
 
@@ -5469,7 +5469,7 @@ mod tests {
         });
 
         context.resolve();
-        assert_declaration_kind_eq!(context, "Foo", "Constant");
+        assert_declaration_kind_eq!(context, "Foo", "constant");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
     }
@@ -5560,6 +5560,91 @@ mod todo_tests {
     }
 
     #[test]
+    fn todo_declaration_promoted_to_real_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo::Bar
+              def bar; end
+            end
+
+            class Foo
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Foo was initially created as a Todo (from class Foo::Bar), then promoted to Class
+        assert_declaration_kind_eq!(context, "Foo", "class");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+    }
+
+    #[test]
+    fn todo_declaration_promoted_to_real_namespace_incrementally() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Foo::Bar
+              def bar; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Foo was promoted from Todo to Class after the second resolution
+        assert_declaration_kind_eq!(context, "Foo", "class");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+    }
+
+    #[test]
+    fn qualified_name_inside_nesting_resolves_to_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar::Baz
+                def qux; end
+              end
+            end
+
+            module Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Bar", "module");
+        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_declaration_exists!(context, "Bar::Baz");
+        assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+    }
+
+    #[test]
     fn qualified_name_inside_nesting_resolves_when_discovered_incrementally() {
         let mut context = GraphTest::new();
         context.index_uri("file:///baz.rb", {
@@ -5587,7 +5672,7 @@ mod todo_tests {
 
         // After discovering top-level Bar, the Todo should be promoted and Baz re-homed.
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_declaration_kind_eq!(context, "Bar", "module");
         assert_members_eq!(context, "Bar", vec!["Baz"]);
         assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
         assert_declaration_does_not_exist!(context, "Foo::Bar");
