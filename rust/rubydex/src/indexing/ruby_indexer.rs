@@ -5,9 +5,10 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, GlobalVariableAliasDefinition,
-    GlobalVariableDefinition, InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin,
-    ModuleDefinition, Parameter, ParameterStruct, SingletonClassDefinition,
+    ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition,
+    GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition, InstanceVariableDefinition,
+    MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct, PrependDefinition,
+    SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -832,7 +833,7 @@ impl<'a> RubyIndexer<'a> {
         let parent_nesting_id = self.current_nesting_definition_id();
 
         // Collect all arguments as constant references. Ignore anything that isn't a constant
-        let reference_ids: Vec<_> = arguments
+        let mixin_arguments = arguments
             .arguments()
             .iter()
             .filter_map(|arg| {
@@ -849,9 +850,16 @@ impl<'a> RubyIndexer<'a> {
 
                     // FIXME: Ideally we would want to save the mixin as `self` but we can only save mixins with a name.
                     // We'll just use the current owner name id for now (what `self` resolves to).
-                    self.current_lexical_scope_name_id()
-                } else if let Some(constant_ref_id) = self.index_constant_reference(&arg, true) {
-                    Some(constant_ref_id)
+                    self.current_lexical_scope_name_id().map(|name_id| {
+                        self.local_graph.add_constant_reference(ConstantReference::new(
+                            name_id,
+                            self.uri_id,
+                            Offset::from_prism_location(&arg.location()),
+                        ));
+                        (name_id, Offset::from_prism_location(&arg.location()))
+                    })
+                } else if let Some(name_id) = self.index_constant_reference(&arg, false) {
+                    Some((name_id, Offset::from_prism_location(&arg.location())))
                 } else {
                     self.local_graph.add_diagnostic(
                         Rule::DynamicAncestor,
@@ -862,9 +870,9 @@ impl<'a> RubyIndexer<'a> {
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<(NameId, Offset)>>();
 
-        if reference_ids.is_empty() {
+        if mixin_arguments.is_empty() {
             return;
         }
 
@@ -872,18 +880,20 @@ impl<'a> RubyIndexer<'a> {
             return;
         };
 
-        let definition = self.local_graph.get_definition_mut(lexical_nesting_id).unwrap();
-
         // Mixin operations with multiple arguments are inserted in reverse, so that they are processed in the expected
         // order by resolution
-        for id in reference_ids.into_iter().rev() {
+        for (id, offset) in mixin_arguments.into_iter().rev() {
+            let constant_ref_id =
+                self.local_graph
+                    .add_constant_reference(ConstantReference::new(id, self.uri_id, offset));
+
             let mixin = match mixin_type {
-                MixinType::Include => Mixin::Include(id),
-                MixinType::Prepend => Mixin::Prepend(id),
-                MixinType::Extend => Mixin::Extend(id),
+                MixinType::Include => Mixin::Include(IncludeDefinition::new(constant_ref_id)),
+                MixinType::Prepend => Mixin::Prepend(PrependDefinition::new(constant_ref_id)),
+                MixinType::Extend => Mixin::Extend(ExtendDefinition::new(constant_ref_id)),
             };
 
-            match definition {
+            match self.local_graph.get_definition_mut(lexical_nesting_id).unwrap() {
                 Definition::Class(class_def) => class_def.add_mixin(mixin),
                 Definition::Module(module_def) => module_def.add_mixin(mixin),
                 Definition::SingletonClass(singleton_class_def) => singleton_class_def.add_mixin(mixin),
@@ -1925,8 +1935,19 @@ mod tests {
                 .mixins()
                 .iter()
                 .filter_map(|mixin| {
-                    if let Mixin::Include(name_id) = mixin {
-                        let name = $context.graph().names().get(name_id).unwrap();
+                    if let Mixin::Include(def) = mixin {
+                        let name = $context
+                            .graph()
+                            .names()
+                            .get(
+                                $context
+                                    .graph()
+                                    .constant_references()
+                                    .get(def.constant_reference_id())
+                                    .unwrap()
+                                    .name_id(),
+                            )
+                            .unwrap();
                         Some($context.graph().strings().get(name.str()).unwrap().as_str())
                     } else {
                         None
@@ -1944,8 +1965,19 @@ mod tests {
                 .mixins()
                 .iter()
                 .filter_map(|mixin| {
-                    if let Mixin::Prepend(name_id) = mixin {
-                        let name = $context.graph().names().get(name_id).unwrap();
+                    if let Mixin::Prepend(def) = mixin {
+                        let name = $context
+                            .graph()
+                            .names()
+                            .get(
+                                $context
+                                    .graph()
+                                    .constant_references()
+                                    .get(def.constant_reference_id())
+                                    .unwrap()
+                                    .name_id(),
+                            )
+                            .unwrap();
                         Some($context.graph().strings().get(name.str()).unwrap().as_str())
                     } else {
                         None
@@ -1963,8 +1995,19 @@ mod tests {
                 .mixins()
                 .iter()
                 .filter_map(|mixin| {
-                    if let Mixin::Extend(name_id) = mixin {
-                        let name = $context.graph().names().get(&name_id).unwrap();
+                    if let Mixin::Extend(def) = mixin {
+                        let name = $context
+                            .graph()
+                            .names()
+                            .get(
+                                $context
+                                    .graph()
+                                    .constant_references()
+                                    .get(def.constant_reference_id())
+                                    .unwrap()
+                                    .name_id(),
+                            )
+                            .unwrap();
                         Some($context.graph().strings().get(name.str()).unwrap().as_str())
                     } else {
                         None
@@ -3827,6 +3870,18 @@ mod tests {
             module M16::IGNORED; end
             module ::M17::IGNORED; end
             module M18::M19::IGNORED; end
+
+            module M20
+              include self
+            end
+
+            module M21
+              extend self
+            end
+
+            module M22
+              prepend self
+            end
             "
         });
 
@@ -3836,7 +3891,7 @@ mod tests {
             &context,
             vec![
                 "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16",
-                "M17", "M18", "M19",
+                "M17", "M18", "M19", "M20", "M21", "M22",
             ]
         );
     }
@@ -4657,7 +4712,18 @@ mod tests {
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
                             let include = bar.mixins().first().unwrap();
-                            let name = context.graph().names().get(include).unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
 
                             assert_eq!(StringId::from("Baz"), *name.str());
                             assert!(name.parent_scope().is_none());
@@ -4705,7 +4771,18 @@ mod tests {
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
                             let include = bar.mixins().first().unwrap();
-                            let name = context.graph().names().get(include).unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
 
                             assert_eq!(StringId::from("Baz"), *name.str());
                             assert!(name.parent_scope().is_none());
@@ -4756,7 +4833,18 @@ mod tests {
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
                             let include = bar.mixins().first().unwrap();
-                            let name = context.graph().names().get(include).unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
 
                             assert_eq!(StringId::from("Baz"), *name.str());
                             assert!(name.parent_scope().is_none());
@@ -4804,7 +4892,18 @@ mod tests {
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
                             let include = bar.mixins().first().unwrap();
-                            let name = context.graph().names().get(include).unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
 
                             assert_eq!(StringId::from("Baz"), *name.str());
                             assert!(name.parent_scope().is_none());
@@ -4855,7 +4954,18 @@ mod tests {
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
                             let include = bar.mixins().first().unwrap();
-                            let name = context.graph().names().get(include).unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
 
                             assert_eq!(StringId::from("Baz"), *name.str());
                             assert!(name.parent_scope().is_none());
