@@ -1371,7 +1371,11 @@ impl<'a> Resolver<'a> {
             if let Definition::Class(class) = definition
                 && let Some(superclass) = class.superclass_ref()
             {
-                let name = self.graph.names().get(&superclass).unwrap();
+                let name = self
+                    .graph
+                    .names()
+                    .get(self.graph.constant_references().get(superclass).unwrap().name_id())
+                    .unwrap();
 
                 match name {
                     NameRef::Resolved(resolved) => {

@@ -214,7 +214,7 @@ pub struct ClassDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     members: Vec<DefinitionId>,
-    superclass_ref: Option<NameId>,
+    superclass_ref: Option<ReferenceId>,
     mixins: Vec<Mixin>,
 }
 
@@ -227,7 +227,7 @@ impl ClassDefinition {
         comments: Vec<Comment>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
-        superclass_ref: Option<NameId>,
+        superclass_ref: Option<ReferenceId>,
     ) -> Self {
         Self {
             name_id,
@@ -273,8 +273,8 @@ impl ClassDefinition {
     }
 
     #[must_use]
-    pub fn superclass_ref(&self) -> Option<NameId> {
-        self.superclass_ref
+    pub fn superclass_ref(&self) -> Option<&ReferenceId> {
+        self.superclass_ref.as_ref()
     }
 
     #[must_use]
