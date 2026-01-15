@@ -231,9 +231,9 @@ impl Graph {
     }
 
     /// Adds a synthetic mixin relationship created by plugins.
-    /// Returns true if the target exists and mixin was added, false otherwise.
+    /// Returns true if the target and module exist and mixin was added, false otherwise.
     pub fn add_synthetic_mixin(&mut self, target_name: &str, module_name: &str, mixin_type: u8) -> bool {
-        use crate::model::name::{Name, NameRef};
+        use crate::model::name::{Name, NameRef, ResolvedName};
 
         // Check target exists
         let target_decl_id = DeclarationId::from(target_name);
@@ -241,12 +241,21 @@ impl Graph {
             return false;
         }
 
-        // Create a name for the module reference
+        // Check module exists and get its declaration ID
+        let module_decl_id = DeclarationId::from(module_name);
+        if !self.declarations().contains_key(&module_decl_id) {
+            return false;
+        }
+
+        // Create a resolved name reference for the module
         let unqualified = module_name.rsplit("::").next().unwrap_or(module_name);
         let module_str_id = self.intern_string(unqualified.to_string());
         let name = Name::new(module_str_id, None, None);
         let name_id = name.id();
-        self.names.insert(name_id, NameRef::Unresolved(Box::new(name)));
+
+        // Store as resolved so linearize_mixins can use it directly
+        let resolved = ResolvedName::new(name, module_decl_id);
+        self.names.insert(name_id, NameRef::Resolved(Box::new(resolved)));
 
         // Create the mixin based on type: 0=Include, 1=Prepend, 2=Extend
         let mixin = match mixin_type {

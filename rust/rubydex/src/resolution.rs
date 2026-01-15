@@ -793,6 +793,40 @@ impl<'a> Resolver<'a> {
                 .filter(|mixin| matches!(mixin, Mixin::Prepend(_) | Mixin::Include(_))),
         );
 
+        // Inject synthetic mixins
+        // For singleton classes, synthetic extends target the attached class (owner), not the singleton itself
+        if let Declaration::Namespace(Namespace::SingletonClass(_)) = declaration {
+            let attached_id = *declaration.owner_id();
+            mixins.extend(
+                self.graph
+                    .synthetic_mixins()
+                    .iter()
+                    .filter(|(target_id, _)| *target_id == attached_id)
+                    .filter_map(|(_, mixin)| {
+                        if matches!(mixin, Mixin::Extend(_)) {
+                            Some(mixin.clone())
+                        } else {
+                            None
+                        }
+                    }),
+            );
+        }
+
+        // Prepends and includes target the declaration directly
+        mixins.extend(
+            self.graph
+                .synthetic_mixins()
+                .iter()
+                .filter(|(target_id, _)| *target_id == declaration_id)
+                .filter_map(|(_, mixin)| {
+                    if matches!(mixin, Mixin::Prepend(_) | Mixin::Include(_)) {
+                        Some(mixin.clone())
+                    } else {
+                        None
+                    }
+                }),
+        );
+
         let (linearized_prepends, linearized_includes) =
             self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
 

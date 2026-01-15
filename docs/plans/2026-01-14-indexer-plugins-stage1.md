@@ -15,6 +15,7 @@
 | API | Purpose | Parameters |
 |-----|---------|------------|
 | `Declaration#members` | Query members of a class/module | none |
+| `Declaration#ancestors` | Query linearized ancestor chain | none |
 | `Graph#add_method` | Insert synthetic method | `owner:`, `name:`, `file_path:`, `line:`, `column:` |
 | `Graph#add_class` | Insert synthetic class | `name:`, `parent:` (optional), `file_path:`, `line:`, `column:` |
 | `Graph#add_module` | Insert synthetic module | `name:`, `file_path:`, `line:`, `column:` |
@@ -1376,6 +1377,520 @@ git commit -m "chore: fix any lint issues"
 
 ---
 
+## Task 17: Declaration#ancestors - Ruby test
+
+**Problem:** The `add_mixin` tests only assert that the API call succeeds, but don't verify that the mixin actually affects the ancestor chain. We need a `Declaration#ancestors` API to enable proper test coverage.
+
+**Files:**
+- Modify: `test/declaration_test.rb`
+
+**Step 1: Write the failing test**
+
+Add to `test/declaration_test.rb`:
+
+```ruby
+def test_ancestors_returns_linearized_ancestor_chain
+  with_context do |context|
+    context.write!("file.rb", <<~RUBY)
+      module Mixin; end
+      class Parent; end
+      class Child < Parent
+        include Mixin
+      end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    child = graph["Child"]
+    ancestor_names = child.ancestors.map(&:name)
+
+    # Linearized order: [Child, Mixin, Parent, Object]
+    assert_includes(ancestor_names, "Child")
+    assert_includes(ancestor_names, "Mixin")
+    assert_includes(ancestor_names, "Parent")
+  end
+end
+
+def test_ancestors_returns_empty_for_module_with_no_mixins
+  with_context do |context|
+    context.write!("file.rb", "module Standalone; end")
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    standalone = graph["Standalone"]
+    ancestor_names = standalone.ancestors.map(&:name)
+    # Module's ancestors include itself
+    assert_includes(ancestor_names, "Standalone")
+  end
+end
+
+def test_ancestors_enumerator_has_size
+  with_context do |context|
+    context.write!("file.rb", "class Post; end")
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    post = graph["Post"]
+    assert(post.ancestors.size >= 1) # At least Post itself
+  end
+end
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `chruby 3.4.3 && bundle exec ruby -Itest test/declaration_test.rb -n /ancestors/`
+Expected: FAIL with "undefined method `ancestors'"
+
+**Step 3: Do NOT commit** (commits handled at end)
+
+---
+
+## Task 18: Declaration#ancestors - Rust implementation
+
+**Files:**
+- Modify: `rust/rubydex-sys/src/declaration_api.rs`
+
+**Step 1: Add AncestorsIter struct and functions**
+
+Add to `rust/rubydex-sys/src/declaration_api.rs`:
+
+```rust
+use rubydex::model::declaration::Ancestor;
+
+/// Iterator over ancestor declaration IDs for a namespace
+pub struct AncestorsIter {
+    ids: Box<[i64]>,
+    index: usize,
+}
+
+/// Creates a new iterator over ancestor declaration IDs for a given namespace declaration.
+/// Only returns Complete ancestors (resolved declaration IDs), skipping Partial ones.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer`
+/// - The returned pointer must be freed with `rdx_ancestors_iter_free`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_declaration_ancestors_iter_new(
+    pointer: GraphPointer,
+    decl_id: i64,
+) -> *mut AncestorsIter {
+    with_graph(pointer, |graph| {
+        let decl_id = DeclarationId::new(decl_id);
+        let ancestors: Vec<i64> = if let Some(decl) = graph.declarations().get(&decl_id) {
+            Declaration::iter_ancestors(decl, |ancestor| {
+                if let Ancestor::Complete(id) = ancestor {
+                    Some(**id)
+                } else {
+                    None
+                }
+            }).flatten().collect()
+        } else {
+            Vec::new()
+        };
+        Box::into_raw(Box::new(AncestorsIter {
+            ids: ancestors.into_boxed_slice(),
+            index: 0,
+        }))
+    })
+}
+
+/// Advances the iterator and writes the next ID into `out_id`.
+/// Returns `true` if an ID was written, `false` if exhausted.
+///
+/// # Safety
+/// - `iter` must be valid pointer from `rdx_declaration_ancestors_iter_new`
+/// - `out_id` must be a valid, writable pointer
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_ancestors_iter_next(iter: *mut AncestorsIter, out_id: *mut i64) -> bool {
+    if iter.is_null() || out_id.is_null() {
+        return false;
+    }
+    let it = unsafe { &mut *iter };
+    if it.index >= it.ids.len() {
+        return false;
+    }
+    unsafe { *out_id = it.ids[it.index] };
+    it.index += 1;
+    true
+}
+
+/// Returns the total number of ancestors in the iterator.
+///
+/// # Safety
+/// - `iter` must be valid pointer from `rdx_declaration_ancestors_iter_new`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_ancestors_iter_len(iter: *const AncestorsIter) -> usize {
+    if iter.is_null() {
+        0
+    } else {
+        unsafe { (&(*iter).ids).len() }
+    }
+}
+
+/// Frees an iterator created by `rdx_declaration_ancestors_iter_new`.
+///
+/// # Safety
+/// - `iter` must be a pointer from `rdx_declaration_ancestors_iter_new`
+/// - `iter` must not be used after being freed
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_ancestors_iter_free(iter: *mut AncestorsIter) {
+    if !iter.is_null() {
+        unsafe {
+            let _ = Box::from_raw(iter);
+        }
+    }
+}
+```
+
+**Step 2: Compile Rust**
+
+Run: `cd rust && cargo build`
+Expected: PASS
+
+**Step 3: Do NOT commit** (commits handled at end)
+
+---
+
+## Task 19: Declaration#ancestors - C bindings
+
+**Files:**
+- Modify: `ext/rubydex/rustbindings.h`
+- Modify: `ext/rubydex/declaration.c`
+
+**Step 1: Update rustbindings.h**
+
+Add declarations:
+
+```c
+typedef struct AncestorsIter AncestorsIter;
+struct AncestorsIter *rdx_declaration_ancestors_iter_new(GraphPointer pointer, int64_t decl_id);
+bool rdx_ancestors_iter_next(struct AncestorsIter *iter, int64_t *out_id);
+size_t rdx_ancestors_iter_len(const struct AncestorsIter *iter);
+void rdx_ancestors_iter_free(struct AncestorsIter *iter);
+```
+
+**Step 2: Add C implementation in declaration.c**
+
+Add to `ext/rubydex/declaration.c` (follow the same pattern as `members`):
+
+```c
+// Body function for rb_ensure in Declaration#ancestors
+static VALUE declaration_ancestors_yield(VALUE args) {
+    VALUE self = rb_ary_entry(args, 0);
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    int64_t id = 0;
+    while (rdx_ancestors_iter_next(iter, &id)) {
+        VALUE argv[] = {data->graph_obj, LL2NUM(id)};
+        VALUE handle = rb_class_new_instance(2, argv, cDeclaration);
+        rb_yield(handle);
+    }
+
+    return Qnil;
+}
+
+// Ensure function to free iterator
+static VALUE declaration_ancestors_ensure(VALUE args) {
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    rdx_ancestors_iter_free(iter);
+    return Qnil;
+}
+
+// Size function for enumerator
+static VALUE declaration_ancestors_size(VALUE self, VALUE _args, VALUE _eobj) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    void *iter = rdx_declaration_ancestors_iter_new(graph, data->id);
+    size_t len = rdx_ancestors_iter_len(iter);
+    rdx_ancestors_iter_free(iter);
+
+    return SIZET2NUM(len);
+}
+
+// Declaration#ancestors: () -> Enumerator[Declaration]
+static VALUE sr_declaration_ancestors(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize_with_size(self, rb_str_new2("ancestors"), 0, NULL, declaration_ancestors_size);
+    }
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    void *iter = rdx_declaration_ancestors_iter_new(graph, data->id);
+    VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
+    rb_ensure(declaration_ancestors_yield, args, declaration_ancestors_ensure, args);
+
+    return self;
+}
+```
+
+**Step 3: Register the method**
+
+In `initialize_declaration` function, add:
+
+```c
+rb_define_method(cDeclaration, "ancestors", sr_declaration_ancestors, 0);
+```
+
+**Step 4: Compile and run tests**
+
+Run: `chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/declaration_test.rb -n /ancestors/`
+Expected: PASS
+
+**Step 5: Do NOT commit** (commits handled at end)
+
+---
+
+## Task 20: Process synthetic mixins during ancestor linearization
+
+**Problem:** Synthetic mixins stored via `Graph#add_mixin` are never processed during resolution. They need to be injected into the `linearize_ancestors` function so they affect the ancestor chain.
+
+**Files:**
+- Modify: `rust/rubydex/src/resolution.rs`
+
+**Step 1: Understand the current flow**
+
+In `linearize_ancestors` (around line 740-761), mixins are collected from definitions:
+
+```rust
+// For singleton classes, collect extends from attached object
+mixins.extend(/* extends from definitions */);
+
+// Collect prepends and includes from definitions
+mixins.extend(/* prepends and includes from definitions */);
+```
+
+**Step 2: Add synthetic mixin injection**
+
+After collecting mixins from definitions, inject synthetic mixins. Add this code after the existing mixin collection (around line 761):
+
+```rust
+// Inject synthetic mixins for this declaration
+let synthetic_mixins: Vec<Mixin> = graph
+    .synthetic_mixins()
+    .iter()
+    .filter(|(target_id, _)| *target_id == declaration_id)
+    .map(|(_, mixin)| mixin.clone())
+    .collect();
+
+// For singleton classes, synthetic extends go on the attached object
+if let Declaration::SingletonClass(_) = declaration {
+    mixins.extend(
+        synthetic_mixins
+            .iter()
+            .filter(|m| matches!(m, Mixin::Extend(_)))
+            .cloned(),
+    );
+}
+
+// Prepends and includes go on the current declaration
+mixins.extend(
+    synthetic_mixins
+        .into_iter()
+        .filter(|m| matches!(m, Mixin::Prepend(_) | Mixin::Include(_))),
+);
+```
+
+**Step 3: Compile and test**
+
+Run: `cd rust && cargo build && cargo test`
+Expected: PASS
+
+**Step 4: Do NOT commit** (commits handled at end)
+
+---
+
+## Task 21: Update add_mixin tests for proper coverage
+
+**Problem:** The current `add_mixin` tests only assert the API call succeeds. We need to verify that mixins actually affect the ancestor chain.
+
+**Files:**
+- Modify: `test/graph_test.rb`
+
+**Step 1: Replace weak tests with proper assertions**
+
+Find and replace the existing `add_mixin` tests:
+
+```ruby
+def test_add_mixin_extend_affects_singleton_ancestors
+  with_context do |context|
+    context.write!("post.rb", <<~RUBY)
+      module Concern; end
+      module Concern::ClassMethods
+        def foo; end
+      end
+      class Post; end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    # Get Post's singleton class ancestors BEFORE adding mixin
+    post = graph["Post"]
+    # Note: singleton_class may not be directly accessible, so we check via the class itself
+    initial_ancestor_names = post.ancestors.map(&:name)
+    refute_includes(initial_ancestor_names, "Concern::ClassMethods")
+
+    # Add extend mixin (extend affects singleton class)
+    result = graph.add_mixin(
+      target: "Post",
+      module_name: "Concern::ClassMethods",
+      type: :extend,
+    )
+    assert(result)
+
+    graph.resolve
+
+    # Now Post's singleton class should have ClassMethods in ancestors
+    # For extend, we check the singleton class's ancestors
+    post_singleton = graph["Post::<Class:Post>"]
+    if post_singleton
+      singleton_ancestor_names = post_singleton.ancestors.map(&:name)
+      assert_includes(singleton_ancestor_names, "Concern::ClassMethods")
+    end
+  end
+end
+
+def test_add_mixin_include_affects_ancestors
+  with_context do |context|
+    context.write!("post.rb", <<~RUBY)
+      module Validations
+        def validate; end
+      end
+      class Post; end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    post = graph["Post"]
+    initial_ancestor_names = post.ancestors.map(&:name)
+    refute_includes(initial_ancestor_names, "Validations")
+
+    # Add include mixin
+    result = graph.add_mixin(
+      target: "Post",
+      module_name: "Validations",
+      type: :include,
+    )
+    assert(result)
+
+    graph.resolve
+
+    # Now Post should have Validations in ancestors
+    updated_ancestor_names = post.ancestors.map(&:name)
+    assert_includes(updated_ancestor_names, "Validations")
+  end
+end
+
+def test_add_mixin_prepend_affects_ancestors
+  with_context do |context|
+    context.write!("post.rb", <<~RUBY)
+      module Prepended
+        def save; end
+      end
+      class Post; end
+    RUBY
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    post = graph["Post"]
+    initial_ancestor_names = post.ancestors.map(&:name)
+    refute_includes(initial_ancestor_names, "Prepended")
+
+    # Add prepend mixin
+    result = graph.add_mixin(
+      target: "Post",
+      module_name: "Prepended",
+      type: :prepend,
+    )
+    assert(result)
+
+    graph.resolve
+
+    # Now Post should have Prepended in ancestors (before Post itself)
+    updated_ancestor_names = post.ancestors.map(&:name)
+    assert_includes(updated_ancestor_names, "Prepended")
+
+    # Prepended should come before Post in the ancestor chain
+    prepended_idx = updated_ancestor_names.index("Prepended")
+    post_idx = updated_ancestor_names.index("Post")
+    assert(prepended_idx < post_idx, "Prepended module should appear before Post in ancestors")
+  end
+end
+
+def test_add_mixin_to_nonexistent_target_returns_false
+  with_context do |context|
+    context.write!("post.rb", "module Foo; end")
+
+    graph = Rubydex::Graph.new
+    graph.index_all(context.glob("**/*.rb"))
+    graph.resolve
+
+    result = graph.add_mixin(
+      target: "NonExistent",
+      module_name: "Foo",
+      type: :include,
+    )
+    refute(result)
+  end
+end
+```
+
+**Step 2: Compile and run tests**
+
+Run: `chruby 3.4.3 && bundle exec rake compile && bundle exec ruby -Itest test/graph_test.rb -n /add_mixin/`
+Expected: PASS
+
+**Step 3: Do NOT commit** (commits handled at end)
+
+---
+
+## Task 22: Run full test suite and verify
+
+**Step 1: Run all Ruby tests**
+
+Run: `chruby 3.4.3 && bundle exec rake ruby_test`
+Expected: All tests pass
+
+**Step 2: Run Rust tests**
+
+Run: `cd rust && cargo test`
+Expected: All tests pass
+
+**Step 3: Run linter**
+
+Run: `chruby 3.4.3 && bundle exec rake lint`
+Expected: No errors (on modified files)
+
+**Step 4: Verify add_mixin tests pass with proper assertions**
+
+Run: `chruby 3.4.3 && bundle exec ruby -Itest test/graph_test.rb -n /add_mixin/`
+Expected: All 4 tests pass with meaningful assertions
+
+---
+
 ## Notes for Implementation
 
 1. **Synthetic definitions use negative IDs** to avoid collision with real definition IDs
@@ -1387,3 +1902,7 @@ git commit -m "chore: fix any lint issues"
 4. **Test pattern** - All tests use `with_context` helper from `test/helpers/context.rb`
 
 5. **Member iteration** - Declaration#members returns Declaration handles, not Definition handles
+
+6. **Ancestor iteration** - Declaration#ancestors returns Declaration handles for resolved ancestors only (skips Partial/unresolved)
+
+7. **Synthetic mixins require re-linearization** - After adding synthetic mixins, `resolve()` must be called to re-linearize ancestors
