@@ -7,13 +7,14 @@ use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef};
 use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::string_ref::StringRef;
 use crate::offset::Offset;
 
 type LocalGraphParts = (
     UriId,
     Document,
     IdentityHashMap<DefinitionId, Definition>,
-    IdentityHashMap<StringId, String>,
+    IdentityHashMap<StringId, StringRef>,
     IdentityHashMap<NameId, NameRef>,
     IdentityHashMap<ReferenceId, ConstantReference>,
     IdentityHashMap<ReferenceId, MethodRef>,
@@ -25,7 +26,7 @@ pub struct LocalGraph {
     uri_id: UriId,
     document: Document,
     definitions: IdentityHashMap<DefinitionId, Definition>,
-    strings: IdentityHashMap<StringId, String>,
+    strings: IdentityHashMap<StringId, StringRef>,
     names: IdentityHashMap<NameId, NameRef>,
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
@@ -80,13 +81,20 @@ impl LocalGraph {
     // Strings
 
     #[must_use]
-    pub fn strings(&self) -> &IdentityHashMap<StringId, String> {
+    pub fn strings(&self) -> &IdentityHashMap<StringId, StringRef> {
         &self.strings
     }
 
     pub fn intern_string(&mut self, string: String) -> StringId {
         let string_id = StringId::from(&string);
-        self.strings.insert(string_id, string);
+        match self.strings.entry(string_id) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().increment_ref_count(1);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(StringRef::new(string));
+            }
+        }
         string_id
     }
 

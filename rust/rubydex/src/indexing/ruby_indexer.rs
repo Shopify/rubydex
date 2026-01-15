@@ -1068,7 +1068,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 .strings()
                 .get(name.str())
                 .expect("Attached target string should exist");
-            format!("<{target_str}>")
+            format!("<{}>", target_str.as_str())
         };
 
         let string_id = self.local_graph.intern_string(singleton_class_name);
@@ -1798,7 +1798,7 @@ mod tests {
 
     macro_rules! assert_name_eq {
         ($context:expr, $expect_name_string:expr, $def:expr) => {{
-            let actual_name = $context.graph().strings().get($def.str_id()).unwrap();
+            let actual_name = $context.graph().strings().get($def.str_id()).unwrap().as_str();
 
             assert_eq!($expect_name_string, actual_name);
         }};
@@ -1819,7 +1819,7 @@ mod tests {
             let expected_parents: Vec<&str> = segments[..segments.len() - 1].iter().rev().copied().collect();
 
             let name = $context.graph().names().get($name_id).unwrap();
-            let actual_name = $context.graph().strings().get(name.str()).unwrap();
+            let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
             assert_eq!(
                 *expected_name, actual_name,
                 "name mismatch: expected '{}', got '{}'",
@@ -1830,7 +1830,7 @@ mod tests {
             for (i, expected_parent) in expected_parents.iter().enumerate() {
                 if let Some(parent_scope_id) = current_name.parent_scope() {
                     let parent_name = $context.graph().names().get(&parent_scope_id).unwrap();
-                    let actual_parent = $context.graph().strings().get(parent_name.str()).unwrap();
+                    let actual_parent = $context.graph().strings().get(parent_name.str()).unwrap().as_str();
                     assert_eq!(
                         *expected_parent, actual_parent,
                         "parent_scope mismatch at depth {}: expected '{}', got '{}'",
@@ -1888,16 +1888,16 @@ mod tests {
                 .values()
                 .map(|r| {
                     let name = $context.graph().names().get(r.name_id()).unwrap();
-                    (r.offset().start(), $context.graph().strings().get(name.str()).unwrap())
+                    (
+                        r.offset().start(),
+                        $context.graph().strings().get(name.str()).unwrap().as_str(),
+                    )
                 })
                 .collect::<Vec<_>>();
 
             actual_references.sort();
 
-            let actual_names = actual_references
-                .iter()
-                .map(|(_, name)| name.as_str())
-                .collect::<Vec<_>>();
+            let actual_names = actual_references.iter().map(|(_, name)| *name).collect::<Vec<_>>();
 
             assert_eq!($expected_names, actual_names);
         }};
@@ -1909,14 +1909,19 @@ mod tests {
                 .graph()
                 .method_references()
                 .values()
-                .map(|m| (m.offset().start(), $context.graph().strings().get(m.str()).unwrap()))
+                .map(|m| {
+                    (
+                        m.offset().start(),
+                        $context.graph().strings().get(m.str()).unwrap().as_str(),
+                    )
+                })
                 .collect::<Vec<_>>();
 
             actual_references.sort();
 
             let actual_names = actual_references
                 .iter()
-                .map(|(_offset, name)| name.as_str())
+                .map(|(_offset, name)| *name)
                 .collect::<Vec<_>>();
 
             assert_eq!($expected_names, actual_names);
@@ -1927,7 +1932,7 @@ mod tests {
         ($context:expr, $method:expr, $expected_receiver:expr) => {{
             if let Some(receiver_name_id) = $method.receiver() {
                 let name = $context.graph().names().get(receiver_name_id).unwrap();
-                let actual_name = $context.graph().strings().get(name.str()).unwrap();
+                let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
                 assert_eq!($expected_receiver, actual_name);
             } else {
                 panic!("expected method to have receiver, got None");
@@ -1949,7 +1954,10 @@ mod tests {
                         .name_id(),
                 )
                 .unwrap();
-            assert_eq!($expected_name, $context.graph().strings().get(name.str()).unwrap());
+            assert_eq!(
+                $expected_name,
+                $context.graph().strings().get(name.str()).unwrap().as_str()
+            );
         }};
     }
 
@@ -1985,7 +1993,7 @@ mod tests {
 
     macro_rules! assert_string_eq {
         ($context:expr, $str_id:expr, $expected_name:expr) => {{
-            let string_name = $context.graph().strings().get($str_id).unwrap();
+            let string_name = $context.graph().strings().get($str_id).unwrap().as_str();
             assert_eq!(string_name, $expected_name);
         }};
     }
@@ -4508,8 +4516,8 @@ mod tests {
             assert_definition_at!(&context, "2:3-2:16", MethodAlias, |def| {
                 let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
                 let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-                assert_eq!(new_name, "foo()");
-                assert_eq!(old_name, "bar()");
+                assert_eq!(new_name.as_str(), "foo()");
+                assert_eq!(old_name.as_str(), "bar()");
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });
@@ -4517,8 +4525,8 @@ mod tests {
             assert_definition_at!(&context, "3:3-3:18", MethodAlias, |def| {
                 let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
                 let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-                assert_eq!(new_name, "baz()");
-                assert_eq!(old_name, "qux()");
+                assert_eq!(new_name.as_str(), "baz()");
+                assert_eq!(old_name.as_str(), "qux()");
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });
@@ -4539,8 +4547,8 @@ mod tests {
         assert_definition_at!(&context, "1:1-1:14", MethodAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name, "foo()");
-            assert_eq!(old_name, "bar()");
+            assert_eq!(new_name.as_str(), "foo()");
+            assert_eq!(old_name.as_str(), "bar()");
 
             assert!(def.lexical_nesting_id().is_none());
         });
@@ -4548,8 +4556,8 @@ mod tests {
         assert_definition_at!(&context, "2:1-2:16", MethodAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name, "baz()");
-            assert_eq!(old_name, "qux()");
+            assert_eq!(new_name.as_str(), "baz()");
+            assert_eq!(old_name.as_str(), "qux()");
 
             assert!(def.lexical_nesting_id().is_none());
         });
@@ -4577,8 +4585,8 @@ mod tests {
         assert_definition_at!(&context, "1:1-1:38", MethodAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name, "foo_symbol()");
-            assert_eq!(old_name, "bar_symbol()");
+            assert_eq!(new_name.as_str(), "foo_symbol()");
+            assert_eq!(old_name.as_str(), "bar_symbol()");
 
             assert!(def.lexical_nesting_id().is_none());
         });
@@ -4586,8 +4594,8 @@ mod tests {
         assert_definition_at!(&context, "2:1-2:40", MethodAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name, "foo_string()");
-            assert_eq!(old_name, "bar_string()");
+            assert_eq!(new_name.as_str(), "foo_string()");
+            assert_eq!(old_name.as_str(), "bar_string()");
 
             assert!(def.lexical_nesting_id().is_none());
         });
@@ -4596,8 +4604,8 @@ mod tests {
             assert_definition_at!(&context, "5:3-5:26", MethodAlias, |def| {
                 let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
                 let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-                assert_eq!(new_name, "baz()");
-                assert_eq!(old_name, "qux()");
+                assert_eq!(new_name.as_str(), "baz()");
+                assert_eq!(old_name.as_str(), "qux()");
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });
@@ -4621,8 +4629,8 @@ mod tests {
         assert_definition_at!(&context, "1:1-1:16", GlobalVariableAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name, "$foo");
-            assert_eq!(old_name, "$bar");
+            assert_eq!(new_name.as_str(), "$foo");
+            assert_eq!(old_name.as_str(), "$bar");
 
             assert!(def.lexical_nesting_id().is_none());
         });
@@ -4631,8 +4639,8 @@ mod tests {
             assert_definition_at!(&context, "4:3-4:18", GlobalVariableAlias, |def| {
                 let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
                 let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-                assert_eq!(new_name, "$baz");
-                assert_eq!(old_name, "$qux");
+                assert_eq!(new_name.as_str(), "$baz");
+                assert_eq!(old_name.as_str(), "$qux");
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });

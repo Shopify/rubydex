@@ -325,7 +325,7 @@ impl<'a> Resolver<'a> {
                 Definition::GlobalVariable(var) => {
                     let owner_id = *OBJECT_ID;
                     let str_id = *var.str_id();
-                    let name = self.graph.strings().get(&str_id).unwrap().clone();
+                    let name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
                     let declaration_id = DeclarationId::from(&name);
 
                     self.graph.add_declaration(declaration_id, id, || {
@@ -501,7 +501,7 @@ impl<'a> Resolver<'a> {
         let fully_qualified_name = {
             let owner = self.graph.declarations().get(&owner_id).unwrap();
             let name_str = self.graph.strings().get(&str_id).unwrap();
-            format!("{}#{name_str}", owner.name())
+            format!("{}#{}", owner.name(), name_str.as_str())
         };
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
@@ -924,7 +924,7 @@ impl<'a> Resolver<'a> {
         // depending on whether the name has a parent scope
         match self.name_owner_id(name_id) {
             Outcome::Resolved(owner_id, id_needing_linearization) => {
-                let mut fully_qualified_name = self.graph.strings().get(&str_id).unwrap().clone();
+                let mut fully_qualified_name = self.graph.strings().get(&str_id).unwrap().to_string();
 
                 {
                     let owner = self.graph.declarations().get(&owner_id).unwrap();
@@ -1674,7 +1674,7 @@ mod tests {
                 .unwrap()
                 .members()
                 .iter()
-                .map(|(str_id, _)| $context.graph().strings().get(str_id).unwrap())
+                .map(|(str_id, _)| $context.graph().strings().get(str_id).unwrap().as_str())
                 .collect::<Vec<_>>();
 
             actual_members.sort();
@@ -1742,7 +1742,9 @@ mod tests {
                 .iter()
                 .filter_map(
                     |(str_id, member_id)| match $context.graph().declarations().get(member_id) {
-                        Some(Declaration::InstanceVariable(_)) => Some($context.graph().strings().get(str_id).unwrap()),
+                        Some(Declaration::InstanceVariable(_)) => {
+                            Some($context.graph().strings().get(str_id).unwrap().as_str())
+                        }
                         _ => None,
                     },
                 )

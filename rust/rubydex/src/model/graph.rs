@@ -11,6 +11,7 @@ use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::string_ref::StringRef;
 use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
@@ -31,7 +32,7 @@ pub struct Graph {
     definitions_to_declarations: IdentityHashMap<DefinitionId, DeclarationId>,
 
     // Map of unqualified names
-    strings: IdentityHashMap<StringId, String>,
+    strings: IdentityHashMap<StringId, StringRef>,
     // Map of names
     names: IdentityHashMap<NameId, NameRef>,
     // Map of constant references
@@ -144,7 +145,7 @@ impl Graph {
 
     // Returns an immutable reference to the strings map
     #[must_use]
-    pub fn strings(&self) -> &IdentityHashMap<StringId, String> {
+    pub fn strings(&self) -> &IdentityHashMap<StringId, StringRef> {
         &self.strings
     }
 
@@ -174,6 +175,21 @@ impl Graph {
     #[must_use]
     pub fn diagnostics(&self) -> &Vec<Diagnostic> {
         &self.diagnostics
+    }
+
+    /// Interns a string in the graph unless already interned. This method is only used to back the
+    /// `Graph#resolve_constant` Ruby API because every string must be interned in the graph to properly resolve.
+    pub fn intern_string(&mut self, string: String) -> StringId {
+        let string_id = StringId::from(&string);
+        match self.strings.entry(string_id) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().increment_ref_count(1);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(StringRef::new(string));
+            }
+        }
+        string_id
     }
 
     /// Registers a name in the graph unless already registered. In regular indexing, this only happens in the local
@@ -257,10 +273,45 @@ impl Graph {
     ///
     /// This does not recursively untrack `parent_scope` or `nesting` names.
     pub fn untrack_name(&mut self, name_id: NameId) {
-        if let Some(name_ref) = self.names.get_mut(&name_id)
-            && !name_ref.decrement_ref_count()
+        if let Some(name_ref) = self.names.get_mut(&name_id) {
+            let string_id = *name_ref.str();
+            if !name_ref.decrement_ref_count() {
+                self.names.remove(&name_id);
+            }
+            self.untrack_string(string_id);
+        }
+    }
+
+    fn untrack_string(&mut self, string_id: StringId) {
+        if let Some(string_ref) = self.strings.get_mut(&string_id)
+            && !string_ref.decrement_ref_count()
         {
-            self.names.remove(&name_id);
+            self.strings.remove(&string_id);
+        }
+    }
+
+    fn untrack_definition_strings(&mut self, definition: &Definition) {
+        match definition {
+            Definition::Class(_)
+            | Definition::SingletonClass(_)
+            | Definition::Module(_)
+            | Definition::Constant(_)
+            | Definition::ConstantAlias(_) => {}
+            Definition::Method(d) => self.untrack_string(*d.str_id()),
+            Definition::AttrAccessor(d) => self.untrack_string(*d.str_id()),
+            Definition::AttrReader(d) => self.untrack_string(*d.str_id()),
+            Definition::AttrWriter(d) => self.untrack_string(*d.str_id()),
+            Definition::GlobalVariable(d) => self.untrack_string(*d.str_id()),
+            Definition::InstanceVariable(d) => self.untrack_string(*d.str_id()),
+            Definition::ClassVariable(d) => self.untrack_string(*d.str_id()),
+            Definition::MethodAlias(d) => {
+                self.untrack_string(*d.new_name_str_id());
+                self.untrack_string(*d.old_name_str_id());
+            }
+            Definition::GlobalVariableAlias(d) => {
+                self.untrack_string(*d.new_name_str_id());
+                self.untrack_string(*d.old_name_str_id());
+            }
         }
     }
 
@@ -372,7 +423,16 @@ impl Graph {
 
         self.documents.insert(uri_id, document);
         self.definitions.extend(definitions);
-        self.strings.extend(strings);
+        for (string_id, string_ref) in strings {
+            match self.strings.entry(string_id) {
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().increment_ref_count(string_ref.ref_count());
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(string_ref);
+                }
+            }
+        }
         for (name_id, name_ref) in names {
             match self.names.entry(name_id) {
                 Entry::Occupied(mut entry) => {
@@ -408,7 +468,9 @@ impl Graph {
 
         // TODO: Remove method references from method declarations once method inference is implemented
         for ref_id in document.method_references() {
-            self.method_references.remove(ref_id);
+            if let Some(method_ref) = self.method_references.remove(ref_id) {
+                self.untrack_string(*method_ref.str());
+            }
         }
 
         for ref_id in document.constant_references() {
@@ -447,6 +509,8 @@ impl Graph {
                 if let Some(name_id) = definition.name_id() {
                     self.untrack_name(*name_id);
                 }
+
+                self.untrack_definition_strings(&definition);
             }
         }
 
@@ -826,6 +890,47 @@ mod tests {
     }
 
     #[test]
+    fn string_ref_count_increments_for_duplicate_definitions() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            def method_name; end
+            attr_accessor :accessor_name
+            attr_reader :reader_name
+            attr_writer :writer_name
+            $global_var = 1
+            @@class_var = 1
+            class Foo
+              def initialize
+                @instance_var = 1
+              end
+            end
+            def old_method; end
+            alias_method :new_method, :old_method
+            $old_global = 1
+            alias $new_global $old_global
+            ",
+        );
+
+        context.resolve();
+
+        let strings = context.graph().strings();
+        assert_eq!(strings.get(&StringId::from("method_name()")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("accessor_name()")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("reader_name()")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("writer_name()")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("$global_var")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("@@class_var")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("@instance_var")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("old_method()")).unwrap().ref_count(), 2);
+        assert_eq!(strings.get(&StringId::from("new_method()")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("$old_global")).unwrap().ref_count(), 2);
+        assert_eq!(strings.get(&StringId::from("$new_global")).unwrap().ref_count(), 1);
+    }
+
+    #[test]
     fn updating_index_with_deleted_names() {
         let mut context = GraphTest::new();
 
@@ -842,6 +947,32 @@ mod tests {
 
         context.delete_uri("file:///bar.rb");
         assert!(context.graph().names().is_empty());
+    }
+
+    #[test]
+    fn updating_index_with_deleted_strings() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            Foo
+            foo.method_call
+            def method_name; end
+            ",
+        );
+        context.resolve();
+
+        let strings = context.graph().strings();
+        assert!(strings.get(&StringId::from("Foo")).is_some());
+        assert!(strings.get(&StringId::from("method_call")).is_some());
+        assert!(strings.get(&StringId::from("method_name()")).is_some());
+
+        context.delete_uri("file:///foo.rb");
+        let strings = context.graph().strings();
+        assert!(strings.get(&StringId::from("Foo")).is_none());
+        assert!(strings.get(&StringId::from("method_call")).is_none());
+        assert!(strings.get(&StringId::from("method_name()")).is_none());
     }
 
     #[test]
