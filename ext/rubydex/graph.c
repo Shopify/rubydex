@@ -320,6 +320,156 @@ static VALUE sr_graph_set_encoding(VALUE self, VALUE encoding) {
     return Qnil;
 }
 
+// Graph#add_method: (owner:, name:, file_path:, line:, column:) -> bool
+static VALUE sr_graph_add_method(int argc, VALUE *argv, VALUE self) {
+    VALUE kwargs;
+    rb_scan_args(argc, argv, ":", &kwargs);
+
+    VALUE owner = rb_hash_aref(kwargs, ID2SYM(rb_intern("owner")));
+    VALUE name = rb_hash_aref(kwargs, ID2SYM(rb_intern("name")));
+    VALUE file_path = rb_hash_aref(kwargs, ID2SYM(rb_intern("file_path")));
+    VALUE line = rb_hash_aref(kwargs, ID2SYM(rb_intern("line")));
+    VALUE column = rb_hash_aref(kwargs, ID2SYM(rb_intern("column")));
+
+    if (NIL_P(owner) || NIL_P(name) || NIL_P(file_path) || NIL_P(line) || NIL_P(column)) {
+        rb_raise(rb_eArgError, "missing required keyword arguments: owner, name, file_path, line, column");
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    bool success = rdx_graph_add_method(
+        graph,
+        StringValueCStr(owner),
+        StringValueCStr(name),
+        StringValueCStr(file_path),
+        NUM2UINT(line),
+        NUM2UINT(column)
+    );
+
+    return success ? Qtrue : Qfalse;
+}
+
+// Graph#add_class: (name:, parent: nil, file_path:, line:, column:) -> bool
+static VALUE sr_graph_add_class(int argc, VALUE *argv, VALUE self) {
+    VALUE kwargs;
+    rb_scan_args(argc, argv, ":", &kwargs);
+
+    VALUE name = rb_hash_aref(kwargs, ID2SYM(rb_intern("name")));
+    VALUE parent = rb_hash_aref(kwargs, ID2SYM(rb_intern("parent")));
+    VALUE file_path = rb_hash_aref(kwargs, ID2SYM(rb_intern("file_path")));
+    VALUE line = rb_hash_aref(kwargs, ID2SYM(rb_intern("line")));
+    VALUE column = rb_hash_aref(kwargs, ID2SYM(rb_intern("column")));
+
+    if (NIL_P(name) || NIL_P(file_path) || NIL_P(line) || NIL_P(column)) {
+        rb_raise(rb_eArgError, "missing required keyword arguments");
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    bool success = rdx_graph_add_class(
+        graph,
+        StringValueCStr(name),
+        NIL_P(parent) ? NULL : StringValueCStr(parent),
+        StringValueCStr(file_path),
+        NUM2UINT(line),
+        NUM2UINT(column)
+    );
+
+    return success ? Qtrue : Qfalse;
+}
+
+// Graph#add_module: (name:, file_path:, line:, column:) -> bool
+static VALUE sr_graph_add_module(int argc, VALUE *argv, VALUE self) {
+    VALUE kwargs;
+    rb_scan_args(argc, argv, ":", &kwargs);
+
+    VALUE name = rb_hash_aref(kwargs, ID2SYM(rb_intern("name")));
+    VALUE file_path = rb_hash_aref(kwargs, ID2SYM(rb_intern("file_path")));
+    VALUE line = rb_hash_aref(kwargs, ID2SYM(rb_intern("line")));
+    VALUE column = rb_hash_aref(kwargs, ID2SYM(rb_intern("column")));
+
+    if (NIL_P(name) || NIL_P(file_path) || NIL_P(line) || NIL_P(column)) {
+        rb_raise(rb_eArgError, "missing required keyword arguments");
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    bool success = rdx_graph_add_module(
+        graph,
+        StringValueCStr(name),
+        StringValueCStr(file_path),
+        NUM2UINT(line),
+        NUM2UINT(column)
+    );
+
+    return success ? Qtrue : Qfalse;
+}
+
+// Graph#add_mixin: (target:, module_name:, type:) -> bool
+static VALUE sr_graph_add_mixin(int argc, VALUE *argv, VALUE self) {
+    VALUE kwargs;
+    rb_scan_args(argc, argv, ":", &kwargs);
+
+    VALUE target = rb_hash_aref(kwargs, ID2SYM(rb_intern("target")));
+    VALUE module_name = rb_hash_aref(kwargs, ID2SYM(rb_intern("module_name")));
+    VALUE type = rb_hash_aref(kwargs, ID2SYM(rb_intern("type")));
+
+    if (NIL_P(target) || NIL_P(module_name) || NIL_P(type)) {
+        rb_raise(rb_eArgError, "missing required keyword arguments: target, module_name, type");
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    // Convert Ruby symbol to MixinType enum
+    enum MixinType mixin_type;
+    if (rb_intern("include") == SYM2ID(type)) {
+        mixin_type = MixinType_Include;
+    } else if (rb_intern("prepend") == SYM2ID(type)) {
+        mixin_type = MixinType_Prepend;
+    } else if (rb_intern("extend") == SYM2ID(type)) {
+        mixin_type = MixinType_Extend;
+    } else {
+        rb_raise(rb_eArgError, "type must be :include, :prepend, or :extend");
+    }
+
+    bool success = rdx_graph_add_mixin(
+        graph,
+        StringValueCStr(target),
+        StringValueCStr(module_name),
+        mixin_type
+    );
+
+    return success ? Qtrue : Qfalse;
+}
+
+// Graph#register_included_hook: (module_name:, extend_module:) -> bool
+static VALUE sr_graph_register_included_hook(int argc, VALUE *argv, VALUE self) {
+    VALUE kwargs;
+    rb_scan_args(argc, argv, ":", &kwargs);
+
+    VALUE module_name = rb_hash_aref(kwargs, ID2SYM(rb_intern("module_name")));
+    VALUE extend_module = rb_hash_aref(kwargs, ID2SYM(rb_intern("extend_module")));
+
+    if (NIL_P(module_name) || NIL_P(extend_module)) {
+        rb_raise(rb_eArgError, "missing required keyword arguments: module_name, extend_module");
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    bool success = rdx_graph_register_included_hook(
+        graph,
+        StringValueCStr(module_name),
+        StringValueCStr(extend_module)
+    );
+
+    return success ? Qtrue : Qfalse;
+}
+
 // Graph#diagnostics -> Array[Rubydex::Diagnostic]
 static VALUE sr_graph_diagnostics(VALUE self) {
     void *graph;
@@ -369,4 +519,9 @@ void initialize_graph(VALUE mRubydex) {
     rb_define_method(cGraph, "[]", sr_graph_aref, 1);
     rb_define_method(cGraph, "search", sr_graph_search, 1);
     rb_define_method(cGraph, "set_encoding", sr_graph_set_encoding, 1);
+    rb_define_method(cGraph, "add_method", sr_graph_add_method, -1);
+    rb_define_method(cGraph, "add_class", sr_graph_add_class, -1);
+    rb_define_method(cGraph, "add_module", sr_graph_add_module, -1);
+    rb_define_method(cGraph, "add_mixin", sr_graph_add_mixin, -1);
+    rb_define_method(cGraph, "register_included_hook", sr_graph_register_included_hook, -1);
 }

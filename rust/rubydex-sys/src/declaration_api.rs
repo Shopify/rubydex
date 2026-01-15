@@ -81,3 +81,85 @@ pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
         }
     })
 }
+
+/// Iterator over member declaration IDs for a namespace
+pub struct MembersIter {
+    ids: Box<[i64]>,
+    index: usize,
+}
+
+/// Creates a new iterator over member declaration IDs for a given namespace declaration.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer`
+/// - The returned pointer must be freed with `rdx_members_iter_free`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_declaration_members_iter_new(
+    pointer: GraphPointer,
+    decl_id: i64,
+) -> *mut MembersIter {
+    with_graph(pointer, |graph| {
+        let decl_id = DeclarationId::new(decl_id);
+        let members: Vec<i64> = if let Some(decl) = graph.declarations().get(&decl_id) {
+            if let Some(namespace) = decl.as_namespace() {
+                namespace.members().values().map(|id| **id).collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        Box::into_raw(Box::new(MembersIter {
+            ids: members.into_boxed_slice(),
+            index: 0,
+        }))
+    })
+}
+
+/// Advances the iterator and writes the next ID into `out_id`.
+/// Returns `true` if an ID was written, `false` if exhausted.
+///
+/// # Safety
+/// - `iter` must be valid pointer from `rdx_declaration_members_iter_new`
+/// - `out_id` must be a valid, writable pointer
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_members_iter_next(iter: *mut MembersIter, out_id: *mut i64) -> bool {
+    if iter.is_null() || out_id.is_null() {
+        return false;
+    }
+    let it = unsafe { &mut *iter };
+    if it.index >= it.ids.len() {
+        return false;
+    }
+    unsafe { *out_id = it.ids[it.index] };
+    it.index += 1;
+    true
+}
+
+/// Returns the total number of members in the iterator.
+///
+/// # Safety
+/// - `iter` must be valid pointer from `rdx_declaration_members_iter_new`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_members_iter_len(iter: *const MembersIter) -> usize {
+    if iter.is_null() {
+        0
+    } else {
+        unsafe { (&(*iter).ids).len() }
+    }
+}
+
+/// Frees an iterator created by `rdx_declaration_members_iter_new`.
+///
+/// # Safety
+/// - `iter` must be a pointer from `rdx_declaration_members_iter_new`
+/// - `iter` must not be used after being freed
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_members_iter_free(iter: *mut MembersIter) {
+    if !iter.is_null() {
+        unsafe {
+            let _ = Box::from_raw(iter);
+        }
+    }
+}

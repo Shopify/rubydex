@@ -146,6 +146,13 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+
+        // Process synthetic classes and modules BEFORE synthetic methods (so methods can be added to them)
+        self.handle_synthetic_classes();
+        self.handle_synthetic_modules();
+
+        // Process synthetic methods - add them to their owner declarations
+        self.handle_synthetic_methods();
     }
 
     /// Handles a unit of work for resolving a constant definition
@@ -472,6 +479,119 @@ impl<'a> Resolver<'a> {
                     panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
                 }
             }
+        }
+    }
+
+    /// Process synthetic classes - create declarations for them
+    fn handle_synthetic_classes(&mut self) {
+        // Clone the synthetic classes to avoid borrow issues
+        let synthetic_classes: Vec<(DefinitionId, String)> = self.graph.synthetic_classes().to_vec();
+
+        for (def_id, class_fqn) in synthetic_classes {
+            // Parse the FQN to extract unqualified name and parent namespace
+            let unqualified_name = class_fqn.rsplit("::").next().unwrap_or(&class_fqn);
+            let str_id = StringId::from(unqualified_name);
+
+            // Ensure the string is interned
+            self.graph.intern_string(unqualified_name.to_string());
+
+            // Determine the owner (parent namespace)
+            let owner_id = if class_fqn.contains("::") {
+                // Has a parent namespace - find it or default to Object
+                let parent_fqn = &class_fqn[..class_fqn.rfind("::").unwrap()];
+                let parent_decl_id = DeclarationId::from(parent_fqn);
+                if self.graph.declarations().contains_key(&parent_decl_id) {
+                    parent_decl_id
+                } else {
+                    // Parent doesn't exist, create it recursively (simplified: just use Object)
+                    *OBJECT_ID
+                }
+            } else {
+                // Top-level class, owned by Object
+                *OBJECT_ID
+            };
+
+            // Create the declaration for this synthetic class
+            let declaration_id = DeclarationId::from(class_fqn.as_str());
+
+            self.graph.add_declaration(declaration_id, def_id, || {
+                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(class_fqn.clone(), owner_id))))
+            });
+
+            // Add as member to owner
+            self.graph.add_member(&owner_id, declaration_id, str_id);
+        }
+    }
+
+    /// Process synthetic modules - create declarations for them
+    fn handle_synthetic_modules(&mut self) {
+        // Clone the synthetic modules to avoid borrow issues
+        let synthetic_modules: Vec<(DefinitionId, String)> = self.graph.synthetic_modules().to_vec();
+
+        for (def_id, module_fqn) in synthetic_modules {
+            // Parse the FQN to extract unqualified name and parent namespace
+            let unqualified_name = module_fqn.rsplit("::").next().unwrap_or(&module_fqn);
+            let str_id = StringId::from(unqualified_name);
+
+            // Ensure the string is interned
+            self.graph.intern_string(unqualified_name.to_string());
+
+            // Determine the owner (parent namespace)
+            let owner_id = if module_fqn.contains("::") {
+                // Has a parent namespace - find it or default to Object
+                let parent_fqn = &module_fqn[..module_fqn.rfind("::").unwrap()];
+                let parent_decl_id = DeclarationId::from(parent_fqn);
+                if self.graph.declarations().contains_key(&parent_decl_id) {
+                    parent_decl_id
+                } else {
+                    // Parent doesn't exist, default to Object
+                    *OBJECT_ID
+                }
+            } else {
+                // Top-level module, owned by Object
+                *OBJECT_ID
+            };
+
+            // Create the declaration for this synthetic module
+            let declaration_id = DeclarationId::from(module_fqn.as_str());
+
+            self.graph.add_declaration(declaration_id, def_id, || {
+                Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(module_fqn.clone(), owner_id))))
+            });
+
+            // Add as member to owner
+            self.graph.add_member(&owner_id, declaration_id, str_id);
+        }
+    }
+
+    /// Process synthetic methods - add them to their owner declarations
+    fn handle_synthetic_methods(&mut self) {
+        // Clone the synthetic methods to avoid borrow issues
+        let synthetic_methods: Vec<(DefinitionId, String)> = self.graph.synthetic_methods().to_vec();
+
+        for (def_id, owner_fqn) in synthetic_methods {
+            let owner_decl_id = DeclarationId::from(owner_fqn.as_str());
+
+            // Get the str_id from the method definition
+            let str_id = {
+                let Some(def) = self.graph.definitions().get(&def_id) else {
+                    continue;
+                };
+                let Definition::Method(method_def) = def else {
+                    continue;
+                };
+                *method_def.str_id()
+            };
+
+            // Verify owner declaration exists
+            if !self.graph.declarations().contains_key(&owner_decl_id) {
+                continue;
+            }
+
+            // Create method declaration and add as member to owner
+            self.create_declaration(str_id, def_id, owner_decl_id, |name| {
+                Declaration::Method(Box::new(MethodDeclaration::new(name, owner_decl_id)))
+            });
         }
     }
 

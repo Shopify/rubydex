@@ -85,4 +85,59 @@ class DeclarationTest < Minitest::Test
       assert_equal("B", decl_b.unqualified_name)
     end
   end
+
+  def test_members_returns_methods_defined_in_class
+    with_context do |context|
+      context.write!("file.rb", <<~RUBY)
+        class Post
+          def save; end
+          def validate; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      post = graph["Post"]
+      member_names = post.members.map(&:unqualified_name)
+      assert_equal(2, member_names.size)
+      assert_includes(member_names, "save")
+      assert_includes(member_names, "validate")
+    end
+  end
+
+  def test_members_returns_empty_for_class_with_no_methods
+    with_context do |context|
+      context.write!("file.rb", "class Post; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      post = graph["Post"]
+      assert_equal(0, post.members.count)
+    end
+  end
+
+  def test_members_returns_nested_constants
+    with_context do |context|
+      context.write!("file.rb", <<~RUBY)
+        module Foo
+          class Bar; end
+          module Baz; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      foo = graph["Foo"]
+      member_names = foo.members.map(&:unqualified_name)
+      assert_equal(2, member_names.size)
+      assert_includes(member_names, "Bar")
+      assert_includes(member_names, "Baz")
+    end
+  end
 end
