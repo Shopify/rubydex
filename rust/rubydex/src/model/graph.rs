@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration};
+use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
@@ -231,9 +231,11 @@ impl Graph {
     ) {
         if let Some(declaration) = self.declarations.get_mut(owner_id) {
             match declaration {
-                Declaration::Class(it) => it.add_member(member_str_id, member_declaration_id),
-                Declaration::Module(it) => it.add_member(member_str_id, member_declaration_id),
-                Declaration::SingletonClass(it) => it.add_member(member_str_id, member_declaration_id),
+                Declaration::Namespace(Namespace::Class(it)) => it.add_member(member_str_id, member_declaration_id),
+                Declaration::Namespace(Namespace::Module(it)) => it.add_member(member_str_id, member_declaration_id),
+                Declaration::Namespace(Namespace::SingletonClass(it)) => {
+                    it.add_member(member_str_id, member_declaration_id);
+                }
                 Declaration::Constant(_) => {
                     // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
                 }
@@ -374,13 +376,13 @@ impl Graph {
             // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
             if let Some(owner) = self.declarations.get_mut(&owner_id) {
                 match owner {
-                    Declaration::Class(owner) => {
+                    Declaration::Namespace(Namespace::Class(owner)) => {
                         owner.remove_member(&member_str_id);
                     }
-                    Declaration::SingletonClass(owner) => {
+                    Declaration::Namespace(Namespace::SingletonClass(owner)) => {
                         owner.remove_member(&member_str_id);
                     }
-                    Declaration::Module(owner) => {
+                    Declaration::Namespace(Namespace::Module(owner)) => {
                         owner.remove_member(&member_str_id);
                     }
                     _ => {} // Nothing happens
@@ -403,20 +405,22 @@ impl Graph {
                 continue;
             };
 
-            Declaration::for_each_ancestor(decl, |ancestor| {
+            let namespace = decl.as_namespace().unwrap();
+
+            namespace.for_each_ancestor(|ancestor| {
                 if let Ancestor::Complete(ancestor_id) = ancestor
                     && let Some(ancestor_decl) = declarations.get(ancestor_id)
                 {
-                    Declaration::remove_descendant(ancestor_decl, &declaration_id);
+                    ancestor_decl.as_namespace().unwrap().remove_descendant(&declaration_id);
                 }
             });
 
-            Declaration::for_each_descendant(decl, |descendant_id| {
+            namespace.for_each_descendant(|descendant_id| {
                 queue.push(*descendant_id);
             });
 
-            Declaration::clear_ancestors(decl);
-            Declaration::clear_descendants(decl);
+            namespace.clear_ancestors();
+            namespace.clear_descendants();
         }
     }
 
@@ -737,19 +741,27 @@ mod tests {
         context.resolve();
 
         let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert!(matches!(foo_declaration.ancestors(), Ancestors::Complete(_)));
+        assert!(matches!(
+            foo_declaration.as_namespace().unwrap().ancestors(),
+            Ancestors::Complete(_)
+        ));
 
         let baz_declaration = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap();
-        assert!(matches!(baz_declaration.ancestors(), Ancestors::Complete(_)));
+        assert!(matches!(
+            baz_declaration.as_namespace().unwrap().ancestors(),
+            Ancestors::Complete(_)
+        ));
 
         {
-            let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
+            let Declaration::Namespace(Namespace::Module(bar)) =
+                context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
             else {
                 panic!("Expected Bar to be a module");
             };
             assert!(bar.descendants().contains(&DeclarationId::from("Foo")));
 
-            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
+            let Declaration::Namespace(Namespace::Class(foo)) =
+                context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
             else {
                 panic!("Expected Foo to be a class");
             };
@@ -759,21 +771,24 @@ mod tests {
         context.index_uri("file:///a.rb", "");
 
         {
-            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
+            let Declaration::Namespace(Namespace::Class(foo)) =
+                context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
             else {
                 panic!("Expected Foo to be a class");
             };
             assert!(matches!(foo.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
             assert!(foo.descendants().is_empty());
 
-            let Declaration::Class(baz) = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap()
+            let Declaration::Namespace(Namespace::Class(baz)) =
+                context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap()
             else {
                 panic!("Expected Baz to be a class");
             };
             assert!(matches!(baz.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
             assert!(baz.descendants().is_empty());
 
-            let Declaration::Module(bar) = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
+            let Declaration::Namespace(Namespace::Module(bar)) =
+                context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
             else {
                 panic!("Expected Bar to be a module");
             };
@@ -783,10 +798,14 @@ mod tests {
         context.resolve();
 
         let baz_declaration = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap();
-        assert!(matches!(baz_declaration.ancestors(), Ancestors::Complete(_)));
+        assert!(matches!(
+            baz_declaration.as_namespace().unwrap().ancestors(),
+            Ancestors::Complete(_)
+        ));
 
         {
-            let Declaration::Class(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
+            let Declaration::Namespace(Namespace::Class(foo)) =
+                context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
             else {
                 panic!("Expected Foo to be a class");
             };
@@ -981,7 +1000,9 @@ mod tests {
         context.resolve();
 
         {
-            if let Declaration::Module(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() {
+            if let Declaration::Namespace(Namespace::Module(foo)) =
+                context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
+            {
                 assert!(foo.members().contains_key(&StringId::from("Bar")));
             } else {
                 panic!("Expected Foo to be a module");
@@ -997,7 +1018,9 @@ mod tests {
         });
         context.resolve();
 
-        if let Declaration::Module(foo) = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap() {
+        if let Declaration::Namespace(Namespace::Module(foo)) =
+            context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
+        {
             assert!(!foo.members().contains_key(&StringId::from("Bar")));
         } else {
             panic!("Expected Foo to be a module");

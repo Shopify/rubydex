@@ -56,9 +56,9 @@ impl<'a> IntoIterator for &'a Ancestors {
 macro_rules! all_declarations {
     ($value:expr, $var:ident => $expr:expr) => {
         match $value {
-            Declaration::Class($var) => $expr,
-            Declaration::SingletonClass($var) => $expr,
-            Declaration::Module($var) => $expr,
+            Declaration::Namespace(Namespace::Class($var)) => $expr,
+            Declaration::Namespace(Namespace::Module($var)) => $expr,
+            Declaration::Namespace(Namespace::SingletonClass($var)) => $expr,
             Declaration::Constant($var) => $expr,
             Declaration::Method($var) => $expr,
             Declaration::GlobalVariable($var) => $expr,
@@ -110,13 +110,10 @@ macro_rules! namespace_declaration {
                 }
             }
 
-            pub fn extend(&mut self, other: Declaration) {
-                match other {
-                    Declaration::$variant(it) => {
-                        self.members.extend(it.members);
-                    }
-                    _ => panic!("Tried to merge incompatible declaration types"),
-                }
+            pub fn extend(&mut self, other: Namespace) {
+                self.definition_ids.extend(other.definitions());
+                self.references.extend(other.references());
+                self.members.extend(other.members());
             }
 
             pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
@@ -208,7 +205,10 @@ macro_rules! simple_declaration {
                 }
             }
 
-            pub fn extend(&mut self, _other: Declaration) {}
+            pub fn extend(&mut self, other: Declaration) {
+                self.definition_ids.extend(other.definitions());
+                self.references.extend(other.references());
+            }
         }
     };
 }
@@ -218,9 +218,7 @@ macro_rules! simple_declaration {
 /// the same fully qualified name
 #[derive(Debug)]
 pub enum Declaration {
-    Class(Box<ClassDeclaration>),
-    SingletonClass(Box<SingletonClassDeclaration>),
-    Module(Box<ModuleDeclaration>),
+    Namespace(Namespace),
     Constant(Box<ConstantDeclaration>),
     Method(Box<MethodDeclaration>),
     GlobalVariable(Box<GlobalVariableDeclaration>),
@@ -229,15 +227,6 @@ pub enum Declaration {
 }
 
 impl Declaration {
-    // Extend this declaration with more definitions by moving `other.definition_ids` inside
-    pub fn extend(&mut self, other: Declaration) {
-        all_declarations!(self, it => {
-            it.definition_ids.extend(other.definitions());
-            it.references.extend(other.references());
-            it.extend(other);
-        });
-    }
-
     #[must_use]
     pub fn name(&self) -> &str {
         all_declarations!(self, it => &it.name)
@@ -246,14 +235,23 @@ impl Declaration {
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
-            Declaration::Class(_) => "Class",
-            Declaration::SingletonClass(_) => "SingletonClass",
-            Declaration::Module(_) => "Module",
+            Declaration::Namespace(namespace) => namespace.kind(),
             Declaration::Constant(_) => "Constant",
             Declaration::Method(_) => "Method",
             Declaration::GlobalVariable(_) => "GlobalVariable",
             Declaration::InstanceVariable(_) => "InstanceVariable",
             Declaration::ClassVariable(_) => "ClassVariable",
+        }
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the declaration is not a namespace
+    #[must_use]
+    pub fn as_namespace(&self) -> Option<&Namespace> {
+        match self {
+            Declaration::Namespace(namespace) => Some(namespace),
+            _ => None,
         }
     }
 
@@ -320,6 +318,51 @@ impl Declaration {
     pub fn unqualified_name(&self) -> String {
         all_declarations!(self, it => it.name.rsplit("::").next().unwrap_or(&it.name).to_string())
     }
+}
+
+#[derive(Debug)]
+pub enum Namespace {
+    Class(Box<ClassDeclaration>),
+    SingletonClass(Box<SingletonClassDeclaration>),
+    Module(Box<ModuleDeclaration>),
+}
+
+impl Namespace {
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Namespace::Class(_) => "Class",
+            Namespace::SingletonClass(_) => "SingletonClass",
+            Namespace::Module(_) => "Module",
+        }
+    }
+
+    #[must_use]
+    pub fn references(&self) -> &IdentityHashSet<ReferenceId> {
+        match self {
+            Namespace::Class(class) => &class.references,
+            Namespace::Module(module) => &module.references,
+            Namespace::SingletonClass(singleton) => &singleton.references,
+        }
+    }
+
+    #[must_use]
+    pub fn definitions(&self) -> &[DefinitionId] {
+        match self {
+            Namespace::Class(class) => &class.definition_ids,
+            Namespace::Module(module) => &module.definition_ids,
+            Namespace::SingletonClass(singleton) => &singleton.definition_ids,
+        }
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
+        match self {
+            Namespace::Class(class) => class.members(),
+            Namespace::Module(module) => module.members(),
+            Namespace::SingletonClass(singleton) => singleton.members(),
+        }
+    }
 
     /// # Panics
     ///
@@ -327,62 +370,55 @@ impl Declaration {
     #[must_use]
     pub fn ancestors(&self) -> Ancestors {
         match self {
-            Declaration::Class(class) => class.clone_ancestors(),
-            Declaration::Module(module) => module.clone_ancestors(),
-            Declaration::SingletonClass(singleton) => singleton.clone_ancestors(),
-            Declaration::Constant(_) => Ancestors::Complete(vec![]),
-            _ => panic!("Tried to get ancestors for a declaration that isn't a namespace or a constant"),
+            Namespace::Class(class) => class.clone_ancestors(),
+            Namespace::Module(module) => module.clone_ancestors(),
+            Namespace::SingletonClass(singleton) => singleton.clone_ancestors(),
         }
     }
 
-    pub fn remove_descendant(declaration: &Declaration, descendant_id: &DeclarationId) {
-        match declaration {
-            Declaration::Class(c) => c.remove_descendant(descendant_id),
-            Declaration::Module(m) => m.remove_descendant(descendant_id),
-            Declaration::SingletonClass(s) => s.remove_descendant(descendant_id),
-            _ => {}
+    pub fn remove_descendant(&self, descendant_id: &DeclarationId) {
+        match self {
+            Namespace::Class(class) => class.remove_descendant(descendant_id),
+            Namespace::Module(module) => module.remove_descendant(descendant_id),
+            Namespace::SingletonClass(singleton) => singleton.remove_descendant(descendant_id),
         }
     }
 
-    pub fn for_each_ancestor<F>(declaration: &Declaration, mut f: F)
+    pub fn for_each_ancestor<F>(&self, mut f: F)
     where
         F: FnMut(&Ancestor),
     {
-        match declaration {
-            Declaration::Class(c) => c.ancestors().iter().for_each(&mut f),
-            Declaration::Module(m) => m.ancestors().iter().for_each(&mut f),
-            Declaration::SingletonClass(s) => s.ancestors().iter().for_each(&mut f),
-            _ => {}
+        match self {
+            Namespace::Class(c) => c.ancestors().iter().for_each(&mut f),
+            Namespace::Module(m) => m.ancestors().iter().for_each(&mut f),
+            Namespace::SingletonClass(s) => s.ancestors().iter().for_each(&mut f),
         }
     }
 
-    pub fn for_each_descendant<F>(declaration: &Declaration, mut f: F)
+    pub fn for_each_descendant<F>(&self, mut f: F)
     where
         F: FnMut(&DeclarationId),
     {
-        match declaration {
-            Declaration::Class(c) => c.descendants().iter().for_each(&mut f),
-            Declaration::Module(m) => m.descendants().iter().for_each(&mut f),
-            Declaration::SingletonClass(s) => s.descendants().iter().for_each(&mut f),
-            _ => {}
+        match self {
+            Namespace::Class(class) => class.descendants().iter().for_each(&mut f),
+            Namespace::Module(module) => module.descendants().iter().for_each(&mut f),
+            Namespace::SingletonClass(singleton) => singleton.descendants().iter().for_each(&mut f),
         }
     }
 
-    pub fn clear_ancestors(declaration: &Declaration) {
-        match declaration {
-            Declaration::Class(c) => c.set_ancestors(Ancestors::Partial(vec![])),
-            Declaration::Module(m) => m.set_ancestors(Ancestors::Partial(vec![])),
-            Declaration::SingletonClass(s) => s.set_ancestors(Ancestors::Partial(vec![])),
-            _ => {}
+    pub fn clear_ancestors(&self) {
+        match self {
+            Namespace::Class(c) => c.set_ancestors(Ancestors::Partial(vec![])),
+            Namespace::Module(module) => module.set_ancestors(Ancestors::Partial(vec![])),
+            Namespace::SingletonClass(singleton) => singleton.set_ancestors(Ancestors::Partial(vec![])),
         }
     }
 
-    pub fn clear_descendants(declaration: &Declaration) {
-        match declaration {
-            Declaration::Class(c) => c.descendants().clear(),
-            Declaration::Module(m) => m.descendants().clear(),
-            Declaration::SingletonClass(s) => s.descendants().clear(),
-            _ => {}
+    pub fn clear_descendants(&self) {
+        match self {
+            Namespace::Class(class) => class.descendants().clear(),
+            Namespace::Module(module) => module.descendants().clear(),
+            Namespace::SingletonClass(singleton) => singleton.descendants().clear(),
         }
     }
 }
@@ -403,10 +439,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "Cannot add the same exact definition to a declaration twice. Duplicate definition IDs")]
     fn inserting_duplicate_definitions() {
-        let mut decl = Declaration::Class(Box::new(ClassDeclaration::new(
+        let mut decl = Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
             "MyDecl".to_string(),
             DeclarationId::from("Object"),
-        )));
+        ))));
         let def_id = DefinitionId::new(123);
 
         // The second call will panic because we're adding the same exact ID twice
@@ -416,14 +452,14 @@ mod tests {
 
     #[test]
     fn adding_and_removing_members() {
-        let decl = Declaration::Class(Box::new(ClassDeclaration::new(
+        let decl = Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
             "Foo".to_string(),
             DeclarationId::from("Object"),
-        )));
+        ))));
         let member_name_id = StringId::from("Bar");
         let member_decl_id = DeclarationId::from("Foo::Bar");
 
-        let Declaration::Class(mut class) = decl else {
+        let Declaration::Namespace(Namespace::Class(mut class)) = decl else {
             panic!("Expected a class declaration");
         };
         class.add_member(member_name_id, member_decl_id);
@@ -436,22 +472,22 @@ mod tests {
 
     #[test]
     fn unqualified_name() {
-        let decl = Declaration::Class(Box::new(ClassDeclaration::new(
+        let decl = Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
             "Foo".to_string(),
             DeclarationId::from("Foo"),
-        )));
+        ))));
         assert_eq!(decl.unqualified_name(), "Foo");
 
-        let decl = Declaration::Class(Box::new(ClassDeclaration::new(
+        let decl = Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
             "Foo::Bar".to_string(),
             DeclarationId::from("Foo"),
-        )));
+        ))));
         assert_eq!(decl.unqualified_name(), "Bar");
 
-        let decl = Declaration::Class(Box::new(ClassDeclaration::new(
+        let decl = Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
             "Foo::Bar::baz".to_string(),
             DeclarationId::from("Foo::Bar"),
-        )));
+        ))));
         assert_eq!(decl.unqualified_name(), "baz");
     }
 }
