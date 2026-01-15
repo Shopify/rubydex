@@ -109,4 +109,5 @@ rules! {
     ParentRedefinition;
     NonClassSuperclass;
     CircularDependency;
+    NonModuleMixin;
 }
