@@ -1492,6 +1492,7 @@ impl<'a> Resolver<'a> {
         for declaration in self.graph.declarations().values() {
             all_diagnostics.extend(self.validate_kind(declaration));
             all_diagnostics.extend(self.validate_superclass(declaration));
+            all_diagnostics.extend(self.validate_mixins(declaration));
         }
 
         self.graph.diagnostics_mut().extend(all_diagnostics);
@@ -1621,6 +1622,54 @@ impl<'a> Resolver<'a> {
                         self.graph.strings().get(parent_name.name().str()).unwrap().deref()
                     ),
                 ));
+            }
+        }
+
+        diagnostics
+    }
+
+    fn validate_mixins(&self, declaration: &Declaration) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        let mixins = declaration
+            .definitions()
+            .iter()
+            .filter_map(|definition_id| {
+                self.mixins_of(*definition_id).map(|mixins| {
+                    mixins
+                        .into_iter()
+                        .map(|mixin| (mixin, *definition_id))
+                        .collect::<Vec<(Mixin, DefinitionId)>>()
+                })
+            })
+            .flatten();
+
+        for (mixin, definition_id) in mixins {
+            let constant_reference = self
+                .graph
+                .constant_references()
+                .get(mixin.constant_reference_id())
+                .unwrap();
+
+            if let NameRef::Resolved(resolved) = self.graph.names().get(constant_reference.name_id()).unwrap() {
+                let definition = self.graph.definitions().get(&definition_id).unwrap();
+                let mixin_declaration = self.graph.declarations().get(resolved.declaration_id()).unwrap();
+                if mixin_declaration.kind() != DeclarationKind::Module {
+                    diagnostics.push(Diagnostic::new(
+                        Rule::NonModuleMixin,
+                        *definition.uri_id(),
+                        self.graph
+                            .constant_references()
+                            .get(mixin.constant_reference_id())
+                            .unwrap()
+                            .offset()
+                            .clone(),
+                        format!(
+                            "Mixin `{}` is not a module",
+                            self.graph.strings().get(resolved.name().str()).unwrap().deref()
+                        ),
+                    ));
+                }
             }
         }
 
@@ -4670,6 +4719,33 @@ mod tests {
             vec![
                 "non-class-superclass: Superclass `Parent1` of `Child1` is not a class (found `module`) (4:16-4:23)",
                 "non-class-superclass: Superclass `Parent2` of `Child2` is not a class (found `constant`) (5:16-5:23)",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolution_diagnostics_for_non_module_mixin() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Mixin; end
+
+            class Child
+              include Mixin;
+              prepend Mixin;
+              extend Mixin;
+            end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "non-module-mixin: Mixin `Mixin` is not a module (4:11-4:16)",
+                "non-module-mixin: Mixin `Mixin` is not a module (5:11-5:16)",
+                "non-module-mixin: Mixin `Mixin` is not a module (6:10-6:15)",
             ]
         );
     }
