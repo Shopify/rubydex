@@ -722,7 +722,7 @@ impl<'a> Resolver<'a> {
         );
 
         let (linearized_prepends, linearized_includes) =
-            self.linearize_mixins(declaration_id, context, mixins, parent_ancestors.as_ref());
+            self.linearize_mixins(declaration_id, context, &mixins, parent_ancestors.as_ref());
 
         // Build the final list
         let mut ancestors = Vec::new();
@@ -812,7 +812,7 @@ impl<'a> Resolver<'a> {
         &mut self,
         declaration_id: DeclarationId,
         context: &mut LinearizationContext,
-        mixins: Vec<Mixin>,
+        mixins: &Vec<Mixin>,
         parent_ancestors: Option<&Vec<Ancestor>>,
     ) -> (VecDeque<Ancestor>, VecDeque<Ancestor>) {
         let mut linearized_prepends = VecDeque::new();
@@ -938,6 +938,32 @@ impl<'a> Resolver<'a> {
             .unwrap()
             .diagnostics_mut()
             .extend(diagnostics);
+
+        if context.cyclic {
+            for mixin in mixins {
+                let constant_reference = self
+                    .graph
+                    .constant_references()
+                    .get(mixin.constant_reference_id())
+                    .unwrap();
+
+                let diagnostic = Diagnostic::new(
+                    Rule::CircularDependency,
+                    constant_reference.uri_id(),
+                    constant_reference.offset().clone(),
+                    format!(
+                        "Circular dependency: `{}` is parent of itself",
+                        self.graph.declarations().get(&declaration_id).unwrap().name()
+                    ),
+                );
+
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&declaration_id)
+                    .unwrap()
+                    .add_diagnostic(diagnostic);
+            }
+        }
 
         (linearized_prepends, linearized_includes)
     }
@@ -2981,7 +3007,10 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["circular-dependency: Circular dependency: `Foo` is parent of itself (2:11-2:14)"]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
@@ -3252,7 +3281,10 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["circular-dependency: Circular dependency: `Foo` is parent of itself (2:11-2:14)"]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
