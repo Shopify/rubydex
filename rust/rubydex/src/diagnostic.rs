@@ -107,4 +107,5 @@ rules! {
     // Resolution
     KindRedefinition;
     ParentRedefinition;
+    NonClassSuperclass;
 }
