@@ -337,30 +337,51 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_add_mixin_extend
+  def test_add_mixin_extend_affects_singleton_ancestors
     with_context do |context|
+      # Include an explicit singleton class definition so it gets indexed
       context.write!("post.rb", <<~RUBY)
         module Concern; end
         module Concern::ClassMethods
           def foo; end
         end
-        class Post; end
+        class Post
+          class << self
+            def existing_class_method; end
+          end
+        end
       RUBY
 
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
+      # Get Post's singleton class ancestors BEFORE adding mixin
+      post_singleton = graph["Post::<Post>"]
+      refute_nil(post_singleton, "Post's singleton class should exist")
+
+      initial_ancestor_names = post_singleton.ancestors.map(&:name)
+      refute_includes(initial_ancestor_names, "Concern::ClassMethods")
+
+      # Add extend mixin (extend affects singleton class)
       result = graph.add_mixin(
         target: "Post",
         module_name: "Concern::ClassMethods",
         type: :extend,
       )
       assert(result)
+
+      graph.resolve
+
+      # Verify the singleton class's ancestor chain includes the extended module
+      assert_equal(
+        ["Post::<Post>", "Concern::ClassMethods", "Object::<Object>", "Class", "Object"],
+        post_singleton.ancestors.map(&:name),
+      )
     end
   end
 
-  def test_add_mixin_include
+  def test_add_mixin_include_affects_ancestors
     with_context do |context|
       context.write!("post.rb", <<~RUBY)
         module Validations
@@ -373,12 +394,60 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
+      post = graph["Post"]
+      initial_ancestor_names = post.ancestors.map(&:name)
+      refute_includes(initial_ancestor_names, "Validations")
+
+      # Add include mixin
       result = graph.add_mixin(
         target: "Post",
         module_name: "Validations",
         type: :include,
       )
       assert(result)
+
+      graph.resolve
+
+      # Verify the ancestor chain: Post, then included module, then Object
+      assert_equal(
+        ["Post", "Validations", "Object"],
+        post.ancestors.map(&:name),
+      )
+    end
+  end
+
+  def test_add_mixin_prepend_affects_ancestors
+    with_context do |context|
+      context.write!("post.rb", <<~RUBY)
+        module Prepended
+          def save; end
+        end
+        class Post; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      post = graph["Post"]
+      initial_ancestor_names = post.ancestors.map(&:name)
+      refute_includes(initial_ancestor_names, "Prepended")
+
+      # Add prepend mixin
+      result = graph.add_mixin(
+        target: "Post",
+        module_name: "Prepended",
+        type: :prepend,
+      )
+      assert(result)
+
+      graph.resolve
+
+      # Verify the ancestor chain: prepended module comes before Post
+      assert_equal(
+        ["Prepended", "Post", "Object"],
+        post.ancestors.map(&:name),
+      )
     end
   end
 

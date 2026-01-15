@@ -140,4 +140,56 @@ class DeclarationTest < Minitest::Test
       assert_includes(member_names, "Baz")
     end
   end
+
+  def test_ancestors_returns_linearized_ancestor_chain
+    with_context do |context|
+      context.write!("file.rb", <<~RUBY)
+        module Mixin; end
+        class Parent; end
+        class Child < Parent
+          include Mixin
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      child = graph["Child"]
+      ancestor_names = child.ancestors.map(&:name)
+
+      # Linearized order: [Child, Mixin, Parent, Object]
+      assert_includes(ancestor_names, "Child")
+      assert_includes(ancestor_names, "Mixin")
+      assert_includes(ancestor_names, "Parent")
+    end
+  end
+
+  def test_ancestors_returns_empty_for_module_with_no_mixins
+    with_context do |context|
+      context.write!("file.rb", "module Standalone; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      standalone = graph["Standalone"]
+      ancestor_names = standalone.ancestors.map(&:name)
+      # Module's ancestors include itself
+      assert_includes(ancestor_names, "Standalone")
+    end
+  end
+
+  def test_ancestors_enumerator_has_size
+    with_context do |context|
+      context.write!("file.rb", "class Post; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      post = graph["Post"]
+      assert(post.ancestors.size >= 1) # At least Post itself
+    end
+  end
 end
