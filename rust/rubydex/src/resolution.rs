@@ -164,6 +164,38 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+
+        for left_unit in self.unit_queue.drain(..) {
+            if let Unit::ConstantRef(id) = left_unit {
+                let reference = self.graph.constant_references().get(&id).unwrap();
+                let uri_id = reference.uri_id();
+                let offset = reference.offset().clone();
+                let name = self
+                    .graph
+                    .strings()
+                    .get(self.graph.names().get(reference.name_id()).unwrap().str())
+                    .unwrap()
+                    .deref()
+                    .clone();
+
+                // Skip synthetic singleton class names (e.g., `<Foo>`). These are auto-generated
+                // for method call dispatch and would produce confusing diagnostics.
+                if name.starts_with('<') {
+                    continue;
+                }
+
+                self.graph
+                    .documents_mut()
+                    .get_mut(&uri_id)
+                    .unwrap()
+                    .add_diagnostic(Diagnostic::new(
+                        Rule::UnresolvedConstantReference,
+                        uri_id,
+                        offset,
+                        format!("Unresolved constant reference: `{name}`"),
+                    ));
+            }
+        }
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -248,7 +280,8 @@ impl<'a> Resolver<'a> {
                 self.unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
-                // We couldn't resolve this name. Emit a diagnostic
+                // We couldn't resolve this name. It will be picked up by the drain loop
+                self.unit_queue.push_back(unit_id);
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
                 self.unit_queue.push_back(unit_id);
@@ -925,9 +958,11 @@ impl<'a> Resolver<'a> {
                         NameRef::Resolved(resolved) => {
                             let mixin_declaration = self.graph.declarations().get(resolved.declaration_id()).unwrap();
 
-                            let is_alias_or_promotable = matches!(mixin_declaration.kind(), DeclarationKind::ConstantAlias | DeclarationKind::Todo)
-                                || (mixin_declaration.kind() == DeclarationKind::Constant
-                                    && self.graph.all_definitions_promotable(mixin_declaration));
+                            let is_alias_or_promotable = matches!(
+                                mixin_declaration.kind(),
+                                DeclarationKind::ConstantAlias | DeclarationKind::Todo
+                            ) || (mixin_declaration.kind() == DeclarationKind::Constant
+                                && self.graph.all_definitions_promotable(mixin_declaration));
 
                             if !is_alias_or_promotable && mixin_declaration.kind() != DeclarationKind::Module {
                                 diagnostics.push(Diagnostic::new(
@@ -982,9 +1017,11 @@ impl<'a> Resolver<'a> {
                         NameRef::Resolved(resolved) => {
                             let mixin_declaration = self.graph.declarations().get(resolved.declaration_id()).unwrap();
 
-                            let is_alias_or_promotable = matches!(mixin_declaration.kind(), DeclarationKind::ConstantAlias | DeclarationKind::Todo)
-                                || (mixin_declaration.kind() == DeclarationKind::Constant
-                                    && self.graph.all_definitions_promotable(mixin_declaration));
+                            let is_alias_or_promotable = matches!(
+                                mixin_declaration.kind(),
+                                DeclarationKind::ConstantAlias | DeclarationKind::Todo
+                            ) || (mixin_declaration.kind() == DeclarationKind::Constant
+                                && self.graph.all_definitions_promotable(mixin_declaration));
 
                             if !is_alias_or_promotable && mixin_declaration.kind() != DeclarationKind::Module {
                                 diagnostics.push(Diagnostic::new(
@@ -1038,12 +1075,19 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        self.graph
+        let existing = self
+            .graph
             .declarations_mut()
             .get_mut(&declaration_id)
             .unwrap()
-            .diagnostics_mut()
-            .extend(diagnostics);
+            .diagnostics_mut();
+        for diagnostic in diagnostics {
+            if !existing.iter().any(|d| {
+                d.rule() == diagnostic.rule() && d.uri_id() == diagnostic.uri_id() && d.offset() == diagnostic.offset()
+            }) {
+                existing.push(diagnostic);
+            }
+        }
 
         if context.cyclic {
             for mixin in mixins {
@@ -1850,9 +1894,11 @@ impl<'a> Resolver<'a> {
             let parent_declaration = self.graph.declarations().get(parent_declaration_id).unwrap();
 
             // Skip aliases (might resolve to a class) and promotable constants (might be a class at runtime)
-            let is_alias_or_promotable = matches!(parent_declaration.kind(), DeclarationKind::ConstantAlias | DeclarationKind::Todo)
-                || (parent_declaration.kind() == DeclarationKind::Constant
-                    && self.graph.all_definitions_promotable(parent_declaration));
+            let is_alias_or_promotable = matches!(
+                parent_declaration.kind(),
+                DeclarationKind::ConstantAlias | DeclarationKind::Todo
+            ) || (parent_declaration.kind() == DeclarationKind::Constant
+                && self.graph.all_definitions_promotable(parent_declaration));
 
             if !is_alias_or_promotable && parent_declaration.kind() != DeclarationKind::Class {
                 let diagnostic = Diagnostic::new(
@@ -2080,7 +2126,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `Foo` (1:1-1:4)"],
+            &[Rule::ParseWarning]
+        );
 
         let reference = context.graph().constant_references().values().next().unwrap();
 
@@ -2197,6 +2247,31 @@ mod tests {
 
         assert_no_members!(context, "Bar::Baz");
         assert_owner_eq!(context, "Bar::Baz", "Bar");
+    }
+
+    #[test]
+    fn resolution_does_not_loop_infinitely_on_non_existing_constants() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo::Bar
+              class Baz
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Foo resolves to a Todo placeholder (implicit namespace), so no diagnostic is emitted.
+        // The Todo declaration itself is the signal that Foo was never explicitly defined.
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["Baz"]);
+        assert_no_members!(context, "Foo::Bar::Baz");
     }
 
     #[test]
@@ -2569,7 +2644,14 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "unresolved-constant-reference: Unresolved constant reference: `Foo` (1:13-1:16)",
+                "unresolved-constant-reference: Unresolved constant reference: `CONST` (2:3-2:8)",
+            ],
+            &[Rule::ParseWarning]
+        );
 
         let declaration = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
         assert!(matches!(
@@ -2994,7 +3076,7 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context, &[Rule::UnresolvedConstantReference]);
 
         assert_ancestors_eq!(context, "B", ["B"]);
         // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
@@ -3290,7 +3372,7 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context, &[Rule::UnresolvedConstantReference]);
 
         assert_ancestors_eq!(context, "B", ["B"]);
         // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
@@ -4022,7 +4104,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `NonExistent` (1:11-1:22)"],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS_2", "ALIAS_1");
         assert_no_constant_alias_target!(context, "ALIAS_1");
@@ -4040,7 +4126,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `NOPE` (3:8-3:12)"],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
 
@@ -4655,7 +4745,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context, &[Rule::NonModuleMixin]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["non-module-mixin: Mixin `B` is not a module (5:11-5:12)"],
+            &[Rule::ParseWarning]
+        );
 
         assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
         assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:7:3-7:4");
@@ -4787,7 +4881,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `Foo` (1:1-1:4)"],
+            &[Rule::ParseWarning]
+        );
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
     }
 
@@ -5059,7 +5157,14 @@ mod tests {
         });
 
         context.resolve();
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "unresolved-constant-reference: Unresolved constant reference: `Protobuf` (1:7-1:15)",
+                "unresolved-constant-reference: Unresolved constant reference: `Protobuf` (2:12-2:20)",
+            ],
+            &[Rule::ParseWarning]
+        );
     }
 
     #[test]
@@ -6262,7 +6367,12 @@ mod todo_tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["parent-redefinition: Parent of class `Child3` redefined from `Parent1` to `Parent2` (15:16-15:23)",]
+            vec![
+                // FIXME: Object should resolve
+                "unresolved-constant-reference: Unresolved constant reference: `Object` (6:16-6:22)",
+                "unresolved-constant-reference: Unresolved constant reference: `Object` (7:16-7:24)",
+                "parent-redefinition: Parent of class `Child3` redefined from `Parent1` to `Parent2` (15:16-15:23)",
+            ]
         );
     }
 

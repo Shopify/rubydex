@@ -70,6 +70,23 @@ pub enum DeclarationKind {
 }
 
 impl DeclarationKind {
+    /// Returns the canonical `PascalCase` name used in external APIs and serialization.
+    #[must_use]
+    pub fn as_api_str(self) -> &'static str {
+        match self {
+            DeclarationKind::Class => "Class",
+            DeclarationKind::SingletonClass => "SingletonClass",
+            DeclarationKind::Module => "Module",
+            DeclarationKind::Constant => "Constant",
+            DeclarationKind::ConstantAlias => "ConstantAlias",
+            DeclarationKind::Method => "Method",
+            DeclarationKind::GlobalVariable => "GlobalVariable",
+            DeclarationKind::InstanceVariable => "InstanceVariable",
+            DeclarationKind::ClassVariable => "ClassVariable",
+            DeclarationKind::Todo => "<TODO>",
+        }
+    }
+
     #[must_use]
     pub fn from_definition_kind(definition_kind: DefinitionKind) -> Self {
         match definition_kind {
@@ -424,7 +441,11 @@ impl Declaration {
     }
 
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
-        all_declarations!(self, it => it.diagnostics.push(diagnostic));
+        all_declarations!(self, it => {
+            if !it.diagnostics.iter().any(|d| d.rule() == diagnostic.rule() && d.uri_id() == diagnostic.uri_id() && d.offset() == diagnostic.offset()) {
+                it.diagnostics.push(diagnostic);
+            }
+        });
     }
 
     pub fn clear_diagnostics(&mut self) {

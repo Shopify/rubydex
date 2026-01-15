@@ -189,7 +189,7 @@ fn format_ancestors(graph: &Graph, ancestors: &Ancestors) -> Vec<serde_json::Val
                 let ancestor_decl = graph.declarations().get(id)?;
                 Some(serde_json::json!({
                     "name": ancestor_decl.name(),
-                    "kind": ancestor_decl.kind().to_string(),
+                    "kind": ancestor_decl.kind().as_api_str(),
                 }))
             }
             Ancestor::Partial(name_id) => {
@@ -265,7 +265,7 @@ impl RubydexServer {
 
                 Some(serde_json::json!({
                     "name": decl.name(),
-                    "kind": decl.kind().to_string(),
+                    "kind": decl.kind().as_api_str(),
                     "locations": locations,
                 }))
             },
@@ -333,7 +333,7 @@ impl RubydexServer {
 
                         let mut member = serde_json::json!({
                             "name": member_decl.name(),
-                            "kind": member_decl.kind().to_string(),
+                            "kind": member_decl.kind().as_api_str(),
                         });
 
                         if let Some(def) = member_def
@@ -354,7 +354,7 @@ impl RubydexServer {
 
         let result = serde_json::json!({
             "name": decl.name(),
-            "kind": decl.kind().to_string(),
+            "kind": decl.kind().as_api_str(),
             "definitions": definitions,
             "ancestors": ancestors,
             "members": members,
@@ -384,7 +384,7 @@ impl RubydexServer {
                 let desc_decl = graph.declarations().get(id)?;
                 Some(serde_json::json!({
                     "name": desc_decl.name(),
-                    "kind": desc_decl.kind().to_string(),
+                    "kind": desc_decl.kind().as_api_str(),
                 }))
             },
         );
@@ -484,7 +484,7 @@ impl RubydexServer {
             let decl_name = graph
                 .definition_id_to_declaration_id(*def_id)
                 .and_then(|decl_id| graph.declarations().get(decl_id))
-                .map(|decl| (decl.name().to_string(), decl.kind().to_string()));
+                .map(|decl| (decl.name().to_string(), decl.kind().as_api_str()));
 
             if let Some((name, kind)) = decl_name {
                 declarations.push(serde_json::json!({
@@ -510,14 +510,14 @@ impl RubydexServer {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
 
-        let mut breakdown: HashMap<String, usize> = HashMap::new();
+        let mut breakdown: HashMap<&'static str, usize> = HashMap::new();
         for decl in graph.declarations().values() {
-            *breakdown.entry(decl.kind().to_string()).or_default() += 1;
+            *breakdown.entry(decl.kind().as_api_str()).or_default() += 1;
         }
 
         let breakdown_json: serde_json::Value = breakdown
             .iter()
-            .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+            .map(|(k, v)| ((*k).to_string(), serde_json::json!(v)))
             .collect();
 
         let result = serde_json::json!({
