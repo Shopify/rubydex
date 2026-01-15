@@ -133,6 +133,17 @@ impl Definition {
     }
 
     #[must_use]
+    pub fn name_id(&self) -> Option<&NameId> {
+        match self {
+            Definition::Class(d) => Some(d.name_id()),
+            Definition::SingletonClass(d) => Some(d.name_id()),
+            Definition::Module(d) => Some(d.name_id()),
+            Definition::Constant(d) => Some(d.name_id()),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn is_deprecated(&self) -> bool {
         all_definitions!(self, it => it.flags.is_deprecated())
     }
