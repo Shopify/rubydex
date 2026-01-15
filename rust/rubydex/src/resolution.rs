@@ -4601,15 +4601,15 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_declaration_exists!(context, "FOO");
-        assert_declaration_kind_eq!(context, "FOO", "Constant");
+        assert_declaration_kind_eq!(context, "FOO", "constant");
         assert_owner_eq!(context, "FOO", "Object");
 
         assert_declaration_exists!(context, "Bar::BAZ");
-        assert_declaration_kind_eq!(context, "Bar::BAZ", "Constant");
+        assert_declaration_kind_eq!(context, "Bar::BAZ", "constant");
         assert_owner_eq!(context, "Bar::BAZ", "Bar");
 
         assert_declaration_exists!(context, "Bar::QUX");
-        assert_declaration_kind_eq!(context, "Bar::QUX", "Constant");
+        assert_declaration_kind_eq!(context, "Bar::QUX", "constant");
         assert_owner_eq!(context, "Bar::QUX", "Bar");
     }
 
@@ -4805,7 +4805,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "FOO", "Constant");
+        assert_declaration_kind_eq!(context, "FOO", "constant");
     }
 
     #[test]
@@ -4839,7 +4839,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Foo", "Constant");
+        assert_declaration_kind_eq!(context, "Foo", "constant");
     }
 
     #[test]
@@ -4874,7 +4874,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Foo", "Class");
+        assert_declaration_kind_eq!(context, "Foo", "class");
     }
 
     #[test]
@@ -5275,9 +5275,9 @@ mod tests {
         });
 
         context.resolve();
-        assert_declaration_kind_eq!(context, "Foo", "Module");
-        assert_declaration_kind_eq!(context, "Foo::Bar", "Module");
-        assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "Constant");
+        assert_declaration_kind_eq!(context, "Foo", "module");
+        assert_declaration_kind_eq!(context, "Foo::Bar", "module");
+        assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "constant");
     }
 
     #[test]
@@ -5294,7 +5294,7 @@ mod tests {
         });
 
         context.resolve();
-        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_kind_eq!(context, "Foo", "module");
         assert_declaration_exists!(context, "Foo::<Foo>#bar()");
     }
 
@@ -5312,7 +5312,7 @@ mod tests {
         });
 
         context.resolve();
-        assert_declaration_kind_eq!(context, "Foo", "Constant");
+        assert_declaration_kind_eq!(context, "Foo", "constant");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
     }
@@ -5364,7 +5364,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // Foo was initially created as a Todo (from class Foo::Bar), then promoted to Class
-        assert_declaration_kind_eq!(context, "Foo", "Class");
+        assert_declaration_kind_eq!(context, "Foo", "class");
 
         assert_members_eq!(context, "Object", vec!["Foo"]);
         assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
@@ -5398,7 +5398,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // Foo was promoted from Todo to Class after the second resolution
-        assert_declaration_kind_eq!(context, "Foo", "Class");
+        assert_declaration_kind_eq!(context, "Foo", "class");
 
         assert_members_eq!(context, "Object", vec!["Foo"]);
         assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
@@ -5423,7 +5423,7 @@ mod tests {
         context.resolve();
 
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_declaration_kind_eq!(context, "Bar", "module");
         assert_members_eq!(context, "Bar", vec!["Baz"]);
         assert_declaration_exists!(context, "Bar::Baz");
         assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
@@ -5458,7 +5458,7 @@ mod tests {
 
         // After discovering top-level Bar, the Todo should be promoted and Baz re-homed.
         assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_declaration_kind_eq!(context, "Bar", "module");
         assert_members_eq!(context, "Bar", vec!["Baz"]);
         assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
         assert_declaration_does_not_exist!(context, "Foo::Bar");
