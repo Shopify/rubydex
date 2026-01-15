@@ -3,8 +3,8 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration, Namespace};
-use crate::model::definitions::Definition;
+use crate::model::declaration::{Ancestor, Declaration, DeclarationKind, Namespace};
+use crate::model::definitions::{Definition, DefinitionKind};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
@@ -761,8 +761,8 @@ impl Graph {
         let mut declarations_with_docs = 0;
         let mut total_doc_size = 0;
         let mut multi_definition_count = 0;
-        let mut declarations_types: HashMap<&str, usize> = HashMap::new();
-        let mut linked_definition_types: HashMap<&str, usize> = HashMap::new();
+        let mut declarations_types: HashMap<DeclarationKind, usize> = HashMap::new();
+        let mut linked_definition_types: HashMap<DefinitionKind, usize> = HashMap::new();
         let mut linked_definition_ids: HashSet<&DefinitionId> = HashSet::new();
 
         for declaration in self.declarations.values() {
@@ -793,7 +793,7 @@ impl Graph {
         }
 
         // Count ALL definitions by type (including unlinked)
-        let mut all_definition_types: HashMap<&str, usize> = HashMap::new();
+        let mut all_definition_types: HashMap<DefinitionKind, usize> = HashMap::new();
         for def in self.definitions.values() {
             *all_definition_types.entry(def.kind()).or_insert(0) += 1;
         }
