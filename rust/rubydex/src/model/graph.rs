@@ -824,7 +824,7 @@ impl Graph {
         let mut types: Vec<_> = declarations_types.iter().collect();
         types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
         for (kind, count) in types {
-            println!("  {kind:20} {count:6}");
+            println!("  {kind:20} {count:6}", kind = kind.to_string());
         }
 
         // Combined definition breakdown: total, linked, orphan
