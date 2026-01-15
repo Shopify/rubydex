@@ -321,6 +321,20 @@ impl Declaration {
         all_declarations!(self, it => it.name.rsplit("::").next().unwrap_or(&it.name).to_string())
     }
 
+    /// # Panics
+    ///
+    /// Panics if the declaration is not a namespace or a constant
+    #[must_use]
+    pub fn ancestors(&self) -> Ancestors {
+        match self {
+            Declaration::Class(class) => class.clone_ancestors(),
+            Declaration::Module(module) => module.clone_ancestors(),
+            Declaration::SingletonClass(singleton) => singleton.clone_ancestors(),
+            Declaration::Constant(_) => Ancestors::Complete(vec![]),
+            _ => panic!("Tried to get ancestors for a declaration that isn't a namespace or a constant"),
+        }
+    }
+
     pub fn remove_descendant(declaration: &Declaration, descendant_id: &DeclarationId) {
         match declaration {
             Declaration::Class(c) => c.remove_descendant(descendant_id),
