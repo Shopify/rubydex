@@ -51,6 +51,35 @@ impl<'a> IntoIterator for &'a Ancestors {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeclarationKind {
+    Class,
+    SingletonClass,
+    Module,
+    Constant,
+    ConstantAlias,
+    Method,
+    GlobalVariable,
+    InstanceVariable,
+    ClassVariable,
+}
+
+impl std::fmt::Display for DeclarationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeclarationKind::Class => write!(f, "class"),
+            DeclarationKind::SingletonClass => write!(f, "singleton class"),
+            DeclarationKind::Module => write!(f, "module"),
+            DeclarationKind::Constant => write!(f, "constant"),
+            DeclarationKind::ConstantAlias => write!(f, "constant alias"),
+            DeclarationKind::Method => write!(f, "method"),
+            DeclarationKind::GlobalVariable => write!(f, "global variable"),
+            DeclarationKind::InstanceVariable => write!(f, "instance variable"),
+            DeclarationKind::ClassVariable => write!(f, "class variable"),
+        }
+    }
+}
+
 macro_rules! all_declarations {
     ($value:expr, $var:ident => $expr:expr) => {
         match $value {
@@ -247,15 +276,15 @@ impl Declaration {
     }
 
     #[must_use]
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> DeclarationKind {
         match self {
             Declaration::Namespace(namespace) => namespace.kind(),
-            Declaration::Constant(_) => "Constant",
-            Declaration::ConstantAlias(_) => "ConstantAlias",
-            Declaration::Method(_) => "Method",
-            Declaration::GlobalVariable(_) => "GlobalVariable",
-            Declaration::InstanceVariable(_) => "InstanceVariable",
-            Declaration::ClassVariable(_) => "ClassVariable",
+            Declaration::Constant(_) => DeclarationKind::Constant,
+            Declaration::ConstantAlias(_) => DeclarationKind::ConstantAlias,
+            Declaration::Method(_) => DeclarationKind::Method,
+            Declaration::GlobalVariable(_) => DeclarationKind::GlobalVariable,
+            Declaration::InstanceVariable(_) => DeclarationKind::InstanceVariable,
+            Declaration::ClassVariable(_) => DeclarationKind::ClassVariable,
         }
     }
 
@@ -350,11 +379,11 @@ pub enum Namespace {
 
 impl Namespace {
     #[must_use]
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> DeclarationKind {
         match self {
-            Namespace::Class(_) => "Class",
-            Namespace::SingletonClass(_) => "SingletonClass",
-            Namespace::Module(_) => "Module",
+            Namespace::Class(_) => DeclarationKind::Class,
+            Namespace::SingletonClass(_) => DeclarationKind::SingletonClass,
+            Namespace::Module(_) => DeclarationKind::Module,
         }
     }
 
