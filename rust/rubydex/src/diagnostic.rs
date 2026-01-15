@@ -106,4 +106,5 @@ rules! {
 
     // Resolution
     KindRedefinition;
+    ParentRedefinition;
 }
