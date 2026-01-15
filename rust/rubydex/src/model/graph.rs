@@ -72,7 +72,7 @@ impl Graph {
 
     /// # Panics
     ///
-    /// Will panic if the `definition_id` is not registered in the graph
+    /// Panics if `definition_id` is not present in the definitions map.
     pub fn add_declaration<F>(
         &mut self,
         definition_id: DefinitionId,
@@ -122,10 +122,14 @@ impl Graph {
                     // that might represent a class).
                     let is_namespace = matches!(declaration.kind(), DeclarationKind::Class | DeclarationKind::Module);
                     let is_mismatch = definition_declaration_kind != declaration.kind();
-                    let is_non_promotable_constant = matches!(definition, Definition::Constant(c) if !c.flags().is_promotable());
-                    let should_emit = is_namespace && is_mismatch
-                        && (matches!(definition_declaration_kind, DeclarationKind::Class | DeclarationKind::Module)
-                            || is_non_promotable_constant);
+                    let is_non_promotable_constant =
+                        matches!(definition, Definition::Constant(c) if !c.flags().is_promotable());
+                    let should_emit = is_namespace
+                        && is_mismatch
+                        && (matches!(
+                            definition_declaration_kind,
+                            DeclarationKind::Class | DeclarationKind::Module
+                        ) || is_non_promotable_constant);
                     if should_emit {
                         declaration.add_diagnostic(Diagnostic::new(
                             Rule::KindRedefinition,
@@ -256,6 +260,11 @@ impl Graph {
         &self.documents
     }
 
+    #[must_use]
+    pub fn documents_mut(&mut self) -> &mut IdentityHashMap<UriId, Document> {
+        &mut self.documents
+    }
+
     /// # Panics
     ///
     /// Panics if the definition is not found
@@ -365,6 +374,11 @@ impl Graph {
     #[must_use]
     pub fn constant_references(&self) -> &IdentityHashMap<ReferenceId, ConstantReference> {
         &self.constant_references
+    }
+
+    #[must_use]
+    pub fn constant_references_mut(&mut self) -> &mut IdentityHashMap<ReferenceId, ConstantReference> {
+        &mut self.constant_references
     }
 
     // Returns an immutable reference to the method references map
