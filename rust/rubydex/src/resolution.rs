@@ -150,6 +150,32 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+
+        for left_unit in unit_queue {
+            if let Unit::Reference(id) = left_unit {
+                let reference = self.graph.constant_references().get(&id).unwrap();
+                let uri_id = reference.uri_id();
+                let offset = reference.offset().clone();
+                let name = self
+                    .graph
+                    .strings()
+                    .get(self.graph.names().get(reference.name_id()).unwrap().str())
+                    .unwrap()
+                    .deref()
+                    .clone();
+
+                self.graph
+                    .documents_mut()
+                    .get_mut(&uri_id)
+                    .unwrap()
+                    .add_diagnostic(Diagnostic::new(
+                        Rule::UnresolvedConstantReference,
+                        uri_id,
+                        offset,
+                        format!("Unresolved constant reference: `{name}`"),
+                    ));
+            }
+        }
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -240,6 +266,7 @@ impl<'a> Resolver<'a> {
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
+                unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(Some(id_needing_linearization)) => {
                 unit_queue.push_back(unit_id);
@@ -2091,7 +2118,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `Foo` (1:1-1:4)"],
+            &[Rule::ParseWarning]
+        );
 
         let reference = context.graph().constant_references().values().next().unwrap();
 
@@ -2222,6 +2253,13 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `Foo` (1:7-1:10)"],
+            &[Rule::ParseWarning]
+        );
+
         assert!(
             context
                 .graph()
@@ -2243,8 +2281,6 @@ mod tests {
                 .get(&DeclarationId::from("Foo::Bar::Baz"))
                 .is_none()
         );
-
-        assert_no_diagnostics!(&context);
     }
 
     #[test]
@@ -2628,7 +2664,14 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "unresolved-constant-reference: Unresolved constant reference: `Foo` (1:13-1:16)",
+                "unresolved-constant-reference: Unresolved constant reference: `CONST` (2:3-2:8)",
+            ],
+            &[Rule::ParseWarning]
+        );
 
         let declaration = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
         assert!(matches!(
@@ -2964,7 +3007,7 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context, &[Rule::UnresolvedConstantReference]);
 
         assert_ancestors_eq!(context, "B", ["B"]);
         // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
@@ -3260,7 +3303,7 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context, &[Rule::UnresolvedConstantReference]);
 
         assert_ancestors_eq!(context, "B", ["B"]);
         // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
@@ -3992,7 +4035,12 @@ mod tests {
             "
         });
         context.resolve();
-        assert_no_diagnostics!(&context);
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `NonExistent` (1:11-1:22)"],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS_2", "ALIAS_1");
         assert_no_constant_alias_target!(context, "ALIAS_1");
@@ -4009,7 +4057,12 @@ mod tests {
             "
         });
         context.resolve();
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `NOPE` (3:8-3:12)"],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
 
@@ -4687,7 +4740,12 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["parent-redefinition: Parent of class `Child3` redefined from `Parent1` to `Parent2` (15:16-15:23)",]
+            vec![
+                // FIXME: Object should resolve
+                "unresolved-constant-reference: Unresolved constant reference: `Object` (6:16-6:22)",
+                "unresolved-constant-reference: Unresolved constant reference: `Object` (7:16-7:24)",
+                "parent-redefinition: Parent of class `Child3` redefined from `Parent1` to `Parent2` (15:16-15:23)",
+            ]
         );
     }
 

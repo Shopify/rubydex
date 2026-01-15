@@ -175,6 +175,11 @@ impl Graph {
         &self.documents
     }
 
+    #[must_use]
+    pub fn documents_mut(&mut self) -> &mut IdentityHashMap<UriId, Document> {
+        &mut self.documents
+    }
+
     /// # Panics
     ///
     /// Panics if the definition is not found
@@ -287,6 +292,11 @@ impl Graph {
     #[must_use]
     pub fn constant_references(&self) -> &IdentityHashMap<ReferenceId, ConstantReference> {
         &self.constant_references
+    }
+
+    #[must_use]
+    pub fn constant_references_mut(&mut self) -> &mut IdentityHashMap<ReferenceId, ConstantReference> {
+        &mut self.constant_references
     }
 
     // Returns an immutable reference to the method references map
