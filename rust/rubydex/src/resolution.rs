@@ -1117,23 +1117,37 @@ fn name_depth(name: &NameRef, names: &IdentityHashMap<NameId, NameRef>) -> u32 {
 #[must_use]
 fn sorted_units(graph: &Graph) -> (VecDeque<Unit>, Vec<DefinitionId>) {
     let estimated_length = graph.definitions().len() / 2;
-    let mut constants = Vec::with_capacity(estimated_length);
+    let mut units = Vec::with_capacity(estimated_length);
     let mut others = Vec::with_capacity(estimated_length);
     let names = graph.names();
 
     for (id, definition) in graph.definitions() {
+        let uri = graph.documents().get(definition.uri_id()).unwrap().uri();
+
         match definition {
             Definition::Class(def) => {
-                constants.push((Unit::Definition(*id), names.get(def.name_id()).unwrap()));
+                units.push((
+                    Unit::Definition(*id),
+                    (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                ));
             }
             Definition::Module(def) => {
-                constants.push((Unit::Definition(*id), names.get(def.name_id()).unwrap()));
+                units.push((
+                    Unit::Definition(*id),
+                    (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                ));
             }
             Definition::Constant(def) => {
-                constants.push((Unit::Definition(*id), names.get(def.name_id()).unwrap()));
+                units.push((
+                    Unit::Definition(*id),
+                    (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                ));
             }
             Definition::SingletonClass(def) => {
-                constants.push((Unit::Definition(*id), names.get(def.name_id()).unwrap()));
+                units.push((
+                    Unit::Definition(*id),
+                    (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                ));
             }
             _ => {
                 others.push(*id);
@@ -1142,14 +1156,22 @@ fn sorted_units(graph: &Graph) -> (VecDeque<Unit>, Vec<DefinitionId>) {
     }
 
     for (id, constant_ref) in graph.constant_references() {
-        constants.push((Unit::Reference(*id), names.get(constant_ref.name_id()).unwrap()));
+        let uri = graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
+
+        units.push((
+            Unit::Reference(*id),
+            (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
+        ));
     }
 
     // Sort namespaces based on their name complexity so that simpler names are always first
-    constants.sort_by(|(_, name_a), (_, name_b)| name_depth(name_a, names).cmp(&name_depth(name_b, names)));
+    // When the depth is the same, sort by URI and offset to maintain determinism
+    units.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+        (name_depth(name_a, names), uri_a, offset_a).cmp(&(name_depth(name_b, names), uri_b, offset_b))
+    });
 
     others.shrink_to_fit();
-    (constants.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>(), others)
+    (units.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>(), others)
 }
 
 /// Returns the singleton parent ID for an attached object ID. A singleton class' parent depends on what the attached
