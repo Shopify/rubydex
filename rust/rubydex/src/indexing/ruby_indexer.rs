@@ -770,15 +770,9 @@ impl<'a> RubyIndexer<'a> {
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
-        let definition = Definition::ConstantAlias(Box::new(ConstantAliasDefinition::new(
-            name_id,
-            target_name_id,
-            self.uri_id,
-            comments,
-            offset,
-            lexical_nesting_id,
-            flags,
-        )));
+        let alias_constant = ConstantDefinition::new(name_id, self.uri_id, offset, comments, flags, lexical_nesting_id);
+        let definition =
+            Definition::ConstantAlias(Box::new(ConstantAliasDefinition::new(target_name_id, alias_constant)));
         let definition_id = self.local_graph.add_definition(definition);
 
         self.add_member_to_current_owner(definition_id);
