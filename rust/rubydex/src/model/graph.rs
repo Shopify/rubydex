@@ -350,7 +350,9 @@ impl Graph {
                     && let Some(declaration) = self.declarations.get_mut(&declaration_id)
                     && declaration.remove_definition(def_id)
                 {
-                    declarations_to_invalidate_ancestor_chains.push(declaration_id);
+                    if declaration.as_namespace().is_some() {
+                        declarations_to_invalidate_ancestor_chains.push(declaration_id);
+                    }
 
                     if declaration.has_no_definitions() {
                         let unqualified_str_id = StringId::from(&declaration.unqualified_name());
@@ -405,13 +407,16 @@ impl Graph {
                 continue;
             };
 
-            let namespace = decl.as_namespace().unwrap();
+            let namespace = decl.as_namespace().expect("expected namespace declaration");
 
             namespace.for_each_ancestor(|ancestor| {
                 if let Ancestor::Complete(ancestor_id) = ancestor
                     && let Some(ancestor_decl) = declarations.get(ancestor_id)
                 {
-                    ancestor_decl.as_namespace().unwrap().remove_descendant(&declaration_id);
+                    ancestor_decl
+                        .as_namespace()
+                        .expect("expected namespace declaration")
+                        .remove_descendant(&declaration_id);
                 }
             });
 
@@ -734,7 +739,7 @@ mod tests {
     fn invalidating_ancestor_chains_when_document_changes() {
         let mut context = GraphTest::new();
 
-        context.index_uri("file:///a.rb", "class Foo; include Bar; end");
+        context.index_uri("file:///a.rb", "class Foo; include Bar; def method_name; end; end");
         context.index_uri("file:///b.rb", "class Foo; end");
         context.index_uri("file:///c.rb", "module Bar; end");
         context.index_uri("file:///d.rb", "class Baz < Foo; end");
