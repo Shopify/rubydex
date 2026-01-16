@@ -1,28 +1,40 @@
-use assert_cmd::prelude::*;
+use assert_cmd::{assert::Assert, prelude::*};
 use predicates::prelude::*;
 use regex::Regex;
 use rubydex::test_utils::{normalize_indentation, with_context};
 use std::process::Command;
 
+fn rdx_cmd(args: &[&str]) -> Command {
+    let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
+    cmd.args(args);
+    cmd
+}
+
+fn rdx(args: &[&str]) -> Assert {
+    rdx_cmd(args).assert()
+}
+
 #[test]
 fn prints_help() {
-    let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
-    cmd.arg("--help");
-    cmd.assert()
+    rdx(&["--help"])
         .success()
         .stdout(predicate::str::contains("A Static Analysis Toolkit for Ruby"))
         .stdout(predicate::str::contains("Usage:"))
+        .stdout(predicate::str::contains("--stats"))
         .stdout(predicate::str::contains("--visualize"));
 }
 
 #[test]
 fn paths_argument_variants() {
-    let mut zero = Command::cargo_bin("rubydex_cli").unwrap();
-    zero.assert().success().stderr(predicate::str::is_empty());
+    rdx(&[])
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("Indexed 0 files"));
 
-    let mut one = Command::cargo_bin("rubydex_cli").unwrap();
-    one.arg(".");
-    one.assert().success().stderr(predicate::str::is_empty());
+    rdx(&["."])
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("Indexed 0 files"));
 
     with_context(|context| {
         context.write("dir1/file1.rb", "class Class1\nend\n");
@@ -30,15 +42,13 @@ fn paths_argument_variants() {
         context.write("dir2/file1.rb", "class Class3\nend\n");
         context.write("dir2/file2.rb", "class Class4\nend\n"); // not indexed
 
-        let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
-        cmd.args([
+        rdx(&[
             context.absolute_path_to("dir1").to_str().unwrap(),
             context.absolute_path_to("dir2/file1.rb").to_str().unwrap(),
-        ]);
-        cmd.assert()
-            .success()
-            .stderr(predicate::str::is_empty())
-            .stdout(predicate::str::contains("Indexed 3 files"))
+        ])
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("Indexed 3 files"));
     });
 }
 
@@ -48,15 +58,12 @@ fn prints_index_metrics() {
         context.write("file1.rb", "class FirstClass\nend\n");
         context.write("file2.rb", "module SecondModule\nend\n");
 
-        let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
-        cmd.arg(context.absolute_path());
-        let output = cmd.output().unwrap();
-
-        assert!(output.status.success());
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("Indexed 2 files"));
-        assert!(stdout.contains("Found 5 names"));
-        assert!(stdout.contains("Found 2 definitions"));
+        rdx(&[context.absolute_path().to_str().unwrap()])
+            .success()
+            .stderr(predicate::str::is_empty())
+            .stdout(predicate::str::contains("Indexed 2 files"))
+            .stdout(predicate::str::contains("Found 5 names"))
+            .stdout(predicate::str::contains("Found 2 definitions"));
     });
 }
 
@@ -73,10 +80,10 @@ fn visualize_simple_class() {
     with_context(|context| {
         context.write("simple.rb", "class SimpleClass\nend\n");
 
-        let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
-        cmd.args([context.absolute_path().to_str().unwrap(), "--visualize"]);
+        let output = rdx_cmd(&[context.absolute_path().to_str().unwrap(), "--visualize"])
+            .output()
+            .unwrap();
 
-        let output = cmd.output().unwrap();
         assert!(output.status.success());
 
         let stdout = String::from_utf8_lossy(&output.stdout);
