@@ -1457,6 +1457,53 @@ mod tests {
     use crate::model::ids::UriId;
     use crate::test_utils::GraphTest;
 
+    macro_rules! assert_constant_alias_target_eq {
+        ($context:expr, $alias_name:expr, $target_name:expr) => {{
+            let decl_id = DeclarationId::from($alias_name);
+            let target = $context
+                .graph()
+                .alias_targets(&decl_id)
+                .and_then(|t| t.first().copied());
+            assert_eq!(
+                target,
+                Some(DeclarationId::from($target_name)),
+                "Expected alias '{}' to have primary target '{}'",
+                $alias_name,
+                $target_name
+            );
+        }};
+    }
+
+    macro_rules! assert_no_constant_alias_target {
+        ($context:expr, $alias_name:expr) => {{
+            let decl_id = DeclarationId::from($alias_name);
+            let targets = $context.graph().alias_targets(&decl_id).unwrap_or_default();
+            assert!(
+                targets.is_empty(),
+                "Expected no alias target for '{}', but found {:?}",
+                $alias_name,
+                targets
+            );
+        }};
+    }
+
+    macro_rules! assert_alias_targets_contain {
+        ($context:expr, $alias_name:expr, $($target_name:expr),+ $(,)?) => {{
+            let decl_id = DeclarationId::from($alias_name);
+            let targets = $context.graph().alias_targets(&decl_id).unwrap_or_default();
+            $(
+                let expected_id = DeclarationId::from($target_name);
+                assert!(
+                    targets.contains(&expected_id),
+                    "Expected alias '{}' to contain target '{}', but targets were {:?}",
+                    $alias_name,
+                    $target_name,
+                    targets
+                );
+            )+
+        }};
+    }
+
     /// Asserts that a declaration has a constant reference at the specified location
     ///
     /// This macro:
@@ -1677,19 +1724,6 @@ mod tests {
         }};
     }
 
-    fn get_alias_targets(context: &GraphTest, alias_name: &str) -> Vec<DeclarationId> {
-        let decl_id = DeclarationId::from(alias_name);
-        context.graph().alias_targets(&decl_id).unwrap_or_default()
-    }
-
-    fn get_constant_alias_target(context: &GraphTest, alias_name: &str) -> Option<DeclarationId> {
-        get_alias_targets(context, alias_name).first().copied()
-    }
-
-    fn has_constant_alias_target(context: &GraphTest, alias_name: &str) -> bool {
-        !get_alias_targets(context, alias_name).is_empty()
-    }
-
     #[test]
     fn resolving_top_level_references() {
         let mut context = GraphTest::new();
@@ -1814,7 +1848,7 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_no_diagnostics!(&context);
 
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_members(foo, &["Bar", "Baz"]);
@@ -3691,9 +3725,9 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        let foo_decl_id = DeclarationId::from("Foo");
-        assert_eq!(get_constant_alias_target(&context, "ALIAS"), Some(foo_decl_id));
+        assert_constant_alias_target_eq!(context, "ALIAS", "Foo");
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:5:7-5:12");
     }
 
@@ -3713,9 +3747,9 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        let foo_bar_decl_id = DeclarationId::from("Foo::Bar");
-        assert_eq!(get_constant_alias_target(&context, "ALIAS"), Some(foo_bar_decl_id));
+        assert_constant_alias_target_eq!(context, "ALIAS", "Foo::Bar");
         assert_constant_reference_to!(context, "Foo::Bar::CONST", "file:///foo.rb:7:7-7:12");
     }
 
@@ -3735,9 +3769,9 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context);
 
-        let foo_decl_id = DeclarationId::from("Foo");
-        assert_eq!(get_constant_alias_target(&context, "Bar::MyFoo"), Some(foo_decl_id));
+        assert_constant_alias_target_eq!(context, "Bar::MyFoo", "Foo");
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:9-6:14");
     }
 
@@ -3758,6 +3792,7 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:8:7-8:12");
     }
@@ -3777,12 +3812,10 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        let alias1_decl_id = DeclarationId::from("ALIAS1");
-        let foo_decl_id = DeclarationId::from("Foo");
-
-        assert_eq!(get_constant_alias_target(&context, "ALIAS1"), Some(foo_decl_id));
-        assert_eq!(get_constant_alias_target(&context, "ALIAS2"), Some(alias1_decl_id));
+        assert_constant_alias_target_eq!(context, "ALIAS1", "Foo");
+        assert_constant_alias_target_eq!(context, "ALIAS2", "ALIAS1");
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:8-6:13");
     }
 
@@ -3796,12 +3829,10 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context);
 
-        assert_eq!(
-            get_constant_alias_target(&context, "ALIAS_2"),
-            Some(DeclarationId::from("ALIAS_1"))
-        );
-        assert!(!has_constant_alias_target(&context, "ALIAS_1"));
+        assert_constant_alias_target_eq!(context, "ALIAS_2", "ALIAS_1");
+        assert_no_constant_alias_target!(context, "ALIAS_1");
     }
 
     #[test]
@@ -3815,11 +3846,9 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        assert_eq!(
-            get_constant_alias_target(&context, "ALIAS"),
-            Some(DeclarationId::from("VALUE"))
-        );
+        assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
 
         // NOPE can't be created because ALIAS points to a value constant, not a namespace
         let read_lock = context.graph().declarations();
@@ -3839,9 +3868,9 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        let foo_decl_id = DeclarationId::from("Foo");
-        assert_eq!(get_constant_alias_target(&context, "ALIAS"), Some(foo_decl_id));
+        assert_constant_alias_target_eq!(context, "ALIAS", "Foo");
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:4:7-4:12");
     }
 
@@ -3860,15 +3889,10 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context);
 
-        let bar_const_decl_id = DeclarationId::from("Bar::CONST");
-        let foo_const_decl_id = DeclarationId::from("Foo::CONST");
-
-        assert_eq!(get_constant_alias_target(&context, "BAZ"), Some(bar_const_decl_id));
-        assert_eq!(
-            get_constant_alias_target(&context, "Bar::CONST"),
-            Some(foo_const_decl_id)
-        );
+        assert_constant_alias_target_eq!(context, "BAZ", "Bar::CONST");
+        assert_constant_alias_target_eq!(context, "Bar::CONST", "Foo::CONST");
     }
 
     #[test]
@@ -3882,19 +3906,11 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context);
 
-        let a_decl_id = DeclarationId::from("A");
-        let b_decl_id = DeclarationId::from("B");
-        let c_decl_id = DeclarationId::from("C");
-
-        let read_lock = context.graph().declarations();
-        assert!(read_lock.contains_key(&a_decl_id));
-        assert!(read_lock.contains_key(&b_decl_id));
-        assert!(read_lock.contains_key(&c_decl_id));
-
-        assert_eq!(get_constant_alias_target(&context, "A"), Some(b_decl_id));
-        assert_eq!(get_constant_alias_target(&context, "B"), Some(c_decl_id));
-        assert_eq!(get_constant_alias_target(&context, "C"), Some(a_decl_id));
+        assert_constant_alias_target_eq!(context, "A", "B");
+        assert_constant_alias_target_eq!(context, "B", "C");
+        assert_constant_alias_target_eq!(context, "C", "A");
     }
 
     #[test]
@@ -3913,6 +3929,7 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context);
 
         let read_lock = context.graph().declarations();
         assert!(read_lock.contains_key(&DeclarationId::from("A::X")));
@@ -3947,15 +3964,10 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        assert_eq!(
-            get_constant_alias_target(&context, "Left::RIGHT_REF"),
-            Some(DeclarationId::from("Right"))
-        );
-        assert_eq!(
-            get_constant_alias_target(&context, "Right::LEFT_REF"),
-            Some(DeclarationId::from("Left"))
-        );
+        assert_constant_alias_target_eq!(context, "Left::RIGHT_REF", "Right");
+        assert_constant_alias_target_eq!(context, "Right::LEFT_REF", "Left");
 
         // Left::RIGHT_REF::Deep::VALUE
         assert_constant_reference_to!(context, "Right::Deep", "file:///foo.rb:15:17-15:21");
@@ -3984,11 +3996,9 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        assert_eq!(
-            get_constant_alias_target(&context, "M::SELF_REF"),
-            Some(DeclarationId::from("M"))
-        );
+        assert_constant_alias_target_eq!(context, "M::SELF_REF", "M");
 
         let read_lock = context.graph().declarations();
         let m_thing_const = read_lock.get(&DeclarationId::from("M::Thing::CONST")).unwrap();
@@ -4030,15 +4040,10 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        assert_eq!(
-            get_constant_alias_target(&context, "ALIAS"),
-            Some(DeclarationId::from("Outer"))
-        );
-        assert_eq!(
-            get_constant_alias_target(&context, "Outer::NESTED"),
-            Some(DeclarationId::from("Outer::Inner"))
-        );
+        assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
+        assert_constant_alias_target_eq!(context, "Outer::NESTED", "Outer::Inner");
 
         // ADDED_CONST should be in Outer::Inner (the resolved target)
         let read_lock = context.graph().declarations();
@@ -4070,11 +4075,9 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        assert_eq!(
-            get_constant_alias_target(&context, "ALIAS"),
-            Some(DeclarationId::from("Outer"))
-        );
+        assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
 
         // NewClass should be declared under Outer, not ALIAS
         let read_lock = context.graph().declarations();
@@ -4105,16 +4108,14 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context);
 
         // FOO should have 2 definitions pointing to different targets
         let read_lock = context.graph().declarations();
         let foo_decl = read_lock.get(&DeclarationId::from("FOO")).unwrap();
         assert_eq!(foo_decl.definitions().len(), 2);
 
-        let targets = get_alias_targets(&context, "FOO");
-        assert_eq!(targets.len(), 2);
-        assert!(targets.contains(&DeclarationId::from("A")));
-        assert!(targets.contains(&DeclarationId::from("B")));
+        assert_alias_targets_contain!(context, "FOO", "A", "B");
     }
 
     #[test]
@@ -4143,6 +4144,7 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         // FOO::CONST_A should resolve to A::CONST_A
         assert_constant_reference_to!(context, "A::CONST_A", "file:///usage.rb:0:5-0:12");
@@ -4164,11 +4166,10 @@ mod tests {
         context.index_uri("file:///b.rb", "ALIAS = ALIAS");
         context.index_uri("file:///usage.rb", "ALIAS::CONST");
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         // ALIAS should have two targets: A and ALIAS (self-reference)
-        let targets = get_alias_targets(&context, "ALIAS");
-        assert!(targets.contains(&DeclarationId::from("A")));
-        assert!(targets.contains(&DeclarationId::from("ALIAS")));
+        assert_alias_targets_contain!(context, "ALIAS", "A", "ALIAS");
 
         // ALIAS::CONST should still resolve to A::CONST through the valid path
         assert_constant_reference_to!(context, "A::CONST", "file:///usage.rb:0:7-0:12");
@@ -4188,15 +4189,10 @@ mod tests {
         });
         context.index_uri("file:///usage.rb", "ALIAS2::CONST");
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        assert_eq!(
-            get_constant_alias_target(&context, "ALIAS1"),
-            Some(DeclarationId::from("Foo"))
-        );
-        assert_eq!(
-            get_constant_alias_target(&context, "ALIAS2"),
-            Some(DeclarationId::from("ALIAS1"))
-        );
+        assert_constant_alias_target_eq!(context, "ALIAS1", "Foo");
+        assert_constant_alias_target_eq!(context, "ALIAS2", "ALIAS1");
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:0:8-0:13");
     }
@@ -4214,6 +4210,7 @@ mod tests {
         });
         context.index_uri("file:///usage.rb", "ALIAS::CONST");
         context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:0:7-0:12");
     }
@@ -4230,6 +4227,7 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context);
     }
 
     #[test]
@@ -4257,6 +4255,7 @@ mod tests {
             "
         });
         context.resolve();
+        assert_no_diagnostics!(&context);
 
         let declarations = context.graph().declarations();
         let foo_decl = declarations.get(&DeclarationId::from("Foo")).expect("Foo should exist");

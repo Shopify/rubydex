@@ -211,11 +211,7 @@ impl Graph {
 
         let mut targets = Vec::new();
         for definition_id in declaration.definitions() {
-            let Some(definition) = self.definitions.get(definition_id) else {
-                continue;
-            };
-
-            let Definition::ConstantAlias(alias_def) = definition else {
+            let Some(Definition::ConstantAlias(alias_def)) = self.definitions.get(definition_id) else {
                 continue;
             };
 

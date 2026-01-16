@@ -5207,6 +5207,8 @@ mod tests {
             assert_name_id_to_string_eq!(&context, "B", def);
             assert_name_path_eq!(&context, "Target", def.target_name_id());
         });
+
+        assert_constant_references_eq!(&context, vec!["Target"]);
     }
 
     #[test]
