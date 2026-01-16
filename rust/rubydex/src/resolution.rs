@@ -3851,8 +3851,12 @@ mod tests {
         assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
 
         // NOPE can't be created because ALIAS points to a value constant, not a namespace
-        let read_lock = context.graph().declarations();
-        assert!(!read_lock.contains_key(&DeclarationId::from("VALUE::NOPE")));
+        assert!(
+            !context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("VALUE::NOPE"))
+        );
     }
 
     #[test]
@@ -3931,12 +3935,26 @@ mod tests {
         context.resolve();
         assert_no_diagnostics!(&context);
 
-        let read_lock = context.graph().declarations();
-        assert!(read_lock.contains_key(&DeclarationId::from("A::X")));
-        assert!(read_lock.contains_key(&DeclarationId::from("B::Y")));
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("A::X"))
+        );
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("B::Y"))
+        );
 
         // SOMETHING can't be created because the circular alias can't resolve to a namespace
-        assert!(!read_lock.contains_key(&DeclarationId::from("A::X::SOMETHING")));
+        assert!(
+            !context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("A::X::SOMETHING"))
+        );
     }
 
     #[test]
@@ -4000,9 +4018,16 @@ mod tests {
 
         assert_constant_alias_target_eq!(context, "M::SELF_REF", "M");
 
-        let read_lock = context.graph().declarations();
-        let m_thing_const = read_lock.get(&DeclarationId::from("M::Thing::CONST")).unwrap();
-        let m_thing = read_lock.get(&DeclarationId::from("M::Thing")).unwrap();
+        let m_thing_const = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("M::Thing::CONST"))
+            .unwrap();
+        let m_thing = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("M::Thing"))
+            .unwrap();
 
         // All 3 paths resolve to M::Thing::CONST
         assert_eq!(m_thing_const.references().len(), 3);
@@ -4046,10 +4071,22 @@ mod tests {
         assert_constant_alias_target_eq!(context, "Outer::NESTED", "Outer::Inner");
 
         // ADDED_CONST should be in Outer::Inner (the resolved target)
-        let read_lock = context.graph().declarations();
-        assert!(read_lock.contains_key(&DeclarationId::from("Outer::Inner::ADDED_CONST")));
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Outer::Inner::ADDED_CONST"))
+        );
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Outer::Inner::ADDED_CONST"))
+        );
 
-        let added_const = read_lock
+        let added_const = context
+            .graph()
+            .declarations()
             .get(&DeclarationId::from("Outer::Inner::ADDED_CONST"))
             .unwrap();
         assert_eq!(added_const.references().len(), 1);
@@ -4080,9 +4117,18 @@ mod tests {
         assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
 
         // NewClass should be declared under Outer, not ALIAS
-        let read_lock = context.graph().declarations();
-        assert!(read_lock.contains_key(&DeclarationId::from("Outer::NewClass")));
-        assert!(read_lock.contains_key(&DeclarationId::from("Outer::NewClass::CLASS_CONST")));
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Outer::NewClass"))
+        );
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Outer::NewClass::CLASS_CONST"))
+        );
 
         // Outer::NewClass::CLASS_CONST
         assert_constant_reference_to!(context, "Outer::NewClass", "file:///foo.rb:10:7-10:15");
@@ -4111,9 +4157,16 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // FOO should have 2 definitions pointing to different targets
-        let read_lock = context.graph().declarations();
-        let foo_decl = read_lock.get(&DeclarationId::from("FOO")).unwrap();
-        assert_eq!(foo_decl.definitions().len(), 2);
+        assert_eq!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("FOO"))
+                .unwrap()
+                .definitions()
+                .len(),
+            2
+        );
 
         assert_alias_targets_contain!(context, "FOO", "A", "B");
     }
