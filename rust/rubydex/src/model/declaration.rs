@@ -1,5 +1,3 @@
-use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
-
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
@@ -99,9 +97,9 @@ macro_rules! namespace_declaration {
             members: IdentityHashMap<StringId, DeclarationId>,
             /// The linearized ancestor chain for this declaration. These are the other declarations that this
             /// declaration inherits from
-            ancestors: RwLock<Ancestors>,
+            ancestors: Ancestors,
             /// The set of declarations that inherit from this declaration
-            descendants: Mutex<IdentityHashSet<DeclarationId>>,
+            descendants: IdentityHashSet<DeclarationId>,
             /// The singleton class associated with this declaration
             singleton_class_id: Option<DeclarationId>,
         }
@@ -115,8 +113,8 @@ macro_rules! namespace_declaration {
                     members: IdentityHashMap::default(),
                     references: IdentityHashSet::default(),
                     owner_id,
-                    ancestors: RwLock::new(Ancestors::Partial(Vec::new())),
-                    descendants: Mutex::new(IdentityHashSet::default()),
+                    ancestors: Ancestors::Partial(Vec::new()),
+                    descendants: IdentityHashSet::default(),
                     singleton_class_id: None,
                 }
             }
@@ -153,38 +151,42 @@ macro_rules! namespace_declaration {
                 self.members.get(string_id)
             }
 
-            pub fn set_ancestors(&self, ancestors: Ancestors) {
-                let mut ancestors_lock = self.ancestors.write().unwrap();
-                *ancestors_lock = ancestors;
+            pub fn set_ancestors(&mut self, ancestors: Ancestors) {
+                self.ancestors = ancestors;
             }
 
-            fn ancestors(&self) -> RwLockReadGuard<'_, Ancestors> {
-                self.ancestors.read().unwrap()
+            pub fn ancestors(&self) -> &Ancestors {
+                &self.ancestors
+            }
+
+            pub fn ancestors_mut(&mut self) -> &mut Ancestors {
+                &mut self.ancestors
             }
 
             #[must_use]
             pub fn clone_ancestors(&self) -> Ancestors {
-                self.ancestors.read().unwrap().clone()
+                self.ancestors.clone()
             }
 
             #[must_use]
             pub fn has_complete_ancestors(&self) -> bool {
-                matches!(
-                    *self.ancestors.read().unwrap(),
-                    Ancestors::Complete(_) | Ancestors::Cyclic(_)
-                )
+                matches!(&self.ancestors, Ancestors::Complete(_) | Ancestors::Cyclic(_))
             }
 
-            pub fn add_descendant(&self, descendant_id: DeclarationId) {
-                self.descendants.lock().unwrap().insert(descendant_id);
+            pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
+                self.descendants.insert(descendant_id);
             }
 
-            fn remove_descendant(&self, descendant_id: &DeclarationId) {
-                self.descendants.lock().unwrap().remove(descendant_id);
+            fn remove_descendant(&mut self, descendant_id: &DeclarationId) {
+                self.descendants.remove(descendant_id);
             }
 
-            pub fn descendants(&self) -> MutexGuard<'_, IdentityHashSet<DeclarationId>> {
-                self.descendants.lock().unwrap()
+            pub fn clear_descendants(&mut self) {
+                self.descendants.clear();
+            }
+
+            pub fn descendants(&self) -> &IdentityHashSet<DeclarationId> {
+                &self.descendants
             }
         }
     };
@@ -379,7 +381,7 @@ impl Namespace {
         all_namespaces!(self, it => it.clone_ancestors())
     }
 
-    pub fn set_ancestors(&self, ancestors: Ancestors) {
+    pub fn set_ancestors(&mut self, ancestors: Ancestors) {
         all_namespaces!(self, it => it.set_ancestors(ancestors));
     }
 
@@ -388,11 +390,11 @@ impl Namespace {
         all_namespaces!(self, it => it.has_complete_ancestors())
     }
 
-    pub fn add_descendant(&self, descendant_id: DeclarationId) {
+    pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
         all_namespaces!(self, it => it.add_descendant(descendant_id));
     }
 
-    pub fn remove_descendant(&self, descendant_id: &DeclarationId) {
+    pub fn remove_descendant(&mut self, descendant_id: &DeclarationId) {
         all_namespaces!(self, it => it.remove_descendant(descendant_id));
     }
 
@@ -410,12 +412,12 @@ impl Namespace {
         all_namespaces!(self, it => it.descendants().iter().for_each(&mut f));
     }
 
-    pub fn clear_ancestors(&self) {
+    pub fn clear_ancestors(&mut self) {
         all_namespaces!(self, it => it.set_ancestors(Ancestors::Partial(vec![])));
     }
 
-    pub fn clear_descendants(&self) {
-        all_namespaces!(self, it => it.descendants().clear());
+    pub fn clear_descendants(&mut self) {
+        all_namespaces!(self, it => it.clear_descendants());
     }
 
     #[must_use]
