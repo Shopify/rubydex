@@ -9,6 +9,7 @@ extern VALUE cClassDefinition;
 extern VALUE cSingletonClassDefinition;
 extern VALUE cModuleDefinition;
 extern VALUE cConstantDefinition;
+extern VALUE cConstantAliasDefinition;
 extern VALUE cMethodDefinition;
 extern VALUE cAttrAccessorDefinition;
 extern VALUE cAttrReaderDefinition;

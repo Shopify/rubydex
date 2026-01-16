@@ -74,5 +74,7 @@ When necessary, commands can be executed for the Rust code.
 - `cargo run -- <directory> --visualize`: generates a DOT visualization of the graph
 - `cargo test`: runs Rust tests
 - `cargo test test_name`: runs a specific tests example
+- `cargo fmt`: auto formats the Rust code
+- `cargo clippy`: lints the Rust code
 - `bundle exec rake lint_rust`: lints the Rust code
 - `bundle exec rake format_rust`: auto formats the Rust code

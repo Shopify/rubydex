@@ -60,6 +60,7 @@ macro_rules! all_declarations {
             Declaration::Namespace(Namespace::Module($var)) => $expr,
             Declaration::Namespace(Namespace::SingletonClass($var)) => $expr,
             Declaration::Constant($var) => $expr,
+            Declaration::ConstantAlias($var) => $expr,
             Declaration::Method($var) => $expr,
             Declaration::GlobalVariable($var) => $expr,
             Declaration::InstanceVariable($var) => $expr,
@@ -220,6 +221,7 @@ macro_rules! simple_declaration {
 pub enum Declaration {
     Namespace(Namespace),
     Constant(Box<ConstantDeclaration>),
+    ConstantAlias(Box<ConstantAliasDeclaration>),
     Method(Box<MethodDeclaration>),
     GlobalVariable(Box<GlobalVariableDeclaration>),
     InstanceVariable(Box<InstanceVariableDeclaration>),
@@ -237,6 +239,7 @@ impl Declaration {
         match self {
             Declaration::Namespace(namespace) => namespace.kind(),
             Declaration::Constant(_) => "Constant",
+            Declaration::ConstantAlias(_) => "ConstantAlias",
             Declaration::Method(_) => "Method",
             Declaration::GlobalVariable(_) => "GlobalVariable",
             Declaration::InstanceVariable(_) => "InstanceVariable",
@@ -431,6 +434,7 @@ simple_declaration!(MethodDeclaration);
 simple_declaration!(GlobalVariableDeclaration);
 simple_declaration!(InstanceVariableDeclaration);
 simple_declaration!(ClassVariableDeclaration);
+simple_declaration!(ConstantAliasDeclaration);
 
 #[cfg(test)]
 mod tests {

@@ -125,6 +125,10 @@ impl Graph {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
             }
+            Definition::ConstantAlias(it) => {
+                let name = self.names.get(it.name_id()).unwrap();
+                name.str()
+            }
             Definition::GlobalVariable(it) => it.str_id(),
             Definition::InstanceVariable(it) => it.str_id(),
             Definition::ClassVariable(it) => it.str_id(),
@@ -188,6 +192,43 @@ impl Graph {
                 .filter_map(|id| self.definitions.get(id))
                 .collect(),
         )
+    }
+
+    /// Returns all target declaration IDs for a constant alias.
+    ///
+    /// A constant alias can have multiple definitions (e.g., conditional assignment in different files),
+    /// each potentially pointing to a different target. This method collects all resolved targets.
+    ///
+    /// Returns `None` if the declaration doesn't exist or is not a constant alias.
+    /// Returns `Some(vec![])` if no targets have been resolved yet.
+    #[must_use]
+    pub fn alias_targets(&self, declaration_id: &DeclarationId) -> Option<Vec<DeclarationId>> {
+        let declaration = self.declarations.get(declaration_id)?;
+
+        let Declaration::ConstantAlias(_) = declaration else {
+            return None;
+        };
+
+        let mut targets = Vec::new();
+        for definition_id in declaration.definitions() {
+            let Some(Definition::ConstantAlias(alias_def)) = self.definitions.get(definition_id) else {
+                continue;
+            };
+
+            let target_name_id = alias_def.target_name_id();
+            let Some(name_ref) = self.names.get(target_name_id) else {
+                continue;
+            };
+
+            if let NameRef::Resolved(resolved) = name_ref {
+                let target_id = *resolved.declaration_id();
+                if !targets.contains(&target_id) {
+                    targets.push(target_id);
+                }
+            }
+        }
+
+        Some(targets)
     }
 
     #[must_use]
