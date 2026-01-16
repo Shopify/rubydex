@@ -106,8 +106,8 @@ impl Definition {
     }
 
     #[must_use]
-    pub fn comments(&self) -> &Vec<Comment> {
-        all_definitions!(self, it => &it.comments)
+    pub fn comments(&self) -> &[Comment] {
+        all_definitions!(self, it => it.comments())
     }
 
     #[must_use]
@@ -148,7 +148,7 @@ impl Definition {
 
     #[must_use]
     pub fn is_deprecated(&self) -> bool {
-        all_definitions!(self, it => it.flags.is_deprecated())
+        all_definitions!(self, it => it.flags().is_deprecated())
     }
 }
 
@@ -268,6 +268,11 @@ impl ClassDefinition {
     pub fn add_mixin(&mut self, mixin: Mixin) {
         self.mixins.push(mixin);
     }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
 }
 
 /// A singleton class definition created from `class << X` syntax.
@@ -371,6 +376,11 @@ impl SingletonClassDefinition {
     pub fn add_mixin(&mut self, mixin: Mixin) {
         self.mixins.push(mixin);
     }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
 }
 
 /// A module definition
@@ -461,6 +471,11 @@ impl ModuleDefinition {
     pub fn add_mixin(&mut self, mixin: Mixin) {
         self.mixins.push(mixin);
     }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
 }
 
 /// A constant definition
@@ -528,6 +543,11 @@ impl ConstantDefinition {
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
     }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
 }
 
 /// A constant alias definition
@@ -539,34 +559,16 @@ impl ConstantDefinition {
 /// ```
 #[derive(Debug)]
 pub struct ConstantAliasDefinition {
-    name_id: NameId,
+    alias_constant: ConstantDefinition,
     target_name_id: NameId,
-    uri_id: UriId,
-    offset: Offset,
-    comments: Vec<Comment>,
-    flags: DefinitionFlags,
-    lexical_nesting_id: Option<DefinitionId>,
 }
 
 impl ConstantAliasDefinition {
     #[must_use]
-    pub const fn new(
-        name_id: NameId,
-        target_name_id: NameId,
-        uri_id: UriId,
-        comments: Vec<Comment>,
-        offset: Offset,
-        lexical_nesting_id: Option<DefinitionId>,
-        flags: DefinitionFlags,
-    ) -> Self {
+    pub const fn new(target_name_id: NameId, alias_constant: ConstantDefinition) -> Self {
         Self {
-            name_id,
+            alias_constant,
             target_name_id,
-            uri_id,
-            offset,
-            comments,
-            flags,
-            lexical_nesting_id,
         }
     }
 
@@ -574,16 +576,16 @@ impl ConstantAliasDefinition {
     pub fn id(&self) -> DefinitionId {
         DefinitionId::from(&format!(
             "{}{}{}{}",
-            *self.uri_id,
-            self.offset.start(),
-            *self.name_id,
+            *self.alias_constant.uri_id(),
+            self.alias_constant.offset().start(),
+            *self.alias_constant.name_id(),
             *self.target_name_id,
         ))
     }
 
     #[must_use]
     pub fn name_id(&self) -> &NameId {
-        &self.name_id
+        self.alias_constant.name_id()
     }
 
     #[must_use]
@@ -593,22 +595,27 @@ impl ConstantAliasDefinition {
 
     #[must_use]
     pub fn uri_id(&self) -> &UriId {
-        &self.uri_id
+        self.alias_constant.uri_id()
     }
 
     #[must_use]
     pub fn offset(&self) -> &Offset {
-        &self.offset
+        self.alias_constant.offset()
     }
 
     #[must_use]
     pub fn comments(&self) -> &[Comment] {
-        &self.comments
+        self.alias_constant.comments()
     }
 
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
-        &self.lexical_nesting_id
+        self.alias_constant.lexical_nesting_id()
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        self.alias_constant.flags()
     }
 }
 
@@ -708,6 +715,11 @@ impl MethodDefinition {
     #[must_use]
     pub fn visibility(&self) -> &Visibility {
         &self.visibility
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
     }
 }
 
@@ -820,6 +832,11 @@ impl AttrAccessorDefinition {
     pub fn visibility(&self) -> &Visibility {
         &self.visibility
     }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
 }
 
 /// An attr reader definition
@@ -894,6 +911,11 @@ impl AttrReaderDefinition {
     #[must_use]
     pub fn visibility(&self) -> &Visibility {
         &self.visibility
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
     }
 }
 
@@ -970,6 +992,11 @@ impl AttrWriterDefinition {
     pub fn visibility(&self) -> &Visibility {
         &self.visibility
     }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
 }
 
 /// A global variable definition
@@ -1036,6 +1063,11 @@ impl GlobalVariableDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
     }
 }
 
@@ -1104,6 +1136,11 @@ impl InstanceVariableDefinition {
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
     }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
 }
 
 /// A class variable definition
@@ -1170,6 +1207,11 @@ impl ClassVariableDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
     }
 }
 
@@ -1246,6 +1288,11 @@ impl MethodAliasDefinition {
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
     }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
 }
 
 #[derive(Debug)]
@@ -1320,5 +1367,10 @@ impl GlobalVariableAliasDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
     }
 }
