@@ -1312,7 +1312,7 @@ impl<'a> Resolver<'a> {
     #[must_use]
     fn sorted_units(&self) -> (VecDeque<Unit>, Vec<DefinitionId>) {
         let estimated_length = self.graph.definitions().len() / 2;
-        let mut units = Vec::with_capacity(estimated_length);
+        let mut definitions = Vec::with_capacity(estimated_length);
         let mut others = Vec::with_capacity(estimated_length);
         let names = self.graph.names();
 
@@ -1321,31 +1321,31 @@ impl<'a> Resolver<'a> {
 
             match definition {
                 Definition::Class(def) => {
-                    units.push((
+                    definitions.push((
                         Unit::Definition(*id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::Module(def) => {
-                    units.push((
+                    definitions.push((
                         Unit::Definition(*id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::Constant(def) => {
-                    units.push((
+                    definitions.push((
                         Unit::Definition(*id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::ConstantAlias(def) => {
-                    units.push((
+                    definitions.push((
                         Unit::Definition(*id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::SingletonClass(def) => {
-                    units.push((
+                    definitions.push((
                         Unit::Definition(*id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
@@ -1356,23 +1356,37 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        for (id, constant_ref) in self.graph.constant_references() {
-            let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
-
-            units.push((
-                Unit::Reference(*id),
-                (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
-            ));
-        }
-
         // Sort namespaces based on their name complexity so that simpler names are always first
         // When the depth is the same, sort by URI and offset to maintain determinism
-        units.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+        definitions.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
+        let mut references = self
+            .graph
+            .constant_references()
+            .iter()
+            .map(|(id, constant_ref)| {
+                let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
+
+                (
+                    Unit::Reference(*id),
+                    (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // Sort constant references based on their name complexity so that simpler names are always first
+        references.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        });
+
+        let mut units = definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>();
+        units.extend(references.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+
         others.shrink_to_fit();
-        (units.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>(), others)
+
+        (units, others)
     }
 
     /// Returns the singleton parent ID for an attached object ID. A singleton class' parent depends on what the attached
@@ -1619,7 +1633,7 @@ mod tests {
                     );
                 }
                 Ancestors::Partial(_) => {
-                    panic!("Expected ancestors to be resolved");
+                    panic!("Expected ancestors to be resolved for {}", declaration.name());
                 }
             }
         };
@@ -4371,5 +4385,35 @@ mod tests {
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#@my_class_var")));
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>::<<Bar>>#other_singleton_m()")));
         assert!(declarations.contains_key(&DeclarationId::from("$other_global_var")));
+    }
+
+    #[test]
+    fn test_nested_same_names() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+              module Foo; end
+
+              module Bar
+                Foo
+
+                module Foo
+                  FOO = 42
+                end
+              end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        // FIXME: this is wrong, the reference is not to `Bar::Foo`, but to `Foo`
+        assert_constant_reference_to!(context, "Bar::Foo", "file:///foo.rb:3:2-3:5");
+
+        assert_ancestors_eq!(context, "Foo", &["Foo"]);
+        assert_ancestors_eq!(context, "Bar::Foo", &["Bar::Foo"]);
+
+        assert_no_members!(context, "Foo");
+        assert_members_eq!(context, "Bar::Foo", vec!["FOO"]);
     }
 }
