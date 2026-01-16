@@ -21,7 +21,8 @@ fn prints_help() {
         .stdout(predicate::str::contains("A Static Analysis Toolkit for Ruby"))
         .stdout(predicate::str::contains("Usage:"))
         .stdout(predicate::str::contains("--stats"))
-        .stdout(predicate::str::contains("--visualize"));
+        .stdout(predicate::str::contains("--visualize"))
+        .stdout(predicate::str::contains("--stop-after"));
 }
 
 #[test]
@@ -111,5 +112,56 @@ fn visualize_simple_class() {
         });
 
         assert_eq!(normalized, expected);
+    });
+}
+
+#[test]
+fn stop_after() {
+    with_context(|context| {
+        context.write("file1.rb", "class Class1\nend\n");
+        context.write("file2.rb", "class Class2\nend\n");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--stop-after",
+            "listing",
+            "--stats",
+        ])
+        .success()
+        .stdout(predicate::str::contains("Listing"))
+        .stdout(predicate::str::contains("Indexing").not())
+        .stdout(predicate::str::contains("Resolution").not())
+        .stdout(predicate::str::contains("Querying").not());
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--stop-after",
+            "indexing",
+            "--stats",
+        ])
+        .success()
+        .stdout(predicate::str::contains("Listing"))
+        .stdout(predicate::str::contains("Indexing"))
+        .stdout(predicate::str::contains("Resolution").not())
+        .stdout(predicate::str::contains("Querying").not());
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--stop-after",
+            "resolution",
+            "--stats",
+        ])
+        .success()
+        .stdout(predicate::str::contains("Listing"))
+        .stdout(predicate::str::contains("Indexing"))
+        .stdout(predicate::str::contains("Resolution"))
+        .stdout(predicate::str::contains("Querying").not());
+
+        rdx(&[context.absolute_path().to_str().unwrap(), "--stats"])
+            .success()
+            .stdout(predicate::str::contains("Listing"))
+            .stdout(predicate::str::contains("Indexing"))
+            .stdout(predicate::str::contains("Resolution"))
+            .stdout(predicate::str::contains("Querying"));
     });
 }
