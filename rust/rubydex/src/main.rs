@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::mem;
 
 use rubydex::{
@@ -19,11 +19,30 @@ struct Args {
     #[arg(value_name = "PATHS", default_value = ".")]
     paths: Vec<String>,
 
+    #[arg(long = "stop-after", help = "Stop after the given stage")]
+    stop_after: Option<StopAfter>,
+
     #[arg(long = "visualize")]
     visualize: bool,
 
     #[arg(long = "stats", help = "Show detailed performance statistics")]
     stats: bool,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+enum StopAfter {
+    Listing,
+    Indexing,
+    Resolution,
+}
+
+fn exit(print_stats: bool) {
+    if print_stats {
+        Timer::print_breakdown();
+        MemoryStats::print_memory_usage();
+    }
+
+    std::process::exit(0);
 }
 
 fn main() {
@@ -33,11 +52,19 @@ fn main() {
         Timer::set_global_timer(Timer::new());
     }
 
+    // Listing
+
     let (file_paths, errors) = time_it!(listing, { listing::collect_file_paths(args.paths) });
 
     for error in errors {
         eprintln!("{error}");
     }
+
+    if let Some(StopAfter::Listing) = args.stop_after {
+        return exit(args.stats);
+    }
+
+    // Indexing
 
     let mut graph = Graph::new();
     let errors = time_it!(indexing, { indexing::index_files(&mut graph, file_paths) });
@@ -46,10 +73,22 @@ fn main() {
         eprintln!("{error}");
     }
 
+    if let Some(StopAfter::Indexing) = args.stop_after {
+        return exit(args.stats);
+    }
+
+    // Resolution
+
     time_it!(resolution, {
         let mut resolver = Resolver::new(&mut graph);
         resolver.resolve_all();
     });
+
+    if let Some(StopAfter::Resolution) = args.stop_after {
+        return exit(args.stats);
+    }
+
+    // Querying
 
     if args.stats {
         time_it!(querying, {
