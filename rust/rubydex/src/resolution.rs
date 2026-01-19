@@ -324,9 +324,14 @@ impl<'a> Resolver<'a> {
                 }
                 Definition::GlobalVariable(var) => {
                     let owner_id = *OBJECT_ID;
-                    self.create_declaration(*var.str_id(), id, owner_id, |name| {
+                    let str_id = *var.str_id();
+                    let name = self.graph.strings().get(&str_id).unwrap().clone();
+                    let declaration_id = DeclarationId::from(&name);
+
+                    self.graph.add_declaration(declaration_id, id, || {
                         Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, owner_id)))
                     });
+                    self.graph.add_member(&owner_id, declaration_id, str_id);
                 }
                 Definition::InstanceVariable(var) => {
                     let str_id = *var.str_id();
@@ -4368,5 +4373,75 @@ mod tests {
                 .get(&DeclarationId::from("Foo#Array()"))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn fully_qualified_names_are_unique() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar
+                CONST = 1
+                @class_ivar = 2
+
+                attr_reader :baz
+                attr_writer :qux
+                attr_accessor :zip
+
+                def instance_m
+                  @@class_var = 3
+                end
+
+                def self.singleton_m
+                  $global_var = 4
+                end
+
+                def Foo.another_singleton_m; end
+
+                class << self
+                  OTHER_CONST = 5
+                  @other_class_ivar = 6
+                  @@other_class_var = 7
+
+                  def other_instance_m
+                    @my_class_var = 8
+                  end
+
+                  def self.other_singleton_m
+                    $other_global_var = 9
+                  end
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        let declarations = context.graph().declarations();
+
+        // In the same order of appearence
+        assert!(declarations.contains_key(&DeclarationId::from("Foo")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::CONST")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#@class_ivar")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#baz()")));
+        // TODO: needs the fix for attributes
+        // assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#qux=()")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#zip()")));
+        // TODO: needs the fix for attributes
+        // assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#zip=()")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#instance_m()")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#@@class_var")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#singleton_m()")));
+        assert!(declarations.contains_key(&DeclarationId::from("$global_var")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::<Foo>#another_singleton_m()")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>::OTHER_CONST")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>::<<Bar>>#@other_class_ivar")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#@@other_class_var")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#other_instance_m()")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#@my_class_var")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>::<<Bar>>#other_singleton_m()")));
+        assert!(declarations.contains_key(&DeclarationId::from("$other_global_var")));
     }
 }
