@@ -565,7 +565,7 @@ impl<'a> Resolver<'a> {
             // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
             // and `Module.new`, which now seem like constants, but are actually namespaces
             if !matches!(attached_decl, Declaration::Constant(_) | Declaration::ConstantAlias(_))
-                && let Some(singleton_id) = Self::singleton_class(attached_decl)
+                && let Some(singleton_id) = attached_decl.as_namespace().unwrap().singleton_class()
             {
                 return *singleton_id;
             }
@@ -580,7 +580,13 @@ impl<'a> Resolver<'a> {
             self.graph.declarations().get(&attached_id).unwrap(),
             Declaration::Constant(_) | Declaration::ConstantAlias(_)
         ) {
-            self.set_singleton_class_id(attached_id, decl_id);
+            self.graph
+                .declarations_mut()
+                .get_mut(&attached_id)
+                .unwrap()
+                .as_namespace_mut()
+                .unwrap()
+                .set_singleton_class_id(decl_id);
         }
 
         self.graph.declarations_mut().insert(
@@ -626,7 +632,7 @@ impl<'a> Resolver<'a> {
 
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
             // again
-            if Self::has_complete_ancestors(declaration) {
+            if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().ancestors();
                 self.propagate_descendants(&mut context.descendants, &cached);
                 context.descendants.remove(&declaration_id);
@@ -643,7 +649,10 @@ impl<'a> Resolver<'a> {
                 } else {
                     Ancestors::Cyclic(vec![])
                 };
-                Self::set_ancestors(declaration, estimated_ancestors.clone());
+                declaration
+                    .as_namespace()
+                    .unwrap()
+                    .set_ancestors(estimated_ancestors.clone());
                 context.descendants.remove(&declaration_id);
                 return estimated_ancestors;
             }
@@ -651,7 +660,13 @@ impl<'a> Resolver<'a> {
             // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
             // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
             for descendant in &context.descendants {
-                self.add_descendant(declaration_id, *descendant);
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&declaration_id)
+                    .unwrap()
+                    .as_namespace_mut()
+                    .unwrap()
+                    .add_descendant(*descendant);
             }
         }
 
@@ -706,7 +721,13 @@ impl<'a> Resolver<'a> {
         } else {
             Ancestors::Complete(ancestors)
         };
-        Self::set_ancestors(self.graph.declarations().get(&declaration_id).unwrap(), result.clone());
+        self.graph
+            .declarations_mut()
+            .get_mut(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .set_ancestors(result.clone());
 
         context.descendants.remove(&declaration_id);
         result
@@ -872,7 +893,13 @@ impl<'a> Resolver<'a> {
             for ancestor in cached {
                 if let Ancestor::Complete(ancestor_id) = ancestor {
                     for descendant in descendants.iter() {
-                        self.add_descendant(*ancestor_id, *descendant);
+                        self.graph
+                            .declarations_mut()
+                            .get_mut(ancestor_id)
+                            .unwrap()
+                            .as_namespace_mut()
+                            .unwrap()
+                            .add_descendant(*descendant);
                     }
                 }
             }
@@ -912,7 +939,13 @@ impl<'a> Resolver<'a> {
                 let declaration_id = DeclarationId::from(&fully_qualified_name);
 
                 if singleton {
-                    self.set_singleton_class_id(owner_id, declaration_id);
+                    self.graph
+                        .declarations_mut()
+                        .get_mut(&owner_id)
+                        .unwrap()
+                        .as_namespace_mut()
+                        .unwrap()
+                        .set_singleton_class_id(declaration_id);
                 } else {
                     self.graph.add_member(&owner_id, declaration_id, str_id);
                 }
@@ -1157,8 +1190,14 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .find_map(|ancestor_id| {
                     if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        let declaration = self.graph.declarations().get(ancestor_id).unwrap();
-                        Self::member(declaration, str_id).map(|id| Outcome::Resolved(*id, None))
+                        self.graph
+                            .declarations()
+                            .get(ancestor_id)
+                            .unwrap()
+                            .as_namespace()
+                            .unwrap()
+                            .member(&str_id)
+                            .map(|id| Outcome::Resolved(*id, None))
                     } else {
                         None
                     }
@@ -1168,8 +1207,14 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .find_map(|ancestor_id| {
                     if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        let declaration = self.graph.declarations().get(ancestor_id).unwrap();
-                        Self::member(declaration, str_id).map(|id| Outcome::Resolved(*id, Some(declaration_id)))
+                        self.graph
+                            .declarations()
+                            .get(ancestor_id)
+                            .unwrap()
+                            .as_namespace()
+                            .unwrap()
+                            .member(&str_id)
+                            .map(|id| Outcome::Resolved(*id, Some(declaration_id)))
                     } else {
                         None
                     }
@@ -1186,7 +1231,7 @@ impl<'a> Resolver<'a> {
             if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(nesting_id).unwrap() {
                 if let Some(declaration) = self.graph.declarations().get(nesting_name_ref.declaration_id())
                     && !matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
-                    && let Some(member) = Self::member(declaration, str_id)
+                    && let Some(member) = declaration.as_namespace().unwrap().member(&str_id)
                 {
                     return Outcome::Resolved(*member, None);
                 }
@@ -1202,7 +1247,15 @@ impl<'a> Resolver<'a> {
 
     /// Look for the constant at the top level (member of Object)
     fn search_top_level(&self, str_id: StringId) -> Outcome {
-        match Self::member(self.graph.declarations().get(&OBJECT_ID).unwrap(), str_id) {
+        match self
+            .graph
+            .declarations()
+            .get(&OBJECT_ID)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .member(&str_id)
+        {
             Some(member_id) => Outcome::Resolved(*member_id, None),
             None => Outcome::Unresolved(None),
         }
@@ -1399,33 +1452,6 @@ impl<'a> Resolver<'a> {
         if partial { result.to_partial() } else { result }
     }
 
-    fn add_descendant(&mut self, declaration_id: DeclarationId, descendant_id: DeclarationId) {
-        match self.graph.declarations_mut().get_mut(&declaration_id).unwrap() {
-            Declaration::Namespace(Namespace::Class(class)) => class.add_descendant(descendant_id),
-            Declaration::Namespace(Namespace::Module(module)) => module.add_descendant(descendant_id),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.add_descendant(descendant_id),
-            _ => panic!("Tried to add descendant for a declaration that isn't a namespace"),
-        }
-    }
-
-    fn has_complete_ancestors(declaration: &Declaration) -> bool {
-        match declaration {
-            Declaration::Namespace(Namespace::Class(class)) => class.has_complete_ancestors(),
-            Declaration::Namespace(Namespace::Module(module)) => module.has_complete_ancestors(),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.has_complete_ancestors(),
-            _ => panic!("Tried to check complete ancestors for a declaration that isn't a namespace"),
-        }
-    }
-
-    fn set_ancestors(declaration: &Declaration, ancestors: Ancestors) {
-        match declaration {
-            Declaration::Namespace(Namespace::Class(class)) => class.set_ancestors(ancestors),
-            Declaration::Namespace(Namespace::Module(module)) => module.set_ancestors(ancestors),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.set_ancestors(ancestors),
-            _ => panic!("Tried to set ancestors for a declaration that isn't a namespace"),
-        }
-    }
-
     fn mixins_of(&self, definition_id: DefinitionId) -> Option<Vec<Mixin>> {
         let definition = self.graph.definitions().get(&definition_id).unwrap();
 
@@ -1434,38 +1460,6 @@ impl<'a> Resolver<'a> {
             Definition::SingletonClass(class) => Some(class.mixins().to_vec()),
             Definition::Module(module) => Some(module.mixins().to_vec()),
             _ => None,
-        }
-    }
-
-    /// # Panics
-    ///
-    /// Panics if the declaration is not a namespace
-    #[must_use]
-    fn member(declaration: &Declaration, str_id: StringId) -> Option<&DeclarationId> {
-        match declaration {
-            Declaration::Namespace(Namespace::Class(class)) => class.get_member(&str_id),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.get_member(&str_id),
-            Declaration::Namespace(Namespace::Module(module)) => module.get_member(&str_id),
-            _ => panic!("Tried to get member for a declaration that isn't a namespace"),
-        }
-    }
-
-    #[must_use]
-    fn singleton_class(declaration: &Declaration) -> Option<&DeclarationId> {
-        match declaration {
-            Declaration::Namespace(Namespace::Class(class)) => class.singleton_class_id(),
-            Declaration::Namespace(Namespace::Module(module)) => module.singleton_class_id(),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.singleton_class_id(),
-            _ => panic!("Tried to get singleton class ID for a declaration that isn't a namespace or a constant"),
-        }
-    }
-
-    fn set_singleton_class_id(&mut self, declaration_id: DeclarationId, id: DeclarationId) {
-        match self.graph.declarations_mut().get_mut(&declaration_id).unwrap() {
-            Declaration::Namespace(Namespace::Class(class)) => class.set_singleton_class_id(id),
-            Declaration::Namespace(Namespace::Module(module)) => module.set_singleton_class_id(id),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.set_singleton_class_id(id),
-            _ => panic!("Tried to set singleton class ID for a declaration that isn't a namespace"),
         }
     }
 }
@@ -1665,41 +1659,95 @@ mod tests {
         };
     }
 
-    fn assert_members(decl: &Declaration, members: &[&str]) {
-        let actual_members = match decl {
-            Declaration::Namespace(Namespace::Class(class)) => class.members(),
-            Declaration::Namespace(Namespace::Module(module)) => module.members(),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.members(),
-            _ => panic!("Tried to assert members for a declaration that isn't a namespace"),
+    macro_rules! assert_members_eq {
+        ($context:expr, $declaration_id:expr, $expected_members:expr) => {
+            let mut actual_members = $context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from($declaration_id))
+                .unwrap()
+                .as_namespace()
+                .unwrap()
+                .members()
+                .iter()
+                .map(|(str_id, _)| $context.graph().strings().get(str_id).unwrap())
+                .collect::<Vec<_>>();
+
+            actual_members.sort();
+
+            assert_eq!($expected_members, actual_members);
         };
+    }
 
-        for member in members {
-            assert!(
-                actual_members.contains_key(&StringId::from(*member)),
-                "Expected member '{member}' not found"
+    macro_rules! assert_no_members {
+        ($context:expr, $declaration_id:expr) => {
+            assert_members_eq!($context, $declaration_id, vec![] as Vec<&str>);
+        };
+    }
+
+    macro_rules! assert_owner_eq {
+        ($context:expr, $declaration_id:expr, $expected_owner_name:expr) => {
+            let actual_owner_id = $context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from($declaration_id))
+                .unwrap()
+                .owner_id();
+
+            let actual_owner_name = $context
+                .graph()
+                .declarations()
+                .get(actual_owner_id)
+                .unwrap()
+                .name();
+
+            assert_eq!($expected_owner_name, actual_owner_name);
+        };
+    }
+
+    macro_rules! assert_singleton_class_eq {
+        ($context:expr, $declaration_id:expr, $expected_singleton_class_name:expr) => {
+            let declaration = $context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from($declaration_id))
+                .unwrap();
+
+            assert_eq!(
+                $expected_singleton_class_name,
+                $context
+                    .graph()
+                    .declarations()
+                    .get(declaration.as_namespace().unwrap().singleton_class().unwrap())
+                    .unwrap()
+                    .name()
             );
-        }
+        };
     }
 
-    fn assert_owner(decl: &Declaration, owner_name: &str) {
-        assert_eq!(
-            decl.owner_id(),
-            &DeclarationId::from(owner_name),
-            "Expected owner '{owner_name}' but found different owner"
-        );
-    }
+    macro_rules! assert_instance_variables_eq {
+        ($context:expr, $declaration_id:expr, $expected_instance_variables:expr) => {
+            let mut actual_instance_variables = $context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from($declaration_id))
+                .unwrap()
+                .as_namespace()
+                .unwrap()
+                .members()
+                .iter()
+                .filter_map(
+                    |(str_id, member_id)| match $context.graph().declarations().get(member_id) {
+                        Some(Declaration::InstanceVariable(_)) => Some($context.graph().strings().get(str_id).unwrap()),
+                        _ => None,
+                    },
+                )
+                .collect::<Vec<_>>();
 
-    fn assert_instance_variable(context: &GraphTest, fqn: &str, owner: &str) {
-        let decl = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from(fqn))
-            .unwrap_or_else(|| panic!("{fqn} declaration should exist"));
-        assert!(
-            matches!(decl, Declaration::InstanceVariable(_)),
-            "{fqn} should be InstanceVariable, got {decl:?}"
-        );
-        assert_owner(decl, owner);
+            actual_instance_variables.sort();
+
+            assert_eq!($expected_instance_variables, actual_instance_variables);
+        };
     }
 
     fn format_diagnostics(context: &GraphTest, ignore_rules: &[Rule]) -> Vec<String> {
@@ -1870,25 +1918,14 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["Bar", "Baz"]);
-        assert_owner(foo, "Object");
+        assert_members_eq!(context, "Foo", vec!["Bar", "Baz"]);
+        assert_owner_eq!(context, "Foo", "Object");
 
-        let bar = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap();
-        assert_members(bar, &[]);
-        assert_owner(bar, "Foo");
+        assert_no_members!(context, "Foo::Bar");
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
 
-        let baz = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::Baz"))
-            .unwrap();
-        assert_members(baz, &[]);
-        assert_owner(baz, "Foo");
+        assert_no_members!(context, "Foo::Baz");
+        assert_owner_eq!(context, "Foo::Baz", "Foo");
     }
 
     #[test]
@@ -1907,9 +1944,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["initialize()", "@name"]);
-        assert_owner(foo, "Object");
+        assert_members_eq!(context, "Foo", vec!["@name", "initialize()"]);
+        assert_owner_eq!(context, "Foo", "Object");
     }
 
     #[test]
@@ -1939,13 +1975,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &[]);
-        assert_owner(foo, "Object");
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
 
-        let bar = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
-        assert_members(bar, &["Baz"]);
-        assert_owner(bar, "Object");
+        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_owner_eq!(context, "Bar", "Object");
     }
 
     #[test]
@@ -1965,21 +1999,14 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &[]);
-        assert_owner(foo, "Object");
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
 
-        let bar = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
-        assert_members(bar, &["Baz"]);
-        assert_owner(bar, "Object");
+        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_owner_eq!(context, "Bar", "Object");
 
-        let baz = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Bar::Baz"))
-            .unwrap();
-        assert_members(baz, &[]);
-        assert_owner(baz, "Bar");
+        assert_no_members!(context, "Bar::Baz");
+        assert_owner_eq!(context, "Bar::Baz", "Bar");
     }
 
     #[test]
@@ -2078,21 +2105,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &[]);
-        assert_owner(foo, "Object");
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>"),
-            Resolver::singleton_class(foo).unwrap()
-        );
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
 
-        let singleton = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
-        assert_members(singleton, &["bar()", "BAZ"]);
-        assert_owner(singleton, "Foo");
+        assert_members_eq!(context, "Foo::<Foo>", vec!["BAZ", "bar()"]);
+        assert_owner_eq!(context, "Foo::<Foo>", "Foo");
     }
 
     #[test]
@@ -2113,31 +2131,14 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &[]);
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>"),
-            Resolver::singleton_class(foo).unwrap()
-        );
+        assert_no_members!(context, "Foo");
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
 
-        let singleton = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
-        assert_members(singleton, &[]);
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>::<<Foo>>"),
-            Resolver::singleton_class(singleton).unwrap()
-        );
+        assert_no_members!(context, "Foo::<Foo>");
+        assert_singleton_class_eq!(context, "Foo::<Foo>", "Foo::<Foo>::<<Foo>>");
 
-        let nested_singleton = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>::<<Foo>>"))
-            .unwrap();
-        assert_members(nested_singleton, &["baz()"]);
-        assert_owner(nested_singleton, "Foo::<Foo>");
+        assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["baz()"]);
+        assert_owner_eq!(context, "Foo::<Foo>::<<Foo>>", "Foo::<Foo>");
     }
 
     #[test]
@@ -2159,25 +2160,15 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &[]);
-        assert_owner(foo, "Object");
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>"),
-            Resolver::singleton_class(foo).unwrap()
-        );
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
 
-        let bar = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
-        assert_members(bar, &[]);
-        assert_owner(bar, "Object");
+        assert_no_members!(context, "Bar");
+        assert_owner_eq!(context, "Bar", "Object");
 
-        let singleton = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
-        assert_members(singleton, &["baz()", "Baz"]);
-        assert_owner(singleton, "Foo");
+        assert_members_eq!(context, "Foo::<Foo>", vec!["Baz", "baz()"]);
+        assert_owner_eq!(context, "Foo::<Foo>", "Foo");
     }
 
     #[test]
@@ -2200,9 +2191,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["@@bar", "@@baz"]);
-        assert_owner(foo, "Object");
+        assert_members_eq!(context, "Foo", vec!["@@bar", "@@baz"]);
+        assert_owner_eq!(context, "Foo", "Object");
     }
 
     #[test]
@@ -2221,8 +2211,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["bar()", "@@baz"]);
+        assert_members_eq!(context, "Foo", vec!["@@baz", "bar()"]);
     }
 
     #[test]
@@ -2248,11 +2237,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &[]);
-
-        let bar = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
-        assert_members(bar, &["@@cvar1", "@@cvar2"]);
+        assert_no_members!(context, "Foo");
+        assert_members_eq!(context, "Bar", vec!["@@cvar1", "@@cvar2"]);
     }
 
     #[test]
@@ -2290,6 +2276,9 @@ mod tests {
         });
 
         context.resolve();
+
+        assert_no_diagnostics!(&context);
+
         assert!(
             context
                 .graph()
@@ -2297,13 +2286,8 @@ mod tests {
                 .get(&DeclarationId::from("Foo::<Foo>"))
                 .is_some()
         );
-        assert_no_diagnostics!(&context);
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_eq!(
-            &DeclarationId::from("Foo::<Foo>"),
-            Resolver::singleton_class(foo).unwrap()
-        );
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
     }
 
     #[test]
@@ -2330,29 +2314,14 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo_singleton = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
-        assert_members(foo_singleton, &["bar()", "baz()"]);
-        assert_owner(foo_singleton, "Foo");
+        assert_members_eq!(context, "Foo::<Foo>", vec!["bar()", "baz()"]);
+        assert_owner_eq!(context, "Foo::<Foo>", "Foo");
 
-        let nested_foo_singleton = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>::<<Foo>>"))
-            .unwrap();
-        assert_members(nested_foo_singleton, &["nested_bar()"]);
-        assert_owner(nested_foo_singleton, "Foo::<Foo>");
+        assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["nested_bar()"]);
+        assert_owner_eq!(context, "Foo::<Foo>::<<Foo>>", "Foo::<Foo>");
 
-        let bar_singleton = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Bar::<Bar>"))
-            .unwrap();
-        assert_members(bar_singleton, &["qux()"]);
-        assert_owner(bar_singleton, "Bar");
+        assert_members_eq!(context, "Bar::<Bar>", vec!["qux()"]);
+        assert_owner_eq!(context, "Bar::<Bar>", "Bar");
     }
 
     #[test]
@@ -2516,12 +2485,10 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>#@foo", "Foo::<Foo>");
-        assert_instance_variable(&context, "Foo#@bar", "Foo");
-        assert_instance_variable(&context, "Foo::<Foo>#@baz", "Foo::<Foo>");
+        assert_instance_variables_eq!(context, "Foo", vec!["@bar"]);
         // @qux in `class << self; def qux` - self is Foo when called, so @qux belongs to Foo's singleton class
-        assert_instance_variable(&context, "Foo::<Foo>#@qux", "Foo::<Foo>");
-        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>#@nested", "Foo::<Foo>::<<Foo>>");
+        assert_instance_variables_eq!(context, "Foo::<Foo>", vec!["@baz", "@foo", "@qux"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["@nested"]);
     }
 
     #[test]
@@ -2549,8 +2516,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>#@foo", "Foo::<Foo>");
-        assert_instance_variable(&context, "Bar::<Bar>#@baz", "Bar::<Bar>");
+        assert_instance_variables_eq!(context, "Foo::<Foo>", vec!["@foo"]);
+        assert_instance_variables_eq!(context, "Bar::<Bar>", vec!["@baz"]);
     }
 
     #[test]
@@ -2572,7 +2539,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
-        assert_instance_variable(&context, "Bar::Baz::<Baz>#@baz", "Bar::Baz::<Baz>");
+        assert_instance_variables_eq!(context, "Bar::Baz::<Baz>", vec!["@baz"]);
     }
 
     #[test]
@@ -2595,12 +2562,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>#@bar", "Foo::<Foo>::<<Foo>>");
-        assert_instance_variable(
-            &context,
-            "Foo::<Foo>::<<Foo>>::<<<Foo>>>#@baz",
-            "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
-        );
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["@bar"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", vec!["@baz"]);
     }
 
     #[test]
@@ -2664,8 +2627,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo_class, &["foo()", "bar()"]);
+        assert_members_eq!(context, "Foo", vec!["bar()", "foo()"]);
     }
 
     #[test]
@@ -2681,12 +2643,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo_class = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Object"))
-            .unwrap();
-        assert_members(foo_class, &["$bar", "$foo"]);
+        assert_members_eq!(context, "Object", vec!["$bar", "$foo"]);
     }
 
     #[test]
@@ -3001,21 +2958,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let bar = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap();
-        assert_members(bar, &["Qux"]);
-        assert_owner(bar, "Foo");
+        assert_members_eq!(context, "Foo::Bar", vec!["Qux"]);
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
 
-        let qux = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar::Qux"))
-            .unwrap();
-        assert_members(qux, &[]);
-        assert_owner(qux, "Foo::Bar");
+        assert_no_members!(context, "Foo::Bar::Qux");
+        assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
     }
 
     #[test]
@@ -3262,21 +3209,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let bar = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar"))
-            .unwrap();
-        assert_members(bar, &["Qux"]);
-        assert_owner(bar, "Foo");
+        assert_members_eq!(context, "Foo::Bar", vec!["Qux"]);
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
 
-        let qux = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::Bar::Qux"))
-            .unwrap();
-        assert_members(qux, &[]);
-        assert_owner(qux, "Foo::Bar");
+        assert_no_members!(context, "Foo::Bar::Qux");
+        assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
     }
 
     #[test]
@@ -3672,12 +3609,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // Global variable aliases should still be owned by Object, regardless of where defined
-        let object = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Object"))
-            .unwrap();
-        assert_members(object, &["$bar"]);
+        assert_members_eq!(context, "Object", vec!["$bar", "Foo"]);
     }
 
     #[test]
@@ -3696,9 +3628,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         // inner_method should be owned by Foo, not by setup
-        assert_members(foo_class, &["setup()", "inner_method()"]);
+        assert_members_eq!(context, "Foo", vec!["inner_method()", "setup()"]);
     }
 
     #[test]
@@ -3719,16 +3650,14 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let foo_singleton_class = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo::<Foo>"))
-            .unwrap();
-        assert_members(foo_singleton_class, &["setup()"]);
+        assert_members_eq!(context, "Foo::<Foo>", vec!["setup()"]);
 
         // All attr_* should be owned by Foo, not by setup
-        let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo_class, &["reader_attr()", "writer_attr()", "accessor_attr()"]);
+        assert_members_eq!(
+            context,
+            "Foo",
+            vec!["accessor_attr()", "reader_attr()", "writer_attr()"]
+        );
     }
 
     #[test]
@@ -4328,22 +4257,11 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context);
 
-        let declarations = context.graph().declarations();
-        let foo_decl = declarations.get(&DeclarationId::from("Foo")).expect("Foo should exist");
-        let bar_decl = declarations.get(&DeclarationId::from("Bar")).expect("Bar should exist");
-
-        assert_members(foo_decl, &["CONST"]);
-
-        // Bar should not have CONST as a member
-        let bar_members = match bar_decl {
-            Declaration::Namespace(Namespace::Module(module)) => module.members(),
-            _ => panic!("Bar should be a module"),
-        };
-
-        let const_key = StringId::from("CONST");
-        assert!(!bar_members.contains_key(&const_key));
+        assert_members_eq!(context, "Foo", vec!["CONST"]);
+        assert_no_members!(context, "Bar");
     }
 
     #[test]
@@ -4359,10 +4277,10 @@ mod tests {
         });
         context.resolve();
 
-        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_no_diagnostics!(&context);
 
         // Both entries exist as unique members
-        assert_members(foo, &["Array", "Array()"]);
+        assert_members_eq!(context, "Foo", vec!["Array", "Array()"]);
 
         // Both declarations exist with unique IDs
         assert!(

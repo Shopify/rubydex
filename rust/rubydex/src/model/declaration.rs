@@ -69,6 +69,16 @@ macro_rules! all_declarations {
     };
 }
 
+macro_rules! all_namespaces {
+    ($value:expr, $var:ident => $expr:expr) => {
+        match $value {
+            Namespace::Class($var) => $expr,
+            Namespace::Module($var) => $expr,
+            Namespace::SingletonClass($var) => $expr,
+        }
+    };
+}
+
 /// Macro to generate a new struct for namespace-like declarations such as classes and modules
 macro_rules! namespace_declaration {
     ($variant:ident, $name:ident) => {
@@ -139,7 +149,7 @@ macro_rules! namespace_declaration {
             }
 
             #[must_use]
-            pub fn get_member(&self, string_id: &StringId) -> Option<&DeclarationId> {
+            pub fn member(&self, string_id: &StringId) -> Option<&DeclarationId> {
                 self.members.get(string_id)
             }
 
@@ -247,11 +257,16 @@ impl Declaration {
         }
     }
 
-    /// # Panics
-    ///
-    /// Panics if the declaration is not a namespace
     #[must_use]
     pub fn as_namespace(&self) -> Option<&Namespace> {
+        match self {
+            Declaration::Namespace(namespace) => Some(namespace),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_namespace_mut(&mut self) -> Option<&mut Namespace> {
         match self {
             Declaration::Namespace(namespace) => Some(namespace),
             _ => None,
@@ -343,38 +358,17 @@ impl Namespace {
 
     #[must_use]
     pub fn references(&self) -> &IdentityHashSet<ReferenceId> {
-        match self {
-            Namespace::Class(class) => &class.references,
-            Namespace::Module(module) => &module.references,
-            Namespace::SingletonClass(singleton) => &singleton.references,
-        }
+        all_namespaces!(self, it => &it.references)
     }
 
     #[must_use]
     pub fn definitions(&self) -> &[DefinitionId] {
-        match self {
-            Namespace::Class(class) => &class.definition_ids,
-            Namespace::Module(module) => &module.definition_ids,
-            Namespace::SingletonClass(singleton) => &singleton.definition_ids,
-        }
+        all_namespaces!(self, it => &it.definition_ids)
     }
 
     #[must_use]
     pub fn members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
-        match self {
-            Namespace::Class(class) => class.members(),
-            Namespace::Module(module) => module.members(),
-            Namespace::SingletonClass(singleton) => singleton.members(),
-        }
-    }
-
-    #[must_use]
-    pub fn get_member(&self, str_id: StringId) -> Option<&DeclarationId> {
-        match self {
-            Namespace::Class(class) => class.get_member(&str_id),
-            Namespace::Module(module) => module.get_member(&str_id),
-            Namespace::SingletonClass(singleton) => singleton.get_member(&str_id),
-        }
+        all_namespaces!(self, it => &it.members)
     }
 
     /// # Panics
@@ -382,57 +376,60 @@ impl Namespace {
     /// Panics if the declaration is not a namespace or a constant
     #[must_use]
     pub fn ancestors(&self) -> Ancestors {
-        match self {
-            Namespace::Class(class) => class.clone_ancestors(),
-            Namespace::Module(module) => module.clone_ancestors(),
-            Namespace::SingletonClass(singleton) => singleton.clone_ancestors(),
-        }
+        all_namespaces!(self, it => it.clone_ancestors())
+    }
+
+    pub fn set_ancestors(&self, ancestors: Ancestors) {
+        all_namespaces!(self, it => it.set_ancestors(ancestors));
+    }
+
+    #[must_use]
+    pub fn has_complete_ancestors(&self) -> bool {
+        all_namespaces!(self, it => it.has_complete_ancestors())
+    }
+
+    pub fn add_descendant(&self, descendant_id: DeclarationId) {
+        all_namespaces!(self, it => it.add_descendant(descendant_id));
     }
 
     pub fn remove_descendant(&self, descendant_id: &DeclarationId) {
-        match self {
-            Namespace::Class(class) => class.remove_descendant(descendant_id),
-            Namespace::Module(module) => module.remove_descendant(descendant_id),
-            Namespace::SingletonClass(singleton) => singleton.remove_descendant(descendant_id),
-        }
+        all_namespaces!(self, it => it.remove_descendant(descendant_id));
     }
 
     pub fn for_each_ancestor<F>(&self, mut f: F)
     where
         F: FnMut(&Ancestor),
     {
-        match self {
-            Namespace::Class(c) => c.ancestors().iter().for_each(&mut f),
-            Namespace::Module(m) => m.ancestors().iter().for_each(&mut f),
-            Namespace::SingletonClass(s) => s.ancestors().iter().for_each(&mut f),
-        }
+        all_namespaces!(self, it => it.ancestors().iter().for_each(&mut f));
     }
 
     pub fn for_each_descendant<F>(&self, mut f: F)
     where
         F: FnMut(&DeclarationId),
     {
-        match self {
-            Namespace::Class(class) => class.descendants().iter().for_each(&mut f),
-            Namespace::Module(module) => module.descendants().iter().for_each(&mut f),
-            Namespace::SingletonClass(singleton) => singleton.descendants().iter().for_each(&mut f),
-        }
+        all_namespaces!(self, it => it.descendants().iter().for_each(&mut f));
     }
 
     pub fn clear_ancestors(&self) {
-        match self {
-            Namespace::Class(c) => c.set_ancestors(Ancestors::Partial(vec![])),
-            Namespace::Module(module) => module.set_ancestors(Ancestors::Partial(vec![])),
-            Namespace::SingletonClass(singleton) => singleton.set_ancestors(Ancestors::Partial(vec![])),
-        }
+        all_namespaces!(self, it => it.set_ancestors(Ancestors::Partial(vec![])));
     }
 
     pub fn clear_descendants(&self) {
-        match self {
-            Namespace::Class(class) => class.descendants().clear(),
-            Namespace::Module(module) => module.descendants().clear(),
-            Namespace::SingletonClass(singleton) => singleton.descendants().clear(),
-        }
+        all_namespaces!(self, it => it.descendants().clear());
+    }
+
+    #[must_use]
+    pub fn member(&self, str_id: &StringId) -> Option<&DeclarationId> {
+        all_namespaces!(self, it => it.member(str_id))
+    }
+
+    #[must_use]
+    pub fn singleton_class(&self) -> Option<&DeclarationId> {
+        all_namespaces!(self, it => it.singleton_class_id())
+    }
+
+    pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
+        all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
     }
 }
 
