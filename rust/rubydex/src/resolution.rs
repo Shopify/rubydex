@@ -148,6 +148,15 @@ impl<'a> Resolver<'a> {
         self.handle_remaining_definitions(other_ids);
     }
 
+    /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
+    /// the Ruby API
+    pub fn resolve_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
+        match self.resolve_constant_internal(name_id) {
+            Outcome::Resolved(id, _) => Some(id),
+            Outcome::Unresolved(_) | Outcome::Retry => None,
+        }
+    }
+
     /// Handles a unit of work for resolving a constant definition
     fn handle_definition_unit(
         &mut self,
@@ -220,7 +229,7 @@ impl<'a> Resolver<'a> {
     ) {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
-        match self.resolve_constant(*constant_ref.name_id()) {
+        match self.resolve_constant_internal(*constant_ref.name_id()) {
             Outcome::Retry => {
                 // There might be dependencies we haven't figured out yet, so we need to retry
                 unit_queue.push_back(unit_id);
@@ -916,7 +925,7 @@ impl<'a> Resolver<'a> {
         if let Some(parent_scope) = name_ref.parent_scope() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
-            match self.resolve_constant(*parent_scope) {
+            match self.resolve_constant_internal(*parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
                 other => other,
             }
@@ -968,7 +977,7 @@ impl<'a> Resolver<'a> {
     /// Attempts to resolve a constant reference against the graph. Returns the fully qualified declaration ID that the
     /// reference is related to or `None`. This method mutates the graph to remember which constants have already been
     /// resolved
-    fn resolve_constant(&mut self, name_id: NameId) -> Outcome {
+    fn resolve_constant_internal(&mut self, name_id: NameId) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap().clone();
 
         match name_ref {

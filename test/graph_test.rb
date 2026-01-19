@@ -221,6 +221,69 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_resolve_constant
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Bar; end
+
+        module Foo
+          CONST = 123
+
+          class Bar::Baz
+            CONST
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      const = graph.resolve_constant("CONST", ["Foo", "Bar::Baz"])
+      assert_equal("Foo::CONST", const.name)
+    end
+  end
+
+  def test_graph_resolve_with_invalid_argument
+    graph = Rubydex::Graph.new
+
+    assert_raises(TypeError) do
+      graph.resolve_constant(123, ["Foo", "Bar::Baz"])
+    end
+
+    assert_raises(TypeError) do
+      graph.resolve_constant("CONST", ["Foo", 123])
+    end
+
+    assert_raises(TypeError) do
+      graph.resolve_constant("CONST", "Not an array")
+    end
+  end
+
+  def test_graph_resolve_non_existing_constant
+    graph = Rubydex::Graph.new
+    assert_nil(graph.resolve_constant("CONST", ["Foo", "Bar::Baz"]))
+  end
+
+  def test_graph_resolve_constant_alias
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Foo
+          CONST = 1
+        end
+
+        ALIAS = Foo
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      const = graph.resolve_constant("ALIAS::CONST", [])
+      assert_equal("Foo::CONST", const.name)
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)

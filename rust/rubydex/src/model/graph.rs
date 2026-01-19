@@ -9,7 +9,7 @@ use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
-use crate::model::name::{NameRef, ResolvedName};
+use crate::model::name::{Name, NameRef, ResolvedName};
 // use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::stats;
@@ -177,6 +177,24 @@ impl Graph {
         &self.diagnostics
     }
 
+    /// Registers a name in the graph unless already registered. In regular indexing, this only happens in the local
+    /// graph. This method is only used to back the `Graph#resolve_constant` Ruby API because every name must be
+    /// registered in the graph to properly resolve
+    pub fn add_name(&mut self, name: Name) -> NameId {
+        let name_id = name.id();
+
+        match self.names.entry(name_id) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().increment_ref_count(1);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(NameRef::Unresolved(Box::new(name)));
+            }
+        }
+
+        name_id
+    }
+
     /// # Panics
     ///
     /// Panics if acquiring a read lock fails
@@ -236,7 +254,7 @@ impl Graph {
         &self.names
     }
 
-    fn untrack_name(&mut self, name_id: NameId) {
+    pub fn untrack_name(&mut self, name_id: NameId) {
         if let Some(name_ref) = self.names.get_mut(&name_id)
             && !name_ref.decrement_ref_count()
         {

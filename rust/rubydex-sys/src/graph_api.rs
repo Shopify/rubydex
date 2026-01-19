@@ -1,7 +1,7 @@
 //! This file provides the C API for the Graph object
 
 use crate::reference_api::{ReferenceKind, ReferencesIter};
-use crate::utils;
+use crate::{name_api, utils};
 use libc::{c_char, c_void};
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
@@ -60,6 +60,39 @@ pub unsafe extern "C" fn rdx_graph_declarations_search(
     });
 
     Box::into_raw(Box::new(DeclarationsIter { ids, index: 0 }))
+}
+
+/// # Panics
+///
+/// Will panic if the nesting cannot be transformed into a vector of strings
+///
+/// # Safety
+///
+/// Assumes that the `const_name` and `nesting` pointer are valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_resolve_constant(
+    pointer: GraphPointer,
+    const_name: *const c_char,
+    nesting: *const *const c_char,
+    count: usize,
+) -> *const i64 {
+    with_graph(pointer, |graph| {
+        let nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, count).unwrap() };
+        let const_name: String = unsafe { utils::convert_char_ptr_to_string(const_name).unwrap() };
+        let (name_id, names_to_untrack) = name_api::nesting_stack_to_name_id(graph, &const_name, nesting);
+
+        let mut resolver = Resolver::new(graph);
+
+        let resolved_id = match resolver.resolve_constant(name_id) {
+            Some(id) => Box::into_raw(Box::new(*id)).cast_const(),
+            None => ptr::null(),
+        };
+
+        for name_id in names_to_untrack {
+            graph.untrack_name(name_id);
+        }
+        resolved_id
+    })
 }
 
 /// Indexes all given file paths in parallel using the provided Graph pointer
@@ -382,4 +415,79 @@ pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPoin
 
         ReferencesIter::new(refs.into_boxed_slice())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use rubydex::indexing::ruby_indexer::RubyIndexer;
+
+    use super::*;
+
+    #[test]
+    fn names_are_untracked_after_resolving_constant() {
+        let mut indexer = RubyIndexer::new(
+            "file:///foo.rb".into(),
+            "
+            class Foo
+              BAR = 1
+            end
+            ",
+        );
+        indexer.index();
+
+        let mut graph = Graph::new();
+        graph.update(indexer.local_graph());
+        let mut resolver = Resolver::new(&mut graph);
+        resolver.resolve_all();
+
+        assert_eq!(
+            1,
+            graph
+                .names()
+                .iter()
+                .find_map(|(_, name)| {
+                    if graph.strings().get(name.str()).unwrap() == "BAR" {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap()
+                .ref_count()
+        );
+
+        let graph_ptr = Box::into_raw(Box::new(graph)) as GraphPointer;
+
+        // Build the nesting array: ["Foo"] since BAR is inside class Foo
+        let nesting_strings: Vec<CString> = vec![CString::new("Foo").unwrap()];
+        let nesting_ptrs: Vec<*const c_char> = nesting_strings.iter().map(|s| s.as_ptr()).collect();
+
+        unsafe {
+            let id = rdx_graph_resolve_constant(
+                graph_ptr,
+                CString::new("BAR").unwrap().as_ptr(),
+                nesting_ptrs.as_ptr(),
+                nesting_ptrs.len(),
+            );
+            assert_eq!(*id, *DeclarationId::from("Foo::BAR"));
+        };
+
+        let graph = unsafe { Box::from_raw(graph_ptr.cast::<Graph>()) };
+
+        assert_eq!(
+            1,
+            graph
+                .names()
+                .iter()
+                .find_map(|(_, name)| {
+                    if graph.strings().get(name.str()).unwrap() == "BAR" {
+                        Some(name)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap()
+                .ref_count()
+        );
+    }
 }

@@ -4,5 +4,6 @@ pub mod diagnostic_api;
 pub mod document_api;
 pub mod graph_api;
 pub mod location_api;
+pub mod name_api;
 pub mod reference_api;
 pub mod utils;

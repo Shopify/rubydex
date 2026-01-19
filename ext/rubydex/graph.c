@@ -320,6 +320,38 @@ static VALUE sr_graph_set_encoding(VALUE self, VALUE encoding) {
     return Qnil;
 }
 
+// Graph#resolve_constant: (String, Array[String]) -> Declaration?
+// Runs the resolver on a single constant reference to determine what it points to
+static VALUE sr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesting) {
+    Check_Type(const_name, T_STRING);
+    check_array_of_strings(nesting);
+
+    // Convert the given file paths into a char** array, so that we can pass to Rust
+    size_t length = RARRAY_LEN(nesting);
+    char **converted_file_paths = str_array_to_char(nesting, length);
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    const int64_t *id_ptr =
+        rdx_graph_resolve_constant(graph, StringValueCStr(const_name), (const char **)converted_file_paths, length);
+
+    for (size_t i = 0; i < length; i++) {
+        free(converted_file_paths[i]);
+    }
+    free(converted_file_paths);
+
+    if (id_ptr == NULL) {
+        return Qnil;
+    }
+
+    int64_t id = *id_ptr;
+    free_i64(id_ptr);
+    VALUE argv[] = {self, LL2NUM(id)};
+
+    return rb_class_new_instance(2, argv, cDeclaration);
+}
+
 // Graph#diagnostics -> Array[Rubydex::Diagnostic]
 static VALUE sr_graph_diagnostics(VALUE self) {
     void *graph;
@@ -361,6 +393,7 @@ void initialize_graph(VALUE mRubydex) {
     rb_define_alloc_func(cGraph, sr_graph_alloc);
     rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
     rb_define_method(cGraph, "resolve", sr_graph_resolve, 0);
+    rb_define_method(cGraph, "resolve_constant", sr_graph_resolve_constant, 2);
     rb_define_method(cGraph, "declarations", sr_graph_declarations, 0);
     rb_define_method(cGraph, "documents", sr_graph_documents, 0);
     rb_define_method(cGraph, "constant_references", sr_graph_constant_references, 0);
