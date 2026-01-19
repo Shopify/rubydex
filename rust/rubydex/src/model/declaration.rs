@@ -374,6 +374,10 @@ impl Namespace {
         all_namespaces!(self, it => it.clone_ancestors())
     }
 
+    pub fn set_ancestors(&self, ancestors: Ancestors) {
+        all_namespaces!(self, it => it.set_ancestors(ancestors));
+    }
+
     pub fn remove_descendant(&self, descendant_id: &DeclarationId) {
         all_namespaces!(self, it => it.remove_descendant(descendant_id));
     }
