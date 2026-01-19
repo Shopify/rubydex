@@ -175,10 +175,17 @@ impl Graph {
         let document_diagnostics = self.documents.values().flat_map(Document::diagnostics);
         let declaration_diagnostics = self.declarations.values().flat_map(Declaration::diagnostics);
         let definition_diagnostics = self.definitions.values().flat_map(Definition::diagnostics);
+        let constant_reference_diagnostics = self
+            .constant_references
+            .values()
+            .flat_map(ConstantReference::diagnostics);
+        let method_reference_diagnostics = self.method_references.values().flat_map(MethodRef::diagnostics);
 
         document_diagnostics
             .chain(declaration_diagnostics)
             .chain(definition_diagnostics)
+            .chain(constant_reference_diagnostics)
+            .chain(method_reference_diagnostics)
             .collect()
     }
 
