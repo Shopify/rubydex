@@ -1,4 +1,5 @@
 pub mod comment;
+pub mod dsl_event;
 pub mod declaration;
 pub mod definitions;
 pub mod document;

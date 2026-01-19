@@ -1,5 +1,7 @@
 //! Visit the Ruby AST and create the definitions.
 
+use std::collections::HashSet;
+
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
@@ -10,7 +12,8 @@ use crate::model::definitions::{
     ModuleDefinition, Parameter, ParameterStruct, SingletonClassDefinition,
 };
 use crate::model::document::Document;
-use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
+use crate::model::dsl_event::DslEvent;
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, StringId, UriId};
 use crate::model::name::Name;
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::visibility::Visibility;
@@ -36,6 +39,12 @@ enum Nesting {
     Method(DefinitionId),
 }
 
+/// Context for tracking DSL block nesting
+struct DslContext {
+    /// The event ID of the DSL call that opened this block
+    event_id: usize,
+}
+
 impl Nesting {
     fn id(&self) -> DefinitionId {
         match self {
@@ -55,11 +64,21 @@ pub struct RubyIndexer<'a> {
     comments: Vec<CommentGroup>,
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<Visibility>,
+    /// Filter for which DSL methods to capture (method names as strings)
+    dsl_method_filter: Option<HashSet<String>>,
+    /// Stack of DSL contexts for tracking block hierarchy
+    dsl_context_stack: Vec<DslContext>,
 }
 
 impl<'a> RubyIndexer<'a> {
     #[must_use]
     pub fn new(uri: String, source: &'a str) -> Self {
+        Self::with_dsl_filter(uri, source, None)
+    }
+
+    /// Create a new indexer with an optional DSL method filter
+    #[must_use]
+    pub fn with_dsl_filter(uri: String, source: &'a str, dsl_filter: Option<HashSet<String>>) -> Self {
         let uri_id = UriId::from(&uri);
         let local_graph = LocalGraph::new(uri_id, Document::new(uri, source));
 
@@ -70,6 +89,8 @@ impl<'a> RubyIndexer<'a> {
             comments: Vec::new(),
             nesting_stack: Vec::new(),
             visibility_stack: vec![Visibility::Private],
+            dsl_method_filter: dsl_filter,
+            dsl_context_stack: Vec::new(),
         }
     }
 
@@ -925,6 +946,107 @@ impl<'a> RubyIndexer<'a> {
     fn current_visibility(&self) -> &Visibility {
         self.visibility_stack.last().unwrap()
     }
+
+    // DSL Capture Methods
+
+    /// Check if a method name should be captured as a DSL event
+    fn should_capture_dsl(&self, method_name: &str) -> bool {
+        self.dsl_method_filter
+            .as_ref()
+            .is_some_and(|filter| filter.contains(method_name))
+    }
+
+    /// Capture arguments from a call node (symbols, strings, and constants)
+    fn capture_call_arguments(&mut self, node: &ruby_prism::CallNode) -> Vec<StringId> {
+        let mut args = Vec::new();
+        if let Some(arguments) = node.arguments() {
+            for arg in arguments.arguments().iter() {
+                if let Some(symbol) = arg.as_symbol_node() {
+                    // :foo -> "foo"
+                    let value = String::from_utf8_lossy(symbol.unescaped()).to_string();
+                    args.push(self.local_graph.intern_string(value));
+                } else if let Some(string) = arg.as_string_node() {
+                    // "foo" -> "foo"
+                    let value = String::from_utf8_lossy(string.unescaped()).to_string();
+                    args.push(self.local_graph.intern_string(value));
+                } else if matches!(
+                    arg,
+                    ruby_prism::Node::ConstantReadNode { .. } | ruby_prism::Node::ConstantPathNode { .. }
+                ) {
+                    // Calculator -> "Calculator", Foo::Bar -> "Foo::Bar"
+                    let value = Self::location_to_string(&arg.location());
+                    args.push(self.local_graph.intern_string(value));
+                }
+                // Skip other complex arguments (expressions, etc.)
+            }
+        }
+        args
+    }
+
+    /// Capture the current Ruby lexical nesting as DeclarationIds
+    fn capture_nesting_stack(&self) -> Vec<DeclarationId> {
+        self.nesting_stack
+            .iter()
+            .filter_map(|nesting| {
+                match nesting {
+                    Nesting::LexicalScope(id) | Nesting::Owner(id) => {
+                        // Convert DefinitionId to DeclarationId
+                        // Use the definition's name to create the declaration ID
+                        Some(DeclarationId::new(**id))
+                    }
+                    Nesting::Method(_) => None,
+                }
+            })
+            .collect()
+    }
+
+    /// Capture a DSL event for the given call node
+    fn capture_dsl_event(&mut self, node: &ruby_prism::CallNode, method_name: String) {
+        // Allocate event ID
+        let event_id = self.local_graph.next_dsl_event_id();
+
+        // Get parent from DSL context stack (the enclosing DSL call with a block)
+        let parent_id = self.dsl_context_stack.last().map(|ctx| ctx.event_id);
+
+        // Capture arguments (symbols and strings only)
+        let arguments = self.capture_call_arguments(node);
+
+        // Intern the method name
+        let method_name_id = self.local_graph.intern_string(method_name);
+
+        // Capture current Ruby lexical nesting (as DeclarationIds)
+        let nesting_stack = self.capture_nesting_stack();
+
+        let has_block = node.block().is_some();
+
+        // Extract receiver text if present
+        let receiver = node.receiver().map(|recv| {
+            let text = String::from_utf8_lossy(recv.location().as_slice()).to_string();
+            self.local_graph.intern_string(text)
+        });
+
+        let event = DslEvent::new(
+            event_id,
+            parent_id,
+            method_name_id,
+            arguments,
+            nesting_stack,
+            Offset::from_prism_location(&node.location()),
+            has_block,
+            receiver,
+        );
+
+        self.local_graph.add_dsl_event(event);
+
+        // If this call has a block, push context and visit children inside it
+        if has_block {
+            self.dsl_context_stack.push(DslContext { event_id });
+            self.visit_call_node_parts(node);
+            self.dsl_context_stack.pop();
+        } else {
+            self.visit_call_node_parts(node);
+        }
+    }
 }
 
 struct CommentGroup {
@@ -1513,6 +1635,12 @@ impl Visit<'_> for RubyIndexer<'_> {
                 self.visit_call_node_parts(node);
             }
             _ => {
+                // Check if this is a potential DSL call to capture
+                if self.should_capture_dsl(&message) {
+                    self.capture_dsl_event(node, message);
+                    return;
+                }
+
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
                 // may discover something inside
                 self.visit_call_node_parts(node);

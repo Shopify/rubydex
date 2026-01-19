@@ -3,6 +3,7 @@ use std::collections::hash_map::Entry;
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
+use crate::model::dsl_event::{DslEvent, FileDslEvents};
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef};
@@ -18,6 +19,7 @@ type LocalGraphParts = (
     IdentityHashMap<ReferenceId, ConstantReference>,
     IdentityHashMap<ReferenceId, MethodRef>,
     Vec<Diagnostic>,
+    FileDslEvents,
 );
 
 #[derive(Debug)]
@@ -30,6 +32,7 @@ pub struct LocalGraph {
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
     diagnostics: Vec<Diagnostic>,
+    dsl_events: FileDslEvents,
 }
 
 impl LocalGraph {
@@ -44,6 +47,7 @@ impl LocalGraph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             diagnostics: Vec::new(),
+            dsl_events: FileDslEvents::new(uri_id),
         }
     }
 
@@ -162,6 +166,21 @@ impl LocalGraph {
             self.constant_references,
             self.method_references,
             self.diagnostics,
+            self.dsl_events,
         )
+    }
+
+    // DSL Events
+
+    pub fn add_dsl_event(&mut self, event: DslEvent) {
+        self.dsl_events.push(event);
+    }
+
+    pub fn next_dsl_event_id(&mut self) -> usize {
+        self.dsl_events.next_id()
+    }
+
+    pub fn take_dsl_events(&mut self) -> FileDslEvents {
+        std::mem::take(&mut self.dsl_events)
     }
 }

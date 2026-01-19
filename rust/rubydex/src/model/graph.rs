@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
@@ -7,6 +8,7 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, Mixin};
 use crate::model::document::Document;
+use crate::model::dsl_event::FileDslEvents;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
@@ -57,6 +59,10 @@ pub struct Graph {
     included_hooks: HashMap<String, Vec<String>>,
     /// Counter for synthetic definition IDs (negative values)
     synthetic_id_counter: i64,
+    /// Filter for which DSL methods to capture (None = capture nothing)
+    dsl_method_filter: Option<HashSet<StringId>>,
+    /// Captured DSL events per file
+    dsl_events: HashMap<UriId, FileDslEvents>,
 }
 
 impl Graph {
@@ -79,6 +85,8 @@ impl Graph {
             synthetic_mixins: Vec::new(),
             included_hooks: HashMap::new(),
             synthetic_id_counter: 0,
+            dsl_method_filter: None,
+            dsl_events: HashMap::new(),
         }
     }
 
@@ -288,6 +296,52 @@ impl Graph {
         self.synthetic_id_counter
     }
 
+    // DSL Event Methods
+
+    /// Configure which DSL methods to capture during indexing.
+    /// Must be called before index_all().
+    pub fn set_dsl_capture_filter(&mut self, methods: Vec<String>) {
+        let filter: HashSet<StringId> = methods
+            .into_iter()
+            .map(|m| self.intern_string(m))
+            .collect();
+        self.dsl_method_filter = Some(filter);
+    }
+
+    /// Check if a method should be captured as a DSL event.
+    #[must_use]
+    pub fn should_capture_dsl(&self, method_name: StringId) -> bool {
+        self.dsl_method_filter
+            .as_ref()
+            .is_some_and(|filter| filter.contains(&method_name))
+    }
+
+    /// Clear the DSL capture filter (no events will be captured).
+    pub fn clear_dsl_capture_filter(&mut self) {
+        self.dsl_method_filter = None;
+    }
+
+    /// Get the DSL method filter (for passing to indexers)
+    #[must_use]
+    pub fn dsl_method_filter(&self) -> Option<&HashSet<StringId>> {
+        self.dsl_method_filter.as_ref()
+    }
+
+    pub fn add_file_dsl_events(&mut self, events: FileDslEvents) {
+        if !events.is_empty() {
+            self.dsl_events.insert(events.uri_id, events);
+        }
+    }
+
+    #[must_use]
+    pub fn dsl_events(&self) -> &HashMap<UriId, FileDslEvents> {
+        &self.dsl_events
+    }
+
+    pub fn take_dsl_events(&mut self) -> HashMap<UriId, FileDslEvents> {
+        std::mem::take(&mut self.dsl_events)
+    }
+
     /// Adds a synthetic method definition created by plugins.
     /// Returns true if the owner exists and method was added, false otherwise.
     pub fn add_synthetic_method(
@@ -309,6 +363,12 @@ impl Graph {
         }
 
         let uri_id = UriId::from(file_path);
+
+        // Ensure document exists for this uri_id (required by resolution)
+        self.documents.entry(uri_id).or_insert_with(|| {
+            Document::new(file_path.to_string(), "")
+        });
+
         let name_str_id = self.intern_string(method_name.to_string());
 
         // Create synthetic offset using line and column
@@ -351,6 +411,12 @@ impl Graph {
         use crate::offset::Offset;
 
         let uri_id = UriId::from(file_path);
+
+        // Ensure document exists for this uri_id (required by resolution)
+        self.documents.entry(uri_id).or_insert_with(|| {
+            Document::new(file_path.to_string(), "")
+        });
+
         let unqualified = class_name.rsplit("::").next().unwrap_or(class_name);
         let name_str_id = self.intern_string(unqualified.to_string());
 
@@ -405,6 +471,12 @@ impl Graph {
         use crate::offset::Offset;
 
         let uri_id = UriId::from(file_path);
+
+        // Ensure document exists for this uri_id (required by resolution)
+        self.documents.entry(uri_id).or_insert_with(|| {
+            Document::new(file_path.to_string(), "")
+        });
+
         let unqualified = module_name.rsplit("::").next().unwrap_or(module_name);
         let name_str_id = self.intern_string(unqualified.to_string());
 
@@ -582,7 +654,7 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references, diagnostics) =
+        let (uri_id, document, definitions, strings, names, constant_references, method_references, diagnostics, dsl_events) =
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
@@ -601,6 +673,11 @@ impl Graph {
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
         self.diagnostics.extend(diagnostics);
+
+        // Merge DSL events
+        if !dsl_events.is_empty() {
+            self.add_file_dsl_events(dsl_events);
+        }
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and

@@ -503,9 +503,165 @@ static VALUE sr_graph_diagnostics(VALUE self) {
     return diagnostics;
 }
 
+// DslEvent class for Ruby
+static VALUE cDslEvent;
+
+// Graph#capture_dsl_methods(methods) -> self
+// Configure which DSL methods to capture during indexing
+static VALUE sr_graph_capture_dsl_methods(VALUE self, VALUE methods) {
+    Check_Type(methods, T_ARRAY);
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    long len = RARRAY_LEN(methods);
+    const char **method_strs = ALLOCA_N(const char *, len);
+
+    for (long i = 0; i < len; i++) {
+        VALUE method = rb_ary_entry(methods, i);
+        method_strs[i] = StringValueCStr(method);
+    }
+
+    rdx_set_dsl_capture_filter(graph, method_strs, (size_t)len);
+    return self;
+}
+
+// Graph#clear_dsl_capture_filter -> self
+// Clear the DSL capture filter
+static VALUE sr_graph_clear_dsl_capture_filter(VALUE self) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    rdx_clear_dsl_capture_filter(graph);
+    return self;
+}
+
+// Helper: create Ruby DslEvent object from C DslEventData
+static VALUE build_dsl_event(void *graph, const DslEventData *data, VALUE file_path) {
+    VALUE event = rb_class_new_instance(0, NULL, cDslEvent);
+
+    rb_iv_set(event, "@id", ULONG2NUM(data->id));
+    rb_iv_set(event, "@parent_id", data->parent_id >= 0 ? LONG2NUM(data->parent_id) : Qnil);
+    rb_iv_set(event, "@offset", UINT2NUM(data->offset));
+    rb_iv_set(event, "@has_block", data->has_block ? Qtrue : Qfalse);
+    rb_iv_set(event, "@file_path", file_path);
+
+    // Receiver (nil if no receiver)
+    if (data->receiver != NULL) {
+        rb_iv_set(event, "@receiver", rb_str_new_cstr(data->receiver));
+    } else {
+        rb_iv_set(event, "@receiver", Qnil);
+    }
+
+    // Method name
+    if (data->method_name != NULL) {
+        rb_iv_set(event, "@method_name", rb_str_new_cstr(data->method_name));
+    } else {
+        rb_iv_set(event, "@method_name", Qnil);
+    }
+
+    // Arguments array
+    VALUE args = rb_ary_new_capa((long)data->arguments_len);
+    for (size_t i = 0; i < data->arguments_len; i++) {
+        if (data->arguments[i] != NULL) {
+            rb_ary_push(args, rb_str_new_cstr(data->arguments[i]));
+        }
+    }
+    rb_iv_set(event, "@arguments", args);
+
+    // Nesting stack array (now contains declaration name strings)
+    VALUE nesting = rb_ary_new_capa((long)data->nesting_len);
+    for (size_t i = 0; i < data->nesting_len; i++) {
+        if (data->nesting_stack[i] != NULL) {
+            rb_ary_push(nesting, rb_str_new_cstr(data->nesting_stack[i]));
+        }
+    }
+    rb_iv_set(event, "@nesting_stack", nesting);
+
+    return event;
+}
+
+// Body function for rb_ensure in Graph#each_dsl_file
+static VALUE graph_each_dsl_file_yield(VALUE args) {
+    VALUE self = rb_ary_entry(args, 0);
+    struct DslFilesIter *files_iter = (struct DslFilesIter *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    int64_t uri_id;
+    while (rdx_dsl_files_iter_next(files_iter, &uri_id)) {
+        // Get file path from uri_id
+        const char *file_path_cstr = rdx_graph_uri_path(graph, uri_id);
+        VALUE file_path = Qnil;
+        if (file_path_cstr != NULL) {
+            file_path = rb_str_new_cstr(file_path_cstr);
+            free_c_string(file_path_cstr);
+        }
+
+        // Build array of DslEvent objects for this file
+        VALUE events_array = rb_ary_new();
+        struct DslEventsIter *events_iter = rdx_dsl_events_iter_new(graph, uri_id);
+
+        size_t event_count = rdx_dsl_events_iter_len(events_iter);
+        for (size_t i = 0; i < event_count; i++) {
+            const DslEventData *event_data = rdx_dsl_events_iter_get(events_iter, i);
+            if (event_data != NULL) {
+                VALUE event = build_dsl_event(graph, event_data, file_path);
+                rb_ary_push(events_array, event);
+            }
+        }
+
+        rdx_dsl_events_iter_free(events_iter);
+
+        // Yield file_path and events array
+        rb_yield_values(2, file_path, events_array);
+    }
+
+    return Qnil;
+}
+
+// Ensure function for rb_ensure in Graph#each_dsl_file
+static VALUE graph_each_dsl_file_ensure(VALUE args) {
+    struct DslFilesIter *iter = (struct DslFilesIter *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    rdx_dsl_files_iter_free(iter);
+    return Qnil;
+}
+
+// Graph#each_dsl_file { |file_path, events| } -> self
+// Yields each file that has DSL events with its events array
+static VALUE sr_graph_each_dsl_file(VALUE self) {
+    rb_need_block();
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    struct DslFilesIter *files_iter = rdx_dsl_files_iter_new(graph);
+
+    VALUE args = rb_ary_new();
+    rb_ary_push(args, self);
+    rb_ary_push(args, ULL2NUM((uintptr_t)files_iter));
+
+    rb_ensure(graph_each_dsl_file_yield, args, graph_each_dsl_file_ensure, args);
+
+    return self;
+}
+
 void initialize_graph(VALUE mRubydex) {
     VALUE eRubydexError = rb_const_get(mRubydex, rb_intern("Error"));
     eIndexingError = rb_define_class_under(mRubydex, "IndexingError", eRubydexError);
+
+    // Define DslEvent class with attr_readers
+    cDslEvent = rb_define_class_under(mRubydex, "DslEvent", rb_cObject);
+    rb_define_attr(cDslEvent, "id", 1, 0);
+    rb_define_attr(cDslEvent, "parent_id", 1, 0);
+    rb_define_attr(cDslEvent, "method_name", 1, 0);
+    rb_define_attr(cDslEvent, "arguments", 1, 0);
+    rb_define_attr(cDslEvent, "nesting_stack", 1, 0);
+    rb_define_attr(cDslEvent, "offset", 1, 0);
+    rb_define_attr(cDslEvent, "has_block", 1, 0);
+    rb_define_attr(cDslEvent, "receiver", 1, 0);
+    rb_define_attr(cDslEvent, "file_path", 1, 0);
 
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, sr_graph_alloc);
@@ -524,4 +680,7 @@ void initialize_graph(VALUE mRubydex) {
     rb_define_method(cGraph, "add_module", sr_graph_add_module, -1);
     rb_define_method(cGraph, "add_mixin", sr_graph_add_mixin, -1);
     rb_define_method(cGraph, "register_included_hook", sr_graph_register_included_hook, -1);
+    rb_define_method(cGraph, "capture_dsl_methods", sr_graph_capture_dsl_methods, 1);
+    rb_define_method(cGraph, "clear_dsl_capture_filter", sr_graph_clear_dsl_capture_filter, 0);
+    rb_define_method(cGraph, "each_dsl_file", sr_graph_each_dsl_file, 0);
 }

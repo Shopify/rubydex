@@ -530,3 +530,334 @@ pub unsafe extern "C" fn rdx_graph_register_included_hook(
         true
     })
 }
+
+// ============================================================================
+// DSL Event API
+// ============================================================================
+
+/// Configure which DSL methods to capture during indexing.
+/// Must be called before rdx_index_all().
+///
+/// # Safety
+///
+/// - `pointer` must be a valid GraphPointer
+/// - `methods` must be an array of `count` valid C strings
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_set_dsl_capture_filter(
+    pointer: GraphPointer,
+    methods: *const *const c_char,
+    count: usize,
+) {
+    let method_names: Vec<String> = (0..count)
+        .filter_map(|i| {
+            let ptr = unsafe { *methods.add(i) };
+            if ptr.is_null() {
+                return None;
+            }
+            unsafe { utils::convert_char_ptr_to_string(ptr) }.ok()
+        })
+        .collect();
+
+    with_graph(pointer, |graph| {
+        graph.set_dsl_capture_filter(method_names);
+    });
+}
+
+/// Clear the DSL capture filter.
+#[unsafe(no_mangle)]
+pub extern "C" fn rdx_clear_dsl_capture_filter(pointer: GraphPointer) {
+    with_graph(pointer, |graph| {
+        graph.clear_dsl_capture_filter();
+    });
+}
+
+/// Iterator over files with DSL events
+pub struct DslFilesIter {
+    uri_ids: Box<[i64]>,
+    index: usize,
+}
+
+/// Creates a new iterator over files that have DSL events.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid GraphPointer
+#[unsafe(no_mangle)]
+pub extern "C" fn rdx_dsl_files_iter_new(pointer: GraphPointer) -> *mut DslFilesIter {
+    let uri_ids = with_graph(pointer, |graph| {
+        graph
+            .dsl_events()
+            .keys()
+            .map(|id| **id)
+            .collect::<Vec<i64>>()
+            .into_boxed_slice()
+    });
+
+    Box::into_raw(Box::new(DslFilesIter { uri_ids, index: 0 }))
+}
+
+/// Advances the DSL files iterator.
+/// Returns true if a URI ID was written, false if exhausted.
+///
+/// # Safety
+///
+/// - `iter` must be a valid pointer from rdx_dsl_files_iter_new
+/// - `out_uri_id` must be a valid writable pointer
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_dsl_files_iter_next(iter: *mut DslFilesIter, out_uri_id: *mut i64) -> bool {
+    if iter.is_null() || out_uri_id.is_null() {
+        return false;
+    }
+    let it = unsafe { &mut *iter };
+    if it.index >= it.uri_ids.len() {
+        return false;
+    }
+    unsafe { *out_uri_id = it.uri_ids[it.index] };
+    it.index += 1;
+    true
+}
+
+/// Frees a DSL files iterator.
+///
+/// # Safety
+///
+/// - `iter` must be a valid pointer from rdx_dsl_files_iter_new
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_dsl_files_iter_free(iter: *mut DslFilesIter) {
+    if !iter.is_null() {
+        unsafe {
+            let _ = Box::from_raw(iter);
+        }
+    }
+}
+
+/// Get the file path for a URI ID.
+/// Caller must free the returned string with free_c_string.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid GraphPointer
+#[unsafe(no_mangle)]
+pub extern "C" fn rdx_graph_uri_path(pointer: GraphPointer, uri_id: i64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let uri_id = rubydex::model::ids::UriId::new(uri_id);
+        if let Some(document) = graph.documents().get(&uri_id) {
+            if let Ok(cstr) = CString::new(document.uri()) {
+                return cstr.into_raw().cast_const();
+            }
+        }
+        ptr::null()
+    })
+}
+
+/// Struct to return DSL event data to C
+#[repr(C)]
+pub struct DslEventData {
+    /// Unique ID within this file
+    pub id: usize,
+    /// Parent event ID (-1 for None/top-level)
+    pub parent_id: i64,
+    /// Method name (caller must free with free_c_string)
+    pub method_name: *const c_char,
+    /// Array of argument strings (caller must free each and the array)
+    pub arguments: *const *const c_char,
+    pub arguments_len: usize,
+    /// Array of nesting stack declaration names (fully qualified)
+    pub nesting_stack: *const *const c_char,
+    pub nesting_len: usize,
+    /// Byte offset in file
+    pub offset: u32,
+    /// Whether this call has a block
+    pub has_block: bool,
+    /// The receiver text if present (null if no receiver)
+    pub receiver: *const c_char,
+}
+
+/// Iterator over DSL events for a specific file
+pub struct DslEventsIter {
+    events: Vec<DslEventData>,
+    /// Owned strings to keep alive
+    _owned_strings: Vec<CString>,
+    /// Owned argument arrays
+    _owned_args: Vec<Vec<*const c_char>>,
+    /// Owned nesting stack pointer arrays
+    _owned_nesting: Vec<Vec<*const c_char>>,
+    index: usize,
+}
+
+/// Creates a new iterator over DSL events for a specific file.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid GraphPointer
+#[unsafe(no_mangle)]
+pub extern "C" fn rdx_dsl_events_iter_new(pointer: GraphPointer, uri_id: i64) -> *mut DslEventsIter {
+    with_graph(pointer, |graph| {
+        let uri_id = rubydex::model::ids::UriId::new(uri_id);
+        let mut owned_strings = Vec::new();
+        let mut owned_args = Vec::new();
+        let mut owned_nesting = Vec::new();
+
+        let events = graph
+            .dsl_events()
+            .get(&uri_id)
+            .map(|file_events| {
+                file_events
+                    .events
+                    .iter()
+                    .map(|event| {
+                        // Convert method name
+                        let method_name = graph
+                            .strings()
+                            .get(&event.method_name)
+                            .map(|s| s.as_str())
+                            .unwrap_or("");
+                        let method_cstr = CString::new(method_name).unwrap_or_default();
+                        let method_ptr = method_cstr.as_ptr();
+                        owned_strings.push(method_cstr);
+
+                        // Convert arguments
+                        let arg_ptrs: Vec<*const c_char> = event
+                            .arguments
+                            .iter()
+                            .filter_map(|arg_id| {
+                                let arg_str = graph.strings().get(arg_id)?;
+                                let arg_cstr = CString::new(arg_str.as_str()).ok()?;
+                                let ptr = arg_cstr.as_ptr();
+                                owned_strings.push(arg_cstr);
+                                Some(ptr)
+                            })
+                            .collect();
+                        let args_ptr = if arg_ptrs.is_empty() {
+                            ptr::null()
+                        } else {
+                            arg_ptrs.as_ptr()
+                        };
+                        let args_len = arg_ptrs.len();
+                        owned_args.push(arg_ptrs);
+
+                        // Convert nesting stack: look up each definition to get the declaration name
+                        // Note: nesting_stack stores DefinitionId values (incorrectly typed as DeclarationId)
+                        let nesting_ptrs: Vec<*const c_char> = event
+                            .nesting_stack
+                            .iter()
+                            .filter_map(|stored_id| {
+                                // The stored value is actually a DefinitionId, not a DeclarationId
+                                let def_id = rubydex::model::ids::DefinitionId::new(**stored_id);
+                                // Look up the correct DeclarationId via definitions_to_declarations
+                                let decl_id = graph.definitions_to_declarations().get(&def_id)?;
+                                let decl = graph.declarations().get(decl_id)?;
+                                let name_cstr = CString::new(decl.name()).ok()?;
+                                let ptr = name_cstr.as_ptr();
+                                owned_strings.push(name_cstr);
+                                Some(ptr)
+                            })
+                            .collect();
+                        let nesting_ptr = if nesting_ptrs.is_empty() {
+                            ptr::null()
+                        } else {
+                            nesting_ptrs.as_ptr()
+                        };
+                        let nesting_len = nesting_ptrs.len();
+                        owned_nesting.push(nesting_ptrs);
+
+                        // Convert receiver
+                        let receiver_ptr = event
+                            .receiver
+                            .and_then(|recv_id| {
+                                let recv_str = graph.strings().get(&recv_id)?;
+                                let recv_cstr = CString::new(recv_str.as_str()).ok()?;
+                                let ptr = recv_cstr.as_ptr();
+                                owned_strings.push(recv_cstr);
+                                Some(ptr)
+                            })
+                            .unwrap_or(ptr::null());
+
+                        DslEventData {
+                            id: event.id,
+                            parent_id: event.parent_id.map_or(-1, |id| id as i64),
+                            method_name: method_ptr,
+                            arguments: args_ptr,
+                            arguments_len: args_len,
+                            nesting_stack: nesting_ptr,
+                            nesting_len,
+                            offset: event.offset.start(),
+                            has_block: event.has_block,
+                            receiver: receiver_ptr,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Box::into_raw(Box::new(DslEventsIter {
+            events,
+            _owned_strings: owned_strings,
+            _owned_args: owned_args,
+            _owned_nesting: owned_nesting,
+            index: 0,
+        }))
+    })
+}
+
+/// Returns the number of events in the iterator.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_dsl_events_iter_len(iter: *const DslEventsIter) -> usize {
+    if iter.is_null() {
+        return 0;
+    }
+    unsafe { (*iter).events.len() }
+}
+
+/// Gets a pointer to the event at the given index.
+/// Returns null if index is out of bounds.
+///
+/// # Safety
+///
+/// - `iter` must be a valid pointer from rdx_dsl_events_iter_new
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_dsl_events_iter_get(iter: *const DslEventsIter, index: usize) -> *const DslEventData {
+    if iter.is_null() {
+        return ptr::null();
+    }
+    let it = unsafe { &*iter };
+    if index >= it.events.len() {
+        return ptr::null();
+    }
+    &it.events[index]
+}
+
+/// Advances the iterator and writes the next event data.
+/// Returns true if an event was available, false if exhausted.
+///
+/// # Safety
+///
+/// - `iter` must be a valid pointer from rdx_dsl_events_iter_new
+/// - `out_event` must be a valid writable pointer
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_dsl_events_iter_next(iter: *mut DslEventsIter, out_event: *mut DslEventData) -> bool {
+    if iter.is_null() || out_event.is_null() {
+        return false;
+    }
+    let it = unsafe { &mut *iter };
+    if it.index >= it.events.len() {
+        return false;
+    }
+    unsafe { ptr::copy_nonoverlapping(&it.events[it.index], out_event, 1) };
+    it.index += 1;
+    true
+}
+
+/// Frees a DSL events iterator.
+///
+/// # Safety
+///
+/// - `iter` must be a valid pointer from rdx_dsl_events_iter_new
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_dsl_events_iter_free(iter: *mut DslEventsIter) {
+    if !iter.is_null() {
+        unsafe {
+            let _ = Box::from_raw(iter);
+        }
+    }
+}

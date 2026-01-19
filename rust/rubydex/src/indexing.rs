@@ -5,6 +5,7 @@ use crate::{
     model::graph::Graph,
 };
 use crossbeam_channel::{Sender, unbounded};
+use std::collections::HashSet;
 use std::{fs, path::PathBuf, sync::Arc};
 use url::Url;
 
@@ -16,15 +17,23 @@ pub struct IndexingRubyFileJob {
     path: PathBuf,
     local_graph_tx: Sender<LocalGraph>,
     errors_tx: Sender<Errors>,
+    /// DSL filter to pass to the indexer (if any)
+    dsl_filter: Option<Arc<HashSet<String>>>,
 }
 
 impl IndexingRubyFileJob {
     #[must_use]
-    pub fn new(path: PathBuf, local_graph_tx: Sender<LocalGraph>, errors_tx: Sender<Errors>) -> Self {
+    pub fn new(
+        path: PathBuf,
+        local_graph_tx: Sender<LocalGraph>,
+        errors_tx: Sender<Errors>,
+        dsl_filter: Option<Arc<HashSet<String>>>,
+    ) -> Self {
         Self {
             path,
             local_graph_tx,
             errors_tx,
+            dsl_filter,
         }
     }
 
@@ -55,7 +64,9 @@ impl Job for IndexingRubyFileJob {
             return;
         };
 
-        let mut ruby_indexer = RubyIndexer::new(url.to_string(), &source);
+        // Create indexer with DSL filter if provided
+        let dsl_filter = self.dsl_filter.as_ref().map(|f| (**f).clone());
+        let mut ruby_indexer = RubyIndexer::with_dsl_filter(url.to_string(), &source, dsl_filter);
         ruby_indexer.index();
 
         self.local_graph_tx
@@ -74,11 +85,21 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
     let (local_graphs_tx, local_graphs_rx) = unbounded();
     let (errors_tx, errors_rx) = unbounded();
 
+    // Extract DSL filter from graph and convert StringIds to Strings for sharing across threads
+    let dsl_filter: Option<Arc<HashSet<String>>> = graph.dsl_method_filter().map(|filter| {
+        let string_filter: HashSet<String> = filter
+            .iter()
+            .filter_map(|str_id| graph.strings().get(str_id).cloned())
+            .collect();
+        Arc::new(string_filter)
+    });
+
     for path in paths {
         queue.push(Box::new(IndexingRubyFileJob::new(
             path,
             local_graphs_tx.clone(),
             errors_tx.clone(),
+            dsl_filter.clone(),
         )));
     }
 
