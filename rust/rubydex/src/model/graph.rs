@@ -10,7 +10,6 @@ use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ResolvedName};
-// use crate::model::integrity::IntegrityChecker;
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::stats;
 
@@ -498,97 +497,6 @@ impl Graph {
         &self.position_encoding
     }
 
-    /// Asserts that the index is in a valid state.
-    #[cfg(test)]
-    pub fn assert_integrity(&self) {
-        // Self::integrity_checker().assert_integrity(self);
-    }
-
-    // #[allow(clippy::too_many_lines)]
-    // #[must_use]
-    // pub fn integrity_checker() -> IntegrityChecker {
-    //     let mut checker = IntegrityChecker::new();
-
-    //     checker.add_rule("Each `declaration` has at least one definition", |index, errors| {
-    //         for declaration in index.declarations().values() {
-    //             if declaration.name() != "<main>" && declaration.definitions().is_empty() {
-    //                 errors.push(format!(
-    //                     "Declaration '{}' exists in `declarations`, but is not associated to any definitions",
-    //                     declaration.name()
-    //                 ));
-    //             }
-    //         }
-    //     });
-
-    //     checker.add_rule(
-    //         "Each `definition` declaration_id is registered in `declarations`",
-    //         |index, errors| {
-    //             for definition_id in index.definitions().keys() {
-    //                 let declaration_id = index.definitions_to_declarations.get(definition_id).unwrap();
-    //                 if !index.declarations().contains_key(declaration_id) {
-    //                     errors.push(format!(
-    //                         "Definition '{definition_id}' is registered in `definitions` but not in `declarations`"
-    //                     ));
-    //                 }
-    //             }
-    //         },
-    //     );
-
-    //     checker.add_rule(
-    //         "Each `declaration` definition is registered in `definitions`",
-    //         |index, errors| {
-    //             for declaration in index.declarations().values() {
-    //                 for definition_id in declaration.definitions() {
-    //                     if !index.definitions().contains_key(definition_id) {
-    //                         errors.push(format!(
-    //                             "Definition '{definition_id}' exists in `declarations` but not in `definitions`"
-    //                         ));
-    //                     }
-    //                 }
-    //             }
-    //         },
-    //     );
-
-    //     checker.add_rule("Each `definition` URI is registered in `documents`", |index, errors| {
-    //         for definition in index.definitions().values() {
-    //             let uri_id = definition.uri_id();
-    //             if !index.documents().contains_key(uri_id) {
-    //                 errors.push(format!(
-    //                     "URI id '{uri_id}' is registered in `definitions` but not in `documents`"
-    //                 ));
-    //             }
-    //         }
-    //     });
-
-    //     checker.add_rule(
-    //         "Each `document` definition is registered in `definitions`",
-    //         |index, errors| {
-    //             for document in index.documents().values() {
-    //                 for definition_id in document.definitions() {
-    //                     if !index.definitions().contains_key(definition_id) {
-    //                         errors.push(format!(
-    //                             "Definition '{definition_id}' is registered in `uris_to_definitions` but not in `definitions`"
-    //                         ));
-    //                     }
-    //                 }
-    //             }
-    //         },
-    //     );
-
-    //     checker.add_rule("Each `definitions` URI is registered in `uri_pool`", |index, errors| {
-    //         for definition in index.definitions().values() {
-    //             let uri_id = definition.uri_id();
-    //             if !index.documents().contains_key(uri_id) {
-    //                 errors.push(format!(
-    //                     "URI id '{uri_id}' is referenced by a definition but not present in `uri_pool`"
-    //                 ));
-    //             }
-    //         }
-    //     });
-
-    //     checker
-    // }
-
     /// # Panics
     ///
     /// Panics if acquiring a read lock fails
@@ -692,8 +600,6 @@ mod tests {
                 .get(&DeclarationId::from("Foo"))
                 .is_none()
         );
-
-        context.graph().assert_integrity();
     }
 
     #[test]
@@ -752,8 +658,6 @@ mod tests {
                     .is_none()
             );
         }
-
-        context.graph().assert_integrity();
     }
 
     #[test]
@@ -790,8 +694,6 @@ mod tests {
             let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
             assert!(declaration.references().is_empty());
         }
-
-        context.graph().assert_integrity();
     }
 
     #[test]
@@ -924,8 +826,6 @@ mod tests {
         assert_eq!(document.uri(), "file:///foo.rb");
         assert_eq!(declaration.definitions().len(), 1);
         assert_eq!(document.definitions().len(), 1);
-
-        context.graph().assert_integrity();
     }
 
     #[test]
@@ -953,8 +853,6 @@ mod tests {
         let definitions = context.graph().get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].offset().start(), 6);
-
-        context.graph().assert_integrity();
     }
 
     #[test]
@@ -970,8 +868,6 @@ mod tests {
         offsets.sort_unstable();
         assert_eq!(definitions.len(), 2);
         assert_eq!(vec![0, 5], offsets);
-
-        context.graph().assert_integrity();
     }
 
     #[test]
@@ -1002,8 +898,6 @@ mod tests {
         offsets.sort_unstable();
         assert_eq!([0, 15], offsets[0]);
         assert_eq!([18, 33], offsets[1]);
-
-        context.graph().assert_integrity();
     }
 
     #[test]
