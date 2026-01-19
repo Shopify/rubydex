@@ -496,7 +496,7 @@ impl<'a> Resolver<'a> {
         let fully_qualified_name = {
             let owner = self.graph.declarations().get(&owner_id).unwrap();
             let name_str = self.graph.strings().get(&str_id).unwrap();
-            format!("{}::{name_str}", owner.name())
+            format!("{}#{name_str}", owner.name())
         };
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
@@ -1897,7 +1897,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["initialize", "@name"]);
+        assert_members(foo, &["initialize()", "@name"]);
         assert_owner(foo, "Object");
     }
 
@@ -2080,7 +2080,7 @@ mod tests {
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>"))
             .unwrap();
-        assert_members(singleton, &["bar", "BAZ"]);
+        assert_members(singleton, &["bar()", "BAZ"]);
         assert_owner(singleton, "Foo");
     }
 
@@ -2125,7 +2125,7 @@ mod tests {
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>::<<Foo>>"))
             .unwrap();
-        assert_members(nested_singleton, &["baz"]);
+        assert_members(nested_singleton, &["baz()"]);
         assert_owner(nested_singleton, "Foo::<Foo>");
     }
 
@@ -2165,7 +2165,7 @@ mod tests {
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>"))
             .unwrap();
-        assert_members(singleton, &["baz", "Baz"]);
+        assert_members(singleton, &["baz()", "Baz"]);
         assert_owner(singleton, "Foo");
     }
 
@@ -2211,7 +2211,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo, &["bar", "@@baz"]);
+        assert_members(foo, &["bar()", "@@baz"]);
     }
 
     #[test]
@@ -2324,7 +2324,7 @@ mod tests {
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>"))
             .unwrap();
-        assert_members(foo_singleton, &["bar", "baz"]);
+        assert_members(foo_singleton, &["bar()", "baz()"]);
         assert_owner(foo_singleton, "Foo");
 
         let nested_foo_singleton = context
@@ -2332,7 +2332,7 @@ mod tests {
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>::<<Foo>>"))
             .unwrap();
-        assert_members(nested_foo_singleton, &["nested_bar"]);
+        assert_members(nested_foo_singleton, &["nested_bar()"]);
         assert_owner(nested_foo_singleton, "Foo::<Foo>");
 
         let bar_singleton = context
@@ -2340,7 +2340,7 @@ mod tests {
             .declarations()
             .get(&DeclarationId::from("Bar::<Bar>"))
             .unwrap();
-        assert_members(bar_singleton, &["qux"]);
+        assert_members(bar_singleton, &["qux()"]);
         assert_owner(bar_singleton, "Bar");
     }
 
@@ -2505,12 +2505,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>::@foo", "Foo::<Foo>");
-        assert_instance_variable(&context, "Foo::@bar", "Foo");
-        assert_instance_variable(&context, "Foo::<Foo>::@baz", "Foo::<Foo>");
+        assert_instance_variable(&context, "Foo::<Foo>#@foo", "Foo::<Foo>");
+        assert_instance_variable(&context, "Foo#@bar", "Foo");
+        assert_instance_variable(&context, "Foo::<Foo>#@baz", "Foo::<Foo>");
         // @qux in `class << self; def qux` - self is Foo when called, so @qux belongs to Foo's singleton class
-        assert_instance_variable(&context, "Foo::<Foo>::@qux", "Foo::<Foo>");
-        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>::@nested", "Foo::<Foo>::<<Foo>>");
+        assert_instance_variable(&context, "Foo::<Foo>#@qux", "Foo::<Foo>");
+        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>#@nested", "Foo::<Foo>::<<Foo>>");
     }
 
     #[test]
@@ -2538,8 +2538,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>::@foo", "Foo::<Foo>");
-        assert_instance_variable(&context, "Bar::<Bar>::@baz", "Bar::<Bar>");
+        assert_instance_variable(&context, "Foo::<Foo>#@foo", "Foo::<Foo>");
+        assert_instance_variable(&context, "Bar::<Bar>#@baz", "Bar::<Bar>");
     }
 
     #[test]
@@ -2561,7 +2561,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
-        assert_instance_variable(&context, "Bar::Baz::<Baz>::@baz", "Bar::Baz::<Baz>");
+        assert_instance_variable(&context, "Bar::Baz::<Baz>#@baz", "Bar::Baz::<Baz>");
     }
 
     #[test]
@@ -2584,10 +2584,10 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>::@bar", "Foo::<Foo>::<<Foo>>");
+        assert_instance_variable(&context, "Foo::<Foo>::<<Foo>>#@bar", "Foo::<Foo>::<<Foo>>");
         assert_instance_variable(
             &context,
-            "Foo::<Foo>::<<Foo>>::<<<Foo>>>::@baz",
+            "Foo::<Foo>::<<Foo>>::<<<Foo>>>#@baz",
             "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
         );
     }
@@ -2654,7 +2654,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo_class, &["foo", "bar"]);
+        assert_members(foo_class, &["foo()", "bar()"]);
     }
 
     #[test]
@@ -3687,7 +3687,7 @@ mod tests {
 
         let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         // inner_method should be owned by Foo, not by setup
-        assert_members(foo_class, &["setup", "inner_method"]);
+        assert_members(foo_class, &["setup()", "inner_method()"]);
     }
 
     #[test]
@@ -3713,11 +3713,11 @@ mod tests {
             .declarations()
             .get(&DeclarationId::from("Foo::<Foo>"))
             .unwrap();
-        assert_members(foo_singleton_class, &["setup"]);
+        assert_members(foo_singleton_class, &["setup()"]);
 
         // All attr_* should be owned by Foo, not by setup
         let foo_class = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert_members(foo_class, &["reader_attr", "writer_attr", "accessor_attr"]);
+        assert_members(foo_class, &["reader_attr()", "writer_attr()", "accessor_attr()"]);
     }
 
     #[test]
@@ -4333,5 +4333,40 @@ mod tests {
 
         let const_key = StringId::from("CONST");
         assert!(!bar_members.contains_key(&const_key));
+    }
+
+    #[test]
+    fn distinct_declarations_with_conflicting_string_ids() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def Array(); end
+              class Array; end
+            end
+            "
+        });
+        context.resolve();
+
+        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+
+        // Both entries exist as unique members
+        assert_members(foo, &["Array", "Array()"]);
+
+        // Both declarations exist with unique IDs
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo::Array"))
+                .is_some()
+        );
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo#Array()"))
+                .is_some()
+        );
     }
 }

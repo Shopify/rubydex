@@ -314,12 +314,13 @@ impl Declaration {
         all_declarations!(self, it => &it.owner_id)
     }
 
-    // This will change once we fix fully qualified names to not use `::` as separators for everything. Also, we may
-    // want to actually store this in the struct. Currently, it is only used to cleanup a member that got deleted from
-    // the graph, so we're avoiding the extra memory cost by computing it on demand.
+    // Splits the fully qualified name either in the last `::` or the `#` to return the simple name of this declaration
     #[must_use]
     pub fn unqualified_name(&self) -> String {
-        all_declarations!(self, it => it.name.rsplit("::").next().unwrap_or(&it.name).to_string())
+        all_declarations!(self, it => {
+            let after_colons = it.name.rsplit("::").next().unwrap_or(&it.name);
+            after_colons.rsplit('#').next().unwrap_or(after_colons).to_string()
+        })
     }
 }
 
@@ -364,6 +365,15 @@ impl Namespace {
             Namespace::Class(class) => class.members(),
             Namespace::Module(module) => module.members(),
             Namespace::SingletonClass(singleton) => singleton.members(),
+        }
+    }
+
+    #[must_use]
+    pub fn get_member(&self, str_id: StringId) -> Option<&DeclarationId> {
+        match self {
+            Namespace::Class(class) => class.get_member(&str_id),
+            Namespace::Module(module) => module.get_member(&str_id),
+            Namespace::SingletonClass(singleton) => singleton.get_member(&str_id),
         }
     }
 
@@ -489,7 +499,7 @@ mod tests {
         assert_eq!(decl.unqualified_name(), "Bar");
 
         let decl = Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-            "Foo::Bar::baz".to_string(),
+            "Foo::Bar#baz".to_string(),
             DeclarationId::from("Foo::Bar"),
         ))));
         assert_eq!(decl.unqualified_name(), "baz");

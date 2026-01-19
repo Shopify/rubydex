@@ -93,7 +93,7 @@ class DefinitionTest < Minitest::Test
       assert_equal(3, location.end_line)
       assert_equal(4, location.end_column)
 
-      def_foo = graph.documents.first.definitions.find { |d| d.name == "foo" }
+      def_foo = graph.documents.first.definitions.find { |d| d.name == "foo()" }
       refute_nil(def_foo)
       location = def_foo.location
       refute_nil(location)
@@ -129,7 +129,7 @@ class DefinitionTest < Minitest::Test
         foo_comments.map { |c| "#{c.string} (#{normalized_comment_location(c)})" },
       )
 
-      bar_comments = graph.documents.first.definitions.find { |d| d.name == "bar" }.comments
+      bar_comments = graph.documents.first.definitions.find { |d| d.name == "bar()" }.comments
       assert_equal(
         ["# Method comment (#{context.absolute_path_to("file1.rb")}:4:3-4:19)"],
         bar_comments.map { |c| "#{c.string} (#{normalized_comment_location(c)})" },
@@ -162,9 +162,9 @@ class DefinitionTest < Minitest::Test
 
       assert(graph.documents.first.definitions.find { |d| d.name == "Deprecated" }.deprecated?)
       refute(graph.documents.first.definitions.find { |d| d.name == "NotDeprecated" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "deprecated_method" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "also_deprecated_method" }.deprecated?)
-      refute(graph.documents.first.definitions.find { |d| d.name == "not_deprecated_method" }.deprecated?)
+      assert(graph.documents.first.definitions.find { |d| d.name == "deprecated_method()" }.deprecated?)
+      assert(graph.documents.first.definitions.find { |d| d.name == "also_deprecated_method()" }.deprecated?)
+      refute(graph.documents.first.definitions.find { |d| d.name == "not_deprecated_method()" }.deprecated?)
     end
   end
 
@@ -198,8 +198,8 @@ class DefinitionTest < Minitest::Test
 
       assert(graph.documents.first.definitions.find { |d| d.name == "DeprecatedWithBlank" }.deprecated?)
       assert(graph.documents.first.definitions.find { |d| d.name == "DeprecatedWithMessage" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "deprecated_method" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "also_deprecated_method" }.deprecated?)
+      assert(graph.documents.first.definitions.find { |d| d.name == "deprecated_method()" }.deprecated?)
+      assert(graph.documents.first.definitions.find { |d| d.name == "also_deprecated_method()" }.deprecated?)
       refute(graph.documents.first.definitions.find { |d| d.name == "NotDeprecated" }.deprecated?)
     end
   end

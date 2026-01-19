@@ -1051,4 +1051,71 @@ mod tests {
             diagnostics,
         );
     }
+
+    #[test]
+    fn removing_method_def_with_conflicting_constant_name() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              class Array; end
+            end
+            "
+        });
+        context.index_uri("file:///foo2.rb", {
+            "
+            class Foo
+              def Array; end
+            end
+            "
+        });
+
+        context.resolve();
+        // Removing the method should not remove the constant
+        context.index_uri("file:///foo2.rb", "");
+
+        let foo = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo"))
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+
+        assert!(foo.get_member(StringId::from("Array")).is_some());
+        assert!(foo.get_member(StringId::from("Array()")).is_none());
+    }
+
+    #[test]
+    fn removing_constant_with_conflicting_method_name() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              class Array; end
+            end
+            "
+        });
+        context.index_uri("file:///foo2.rb", {
+            "
+            class Foo
+              def Array; end
+            end
+            "
+        });
+
+        context.resolve();
+        // Removing the method should not remove the constant
+        context.index_uri("file:///foo.rb", "");
+
+        let foo = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo"))
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+        assert!(foo.get_member(StringId::from("Array()")).is_some());
+        assert!(foo.get_member(StringId::from("Array")).is_none());
+    }
 }
