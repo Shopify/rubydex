@@ -575,7 +575,13 @@ impl<'a> Resolver<'a> {
             self.graph.declarations().get(&attached_id).unwrap(),
             Declaration::Constant(_) | Declaration::ConstantAlias(_)
         ) {
-            self.set_singleton_class_id(attached_id, decl_id);
+            self.graph
+                .declarations_mut()
+                .get_mut(&attached_id)
+                .unwrap()
+                .as_namespace_mut()
+                .unwrap()
+                .set_singleton_class_id(decl_id);
         }
 
         self.graph.declarations_mut().insert(
@@ -910,7 +916,13 @@ impl<'a> Resolver<'a> {
                 let declaration_id = DeclarationId::from(&fully_qualified_name);
 
                 if singleton {
-                    self.set_singleton_class_id(owner_id, declaration_id);
+                    self.graph
+                        .declarations_mut()
+                        .get_mut(&owner_id)
+                        .unwrap()
+                        .as_namespace_mut()
+                        .unwrap()
+                        .set_singleton_class_id(declaration_id);
                 } else {
                     self.graph.add_member(&owner_id, declaration_id, str_id);
                 }
@@ -1443,15 +1455,6 @@ impl<'a> Resolver<'a> {
             Definition::SingletonClass(class) => Some(class.mixins().to_vec()),
             Definition::Module(module) => Some(module.mixins().to_vec()),
             _ => None,
-        }
-    }
-
-    fn set_singleton_class_id(&mut self, declaration_id: DeclarationId, id: DeclarationId) {
-        match self.graph.declarations_mut().get_mut(&declaration_id).unwrap() {
-            Declaration::Namespace(Namespace::Class(class)) => class.set_singleton_class_id(id),
-            Declaration::Namespace(Namespace::Module(module)) => module.set_singleton_class_id(id),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.set_singleton_class_id(id),
-            _ => panic!("Tried to set singleton class ID for a declaration that isn't a namespace"),
         }
     }
 }

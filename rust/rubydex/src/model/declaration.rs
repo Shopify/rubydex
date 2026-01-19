@@ -257,11 +257,16 @@ impl Declaration {
         }
     }
 
-    /// # Panics
-    ///
-    /// Panics if the declaration is not a namespace
     #[must_use]
     pub fn as_namespace(&self) -> Option<&Namespace> {
+        match self {
+            Declaration::Namespace(namespace) => Some(namespace),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_namespace_mut(&mut self) -> Option<&mut Namespace> {
         match self {
             Declaration::Namespace(namespace) => Some(namespace),
             _ => None,
@@ -412,6 +417,10 @@ impl Namespace {
     #[must_use]
     pub fn singleton_class(&self) -> Option<&DeclarationId> {
         all_namespaces!(self, it => it.singleton_class_id())
+    }
+
+    pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
+        all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
     }
 }
 
