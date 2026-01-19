@@ -174,8 +174,12 @@ impl Graph {
     pub fn diagnostics(&self) -> Vec<&Diagnostic> {
         let document_diagnostics = self.documents.values().flat_map(Document::diagnostics);
         let declaration_diagnostics = self.declarations.values().flat_map(Declaration::diagnostics);
+        let definition_diagnostics = self.definitions.values().flat_map(Definition::diagnostics);
 
-        document_diagnostics.chain(declaration_diagnostics).collect()
+        document_diagnostics
+            .chain(declaration_diagnostics)
+            .chain(definition_diagnostics)
+            .collect()
     }
 
     /// Interns a string in the graph unless already interned. This method is only used to back the
