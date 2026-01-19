@@ -253,11 +253,36 @@ impl Graph {
         &self.names
     }
 
+    /// Decrements the ref count for a name and removes it if the count reaches zero.
+    ///
+    /// This does not recursively untrack `parent_scope` or `nesting` names.
     pub fn untrack_name(&mut self, name_id: NameId) {
         if let Some(name_ref) = self.names.get_mut(&name_id)
             && !name_ref.decrement_ref_count()
         {
             self.names.remove(&name_id);
+        }
+    }
+
+    /// Decrements the ref count for a name and removes it if the count reaches zero.
+    ///
+    /// This recursively untracks `parent_scope` and `nesting` names.
+    pub fn untrack_name_recursive(&mut self, name_id: NameId) {
+        let Some(name_ref) = self.names.get(&name_id) else {
+            return;
+        };
+
+        let parent_scope = *name_ref.parent_scope();
+        let nesting = *name_ref.nesting();
+
+        self.untrack_name(name_id);
+
+        if let Some(parent_scope_id) = parent_scope {
+            self.untrack_name_recursive(parent_scope_id);
+        }
+
+        if let Some(nesting_id) = nesting {
+            self.untrack_name_recursive(nesting_id);
         }
     }
 
