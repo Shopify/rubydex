@@ -655,7 +655,13 @@ impl<'a> Resolver<'a> {
             // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
             // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
             for descendant in &context.descendants {
-                self.add_descendant(declaration_id, *descendant);
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&declaration_id)
+                    .unwrap()
+                    .as_namespace_mut()
+                    .unwrap()
+                    .add_descendant(*descendant);
             }
         }
 
@@ -876,7 +882,13 @@ impl<'a> Resolver<'a> {
             for ancestor in cached {
                 if let Ancestor::Complete(ancestor_id) = ancestor {
                     for descendant in descendants.iter() {
-                        self.add_descendant(*ancestor_id, *descendant);
+                        self.graph
+                            .declarations_mut()
+                            .get_mut(ancestor_id)
+                            .unwrap()
+                            .as_namespace_mut()
+                            .unwrap()
+                            .add_descendant(*descendant);
                     }
                 }
             }
@@ -1427,15 +1439,6 @@ impl<'a> Resolver<'a> {
         let (picked_parent, partial) = self.get_parent_class(definition_ids);
         let result = self.linearize_ancestors(picked_parent, context);
         if partial { result.to_partial() } else { result }
-    }
-
-    fn add_descendant(&mut self, declaration_id: DeclarationId, descendant_id: DeclarationId) {
-        match self.graph.declarations_mut().get_mut(&declaration_id).unwrap() {
-            Declaration::Namespace(Namespace::Class(class)) => class.add_descendant(descendant_id),
-            Declaration::Namespace(Namespace::Module(module)) => module.add_descendant(descendant_id),
-            Declaration::Namespace(Namespace::SingletonClass(singleton)) => singleton.add_descendant(descendant_id),
-            _ => panic!("Tried to add descendant for a declaration that isn't a namespace"),
-        }
     }
 
     fn mixins_of(&self, definition_id: DefinitionId) -> Option<Vec<Mixin>> {

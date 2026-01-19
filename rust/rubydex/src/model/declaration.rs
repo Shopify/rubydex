@@ -388,6 +388,10 @@ impl Namespace {
         all_namespaces!(self, it => it.has_complete_ancestors())
     }
 
+    pub fn add_descendant(&self, descendant_id: DeclarationId) {
+        all_namespaces!(self, it => it.add_descendant(descendant_id));
+    }
+
     pub fn remove_descendant(&self, descendant_id: &DeclarationId) {
         all_namespaces!(self, it => it.remove_descendant(descendant_id));
     }
