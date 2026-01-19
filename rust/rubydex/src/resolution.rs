@@ -619,7 +619,7 @@ impl<'a> Resolver<'a> {
     #[must_use]
     fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
         {
-            let declaration = self.graph.declarations().get(&declaration_id).unwrap();
+            let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
 
             // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
             // `Module.new`, which now seem like constants, but are actually namespaces
@@ -650,7 +650,7 @@ impl<'a> Resolver<'a> {
                     Ancestors::Cyclic(vec![])
                 };
                 declaration
-                    .as_namespace()
+                    .as_namespace_mut()
                     .unwrap()
                     .set_ancestors(estimated_ancestors.clone());
                 context.descendants.remove(&declaration_id);
@@ -725,7 +725,7 @@ impl<'a> Resolver<'a> {
             .declarations_mut()
             .get_mut(&declaration_id)
             .unwrap()
-            .as_namespace()
+            .as_namespace_mut()
             .unwrap()
             .set_ancestors(result.clone());
 

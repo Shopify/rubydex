@@ -476,8 +476,7 @@ impl Graph {
         }
     }
 
-    fn invalidate_ancestor_chains(&self, initial_ids: Vec<DeclarationId>) {
-        let declarations = &self.declarations;
+    fn invalidate_ancestor_chains(&mut self, initial_ids: Vec<DeclarationId>) {
         let mut queue = initial_ids;
         let mut visited = IdentityHashSet::<DeclarationId>::default();
 
@@ -486,22 +485,30 @@ impl Graph {
                 continue;
             }
 
-            let Some(decl) = declarations.get(&declaration_id) else {
-                continue;
-            };
+            let namespace = self
+                .declarations_mut()
+                .get_mut(&declaration_id)
+                .unwrap()
+                .as_namespace_mut()
+                .expect("expected namespace declaration");
 
-            let namespace = decl.as_namespace().expect("expected namespace declaration");
-
-            namespace.for_each_ancestor(|ancestor| {
-                if let Ancestor::Complete(ancestor_id) = ancestor
-                    && let Some(ancestor_decl) = declarations.get(ancestor_id)
-                {
-                    ancestor_decl
-                        .as_namespace()
-                        .expect("expected namespace declaration")
+            for ancestor in &namespace.ancestors() {
+                if let Ancestor::Complete(ancestor_id) = ancestor {
+                    self.declarations_mut()
+                        .get_mut(ancestor_id)
+                        .unwrap()
+                        .as_namespace_mut()
+                        .unwrap()
                         .remove_descendant(&declaration_id);
                 }
-            });
+            }
+
+            let namespace = self
+                .declarations_mut()
+                .get_mut(&declaration_id)
+                .unwrap()
+                .as_namespace_mut()
+                .unwrap();
 
             namespace.for_each_descendant(|descendant_id| {
                 queue.push(*descendant_id);
