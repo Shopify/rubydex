@@ -23,13 +23,12 @@
 //! 1. The declaration for the name `Foo`
 //! 2. The declaration for the name `Foo::Bar`
 
-use std::ops::Deref;
-
 use bitflags::bitflags;
 
 use crate::{
     model::{
         comment::Comment,
+        ids::ReferenceId,
         ids::{DefinitionId, NameId, StringId, UriId},
         visibility::Visibility,
     },
@@ -156,21 +155,48 @@ impl Definition {
 /// During resolution, `Extend` mixins are attached to the singleton class.
 #[derive(Debug, Clone)]
 pub enum Mixin {
-    Include(NameId),
-    Prepend(NameId),
-    Extend(NameId),
+    Include(IncludeDefinition),
+    Prepend(PrependDefinition),
+    Extend(ExtendDefinition),
 }
 
-// Deref implementation to conveniently extract the reference ID with a dereference
-impl Deref for Mixin {
-    type Target = NameId;
-
-    fn deref(&self) -> &Self::Target {
+impl Mixin {
+    #[must_use]
+    pub fn constant_reference_id(&self) -> &ReferenceId {
         match self {
-            Mixin::Include(id) | Mixin::Prepend(id) | Mixin::Extend(id) => id,
+            Mixin::Include(def) => def.constant_reference_id(),
+            Mixin::Prepend(def) => def.constant_reference_id(),
+            Mixin::Extend(def) => def.constant_reference_id(),
         }
     }
 }
+
+macro_rules! mixin_definition {
+    ($variant:ident, $name:ident) => {
+        #[derive(Debug, Clone)]
+        pub struct $name {
+            constant_reference_id: ReferenceId,
+        }
+
+        impl $name {
+            #[must_use]
+            pub const fn new(constant_reference_id: ReferenceId) -> Self {
+                Self {
+                    constant_reference_id,
+                }
+            }
+
+            #[must_use]
+            pub fn constant_reference_id(&self) -> &ReferenceId {
+                &self.constant_reference_id
+            }
+        }
+    };
+}
+
+mixin_definition!(Include, IncludeDefinition);
+mixin_definition!(Prepend, PrependDefinition);
+mixin_definition!(Extend, ExtendDefinition);
 
 /// A class definition
 ///

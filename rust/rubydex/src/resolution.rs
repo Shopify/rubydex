@@ -778,9 +778,15 @@ impl<'a> Resolver<'a> {
         // collect ahead of time. This is the reason why we apparently treat an extend like an include, because an extend in
         // the attached object is equivalent to an include in the singleton class
         for mixin in mixins {
+            let constant_reference = self
+                .graph
+                .constant_references()
+                .get(mixin.constant_reference_id())
+                .unwrap();
+
             match mixin {
-                Mixin::Prepend(name_id) => {
-                    match self.graph.names().get(&name_id).unwrap() {
+                Mixin::Prepend(_) => {
+                    match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
                             let ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
                                 Ancestors::Complete(ids) => ids,
@@ -810,12 +816,12 @@ impl<'a> Resolver<'a> {
                             // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
                             // later
                             context.partial = true;
-                            linearized_prepends.push_front(Ancestor::Partial(name_id));
+                            linearized_prepends.push_front(Ancestor::Partial(*constant_reference.name_id()));
                         }
                     }
                 }
-                Mixin::Include(name_id) | Mixin::Extend(name_id) => {
-                    match self.graph.names().get(&name_id).unwrap() {
+                Mixin::Include(_) | Mixin::Extend(_) => {
+                    match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
                             let mut ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
                                 Ancestors::Complete(ids) => ids,
@@ -846,7 +852,7 @@ impl<'a> Resolver<'a> {
                             // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
                             // later
                             context.partial = true;
-                            linearized_includes.push_front(Ancestor::Partial(name_id));
+                            linearized_includes.push_front(Ancestor::Partial(*constant_reference.name_id()));
                         }
                     }
                 }

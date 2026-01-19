@@ -117,10 +117,11 @@ impl LocalGraph {
         &self.constant_references
     }
 
-    pub fn add_constant_reference(&mut self, reference: ConstantReference) {
+    pub fn add_constant_reference(&mut self, reference: ConstantReference) -> ReferenceId {
         let reference_id = reference.id();
         self.constant_references.insert(reference_id, reference);
         self.document.add_constant_reference(reference_id);
+        reference_id
     }
 
     // Method references
