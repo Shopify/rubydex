@@ -583,9 +583,15 @@ impl<'a> RubyIndexer<'a> {
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
-        let superclass = superclass_node
-            .as_ref()
-            .and_then(|n| self.index_constant_reference(n, true));
+        let superclass = superclass_node.as_ref().and_then(|n| {
+            self.index_constant_reference(n, false).map(|id| {
+                self.local_graph.add_constant_reference(ConstantReference::new(
+                    id,
+                    self.uri_id,
+                    Offset::from_prism_location(&n.location()),
+                ))
+            })
+        });
 
         if let Some(superclass_node) = superclass_node
             && superclass.is_none()
@@ -1926,6 +1932,24 @@ mod tests {
             } else {
                 panic!("expected method to have receiver, got None");
             }
+        }};
+    }
+
+    macro_rules! assert_superclass_ref_eq {
+        ($context:expr, $def:expr, $expected_name:expr) => {{
+            let name = $context
+                .graph()
+                .names()
+                .get(
+                    $context
+                        .graph()
+                        .constant_references()
+                        .get($def.superclass_ref().unwrap())
+                        .unwrap()
+                        .name_id(),
+                )
+                .unwrap();
+            assert_eq!($expected_name, $context.graph().strings().get(name.str()).unwrap());
         }};
     }
 
@@ -3774,7 +3798,7 @@ mod tests {
             class IGNORED < ::C2; end
             class IGNORED < C3; end
             class IGNORED < C4::C5; end
-            class IGNORED < ::C6::C7; end
+            class IGNORED < ::C7::C6; end
 
             class C8::IGNORED; end
             class ::C9::IGNORED; end
@@ -4116,10 +4140,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:21", Class, |def| {
-            assert_eq!(
-                &def.superclass_ref().unwrap(),
-                context.graph().constant_references().values().collect::<Vec<_>>()[0].name_id()
-            );
+            assert_superclass_ref_eq!(&context, def, "Bar");
         });
     }
 
@@ -4137,7 +4158,7 @@ mod tests {
         refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
 
         assert_definition_at!(&context, "1:1-1:26", Class, |def| {
-            assert_eq!(&def.superclass_ref().unwrap(), refs[1].name_id());
+            assert_superclass_ref_eq!(&context, def, "Baz");
         });
     }
 
@@ -4767,8 +4788,7 @@ mod tests {
                             assert_eq!(bar.members()[1], var.id());
                             assert_eq!(bar.members()[2], hello.id());
 
-                            let superclass_name = context.graph().names().get(&bar.superclass_ref().unwrap()).unwrap();
-                            assert_eq!(StringId::from("Parent"), *superclass_name.str());
+                            assert_superclass_ref_eq!(&context, bar, "Parent");
 
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
@@ -4888,8 +4908,7 @@ mod tests {
                             assert_eq!(bar.members()[1], var.id());
                             assert_eq!(bar.members()[2], hello.id());
 
-                            let superclass_name = context.graph().names().get(&bar.superclass_ref().unwrap()).unwrap();
-                            assert_eq!(StringId::from("Parent"), *superclass_name.str());
+                            assert_superclass_ref_eq!(&context, bar, "Parent");
 
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
