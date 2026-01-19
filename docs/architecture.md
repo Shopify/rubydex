@@ -103,5 +103,7 @@ Connections between nodes use hashed IDs defined in `ids.rs`:
 
 - `DefinitionId`: Hash of URI, byte offset, and name
 - `DeclarationId`: Hash of fully qualified name (e.g., `Foo::Bar` or `Foo#my_method`)
-- `NameId`: Hash of unqualified name (e.g., `Bar` instead of `Foo::Bar`)
+- `NameId`: Hash of unqualified name combined with parent scope and lexical nesting context
 - `UriId`: Hash of file URI
+- `StringId`: ID for interned string values
+- `ReferenceId`: ID for constant or method reference occurrences (combines reference kind, URI, and offset)

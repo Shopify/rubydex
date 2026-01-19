@@ -59,9 +59,11 @@ type checkers, linting and other code analysis features.
 
 - `rust/rubydex/src/model/graph.rs`: the Graph representation of the codebase. Read more about the architecture of the graph
 in `docs/architecture.md`
-- `rust/rubydex/src/indexing/ruby_indexer.rs`: the visitor that extracts declaration information from the
-AST to save in the global graph
+- `rust/rubydex/src/indexing/ruby_indexer.rs`: the visitor that extracts definition information from the
+AST to save in the graph
 - `rust/rubydex/src/indexing.rs`: the parallel implementation of indexing a list of documents
+- `rust/rubydex/src/resolution.rs`: the Resolution stage that computes fully qualified names, creates declarations,
+resolves constant references, and linearizes ancestor chains
 
 ### Commands
 
@@ -70,7 +72,7 @@ When necessary, commands can be executed for the Rust code.
 - `cargo build`: compiles the Rust code
 - `cargo run -- <directory>`: runs the indexer on the specified directory (must use absolute paths or $HOME, not ~)
 - `cargo run -- <directory> --stats`: runs the indexer with detailed performance breakdown
-- `cargo run -- <directory> --check-integrity`: runs integrity checks on the index after processing
+- `cargo run -- <directory> --stop-after <stage>`: stops after the specified stage (Listing, Indexing, or Resolution)
 - `cargo run -- <directory> --visualize`: generates a DOT visualization of the graph
 - `cargo test`: runs Rust tests
 - `cargo test test_name`: runs a specific tests example
