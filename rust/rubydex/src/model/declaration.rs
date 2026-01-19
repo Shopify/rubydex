@@ -383,6 +383,11 @@ impl Namespace {
         all_namespaces!(self, it => it.set_ancestors(ancestors));
     }
 
+    #[must_use]
+    pub fn has_complete_ancestors(&self) -> bool {
+        all_namespaces!(self, it => it.has_complete_ancestors())
+    }
+
     pub fn remove_descendant(&self, descendant_id: &DeclarationId) {
         all_namespaces!(self, it => it.remove_descendant(descendant_id));
     }
