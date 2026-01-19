@@ -19,12 +19,6 @@ struct Args {
     #[arg(value_name = "PATHS", default_value = ".")]
     paths: Vec<String>,
 
-    #[arg(
-        long = "check-integrity",
-        help = "Run integrity checks on the index after processing"
-    )]
-    check_integrity: bool,
-
     #[arg(long = "visualize")]
     visualize: bool,
 
@@ -56,23 +50,6 @@ fn main() {
         let mut resolver = Resolver::new(&mut graph);
         resolver.resolve_all();
     });
-
-    // Run integrity checks if requested
-    // if args.check_integrity {
-    //     time_it!(integrity_check, {
-    //         let errors = Graph::integrity_checker().apply(&graph);
-
-    //         if errors.is_empty() {
-    //             println!("✓ Index integrity check passed");
-    //         } else {
-    //             eprintln!("✗ Index integrity check failed with {} errors:", errors.len());
-    //             for error in &errors {
-    //                 eprintln!("  - {error}");
-    //             }
-    //             std::process::exit(1);
-    //         }
-    //     });
-    // }
 
     if args.stats {
         time_it!(querying, {
