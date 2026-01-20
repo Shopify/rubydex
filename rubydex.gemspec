@@ -7,6 +7,7 @@ Gem::Specification.new do |spec|
   spec.version = Rubydex::VERSION
   spec.authors = ["Shopify"]
   spec.email = ["ruby@shopify.com"]
+  spec.licenses = ["MIT"]
 
   spec.summary = "A high performance static analysis suite for Ruby"
   spec.description = "A high performance static analysis suite for Ruby, built in Rust with Ruby APIs"
@@ -20,6 +21,11 @@ Gem::Specification.new do |spec|
   spec.metadata["changelog_uri"] = "#{spec.homepage}/releases"
 
   spec.files = Dir.glob("lib/**/*.rb") + ["README.md", "LICENSE.txt"]
+
+  if ENV["RELEASE"]
+    spec.files << "THIRD_PARTY_LICENSES.html"
+  end
+
   spec.bindir = "exe"
   spec.executables = Dir.glob("exe/*").map { |f| File.basename(f) }
   spec.require_paths = ["lib"]
