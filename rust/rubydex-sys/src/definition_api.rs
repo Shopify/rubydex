@@ -321,3 +321,30 @@ pub unsafe extern "C" fn rdx_definition_is_deprecated(pointer: GraphPointer, def
         defn.is_deprecated()
     })
 }
+
+/// Returns a newly allocated `Location` for the name portion of a definition id.
+/// For class, module, and singleton class definitions, this returns the location of just
+/// the name (e.g., "Bar" in `class Foo::Bar`).
+/// For other definition types, returns NULL.
+/// Caller must free the returned pointer with `rdx_location_free`.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `definition_id` must be a valid definition id.
+///
+/// # Panics
+/// Panics if the definition's document does not exist in the graph.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_definition_name_location(pointer: GraphPointer, definition_id: i64) -> *mut Location {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let Some(defn) = graph.definitions().get(&def_id) else {
+            return ptr::null_mut();
+        };
+        let Some(name_offset) = defn.name_offset() else {
+            return ptr::null_mut();
+        };
+        let document = graph.documents().get(defn.uri_id()).expect("document should exist");
+        create_location_for_uri_and_offset(graph, document, name_offset)
+    })
+}

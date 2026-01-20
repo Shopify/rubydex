@@ -603,14 +603,27 @@ impl<'a> RubyIndexer<'a> {
             );
         }
 
-        let name_id = if let Some(name_node) = name_node {
-            self.index_constant_reference(name_node, false)
+        let (name_id, name_offset) = if let Some(name_node) = name_node {
+            let name_loc = match name_node {
+                ruby_prism::Node::ConstantPathNode { .. } => name_node.as_constant_path_node().unwrap().name_loc(),
+                ruby_prism::Node::ConstantPathWriteNode { .. } => {
+                    name_node.as_constant_path_write_node().unwrap().target().name_loc()
+                }
+                _ => name_node.location(),
+            };
+            (
+                self.index_constant_reference(name_node, false),
+                Offset::from_prism_location(&name_loc),
+            )
         } else {
             let string_id = self
                 .local_graph
                 .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
 
-            Some(self.local_graph.add_name(Name::new(string_id, None, None)))
+            (
+                Some(self.local_graph.add_name(Name::new(string_id, None, None))),
+                offset.clone(),
+            )
         };
 
         if let Some(name_id) = name_id {
@@ -618,6 +631,7 @@ impl<'a> RubyIndexer<'a> {
                 name_id,
                 self.uri_id,
                 offset,
+                name_offset,
                 comments,
                 flags,
                 lexical_nesting_id,
@@ -649,14 +663,27 @@ impl<'a> RubyIndexer<'a> {
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
-        let name_id = if let Some(name_node) = name_node {
-            self.index_constant_reference(name_node, false)
+        let (name_id, name_offset) = if let Some(name_node) = name_node {
+            let name_loc = match name_node {
+                ruby_prism::Node::ConstantPathNode { .. } => name_node.as_constant_path_node().unwrap().name_loc(),
+                ruby_prism::Node::ConstantPathWriteNode { .. } => {
+                    name_node.as_constant_path_write_node().unwrap().target().name_loc()
+                }
+                _ => name_node.location(),
+            };
+            (
+                self.index_constant_reference(name_node, false),
+                Offset::from_prism_location(&name_loc),
+            )
         } else {
             let string_id = self
                 .local_graph
                 .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
 
-            Some(self.local_graph.add_name(Name::new(string_id, None, None)))
+            (
+                Some(self.local_graph.add_name(Name::new(string_id, None, None))),
+                offset.clone(),
+            )
         };
 
         if let Some(name_id) = name_id {
@@ -664,6 +691,7 @@ impl<'a> RubyIndexer<'a> {
                 name_id,
                 self.uri_id,
                 offset,
+                name_offset,
                 comments,
                 flags,
                 lexical_nesting_id,
@@ -1027,20 +1055,33 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_singleton_class_node(&mut self, node: &ruby_prism::SingletonClassNode) {
         let expression = node.expression();
 
-        // Determine the attached_target for the singleton class
-        let attached_target = if expression.as_self_node().is_some() {
+        // Determine the attached_target for the singleton class and the name_offset
+        let (attached_target, name_offset) = if expression.as_self_node().is_some() {
             // `class << self` - resolve self to current class/module's NameId
-            self.current_lexical_scope_name_id()
+            // name_offset points to "self"
+            (
+                self.current_lexical_scope_name_id(),
+                Offset::from_prism_location(&expression.location()),
+            )
         } else if matches!(
             expression,
             ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }
         ) {
             // `class << Foo` or `class << Foo::Bar` - use the constant's NameId
-            self.index_constant_reference(&expression, true)
+            // name_offset points to the expression (the constant reference)
+            (
+                self.index_constant_reference(&expression, true),
+                Offset::from_prism_location(&expression.location()),
+            )
         } else {
             // Dynamic expression (e.g., `class << some_var`) - skip creating definition
             self.visit(&expression);
-            None
+            self.local_graph.add_diagnostic(
+                Rule::DynamicSingletonDefinition,
+                Offset::from_prism_location(&node.location()),
+                "Dynamic singleton class definition".to_string(),
+            );
+            return;
         };
 
         let Some(attached_target) = attached_target else {
@@ -1080,6 +1121,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             name_id,
             self.uri_id,
             offset,
+            name_offset,
             comments,
             flags,
             lexical_nesting_id,
@@ -1998,6 +2040,19 @@ mod tests {
         }};
     }
 
+    macro_rules! assert_name_offset_eq {
+        ($context:expr, $expected_location:expr, $def:expr) => {{
+            let (_, expected_offset) = $context.parse_location(&format!("{}:{}", $context.uri(), $expected_location));
+            assert_eq!(
+                &expected_offset,
+                $def.name_offset(),
+                "name_offset mismatch: expected {}, got {}",
+                expected_offset.to_display_range($context.graph().document()),
+                $def.name_offset().to_display_range($context.graph().document())
+            );
+        }};
+    }
+
     fn format_diagnostics(context: &LocalGraphTest) -> Vec<String> {
         let mut diagnostics = context.graph().diagnostics().iter().collect::<Vec<_>>();
 
@@ -2082,6 +2137,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
             assert_name_id_to_string_eq!(&context, "Foo", def);
+            assert_name_offset_eq!(&context, "1:7-1:10", def);
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
@@ -2089,6 +2145,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
             assert_name_id_to_string_eq!(&context, "Bar", def);
+            assert_name_offset_eq!(&context, "2:9-2:12", def);
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -2100,6 +2157,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:5-3:19", Class, |def| {
             assert_name_id_to_string_eq!(&context, "Baz", def);
+            assert_name_offset_eq!(&context, "3:11-3:14", def);
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -2127,6 +2185,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
             assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
+            assert_name_offset_eq!(&context, "1:12-1:15", def);
             assert!(def.superclass_ref().is_none());
             assert!(def.lexical_nesting_id().is_none());
             assert_eq!(1, def.members().len());
@@ -2134,6 +2193,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
             assert_name_id_to_string_eq!(&context, "Baz::Qux", def);
+            assert_name_offset_eq!(&context, "2:14-2:17", def);
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -2145,6 +2205,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:5-3:23", Class, |def| {
             assert_name_id_to_string_eq!(&context, "Quuux", def);
+            assert_name_offset_eq!(&context, "3:13-3:18", def);
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -2188,12 +2249,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
             assert_name_id_to_string_eq!(&context, "Foo", def);
+            assert_name_offset_eq!(&context, "1:8-1:11", def);
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
             assert_name_id_to_string_eq!(&context, "Bar", def);
+            assert_name_offset_eq!(&context, "2:10-2:13", def);
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -2204,6 +2267,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:5-3:20", Module, |def| {
             assert_name_id_to_string_eq!(&context, "Baz", def);
+            assert_name_offset_eq!(&context, "3:12-3:15", def);
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2229,12 +2293,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
             assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
+            assert_name_offset_eq!(&context, "1:13-1:16", def);
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
             assert_name_id_to_string_eq!(&context, "Baz::Qux", def);
+            assert_name_offset_eq!(&context, "2:15-2:18", def);
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -2245,6 +2311,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:5-3:24", Module, |def| {
             assert_name_id_to_string_eq!(&context, "Quuux", def);
+            assert_name_offset_eq!(&context, "3:14-3:19", def);
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2565,15 +2632,19 @@ mod tests {
         // class Bar
         assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
             assert_name_id_to_string_eq!(&context, "Bar", bar_class);
+            assert_name_offset_eq!(&context, "1:7-1:10", bar_class);
         });
 
         // class Foo
         assert_definition_at!(&context, "3:1-15:4", Class, |foo_class| {
             assert_name_id_to_string_eq!(&context, "Foo", foo_class);
+            assert_name_offset_eq!(&context, "3:7-3:10", foo_class);
 
             // class << self (inside Foo)
             assert_definition_at!(&context, "4:3-14:6", SingletonClass, |foo_singleton| {
                 assert_name_id_to_string_eq!(&context, "Foo::<Foo>", foo_singleton);
+                // name_offset points to "self"
+                assert_name_offset_eq!(&context, "4:12-4:16", foo_singleton);
                 assert_eq!(foo_singleton.lexical_nesting_id(), &Some(foo_class.id()));
 
                 // def baz (inside class << self)
@@ -2584,6 +2655,8 @@ mod tests {
                 // class << Bar (inside class << self of Foo)
                 assert_definition_at!(&context, "7:5-9:8", SingletonClass, |bar_singleton| {
                     assert_name_id_to_string_eq!(&context, "Bar::<Bar>", bar_singleton);
+                    // name_offset points to "Bar"
+                    assert_name_offset_eq!(&context, "7:14-7:17", bar_singleton);
                     assert_eq!(bar_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
 
                     // def self.qux (inside class << Bar)
@@ -2596,6 +2669,8 @@ mod tests {
                 // class << self (nested inside outer class << self)
                 assert_definition_at!(&context, "11:5-13:8", SingletonClass, |nested_singleton| {
                     assert_name_id_to_string_eq!(&context, "Foo::<Foo>::<<Foo>>", nested_singleton);
+                    // name_offset points to "self"
+                    assert_name_offset_eq!(&context, "11:14-11:18", nested_singleton);
                     assert_eq!(nested_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
 
                     // def quz (inside nested class << self)
@@ -4167,6 +4242,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:26", Class, |def| {
             assert_superclass_ref_eq!(&context, def, "Baz");
+            assert_name_offset_eq!(&context, "1:7-1:10", def);
         });
     }
 

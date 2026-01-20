@@ -141,6 +141,26 @@ static VALUE rdxr_definition_deprecated(VALUE self) {
     return deprecated ? Qtrue : Qfalse;
 }
 
+// Definition#name_location -> Rubydex::Location or nil
+// For class, module, and singleton class definitions, returns the location of just the name
+// (e.g., "Bar" in "class Foo::Bar"). For other definition types, returns nil.
+static VALUE rdxr_definition_name_location(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    Location *loc = rdx_definition_name_location(graph, data->id);
+    if (loc == NULL) {
+        return Qnil;
+    }
+    VALUE location = rdxi_build_location_value(loc);
+    rdx_location_free(loc);
+
+    return location;
+}
+
 void rdxi_initialize_definition(VALUE mod) {
     mRubydex = mod;
 
@@ -154,6 +174,7 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cDefinition, "comments", rdxr_definition_comments, 0);
     rb_define_method(cDefinition, "name", rdxr_definition_name, 0);
     rb_define_method(cDefinition, "deprecated?", rdxr_definition_deprecated, 0);
+    rb_define_method(cDefinition, "name_location", rdxr_definition_name_location, 0);
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
     rb_define_alloc_func(cClassDefinition, rdxr_handle_alloc);
