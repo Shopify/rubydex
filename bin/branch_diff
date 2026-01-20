@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Script to print the diff between the current branch and its base
+
+# List all of the branch information starting with *, which indicates the current branch
+branches = %x(git show-branch).split("\n").select { |branch| branch.include?("* [") }
+
+# Search for the current branch entry (has to happen from the right because it may appear more than once)
+current_branch = %x(git rev-parse --abbrev-ref HEAD).strip
+current_branch_index = branches.rindex { |branch| branch.include?("[#{current_branch}]") }
+
+# The base branch is the next branch in the list. Sanitize the branch name or default to main
+base_branch = branches[current_branch_index + 1]
+
+sanitized_base_branch = if base_branch
+  # The branch information looks like this: "* [branch_name^213] Commit message"
+  base_branch.match(/\[([^^]+)/)[1]
+else
+  "main"
+end
+
+puts %x(git diff #{sanitized_base_branch}...#{current_branch})
