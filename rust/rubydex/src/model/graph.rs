@@ -441,6 +441,12 @@ impl Graph {
                         let unqualified_str_id = StringId::from(&declaration.unqualified_name());
                         members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
                         declarations_to_delete.push(declaration_id);
+
+                        if let Some(namespace) = declaration.as_namespace()
+                            && let Some(singleton_id) = namespace.singleton_class()
+                        {
+                            declarations_to_delete.push(*singleton_id);
+                        }
                     }
                 }
 
@@ -1117,5 +1123,103 @@ mod tests {
             .unwrap();
         assert!(foo.member(&StringId::from("Array()")).is_some());
         assert!(foo.member(&StringId::from("Array")).is_none());
+    }
+
+    #[test]
+    fn deleting_class_also_deletes_singleton_class() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.hello; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert!(context.graph().get("Foo").is_some());
+        assert!(context.graph().get("Foo::<Foo>").is_some());
+
+        context.delete_uri("file:///foo.rb");
+
+        assert!(context.graph().get("Foo").is_none());
+        assert!(context.graph().get("Foo::<Foo>").is_none());
+    }
+
+    #[test]
+    fn deleting_module_also_deletes_singleton_class() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///bar.rb", {
+            r"
+            module Bar
+              def self.greet; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert!(context.graph().get("Bar").is_some());
+        assert!(context.graph().get("Bar::<Bar>").is_some());
+
+        context.delete_uri("file:///bar.rb");
+
+        assert!(context.graph().get("Bar").is_none());
+        assert!(context.graph().get("Bar::<Bar>").is_none());
+    }
+
+    #[test]
+    fn deleting_nested_class_also_deletes_singleton_class() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///nested.rb",
+            r"
+            class Outer
+              class Inner
+                def self.method; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert!(context.graph().get("Outer").is_some());
+        assert!(context.graph().get("Outer::Inner").is_some());
+        assert!(context.graph().get("Outer::Inner::<Inner>").is_some());
+
+        context.delete_uri("file:///nested.rb");
+
+        assert!(context.graph().get("Outer").is_none());
+        assert!(context.graph().get("Outer::Inner").is_none());
+        assert!(context.graph().get("Outer::Inner::<Inner>").is_none());
+    }
+
+    #[test]
+    fn deleting_singleton_class_also_deletes_its_singleton_class() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              class << self
+                def self.hello; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert!(context.graph().get("Foo").is_some());
+        assert!(context.graph().get("Foo::<Foo>").is_some());
+        assert!(context.graph().get("Foo::<Foo>::<<Foo>>").is_some());
+
+        context.delete_uri("file:///foo.rb");
+
+        assert!(context.graph().get("Foo").is_none());
+        assert!(context.graph().get("Foo::<Foo>").is_none());
+        assert!(context.graph().get("Foo::<Foo>::<<Foo>>").is_none());
     }
 }
