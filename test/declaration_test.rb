@@ -28,6 +28,27 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_declaration_member
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A
+          def foo; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      declaration = graph["A"]
+      assert_instance_of(Rubydex::Declaration, declaration)
+
+      member_declaration = declaration.member("foo()")
+      assert_instance_of(Rubydex::Declaration, member_declaration)
+      assert_equal("A#foo()", member_declaration.name)
+    end
+  end
+
   def test_definitions_enumerator
     with_context do |context|
       context.write!("file1.rb", "class A; end")
