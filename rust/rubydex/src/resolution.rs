@@ -301,27 +301,6 @@ impl<'a> Resolver<'a> {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
-                Definition::AttrAccessor(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
-
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
-                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                    });
-                }
-                Definition::AttrReader(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
-
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
-                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                    });
-                }
-                Definition::AttrWriter(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
-
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
-                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                    });
-                }
                 Definition::GlobalVariable(var) => {
                     let owner_id = *OBJECT_ID;
                     let str_id = *var.str_id();
@@ -3674,7 +3653,7 @@ mod tests {
         assert_members_eq!(
             context,
             "Foo",
-            vec!["accessor_attr()", "reader_attr()", "writer_attr()"]
+            vec!["accessor_attr()", "accessor_attr=()", "reader_attr()", "writer_attr=()"]
         );
     }
 
@@ -4368,11 +4347,9 @@ mod tests {
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::CONST")));
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#@class_ivar")));
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#baz()")));
-        // TODO: needs the fix for attributes
-        // assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#qux=()")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#qux=()")));
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#zip()")));
-        // TODO: needs the fix for attributes
-        // assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#zip=()")));
+        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#zip=()")));
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#instance_m()")));
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#@@class_var")));
         assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#singleton_m()")));

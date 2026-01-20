@@ -38,7 +38,15 @@ use crate::{
 bitflags! {
     #[derive(Debug, Clone)]
     pub struct DefinitionFlags: u8 {
-        const DEPRECATED = 0b0001;
+        const DEPRECATED = 0b0000_0001;
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct MethodFlags: u8 {
+        const DEPRECATED = 0b0000_0001;
+        // Flags to indicate if this method originated from an attribute. For attr_accessor, both bits will be set
+        const ATTRIBUTE_READER = 0b0000_0010;
+        const ATTRIBUTE_WRITER = 0b0000_0100;
     }
 }
 
@@ -46,6 +54,34 @@ impl DefinitionFlags {
     #[must_use]
     pub fn is_deprecated(&self) -> bool {
         self.contains(Self::DEPRECATED)
+    }
+}
+
+impl MethodFlags {
+    #[must_use]
+    pub fn is_deprecated(&self) -> bool {
+        self.contains(Self::DEPRECATED)
+    }
+
+    #[must_use]
+    pub fn is_reader(&self) -> bool {
+        self.contains(Self::ATTRIBUTE_READER) && !self.contains(Self::ATTRIBUTE_WRITER)
+    }
+
+    #[must_use]
+    pub fn is_writer(&self) -> bool {
+        self.contains(Self::ATTRIBUTE_WRITER) && !self.contains(Self::ATTRIBUTE_READER)
+    }
+
+    #[must_use]
+    pub fn is_accessor(&self) -> bool {
+        self.contains(Self::ATTRIBUTE_READER) && self.contains(Self::ATTRIBUTE_WRITER)
+    }
+}
+
+impl From<DefinitionFlags> for MethodFlags {
+    fn from(def_flags: DefinitionFlags) -> Self {
+        MethodFlags::from_bits_truncate(def_flags.bits())
     }
 }
 
@@ -57,9 +93,6 @@ pub enum Definition {
     Constant(Box<ConstantDefinition>),
     ConstantAlias(Box<ConstantAliasDefinition>),
     Method(Box<MethodDefinition>),
-    AttrAccessor(Box<AttrAccessorDefinition>),
-    AttrReader(Box<AttrReaderDefinition>),
-    AttrWriter(Box<AttrWriterDefinition>),
     GlobalVariable(Box<GlobalVariableDefinition>),
     InstanceVariable(Box<InstanceVariableDefinition>),
     ClassVariable(Box<ClassVariableDefinition>),
@@ -78,9 +111,6 @@ macro_rules! all_definitions {
             Definition::GlobalVariable($var) => $expr,
             Definition::InstanceVariable($var) => $expr,
             Definition::ClassVariable($var) => $expr,
-            Definition::AttrAccessor($var) => $expr,
-            Definition::AttrReader($var) => $expr,
-            Definition::AttrWriter($var) => $expr,
             Definition::Method($var) => $expr,
             Definition::MethodAlias($var) => $expr,
             Definition::GlobalVariableAlias($var) => $expr,
@@ -123,9 +153,6 @@ impl Definition {
             Definition::Constant(_) => "Constant",
             Definition::ConstantAlias(_) => "ConstantAlias",
             Definition::Method(_) => "Method",
-            Definition::AttrAccessor(_) => "AttrAccessor",
-            Definition::AttrReader(_) => "AttrReader",
-            Definition::AttrWriter(_) => "AttrWriter",
             Definition::GlobalVariable(_) => "GlobalVariable",
             Definition::InstanceVariable(_) => "InstanceVariable",
             Definition::ClassVariable(_) => "ClassVariable",
@@ -657,7 +684,7 @@ pub struct MethodDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
-    flags: DefinitionFlags,
+    flags: MethodFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
@@ -673,7 +700,7 @@ impl MethodDefinition {
         uri_id: UriId,
         offset: Offset,
         comments: Vec<Comment>,
-        flags: DefinitionFlags,
+        flags: MethodFlags,
         lexical_nesting_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
         visibility: Visibility,
@@ -744,7 +771,7 @@ impl MethodDefinition {
     }
 
     #[must_use]
-    pub fn flags(&self) -> &DefinitionFlags {
+    pub fn flags(&self) -> &MethodFlags {
         &self.flags
     }
 }
@@ -782,246 +809,6 @@ impl ParameterStruct {
     #[must_use]
     pub fn str(&self) -> &StringId {
         &self.str
-    }
-}
-
-/// An attr accessor definition
-///
-/// # Example
-/// ```ruby
-/// attr_accessor :foo
-/// ```
-#[derive(Debug)]
-pub struct AttrAccessorDefinition {
-    str_id: StringId,
-    uri_id: UriId,
-    offset: Offset,
-    flags: DefinitionFlags,
-    comments: Vec<Comment>,
-    lexical_nesting_id: Option<DefinitionId>,
-    visibility: Visibility,
-}
-
-impl AttrAccessorDefinition {
-    #[must_use]
-    pub const fn new(
-        str_id: StringId,
-        uri_id: UriId,
-        offset: Offset,
-        comments: Vec<Comment>,
-        flags: DefinitionFlags,
-        lexical_nesting_id: Option<DefinitionId>,
-        visibility: Visibility,
-    ) -> Self {
-        Self {
-            str_id,
-            uri_id,
-            offset,
-            flags,
-            comments,
-            lexical_nesting_id,
-            visibility,
-        }
-    }
-
-    #[must_use]
-    pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
-    }
-
-    #[must_use]
-    pub fn str_id(&self) -> &StringId {
-        &self.str_id
-    }
-
-    #[must_use]
-    pub fn uri_id(&self) -> &UriId {
-        &self.uri_id
-    }
-
-    #[must_use]
-    pub fn offset(&self) -> &Offset {
-        &self.offset
-    }
-
-    #[must_use]
-    pub fn comments(&self) -> &[Comment] {
-        &self.comments
-    }
-
-    #[must_use]
-    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
-        &self.lexical_nesting_id
-    }
-
-    #[must_use]
-    pub fn visibility(&self) -> &Visibility {
-        &self.visibility
-    }
-
-    #[must_use]
-    pub fn flags(&self) -> &DefinitionFlags {
-        &self.flags
-    }
-}
-
-/// An attr reader definition
-///
-/// # Example
-/// ```ruby
-/// attr_reader :foo
-/// ```
-#[derive(Debug)]
-pub struct AttrReaderDefinition {
-    str_id: StringId,
-    uri_id: UriId,
-    offset: Offset,
-    flags: DefinitionFlags,
-    comments: Vec<Comment>,
-    lexical_nesting_id: Option<DefinitionId>,
-    visibility: Visibility,
-}
-
-impl AttrReaderDefinition {
-    #[must_use]
-    pub const fn new(
-        str_id: StringId,
-        uri_id: UriId,
-        offset: Offset,
-        comments: Vec<Comment>,
-        flags: DefinitionFlags,
-        lexical_nesting_id: Option<DefinitionId>,
-        visibility: Visibility,
-    ) -> Self {
-        Self {
-            str_id,
-            uri_id,
-            offset,
-            flags,
-            comments,
-            lexical_nesting_id,
-            visibility,
-        }
-    }
-
-    #[must_use]
-    pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
-    }
-
-    #[must_use]
-    pub fn str_id(&self) -> &StringId {
-        &self.str_id
-    }
-
-    #[must_use]
-    pub fn uri_id(&self) -> &UriId {
-        &self.uri_id
-    }
-
-    #[must_use]
-    pub fn offset(&self) -> &Offset {
-        &self.offset
-    }
-
-    #[must_use]
-    pub fn comments(&self) -> &[Comment] {
-        &self.comments
-    }
-
-    #[must_use]
-    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
-        &self.lexical_nesting_id
-    }
-
-    #[must_use]
-    pub fn visibility(&self) -> &Visibility {
-        &self.visibility
-    }
-
-    #[must_use]
-    pub fn flags(&self) -> &DefinitionFlags {
-        &self.flags
-    }
-}
-
-/// An attr writer definition
-///
-/// # Example
-/// ```ruby
-/// attr_writer :foo
-/// ```
-#[derive(Debug)]
-pub struct AttrWriterDefinition {
-    str_id: StringId,
-    uri_id: UriId,
-    offset: Offset,
-    flags: DefinitionFlags,
-    comments: Vec<Comment>,
-    lexical_nesting_id: Option<DefinitionId>,
-    visibility: Visibility,
-}
-
-impl AttrWriterDefinition {
-    #[must_use]
-    pub const fn new(
-        str_id: StringId,
-        uri_id: UriId,
-        offset: Offset,
-        comments: Vec<Comment>,
-        flags: DefinitionFlags,
-        lexical_nesting_id: Option<DefinitionId>,
-        visibility: Visibility,
-    ) -> Self {
-        Self {
-            str_id,
-            uri_id,
-            offset,
-            flags,
-            comments,
-            lexical_nesting_id,
-            visibility,
-        }
-    }
-
-    #[must_use]
-    pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
-    }
-
-    #[must_use]
-    pub fn str_id(&self) -> &StringId {
-        &self.str_id
-    }
-
-    #[must_use]
-    pub fn comments(&self) -> &[Comment] {
-        &self.comments
-    }
-
-    #[must_use]
-    pub fn uri_id(&self) -> &UriId {
-        &self.uri_id
-    }
-
-    #[must_use]
-    pub fn offset(&self) -> &Offset {
-        &self.offset
-    }
-
-    #[must_use]
-    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
-        &self.lexical_nesting_id
-    }
-
-    #[must_use]
-    pub fn visibility(&self) -> &Visibility {
-        &self.visibility
-    }
-
-    #[must_use]
-    pub fn flags(&self) -> &DefinitionFlags {
-        &self.flags
     }
 }
 

@@ -2,7 +2,6 @@
 #include "graph.h"
 #include "handle.h"
 #include "location.h"
-#include "ruby/internal/scan_args.h"
 #include "rustbindings.h"
 
 static VALUE mRubydex;
@@ -14,9 +13,6 @@ VALUE cModuleDefinition;
 VALUE cConstantDefinition;
 VALUE cConstantAliasDefinition;
 VALUE cMethodDefinition;
-VALUE cAttrAccessorDefinition;
-VALUE cAttrReaderDefinition;
-VALUE cAttrWriterDefinition;
 VALUE cGlobalVariableDefinition;
 VALUE cInstanceVariableDefinition;
 VALUE cClassVariableDefinition;
@@ -38,12 +34,6 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
         return cConstantAliasDefinition;
     case DefinitionKind_Method:
         return cMethodDefinition;
-    case DefinitionKind_AttrAccessor:
-        return cAttrAccessorDefinition;
-    case DefinitionKind_AttrReader:
-        return cAttrReaderDefinition;
-    case DefinitionKind_AttrWriter:
-        return cAttrWriterDefinition;
     case DefinitionKind_GlobalVariable:
         return cGlobalVariableDefinition;
     case DefinitionKind_InstanceVariable:
@@ -178,18 +168,6 @@ void initialize_definition(VALUE mod) {
     cMethodDefinition = rb_define_class_under(mRubydex, "MethodDefinition", cDefinition);
     rb_define_alloc_func(cMethodDefinition, sr_handle_alloc);
     rb_define_method(cMethodDefinition, "initialize", sr_handle_initialize, 2);
-
-    cAttrAccessorDefinition = rb_define_class_under(mRubydex, "AttrAccessorDefinition", cDefinition);
-    rb_define_alloc_func(cAttrAccessorDefinition, sr_handle_alloc);
-    rb_define_method(cAttrAccessorDefinition, "initialize", sr_handle_initialize, 2);
-
-    cAttrReaderDefinition = rb_define_class_under(mRubydex, "AttrReaderDefinition", cDefinition);
-    rb_define_alloc_func(cAttrReaderDefinition, sr_handle_alloc);
-    rb_define_method(cAttrReaderDefinition, "initialize", sr_handle_initialize, 2);
-
-    cAttrWriterDefinition = rb_define_class_under(mRubydex, "AttrWriterDefinition", cDefinition);
-    rb_define_alloc_func(cAttrWriterDefinition, sr_handle_alloc);
-    rb_define_method(cAttrWriterDefinition, "initialize", sr_handle_initialize, 2);
 
     cGlobalVariableDefinition = rb_define_class_under(mRubydex, "GlobalVariableDefinition", cDefinition);
     rb_define_alloc_func(cGlobalVariableDefinition, sr_handle_alloc);

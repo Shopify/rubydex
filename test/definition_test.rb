@@ -18,9 +18,6 @@ class DefinitionTest < Minitest::Test
     assert_raises(NoMethodError) { Rubydex::ConstantDefinition.new }
     assert_raises(NoMethodError) { Rubydex::ConstantAliasDefinition.new }
     assert_raises(NoMethodError) { Rubydex::MethodDefinition.new }
-    assert_raises(NoMethodError) { Rubydex::AttrAccessorDefinition.new }
-    assert_raises(NoMethodError) { Rubydex::AttrReaderDefinition.new }
-    assert_raises(NoMethodError) { Rubydex::AttrWriterDefinition.new }
     assert_raises(NoMethodError) { Rubydex::GlobalVariableDefinition.new }
     assert_raises(NoMethodError) { Rubydex::InstanceVariableDefinition.new }
     assert_raises(NoMethodError) { Rubydex::ClassVariableDefinition.new }
@@ -57,17 +54,18 @@ class DefinitionTest < Minitest::Test
 
       assert_instance_of(Rubydex::ClassDefinition, defs[0])
       assert_instance_of(Rubydex::ClassVariableDefinition, defs[1])
-      assert_instance_of(Rubydex::AttrAccessorDefinition, defs[2])
-      assert_instance_of(Rubydex::AttrReaderDefinition, defs[3])
-      assert_instance_of(Rubydex::AttrWriterDefinition, defs[4])
-      assert_instance_of(Rubydex::ModuleDefinition, defs[5])
-      assert_instance_of(Rubydex::ConstantAliasDefinition, defs[6])
-      assert_instance_of(Rubydex::ConstantDefinition, defs[7])
-      assert_instance_of(Rubydex::MethodDefinition, defs[8])
-      assert_instance_of(Rubydex::GlobalVariableDefinition, defs[9])
-      assert_instance_of(Rubydex::InstanceVariableDefinition, defs[10])
-      assert_instance_of(Rubydex::MethodAliasDefinition, defs[11])
-      assert_instance_of(Rubydex::GlobalVariableAliasDefinition, defs[12])
+      assert_instance_of(Rubydex::MethodDefinition, defs[2])
+      assert_instance_of(Rubydex::MethodDefinition, defs[3])
+      assert_instance_of(Rubydex::MethodDefinition, defs[4])
+      assert_instance_of(Rubydex::MethodDefinition, defs[5])
+      assert_instance_of(Rubydex::ModuleDefinition, defs[6])
+      assert_instance_of(Rubydex::ConstantAliasDefinition, defs[7])
+      assert_instance_of(Rubydex::ConstantDefinition, defs[8])
+      assert_instance_of(Rubydex::MethodDefinition, defs[9])
+      assert_instance_of(Rubydex::GlobalVariableDefinition, defs[10])
+      assert_instance_of(Rubydex::InstanceVariableDefinition, defs[11])
+      assert_instance_of(Rubydex::MethodAliasDefinition, defs[12])
+      assert_instance_of(Rubydex::GlobalVariableAliasDefinition, defs[13])
     end
   end
 
