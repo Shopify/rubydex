@@ -107,3 +107,14 @@ Connections between nodes use hashed IDs defined in `ids.rs`:
 - `UriId`: Hash of file URI
 - `StringId`: ID for interned string values
 - `ReferenceId`: ID for constant or method reference occurrences (combines reference kind, URI, and offset)
+
+## FFI Layer
+
+The Rust crate exposes a C-compatible FFI API through `rubydex-sys`. The C extension in `ext/rubydex/` wraps this API for Ruby.
+
+### Naming Conventions
+
+- `rdx_*`: Rust FFI exports (e.g., `rdx_graph_new()`)
+- `rdxr_*`: Ruby method callbacks (e.g., `rdxr_graph_alloc()`)
+- `rdxi_*`: Shared C helpers (e.g., `rdxi_str_array_to_char()`)
+- Static functions have no prefix

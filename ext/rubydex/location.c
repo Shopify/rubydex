@@ -2,7 +2,7 @@
 
 VALUE cLocation;
 
-VALUE build_location_value(Location *loc) {
+VALUE rdxi_build_location_value(Location *loc) {
     if (loc == NULL) {
         return Qnil;
     }
@@ -19,4 +19,4 @@ VALUE build_location_value(Location *loc) {
     return rb_class_new_instance_kw(1, &kwargs, cLocation, RB_PASS_KEYWORDS);
 }
 
-void initialize_location(VALUE mRubydex) { cLocation = rb_define_class_under(mRubydex, "Location", rb_cObject); }
+void rdxi_initialize_location(VALUE mRubydex) { cLocation = rb_define_class_under(mRubydex, "Location", rb_cObject); }

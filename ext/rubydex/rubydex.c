@@ -12,11 +12,11 @@ void Init_rubydex(void) {
     rb_ext_ractor_safe(true);
 
     mRubydex = rb_define_module("Rubydex");
-    initialize_graph(mRubydex);
-    initialize_declaration(mRubydex);
-    initialize_document(mRubydex);
-    initialize_definition(mRubydex);
-    initialize_location(mRubydex);
-    initialize_diagnostic(mRubydex);
-    initialize_reference(mRubydex);
+    rdxi_initialize_graph(mRubydex);
+    rdxi_initialize_declaration(mRubydex);
+    rdxi_initialize_document(mRubydex);
+    rdxi_initialize_definition(mRubydex);
+    rdxi_initialize_location(mRubydex);
+    rdxi_initialize_diagnostic(mRubydex);
+    rdxi_initialize_reference(mRubydex);
 }

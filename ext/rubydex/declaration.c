@@ -7,7 +7,7 @@
 VALUE cDeclaration;
 
 // Declaration#name -> String
-static VALUE sr_declaration_name(VALUE self) {
+static VALUE rdxr_declaration_name(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
@@ -26,7 +26,7 @@ static VALUE sr_declaration_name(VALUE self) {
 }
 
 // Declaration#unqualified_name -> String
-static VALUE sr_declaration_unqualified_name(VALUE self) {
+static VALUE rdxr_declaration_unqualified_name(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
@@ -56,7 +56,7 @@ static VALUE declaration_definitions_yield(VALUE args) {
     DefinitionKind kind;
     while (rdx_definitions_iter_next(iter, &id, &kind)) {
         VALUE argv[] = {data->graph_obj, LL2NUM(id)};
-        VALUE defn_class = definition_class_for_kind(kind);
+        VALUE defn_class = rdxi_definition_class_for_kind(kind);
         VALUE handle = rb_class_new_instance(2, argv, defn_class);
         rb_yield(handle);
     }
@@ -89,7 +89,7 @@ static VALUE declaration_definitions_size(VALUE self, VALUE _args, VALUE _eobj) 
 
 // Declaration#definitions: () -> Enumerator[Definition]
 // Returns an enumerator that yields all definitions for this declaration lazily
-static VALUE sr_declaration_definitions(VALUE self) {
+static VALUE rdxr_declaration_definitions(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("definitions"), 0, NULL, declaration_definitions_size);
     }
@@ -109,7 +109,7 @@ static VALUE sr_declaration_definitions(VALUE self) {
 
 // Declaration#member: (String member) -> Declaration
 // Returns a declaration handle for the given member
-static VALUE sr_declaration_member(VALUE self, VALUE name) {
+static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
@@ -132,15 +132,15 @@ static VALUE sr_declaration_member(VALUE self, VALUE name) {
     return rb_class_new_instance(2, argv, cDeclaration);
 }
 
-void initialize_declaration(VALUE mRubydex) {
+void rdxi_initialize_declaration(VALUE mRubydex) {
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
 
-    rb_define_alloc_func(cDeclaration, sr_handle_alloc);
-    rb_define_method(cDeclaration, "initialize", sr_handle_initialize, 2);
-    rb_define_method(cDeclaration, "name", sr_declaration_name, 0);
-    rb_define_method(cDeclaration, "unqualified_name", sr_declaration_unqualified_name, 0);
-    rb_define_method(cDeclaration, "definitions", sr_declaration_definitions, 0);
-    rb_define_method(cDeclaration, "member", sr_declaration_member, 1);
+    rb_define_alloc_func(cDeclaration, rdxr_handle_alloc);
+    rb_define_method(cDeclaration, "initialize", rdxr_handle_initialize, 2);
+    rb_define_method(cDeclaration, "name", rdxr_declaration_name, 0);
+    rb_define_method(cDeclaration, "unqualified_name", rdxr_declaration_unqualified_name, 0);
+    rb_define_method(cDeclaration, "definitions", rdxr_declaration_definitions, 0);
+    rb_define_method(cDeclaration, "member", rdxr_declaration_member, 1);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }

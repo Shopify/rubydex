@@ -22,19 +22,19 @@ const rb_data_type_t graph_type = {"Graph", {0, graph_free, 0}, 0, 0, RUBY_TYPED
 
 // Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
 // as a void pointer
-static VALUE sr_graph_alloc(VALUE klass) {
+static VALUE rdxr_graph_alloc(VALUE klass) {
     void *graph = rdx_graph_new();
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
 }
 
 // Graph#index_all: (Array[String] file_paths) -> nil
 // Raises IndexingError if anything failed during indexing
-static VALUE sr_graph_index_all(VALUE self, VALUE file_paths) {
-    check_array_of_strings(file_paths);
+static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
+    rdxi_check_array_of_strings(file_paths);
 
     // Convert the given file paths into a char** array, so that we can pass to Rust
     size_t length = RARRAY_LEN(file_paths);
-    char **converted_file_paths = str_array_to_char(file_paths, length);
+    char **converted_file_paths = rdxi_str_array_to_char(file_paths, length);
 
     // Get the underying graph pointer and then invoke the Rust index all implementation
     void *graph;
@@ -95,7 +95,7 @@ static VALUE graph_declarations_size(VALUE self, VALUE _args, VALUE _eobj) {
 
 // Graph#declarations: () -> Enumerator[Declaration]
 // Returns an enumerator that yields all declarations lazily
-static VALUE sr_graph_declarations(VALUE self) {
+static VALUE rdxr_graph_declarations(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("declarations"), 0, NULL, graph_declarations_size);
     }
@@ -112,7 +112,7 @@ static VALUE sr_graph_declarations(VALUE self) {
 
 // Graph#search: () -> Enumerator[Declaration]
 // Returns an enumerator that yields all declarations lazily
-static VALUE sr_graph_search(VALUE self, VALUE query) {
+static VALUE rdxr_graph_search(VALUE self, VALUE query) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize(self, rb_str_new2("search"), 1, &query);
     }
@@ -173,7 +173,7 @@ static VALUE graph_documents_size(VALUE self, VALUE _args, VALUE _eobj) {
 
 // Graph#documents: () -> Enumerator[Document]
 // Returns an enumerator that yields all documents lazily
-static VALUE sr_graph_documents(VALUE self) {
+static VALUE rdxr_graph_documents(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("documents"), 0, NULL, graph_documents_size);
     }
@@ -190,7 +190,7 @@ static VALUE sr_graph_documents(VALUE self) {
 
 // Graph#[]: (String fully_qualified_name) -> Declaration
 // Returns a declaration handle for the given ID
-static VALUE sr_graph_aref(VALUE self, VALUE key) {
+static VALUE rdxr_graph_aref(VALUE self, VALUE key) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
@@ -218,7 +218,7 @@ static VALUE graph_references_yield(VALUE args) {
     int64_t id = 0;
     ReferenceKind kind;
     while (rdx_references_iter_next(iter, &id, &kind)) {
-        VALUE ref_class = reference_class_for_kind(kind);
+        VALUE ref_class = rdxi_reference_class_for_kind(kind);
         VALUE argv[] = {self, LL2NUM(id)};
         VALUE obj = rb_class_new_instance(2, argv, ref_class);
         rb_yield(obj);
@@ -249,7 +249,7 @@ static VALUE graph_constant_references_size(VALUE self, VALUE _args, VALUE _eobj
 
 // Graph#constant_references: () -> Enumerator[ConstantReference]
 // Returns an enumerator that yields constant references lazily
-static VALUE sr_graph_constant_references(VALUE self) {
+static VALUE rdxr_graph_constant_references(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("constant_references"), 0, NULL,
                                           graph_constant_references_size);
@@ -279,7 +279,7 @@ static VALUE graph_method_references_size(VALUE self, VALUE _args, VALUE _eobj) 
 
 // Graph#method_references: () -> Enumerator[MethodReference]
 // Returns an enumerator that yields method references lazily
-static VALUE sr_graph_method_references(VALUE self) {
+static VALUE rdxr_graph_method_references(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("method_references"), 0, NULL,
                                           graph_method_references_size);
@@ -297,7 +297,7 @@ static VALUE sr_graph_method_references(VALUE self) {
 
 // Graph#resolve: () -> self
 // Runs the resolver to compute declarations and ownership
-static VALUE sr_graph_resolve(VALUE self) {
+static VALUE rdxr_graph_resolve(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
     rdx_graph_resolve(graph);
@@ -306,7 +306,7 @@ static VALUE sr_graph_resolve(VALUE self) {
 
 // Graph#set_encoding: (String) -> void
 // Sets the encoding used for transforming byte offsets into LSP code unit line/column positions
-static VALUE sr_graph_set_encoding(VALUE self, VALUE encoding) {
+static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
     Check_Type(encoding, T_STRING);
 
     void *graph;
@@ -322,13 +322,13 @@ static VALUE sr_graph_set_encoding(VALUE self, VALUE encoding) {
 
 // Graph#resolve_constant: (String, Array[String]) -> Declaration?
 // Runs the resolver on a single constant reference to determine what it points to
-static VALUE sr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesting) {
+static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesting) {
     Check_Type(const_name, T_STRING);
-    check_array_of_strings(nesting);
+    rdxi_check_array_of_strings(nesting);
 
     // Convert the given file paths into a char** array, so that we can pass to Rust
     size_t length = RARRAY_LEN(nesting);
-    char **converted_file_paths = str_array_to_char(nesting, length);
+    char **converted_file_paths = rdxi_str_array_to_char(nesting, length);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -353,7 +353,7 @@ static VALUE sr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesti
 }
 
 // Graph#diagnostics -> Array[Rubydex::Diagnostic]
-static VALUE sr_graph_diagnostics(VALUE self) {
+static VALUE rdxr_graph_diagnostics(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
@@ -370,7 +370,7 @@ static VALUE sr_graph_diagnostics(VALUE self) {
         DiagnosticEntry entry = array->items[i];
         VALUE message = entry.message == NULL ? Qnil : rb_utf8_str_new_cstr(entry.message);
         VALUE rule = rb_str_new2(entry.rule);
-        VALUE location = build_location_value(entry.location);
+        VALUE location = rdxi_build_location_value(entry.location);
 
         VALUE kwargs = rb_hash_new();
         rb_hash_aset(kwargs, ID2SYM(rb_intern("rule")), rule);
@@ -385,21 +385,21 @@ static VALUE sr_graph_diagnostics(VALUE self) {
     return diagnostics;
 }
 
-void initialize_graph(VALUE mRubydex) {
+void rdxi_initialize_graph(VALUE mRubydex) {
     VALUE eRubydexError = rb_const_get(mRubydex, rb_intern("Error"));
     eIndexingError = rb_define_class_under(mRubydex, "IndexingError", eRubydexError);
 
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
-    rb_define_alloc_func(cGraph, sr_graph_alloc);
-    rb_define_method(cGraph, "index_all", sr_graph_index_all, 1);
-    rb_define_method(cGraph, "resolve", sr_graph_resolve, 0);
-    rb_define_method(cGraph, "resolve_constant", sr_graph_resolve_constant, 2);
-    rb_define_method(cGraph, "declarations", sr_graph_declarations, 0);
-    rb_define_method(cGraph, "documents", sr_graph_documents, 0);
-    rb_define_method(cGraph, "constant_references", sr_graph_constant_references, 0);
-    rb_define_method(cGraph, "method_references", sr_graph_method_references, 0);
-    rb_define_method(cGraph, "diagnostics", sr_graph_diagnostics, 0);
-    rb_define_method(cGraph, "[]", sr_graph_aref, 1);
-    rb_define_method(cGraph, "search", sr_graph_search, 1);
-    rb_define_method(cGraph, "set_encoding", sr_graph_set_encoding, 1);
+    rb_define_alloc_func(cGraph, rdxr_graph_alloc);
+    rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
+    rb_define_method(cGraph, "resolve", rdxr_graph_resolve, 0);
+    rb_define_method(cGraph, "resolve_constant", rdxr_graph_resolve_constant, 2);
+    rb_define_method(cGraph, "declarations", rdxr_graph_declarations, 0);
+    rb_define_method(cGraph, "documents", rdxr_graph_documents, 0);
+    rb_define_method(cGraph, "constant_references", rdxr_graph_constant_references, 0);
+    rb_define_method(cGraph, "method_references", rdxr_graph_method_references, 0);
+    rb_define_method(cGraph, "diagnostics", rdxr_graph_diagnostics, 0);
+    rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
+    rb_define_method(cGraph, "search", rdxr_graph_search, 1);
+    rb_define_method(cGraph, "set_encoding", rdxr_graph_set_encoding, 1);
 }

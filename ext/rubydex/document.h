@@ -5,6 +5,6 @@
 
 extern VALUE cDocument;
 
-void initialize_document(VALUE mRubydex);
+void rdxi_initialize_document(VALUE mRubydex);
 
 #endif // RUBYDEX_DOCUMENT_H

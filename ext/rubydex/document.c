@@ -7,7 +7,7 @@
 VALUE cDocument;
 
 // Document#uri -> String
-static VALUE sr_document_uri(VALUE self) {
+static VALUE rdxr_document_uri(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
@@ -37,7 +37,7 @@ static VALUE document_definitions_yield(VALUE args) {
     DefinitionKind kind;
     while (rdx_definitions_iter_next(iter, &id, &kind)) {
         VALUE argv[] = {data->graph_obj, LL2NUM(id)};
-        VALUE defn_class = definition_class_for_kind(kind);
+        VALUE defn_class = rdxi_definition_class_for_kind(kind);
         VALUE handle = rb_class_new_instance(2, argv, defn_class);
         rb_yield(handle);
     }
@@ -69,7 +69,7 @@ static VALUE document_definitions_size(VALUE self, VALUE _args, VALUE _eobj) {
 
 // Document#definitions: () -> Enumerator[Definition]
 // Returns an enumerator that yields all definitions for this document lazily
-static VALUE sr_document_definitions(VALUE self) {
+static VALUE rdxr_document_definitions(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("definitions"), 0, NULL, document_definitions_size);
     }
@@ -86,13 +86,13 @@ static VALUE sr_document_definitions(VALUE self) {
     return self;
 }
 
-void initialize_document(VALUE mRubydex) {
+void rdxi_initialize_document(VALUE mRubydex) {
     cDocument = rb_define_class_under(mRubydex, "Document", rb_cObject);
 
-    rb_define_alloc_func(cDocument, sr_handle_alloc);
-    rb_define_method(cDocument, "initialize", sr_handle_initialize, 2);
-    rb_define_method(cDocument, "uri", sr_document_uri, 0);
-    rb_define_method(cDocument, "definitions", sr_document_definitions, 0);
+    rb_define_alloc_func(cDocument, rdxr_handle_alloc);
+    rb_define_method(cDocument, "initialize", rdxr_handle_initialize, 2);
+    rb_define_method(cDocument, "uri", rdxr_document_uri, 0);
+    rb_define_method(cDocument, "definitions", rdxr_document_definitions, 0);
 
     rb_funcall(rb_singleton_class(cDocument), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }

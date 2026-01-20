@@ -2,7 +2,7 @@
 
 // Convert a Ruby array of strings into a double char pointer so that we can pass that to Rust.
 // This copies the data so it must be freed
-char **str_array_to_char(VALUE array, size_t length) {
+char **rdxi_str_array_to_char(VALUE array, size_t length) {
     char **converted_array = malloc(length * sizeof(char *));
 
     for (size_t i = 0; i < length; i++) {
@@ -17,7 +17,7 @@ char **str_array_to_char(VALUE array, size_t length) {
 }
 
 // Verify that the Ruby object is an array of strings or raise `TypeError`
-void check_array_of_strings(VALUE array) {
+void rdxi_check_array_of_strings(VALUE array) {
     Check_Type(array, T_ARRAY);
 
     for (long i = 0; i < RARRAY_LEN(array); i++) {
