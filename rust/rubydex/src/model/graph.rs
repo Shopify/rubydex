@@ -12,6 +12,7 @@ use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, String
 use crate::model::name::{Name, NameRef, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
+use crate::resolution::Unit;
 use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
@@ -42,6 +43,8 @@ pub struct Graph {
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
+
+    pending: Vec<Unit>,
 }
 
 impl Graph {
@@ -57,6 +60,7 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
+            pending: Vec::new(),
         }
     }
 
@@ -281,6 +285,15 @@ impl Graph {
         &self.names
     }
 
+    #[must_use]
+    pub fn pending(&self) -> &[Unit] {
+        &self.pending
+    }
+
+    pub fn take_pending(&mut self) -> Vec<Unit> {
+        std::mem::take(&mut self.pending)
+    }
+
     /// Decrements the ref count for a name and removes it if the count reaches zero.
     ///
     /// This does not recursively untrack `parent_scope` or `nesting` names.
@@ -403,8 +416,11 @@ impl Graph {
                     }
                 }
                 NameRef::Resolved(_) => {
-                    // TODO: consider if this is a valid scenario with the resolution phase design. Either collect
-                    // metrics here or panic if it's never supposed to occur
+                    if let NameRef::Resolved(resolved) = entry.remove() {
+                        let new_resolved =
+                            NameRef::Resolved(Box::new(ResolvedName::new(resolved.name().clone(), declaration_id)));
+                        self.names.insert(name_id, new_resolved);
+                    }
                 }
             },
             Entry::Vacant(_) => panic!("Trying to record resolved name for a name ID that does not exist"),
@@ -434,6 +450,7 @@ impl Graph {
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
+        self.pending.extend(definitions.keys().copied().map(Unit::Definition));
         self.definitions.extend(definitions);
         for (string_id, string_ref) in strings {
             match self.strings.entry(string_id) {
@@ -455,6 +472,8 @@ impl Graph {
                 }
             }
         }
+        self.pending
+            .extend(constant_references.keys().copied().map(Unit::Reference));
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
     }
@@ -598,6 +617,8 @@ impl Graph {
 
             namespace.clear_ancestors();
             namespace.clear_descendants();
+
+            self.pending.push(Unit::Ancestors(declaration_id));
         }
     }
 

@@ -16,6 +16,7 @@ use crate::model::{
     name::{Name, NameRef},
 };
 
+#[derive(Debug)]
 pub enum Unit {
     /// A definition that defines a constant and might require resolution
     Definition(DefinitionId),
@@ -83,12 +84,8 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     pub fn resolve_all(&mut self) {
-        // TODO: temporary code while we don't have synchronization. We clear all declarations instead of doing the minimal
-        // amount of work
-        self.graph.clear_declarations();
         // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
-
-        {
+        if !self.graph.declarations().contains_key(&OBJECT_ID) {
             self.graph.declarations_mut().insert(
                 *OBJECT_ID,
                 Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
@@ -1309,84 +1306,99 @@ impl<'a> Resolver<'a> {
     /// Returns a tuple of 2 vectors:
     /// - The first one contains all constants, sorted in order for resolution (less complex constant names first)
     /// - The second one contains all other definitions, in no particular order
-    #[must_use]
-    fn sorted_units(&self) -> (VecDeque<Unit>, Vec<DefinitionId>) {
-        let estimated_length = self.graph.definitions().len() / 2;
-        let mut definitions = Vec::with_capacity(estimated_length);
-        let mut others = Vec::with_capacity(estimated_length);
-        let names = self.graph.names();
+    fn sorted_units(&mut self) -> (VecDeque<Unit>, Vec<DefinitionId>) {
+        let pending = self.graph.take_pending();
+        let mut definitions = Vec::with_capacity(pending.len());
+        let mut references = Vec::new();
+        let mut others = Vec::new();
+        let mut ancestors = Vec::new();
 
-        for (id, definition) in self.graph.definitions() {
-            let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+        let mut seen_definitions = IdentityHashSet::<DefinitionId>::default();
+        let mut seen_references = IdentityHashSet::<ReferenceId>::default();
+        let mut seen_ancestors = IdentityHashSet::<DeclarationId>::default();
 
-            match definition {
-                Definition::Class(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+        for unit in pending {
+            match unit {
+                Unit::Definition(id) => {
+                    if !seen_definitions.insert(id) {
+                        continue;
+                    }
+                    let Some(definition) = self.graph.definitions().get(&id) else {
+                        continue;
+                    };
+                    let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+                    let names = self.graph.names();
+
+                    match definition {
+                        Definition::Class(def) => {
+                            definitions.push((
+                                Unit::Definition(id),
+                                (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                            ));
+                        }
+                        Definition::Module(def) => {
+                            definitions.push((
+                                Unit::Definition(id),
+                                (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                            ));
+                        }
+                        Definition::Constant(def) => {
+                            definitions.push((
+                                Unit::Definition(id),
+                                (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                            ));
+                        }
+                        Definition::ConstantAlias(def) => {
+                            definitions.push((
+                                Unit::Definition(id),
+                                (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                            ));
+                        }
+                        Definition::SingletonClass(def) => {
+                            definitions.push((
+                                Unit::Definition(id),
+                                (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                            ));
+                        }
+                        _ => {
+                            others.push(id);
+                        }
+                    }
+                }
+                Unit::Reference(id) => {
+                    if !seen_references.insert(id) {
+                        continue;
+                    }
+                    let Some(constant_ref) = self.graph.constant_references().get(&id) else {
+                        continue;
+                    };
+                    let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
+                    let names = self.graph.names();
+                    references.push((
+                        Unit::Reference(id),
+                        (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
                     ));
                 }
-                Definition::Module(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
-                }
-                Definition::Constant(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
-                }
-                Definition::ConstantAlias(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
-                }
-                Definition::SingletonClass(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
-                }
-                _ => {
-                    others.push(*id);
+                Unit::Ancestors(id) => {
+                    if seen_ancestors.insert(id) && self.graph.declarations().contains_key(&id) {
+                        ancestors.push(Unit::Ancestors(id));
+                    }
                 }
             }
         }
 
-        // Sort namespaces based on their name complexity so that simpler names are always first
-        // When the depth is the same, sort by URI and offset to maintain determinism
-        definitions.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+        let names = self.graph.names();
+
+        let mut units: Vec<_> = definitions.into_iter().chain(references).collect();
+        units.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
-        let mut references = self
-            .graph
-            .constant_references()
-            .iter()
-            .map(|(id, constant_ref)| {
-                let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
-
-                (
-                    Unit::Reference(*id),
-                    (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        // Sort constant references based on their name complexity so that simpler names are always first
-        references.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
-        });
-
-        let mut units = definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>();
-        units.extend(references.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+        let mut unit_queue: VecDeque<_> = units.into_iter().map(|(unit, _)| unit).collect();
+        unit_queue.extend(ancestors);
 
         others.shrink_to_fit();
-
-        (units, others)
+        (unit_queue, others)
     }
 
     /// Returns the singleton parent ID for an attached object ID. A singleton class' parent depends on what the attached
@@ -4409,13 +4421,103 @@ mod tests {
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        // FIXME: this is wrong, the reference is not to `Bar::Foo`, but to `Foo`
-        assert_constant_reference_to!(context, "Bar::Foo", "file:///foo.rb:3:2-3:5");
+        assert_constant_reference_to!(context, "Foo", "file:///foo.rb:3:2-3:5");
 
         assert_ancestors_eq!(context, "Foo", &["Foo"]);
         assert_ancestors_eq!(context, "Bar::Foo", &["Bar::Foo"]);
 
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", vec!["FOO"]);
+    }
+
+    #[test]
+    fn partial_resolution_after_document_change() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///mixin.rb", "module Mixin; end");
+        context.index_uri(
+            "file:///parent.rb",
+            "
+            class Parent
+              CONST = 1
+            end
+            ",
+        );
+        context.index_uri("file:///child.rb", "class Child < Parent; end");
+
+        // Definitions pending, declarations don't exist
+        assert_eq!(
+            context
+                .graph()
+                .pending()
+                .iter()
+                .filter(|u| matches!(u, Unit::Definition(_)))
+                .count(),
+            4
+        );
+        assert!(
+            !context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Parent"))
+        );
+
+        context.resolve();
+
+        // Pending cleared, declarations created
+        assert!(context.graph().pending().is_empty());
+        assert_ancestors_eq!(context, "Mixin", ["Mixin"]);
+        assert_ancestors_eq!(context, "Parent", ["Parent", "Object"]);
+        assert_ancestors_eq!(context, "Child", ["Child", "Parent", "Object"]);
+
+        context.index_uri(
+            "file:///parent.rb",
+            "
+            class Parent
+              include Mixin
+              CONST = Mixin
+            end
+            ",
+        );
+
+        // Parent declaration removed, Child declaration invalidated, new items pending
+        assert!(
+            !context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Parent"))
+        );
+        assert!(
+            context
+                .graph()
+                .pending()
+                .iter()
+                .any(|u| matches!(u, Unit::Ancestors(id) if *id == DeclarationId::from("Child")))
+        );
+        assert_eq!(
+            context
+                .graph()
+                .pending()
+                .iter()
+                .filter(|u| matches!(u, Unit::Definition(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            context
+                .graph()
+                .pending()
+                .iter()
+                .filter(|u| matches!(u, Unit::Reference(_)))
+                .count(),
+            2
+        );
+
+        context.resolve();
+
+        // Ancestors updated and references resolved
+        assert_ancestors_eq!(context, "Parent", ["Parent", "Mixin", "Object"]);
+        assert_ancestors_eq!(context, "Child", ["Child", "Parent", "Mixin", "Object"]);
+        assert_constant_reference_to!(context, "Mixin", "<file:///parent.rb:2:10-2:15>");
     }
 }
