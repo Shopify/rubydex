@@ -18,6 +18,17 @@ pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
 pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
 
+// Track changed documents and ancestors requiring relinearization
+#[derive(Debug, Default)]
+pub enum Dirty {
+    #[default]
+    All,
+    Partial {
+        uris: IdentityHashSet<UriId>,
+        ancestors: IdentityHashSet<DeclarationId>,
+    },
+}
+
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
 #[derive(Default, Debug)]
@@ -42,6 +53,9 @@ pub struct Graph {
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
+
+    // Changed documents and ancestors requiring relinearization
+    dirty: Dirty,
 }
 
 impl Graph {
@@ -57,6 +71,7 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
+            dirty: Dirty::All,
         }
     }
 
@@ -281,6 +296,21 @@ impl Graph {
         &self.names
     }
 
+    #[must_use]
+    pub fn dirty(&self) -> &Dirty {
+        &self.dirty
+    }
+
+    pub fn take_dirty(&mut self) -> Dirty {
+        std::mem::replace(
+            &mut self.dirty,
+            Dirty::Partial {
+                uris: IdentityHashSet::default(),
+                ancestors: IdentityHashSet::default(),
+            },
+        )
+    }
+
     /// Decrements the ref count for a name and removes it if the count reaches zero.
     ///
     /// This does not recursively untrack `parent_scope` or `nesting` names.
@@ -434,6 +464,7 @@ impl Graph {
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
+
         self.definitions.extend(definitions);
         for (string_id, string_ref) in strings {
             match self.strings.entry(string_id) {
@@ -466,6 +497,11 @@ impl Graph {
         // representation
         let uri_id = other.uri_id();
         self.remove_definitions_for_uri(uri_id);
+
+        // Only mark documents as dirty for partial updates
+        if let Dirty::Partial { uris, .. } = &mut self.dirty {
+            uris.insert(uri_id);
+        }
 
         self.extend(other);
     }
@@ -598,6 +634,10 @@ impl Graph {
 
             namespace.clear_ancestors();
             namespace.clear_descendants();
+
+            if let Dirty::Partial { ancestors, .. } = &mut self.dirty {
+                ancestors.insert(declaration_id);
+            }
         }
     }
 
