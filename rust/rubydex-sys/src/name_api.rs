@@ -1,8 +1,4 @@
-use rubydex::model::{
-    graph::Graph,
-    ids::{NameId, StringId},
-    name::Name,
-};
+use rubydex::model::{graph::Graph, ids::NameId, name::Name};
 
 /// Takes a constant name and a nesting stack (e.g.: `["Foo", "Bar::Baz", "Qux"]`) and transforms it into a `NameId`,
 /// registering each required part in the graph. Returns the `NameId` and a list of name ids that need to be untracked
@@ -18,7 +14,7 @@ pub fn nesting_stack_to_name_id(graph: &mut Graph, const_name: &str, nesting: Ve
 
     for entry in nesting {
         for part in entry.split("::").map(String::from) {
-            let str_id = StringId::from(&part);
+            let str_id = graph.intern_string(part);
             let name_id = graph.add_name(Name::new(str_id, current_name, current_nesting));
             names_to_untrack.push(name_id);
             let new_name = Some(name_id);
@@ -30,7 +26,7 @@ pub fn nesting_stack_to_name_id(graph: &mut Graph, const_name: &str, nesting: Ve
     }
 
     for part in const_name.split("::").map(String::from) {
-        let str_id = StringId::from(&part);
+        let str_id = graph.intern_string(part);
         let name_id = graph.add_name(Name::new(str_id, current_name, current_nesting));
         names_to_untrack.push(name_id);
         let new_name = Some(name_id);

@@ -107,7 +107,11 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
         let name = graph.names().get(reference.name_id()).expect("Name ID should exist");
 
-        let name_string = graph.strings().get(name.str()).expect("String ID should exist").clone();
+        let name_string = graph
+            .strings()
+            .get(name.str())
+            .expect("String ID should exist")
+            .to_string();
         CString::new(name_string).unwrap().into_raw().cast_const()
     })
 }
@@ -131,7 +135,7 @@ pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, refere
             .strings()
             .get(reference.str())
             .expect("Name ID should exist")
-            .clone();
+            .to_string();
         CString::new(name).unwrap().into_raw().cast_const()
     })
 }

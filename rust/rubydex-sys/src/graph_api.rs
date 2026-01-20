@@ -446,7 +446,7 @@ mod tests {
                 .names()
                 .iter()
                 .find_map(|(_, name)| {
-                    if graph.strings().get(name.str()).unwrap() == "BAR" {
+                    if graph.strings().get(name.str()).unwrap().as_str() == "BAR" {
                         Some(name)
                     } else {
                         None
@@ -480,7 +480,7 @@ mod tests {
                 .names()
                 .iter()
                 .find_map(|(_, name)| {
-                    if graph.strings().get(name.str()).unwrap() == "BAR" {
+                    if graph.strings().get(name.str()).unwrap().as_str() == "BAR" {
                         Some(name)
                     } else {
                         None
