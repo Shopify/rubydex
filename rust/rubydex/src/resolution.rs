@@ -1773,7 +1773,7 @@ mod tests {
     fn format_diagnostics(context: &GraphTest, ignore_rules: &[Rule]) -> Vec<String> {
         let mut diagnostics: Vec<_> = context
             .graph()
-            .diagnostics()
+            .all_diagnostics()
             .into_iter()
             .filter(|d| !ignore_rules.contains(d.rule()))
             .collect();

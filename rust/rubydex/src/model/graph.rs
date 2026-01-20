@@ -171,7 +171,7 @@ impl Graph {
     }
 
     #[must_use]
-    pub fn diagnostics(&self) -> Vec<&Diagnostic> {
+    pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
         let document_diagnostics = self.documents.values().flat_map(Document::diagnostics);
         let declaration_diagnostics = self.declarations.values().flat_map(Declaration::diagnostics);
         let definition_diagnostics = self.definitions.values().flat_map(Definition::diagnostics);
@@ -1172,10 +1172,10 @@ mod tests {
 
         // TODO: Add resolution error to test diagnostics attached to declarations
         context.index_uri("file:///foo.rb", "class Foo");
-        assert!(!context.graph().diagnostics().is_empty());
+        assert!(!context.graph().all_diagnostics().is_empty());
 
         context.index_uri("file:///foo.rb", "class Foo; end");
-        assert!(context.graph().diagnostics().is_empty());
+        assert!(context.graph().all_diagnostics().is_empty());
     }
 
     #[test]
@@ -1196,7 +1196,7 @@ mod tests {
 
         let mut diagnostics: Vec<String> = context
             .graph()
-            .diagnostics()
+            .all_diagnostics()
             .iter()
             .map(|d| {
                 format!(
