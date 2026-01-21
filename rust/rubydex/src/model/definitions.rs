@@ -146,6 +146,16 @@ impl Definition {
     }
 
     #[must_use]
+    pub fn name_offset(&self) -> Option<&Offset> {
+        match self {
+            Definition::Class(d) => Some(d.name_offset()),
+            Definition::Module(d) => Some(d.name_offset()),
+            Definition::SingletonClass(d) => Some(d.name_offset()),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn is_deprecated(&self) -> bool {
         all_definitions!(self, it => it.flags().is_deprecated())
     }
@@ -210,6 +220,7 @@ pub struct ClassDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    name_offset: Offset,
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
@@ -220,10 +231,12 @@ pub struct ClassDefinition {
 
 impl ClassDefinition {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         name_id: NameId,
         uri_id: UriId,
         offset: Offset,
+        name_offset: Offset,
         comments: Vec<Comment>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
@@ -233,6 +246,7 @@ impl ClassDefinition {
             name_id,
             uri_id,
             offset,
+            name_offset,
             flags,
             comments,
             lexical_nesting_id,
@@ -260,6 +274,11 @@ impl ClassDefinition {
     #[must_use]
     pub fn offset(&self) -> &Offset {
         &self.offset
+    }
+
+    #[must_use]
+    pub fn name_offset(&self) -> &Offset {
+        &self.name_offset
     }
 
     #[must_use]
@@ -323,6 +342,7 @@ pub struct SingletonClassDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    name_offset: Offset,
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     /// The definition where `class << X` was found (lexical owner)
@@ -339,6 +359,7 @@ impl SingletonClassDefinition {
         name_id: NameId,
         uri_id: UriId,
         offset: Offset,
+        name_offset: Offset,
         comments: Vec<Comment>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
@@ -347,6 +368,7 @@ impl SingletonClassDefinition {
             name_id,
             uri_id,
             offset,
+            name_offset,
             flags,
             comments,
             lexical_nesting_id,
@@ -373,6 +395,11 @@ impl SingletonClassDefinition {
     #[must_use]
     pub fn offset(&self) -> &Offset {
         &self.offset
+    }
+
+    #[must_use]
+    pub fn name_offset(&self) -> &Offset {
+        &self.name_offset
     }
 
     #[must_use]
@@ -421,6 +448,7 @@ pub struct ModuleDefinition {
     name_id: NameId,
     uri_id: UriId,
     offset: Offset,
+    name_offset: Offset,
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
@@ -434,6 +462,7 @@ impl ModuleDefinition {
         name_id: NameId,
         uri_id: UriId,
         offset: Offset,
+        name_offset: Offset,
         comments: Vec<Comment>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
@@ -442,6 +471,7 @@ impl ModuleDefinition {
             name_id,
             uri_id,
             offset,
+            name_offset,
             flags,
             comments,
             lexical_nesting_id,
@@ -468,6 +498,11 @@ impl ModuleDefinition {
     #[must_use]
     pub fn offset(&self) -> &Offset {
         &self.offset
+    }
+
+    #[must_use]
+    pub fn name_offset(&self) -> &Offset {
+        &self.name_offset
     }
 
     #[must_use]
