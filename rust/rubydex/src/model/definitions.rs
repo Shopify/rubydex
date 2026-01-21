@@ -39,6 +39,7 @@ bitflags! {
     #[derive(Debug, Clone)]
     pub struct DefinitionFlags: u8 {
         const DEPRECATED = 0b0001;
+        const PROMOTABLE = 0b0010;
     }
 }
 
@@ -46,6 +47,11 @@ impl DefinitionFlags {
     #[must_use]
     pub fn is_deprecated(&self) -> bool {
         self.contains(Self::DEPRECATED)
+    }
+
+    #[must_use]
+    pub fn is_promotable(&self) -> bool {
+        self.contains(Self::PROMOTABLE)
     }
 }
 

@@ -88,6 +88,26 @@ macro_rules! assert_declaration_exists {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_declaration_kind_eq {
+    ($context:expr, $declaration_name:expr, $expected_kind:expr) => {
+        let declaration = $context
+            .graph()
+            .declarations()
+            .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+            .unwrap();
+        assert_eq!(
+            declaration.kind(),
+            $expected_kind,
+            "Expected declaration `{}` to be a {}, got {}",
+            $declaration_name,
+            $expected_kind,
+            declaration.kind()
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_declaration_does_not_exist {
     ($context:expr, $declaration_name:expr) => {
         assert!(

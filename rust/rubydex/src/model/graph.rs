@@ -69,6 +69,9 @@ impl Graph {
         &mut self.declarations
     }
 
+    /// # Panics
+    ///
+    /// Will panic if the `definition_id` is not registered in the graph
     pub fn add_declaration<F>(
         &mut self,
         definition_id: DefinitionId,
@@ -80,22 +83,80 @@ impl Graph {
     {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
+        let should_promote = self.declarations.get(&declaration_id).is_some_and(|existing| {
+            matches!(existing, Declaration::Constant(_))
+                && matches!(
+                    self.definitions.get(&definition_id),
+                    Some(Definition::Class(_) | Definition::Module(_) | Definition::SingletonClass(_))
+                )
+                && self.all_definitions_promotable(existing)
+        });
+
         match self.declarations.entry(declaration_id) {
-            Entry::Vacant(vacant_entry) => {
-                vacant_entry
-                    .insert(constructor(fully_qualified_name))
-                    .add_definition(definition_id);
-            }
             Entry::Occupied(mut occupied_entry) => {
                 debug_assert!(
                     occupied_entry.get().name() == fully_qualified_name,
                     "DeclarationId collision in global graph"
                 );
-                occupied_entry.get_mut().add_definition(definition_id);
+
+                if should_promote {
+                    let mut new_declaration = constructor(fully_qualified_name);
+                    let removed_declaration = occupied_entry.remove();
+                    new_declaration.as_namespace_mut().unwrap().extend(removed_declaration);
+                    new_declaration.add_definition(definition_id);
+                    self.declarations.insert(declaration_id, new_declaration);
+                } else {
+                    occupied_entry.get_mut().add_definition(definition_id);
+                }
+            }
+            Entry::Vacant(vacant_entry) => {
+                let mut declaration = constructor(fully_qualified_name);
+                declaration.add_definition(definition_id);
+                vacant_entry.insert(declaration);
             }
         }
 
         declaration_id
+    }
+
+    /// Checks if all constant definitions for a declaration have the PROMOTABLE flag set.
+    /// Used to determine whether a constant can be promoted to a namespace.
+    #[must_use]
+    pub fn all_definitions_promotable(&self, declaration: &Declaration) -> bool {
+        declaration
+            .definitions()
+            .iter()
+            .all(|def_id| match self.definitions.get(def_id) {
+                Some(Definition::Constant(c)) => c.flags().is_promotable(),
+                _ => true,
+            })
+    }
+
+    /// Promotes a `Declaration::Constant` to a namespace using the provided constructor. Transfers all definitions,
+    /// references, and diagnostics from the old declaration.
+    ///
+    /// # Panics
+    ///
+    /// Will panic if the declaration ID doesn't exist
+    pub fn promote_constant_to_namespace<F>(&mut self, declaration_id: DeclarationId, constructor: F)
+    where
+        F: FnOnce(String, DeclarationId) -> Declaration,
+    {
+        let old_decl = self.declarations.remove(&declaration_id).unwrap();
+        let name = old_decl.name().to_string();
+        let owner_id = *old_decl.owner_id();
+
+        let mut new_decl = constructor(name, owner_id);
+        new_decl.as_namespace_mut().unwrap().extend(old_decl);
+
+        self.declarations.insert(declaration_id, new_decl);
+    }
+
+    #[must_use]
+    pub fn is_namespace(&self, declaration_id: &DeclarationId) -> bool {
+        self.declarations
+            .get(declaration_id)
+            .is_some_and(|decl| decl.as_namespace().is_some())
     }
 
     pub fn clear_declarations(&mut self) {
@@ -501,9 +562,6 @@ impl Graph {
                 Declaration::Namespace(Namespace::Module(it)) => it.add_member(member_str_id, member_declaration_id),
                 Declaration::Namespace(Namespace::SingletonClass(it)) => {
                     it.add_member(member_str_id, member_declaration_id);
-                }
-                Declaration::Constant(_) => {
-                    // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
                 }
                 _ => panic!("Tried to add member to a declaration that isn't a namespace"),
             }
