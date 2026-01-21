@@ -4,7 +4,8 @@ require "mkmf"
 require "pathname"
 
 release = ENV["RELEASE"]
-root_dir = Pathname.new("../..").expand_path(__dir__).join("rust")
+gem_dir = Pathname.new("../..").expand_path(__dir__)
+root_dir = gem_dir.join("rust")
 target_dir = root_dir.join("target")
 target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
 target_dir = target_dir.join(release ? "release" : "debug")
@@ -69,6 +70,31 @@ new_makefile.gsub!("$(Q) $(POSTLINK)", <<~MAKEFILE.chomp)
   $(Q) $(POSTLINK)
   \t$(Q)$(RM) .rust_built
 MAKEFILE
+
+# Bundle all dependency licenses when building a release version of the gem
+if release
+  unless system("cargo about --version > /dev/null 2>&1")
+    abort <<~MESSAGE
+      ERROR: cargo-about is not installed and required to build the release version of the gem.
+      Please install it by running:
+        cargo install cargo-about
+    MESSAGE
+  end
+
+  licenses_file = root_dir.join("THIRD_PARTY_LICENSES.html")
+  about_config = root_dir.join("about.toml")
+  about_template = root_dir.join("about.hbs")
+
+  new_makefile.gsub!(".rust_built: $(RUST_SRCS)", <<~MAKEFILE.chomp)
+    #{licenses_file}: #{about_config} #{about_template}
+    \t$(Q)$(RM) #{licenses_file}
+    \tcargo about generate #{about_template} --manifest-path #{root_dir.join("Cargo.toml")} --workspace > #{licenses_file}
+    \t$(COPY) #{licenses_file} #{gem_dir}
+
+    .rust_built: $(RUST_SRCS) #{licenses_file}
+  MAKEFILE
+end
+
 File.write("Makefile", new_makefile)
 
 begin

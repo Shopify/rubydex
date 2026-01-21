@@ -18,3 +18,5 @@ rust/rubydex-sys/rustbindings.h
 ext/rubydex/rustbindings.h
 ext/rubydex/compile_commands.json
 ext/rubydex/.cache
+THIRD_PARTY_LICENSES.html
+rust/THIRD_PARTY_LICENSES.html

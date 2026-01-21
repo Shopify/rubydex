@@ -23,6 +23,12 @@ jobs:
 
       - name: Lint
         run: bundle exec rake lint
+
+      # Verify that licenses conform to the policy in rust/about.toml
+      - name: Check licenses
+        run: |
+          cargo install cargo-about
+          cargo about generate rust/about.hbs --manifest-path rust/Cargo.toml --workspace > THIRD_PARTY_LICENSES.html
   build:
     strategy:
       fail-fast: false
