@@ -140,6 +140,7 @@ impl Graph {
             | Definition::Module(_)
             | Definition::Constant(_)
             | Definition::ConstantAlias(_)
+            | Definition::ConstantVisibility(_)
             | Definition::GlobalVariable(_)
             | Definition::ClassVariable(_)
             | Definition::GlobalVariableAlias(_) => "::",

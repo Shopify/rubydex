@@ -255,6 +255,10 @@ impl Graph {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
             }
+            Definition::ConstantVisibility(it) => {
+                let name = self.names.get(it.name_id()).unwrap();
+                name.str()
+            }
             Definition::GlobalVariable(it) => it.str_id(),
             Definition::InstanceVariable(it) => it.str_id(),
             Definition::ClassVariable(it) => it.str_id(),
@@ -308,6 +312,9 @@ impl Graph {
                 return self.name_id_to_declaration_id(*it.name_id());
             }
             Definition::ConstantAlias(it) => {
+                return self.name_id_to_declaration_id(*it.name_id());
+            }
+            Definition::ConstantVisibility(it) => {
                 return self.name_id_to_declaration_id(*it.name_id());
             }
             Definition::GlobalVariable(it) => (
@@ -653,7 +660,8 @@ impl Graph {
             | Definition::SingletonClass(_)
             | Definition::Module(_)
             | Definition::Constant(_)
-            | Definition::ConstantAlias(_) => {}
+            | Definition::ConstantAlias(_)
+            | Definition::ConstantVisibility(_) => {}
             Definition::Method(d) => self.untrack_string(*d.str_id()),
             Definition::AttrAccessor(d) => self.untrack_string(*d.str_id()),
             Definition::AttrReader(d) => self.untrack_string(*d.str_id()),
