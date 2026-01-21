@@ -20,7 +20,11 @@ Gem::Specification.new do |spec|
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["changelog_uri"] = "#{spec.homepage}/releases"
 
-  spec.files = Dir.glob("lib/**/*.rb") + ["README.md", "LICENSE.txt"]
+  spec.files = ["README.md", "LICENSE.txt"] +
+    Dir.glob("lib/**/*.rb") +
+    Dir.glob("lib/rubydex/*.{so,dylib}") +
+    Dir.glob("ext/rubydex/**/*.{c,h}") +
+    Dir.glob("rust/**/*.{rs,toml,lock,hbs}").reject { |f| f.start_with?("rust/target") }
 
   if ENV["RELEASE"]
     spec.files << "THIRD_PARTY_LICENSES.html"
