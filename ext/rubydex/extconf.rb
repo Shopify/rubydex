@@ -3,8 +3,12 @@
 require "mkmf"
 require "pathname"
 
-release = ENV["RELEASE"]
+unless system("cargo", "--version", out: File::NULL, err: File::NULL)
+  abort "Installing Rubydex requires Cargo, the Rust package manager for platforms that we do not precompile binaries."
+end
+
 gem_dir = Pathname.new("../..").expand_path(__dir__)
+release = ENV["RELEASE"] || !gem_dir.join(".git").exist?
 root_dir = gem_dir.join("rust")
 target_dir = root_dir.join("target")
 target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
@@ -34,7 +38,12 @@ if Gem.win_platform?
     $LDFLAGS << " -l#{lib}"
   end
 else
-  append_ldflags("-Wl,-rpath,#{target_dir}")
+  if RUBY_PLATFORM.include?("darwin")
+    append_ldflags("-Wl,-rpath,@loader_path")
+  else
+    $LDFLAGS << " -Wl,-rpath,\\$$ORIGIN"
+  end
+
   # We cannot use append_ldflags here because the Rust code is only compiled later. If it's not compiled yet, this will
   # fail and the flag will not be added
   $LDFLAGS << " -L#{target_dir} -lrubydex_sys"
@@ -49,9 +58,22 @@ else
   "cargo build #{cargo_args.join(" ")}".strip
 end
 
-rust_srcs = Dir.glob("#{root_dir}/**/*.rs")
+lib_dir = gem_dir.join("lib").join("rubydex")
 
+copy_dylib_commands = if Gem.win_platform?
+  ""
+elsif RUBY_PLATFORM.include?("darwin")
+  src_dylib = target_dir.join("librubydex_sys.dylib")
+  "\t$(COPY) #{src_dylib} #{lib_dir}"
+else
+  # Linux
+  src_dylib = target_dir.join("librubydex_sys.so")
+  "\t$(COPY) #{src_dylib} #{lib_dir}"
+end
+
+rust_srcs = Dir.glob("#{root_dir}/**/*.rs").reject { |path| path.include?("rust/target") }
 makefile = File.read("Makefile")
+
 new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.chomp)
   .PHONY: compile_rust
   RUST_SRCS = #{File.expand_path("Cargo.toml", root_dir)} #{File.expand_path("Cargo.lock", root_dir)} #{rust_srcs.join(" ")}
@@ -66,21 +88,16 @@ new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.cho
   $(OBJS): $(HDRS) $(ruby_headers) .rust_built
 MAKEFILE
 
-new_makefile.gsub!("$(Q) $(POSTLINK)", <<~MAKEFILE.chomp)
-  $(Q) $(POSTLINK)
+new_makefile.gsub!(/(\$\(Q\) \$\(LDSHARED\) .*)/, <<~MAKEFILE.chomp)
+  \\1
+  #{copy_dylib_commands}
   \t$(Q)$(RM) .rust_built
 MAKEFILE
 
-# Bundle all dependency licenses when building a release version of the gem
-if release
-  unless system("cargo about --version > /dev/null 2>&1")
-    abort <<~MESSAGE
-      ERROR: cargo-about is not installed and required to build the release version of the gem.
-      Please install it by running:
-        cargo install cargo-about
-    MESSAGE
-  end
-
+# Bundle all dependency licenses when building a release version of the gem. This only has to happen on CI where we
+# precompile binaries. Oherwise, we're not redistributing the Rust dependencies as they are getting downloaded, compiled
+# and linked on the user's machine
+if release && system("cargo", "about", "--version", out: File::NULL, err: File::NULL)
   licenses_file = root_dir.join("THIRD_PARTY_LICENSES.html")
   about_config = root_dir.join("about.toml")
   about_template = root_dir.join("about.hbs")

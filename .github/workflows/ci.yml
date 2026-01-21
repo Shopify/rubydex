@@ -55,7 +55,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            rust/target
           key: ${{ runner.os }}-rust
 
       - name: Run Rust tests
@@ -71,5 +71,5 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            rust/target
           key: ${{ steps.rust-compile-cache-restore.outputs.cache-primary-key }}

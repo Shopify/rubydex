@@ -20,3 +20,5 @@ ext/rubydex/compile_commands.json
 ext/rubydex/.cache
 THIRD_PARTY_LICENSES.html
 rust/THIRD_PARTY_LICENSES.html
+lib/rubydex/*.dylib
+lib/rubydex/*.so
