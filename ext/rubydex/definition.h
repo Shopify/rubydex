@@ -20,9 +20,9 @@ extern VALUE cClassVariableDefinition;
 extern VALUE cMethodAliasDefinition;
 extern VALUE cGlobalVariableAliasDefinition;
 
-void initialize_definition(VALUE mRubydex);
+void rdxi_initialize_definition(VALUE mRubydex);
 
 // Returns the Ruby class for a given DefinitionKind without calling back into Rust
-VALUE definition_class_for_kind(DefinitionKind kind);
+VALUE rdxi_definition_class_for_kind(DefinitionKind kind);
 
 #endif // RUBYDEX_DEFINITION_H

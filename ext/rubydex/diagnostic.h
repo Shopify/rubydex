@@ -6,6 +6,6 @@
 
 extern VALUE cDiagnostic;
 
-void initialize_diagnostic(VALUE mRubydex);
+void rdxi_initialize_diagnostic(VALUE mRubydex);
 
 #endif // RUBYDEX_DIAGNOSTIC_H

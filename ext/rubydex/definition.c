@@ -24,7 +24,7 @@ VALUE cMethodAliasDefinition;
 VALUE cGlobalVariableAliasDefinition;
 
 // Keep this in sync with definition.rs
-VALUE definition_class_for_kind(DefinitionKind kind) {
+VALUE rdxi_definition_class_for_kind(DefinitionKind kind) {
     switch (kind) {
     case DefinitionKind_Class:
         return cClassDefinition;
@@ -60,7 +60,7 @@ VALUE definition_class_for_kind(DefinitionKind kind) {
 }
 
 // Definition#location -> Rubydex::Location
-static VALUE sr_definition_location(VALUE self) {
+static VALUE rdxr_definition_location(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
@@ -68,14 +68,14 @@ static VALUE sr_definition_location(VALUE self) {
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
     Location *loc = rdx_definition_location(graph, data->id);
-    VALUE location = build_location_value(loc);
+    VALUE location = rdxi_build_location_value(loc);
     rdx_location_free(loc);
 
     return location;
 }
 
 // Definition#comments -> [Rubydex::Comment]
-static VALUE sr_definition_comments(VALUE self) {
+static VALUE rdxr_definition_comments(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
@@ -97,7 +97,7 @@ static VALUE sr_definition_comments(VALUE self) {
         VALUE string = rb_utf8_str_new_cstr(entry.string);
 
         Location *loc = entry.location;
-        VALUE location = build_location_value(loc);
+        VALUE location = rdxi_build_location_value(loc);
 
         VALUE comment_kwargs = rb_hash_new();
         rb_hash_aset(comment_kwargs, ID2SYM(rb_intern("string")), string);
@@ -113,7 +113,7 @@ static VALUE sr_definition_comments(VALUE self) {
 }
 
 // Definition#name -> String
-static VALUE sr_definition_name(VALUE self) {
+static VALUE rdxr_definition_name(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
@@ -130,84 +130,84 @@ static VALUE sr_definition_name(VALUE self) {
 }
 
 // Definition#deprecated? -> bool
-static VALUE sr_definition_deprecated(VALUE self) {
+static VALUE rdxr_definition_deprecated(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    bool deprecated = sat_definition_is_deprecated(graph, data->id);
+    bool deprecated = rdx_definition_is_deprecated(graph, data->id);
     return deprecated ? Qtrue : Qfalse;
 }
 
-void initialize_definition(VALUE mod) {
+void rdxi_initialize_definition(VALUE mod) {
     mRubydex = mod;
 
     cComment = rb_define_class_under(mRubydex, "Comment", rb_cObject);
 
     cDefinition = rb_define_class_under(mRubydex, "Definition", rb_cObject);
-    rb_define_alloc_func(cDefinition, sr_handle_alloc);
-    rb_define_method(cDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cDefinition, rdxr_handle_alloc);
+    rb_define_method(cDefinition, "initialize", rdxr_handle_initialize, 2);
     rb_funcall(rb_singleton_class(cDefinition), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
-    rb_define_method(cDefinition, "location", sr_definition_location, 0);
-    rb_define_method(cDefinition, "comments", sr_definition_comments, 0);
-    rb_define_method(cDefinition, "name", sr_definition_name, 0);
-    rb_define_method(cDefinition, "deprecated?", sr_definition_deprecated, 0);
+    rb_define_method(cDefinition, "location", rdxr_definition_location, 0);
+    rb_define_method(cDefinition, "comments", rdxr_definition_comments, 0);
+    rb_define_method(cDefinition, "name", rdxr_definition_name, 0);
+    rb_define_method(cDefinition, "deprecated?", rdxr_definition_deprecated, 0);
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
-    rb_define_alloc_func(cClassDefinition, sr_handle_alloc);
-    rb_define_method(cClassDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cClassDefinition, rdxr_handle_alloc);
+    rb_define_method(cClassDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cSingletonClassDefinition = rb_define_class_under(mRubydex, "SingletonClassDefinition", cDefinition);
-    rb_define_alloc_func(cSingletonClassDefinition, sr_handle_alloc);
-    rb_define_method(cSingletonClassDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cSingletonClassDefinition, rdxr_handle_alloc);
+    rb_define_method(cSingletonClassDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cModuleDefinition = rb_define_class_under(mRubydex, "ModuleDefinition", cDefinition);
-    rb_define_alloc_func(cModuleDefinition, sr_handle_alloc);
-    rb_define_method(cModuleDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cModuleDefinition, rdxr_handle_alloc);
+    rb_define_method(cModuleDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cConstantDefinition = rb_define_class_under(mRubydex, "ConstantDefinition", cDefinition);
-    rb_define_alloc_func(cConstantDefinition, sr_handle_alloc);
-    rb_define_method(cConstantDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cConstantDefinition, rdxr_handle_alloc);
+    rb_define_method(cConstantDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cConstantAliasDefinition = rb_define_class_under(mRubydex, "ConstantAliasDefinition", cDefinition);
-    rb_define_alloc_func(cConstantAliasDefinition, sr_handle_alloc);
-    rb_define_method(cConstantAliasDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cConstantAliasDefinition, rdxr_handle_alloc);
+    rb_define_method(cConstantAliasDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cMethodDefinition = rb_define_class_under(mRubydex, "MethodDefinition", cDefinition);
-    rb_define_alloc_func(cMethodDefinition, sr_handle_alloc);
-    rb_define_method(cMethodDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cMethodDefinition, rdxr_handle_alloc);
+    rb_define_method(cMethodDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cAttrAccessorDefinition = rb_define_class_under(mRubydex, "AttrAccessorDefinition", cDefinition);
-    rb_define_alloc_func(cAttrAccessorDefinition, sr_handle_alloc);
-    rb_define_method(cAttrAccessorDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cAttrAccessorDefinition, rdxr_handle_alloc);
+    rb_define_method(cAttrAccessorDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cAttrReaderDefinition = rb_define_class_under(mRubydex, "AttrReaderDefinition", cDefinition);
-    rb_define_alloc_func(cAttrReaderDefinition, sr_handle_alloc);
-    rb_define_method(cAttrReaderDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cAttrReaderDefinition, rdxr_handle_alloc);
+    rb_define_method(cAttrReaderDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cAttrWriterDefinition = rb_define_class_under(mRubydex, "AttrWriterDefinition", cDefinition);
-    rb_define_alloc_func(cAttrWriterDefinition, sr_handle_alloc);
-    rb_define_method(cAttrWriterDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cAttrWriterDefinition, rdxr_handle_alloc);
+    rb_define_method(cAttrWriterDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cGlobalVariableDefinition = rb_define_class_under(mRubydex, "GlobalVariableDefinition", cDefinition);
-    rb_define_alloc_func(cGlobalVariableDefinition, sr_handle_alloc);
-    rb_define_method(cGlobalVariableDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cGlobalVariableDefinition, rdxr_handle_alloc);
+    rb_define_method(cGlobalVariableDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cInstanceVariableDefinition = rb_define_class_under(mRubydex, "InstanceVariableDefinition", cDefinition);
-    rb_define_alloc_func(cInstanceVariableDefinition, sr_handle_alloc);
-    rb_define_method(cInstanceVariableDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cInstanceVariableDefinition, rdxr_handle_alloc);
+    rb_define_method(cInstanceVariableDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cClassVariableDefinition = rb_define_class_under(mRubydex, "ClassVariableDefinition", cDefinition);
-    rb_define_alloc_func(cClassVariableDefinition, sr_handle_alloc);
-    rb_define_method(cClassVariableDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cClassVariableDefinition, rdxr_handle_alloc);
+    rb_define_method(cClassVariableDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cMethodAliasDefinition = rb_define_class_under(mRubydex, "MethodAliasDefinition", cDefinition);
-    rb_define_alloc_func(cMethodAliasDefinition, sr_handle_alloc);
-    rb_define_method(cMethodAliasDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cMethodAliasDefinition, rdxr_handle_alloc);
+    rb_define_method(cMethodAliasDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cGlobalVariableAliasDefinition = rb_define_class_under(mRubydex, "GlobalVariableAliasDefinition", cDefinition);
-    rb_define_alloc_func(cGlobalVariableAliasDefinition, sr_handle_alloc);
-    rb_define_method(cGlobalVariableAliasDefinition, "initialize", sr_handle_initialize, 2);
+    rb_define_alloc_func(cGlobalVariableAliasDefinition, rdxr_handle_alloc);
+    rb_define_method(cGlobalVariableAliasDefinition, "initialize", rdxr_handle_initialize, 2);
 }

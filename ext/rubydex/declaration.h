@@ -5,6 +5,6 @@
 
 extern VALUE cDeclaration;
 
-void initialize_declaration(VALUE mRubydex);
+void rdxi_initialize_declaration(VALUE mRubydex);
 
 #endif // RUBYDEX_DECLARATION_H

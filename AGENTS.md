@@ -33,6 +33,17 @@ the Ruby VM to the Rust crate logic.
 - `lib`: The rest of the Ruby code
 - `test`: Ruby test files
 
+### Naming Conventions
+
+The C extension uses prefixed function names to distinguish between abstraction layers:
+
+| Prefix | Layer | Purpose |
+|--------|-------|---------|
+| `rdx_` | Rust FFI | Functions exported from Rust via `#[no_mangle]`, callable from C |
+| `rdxr_` | Ruby callbacks | C functions registered with Ruby VM (e.g., `rb_define_method`) |
+| `rdxi_` | Internal helpers | Non-static C functions shared across files (declared in headers) |
+| (none) | File-local | Static helper functions used only within one C file |
+
 ### Commands
 
 When necessary, commands can be executed for the Ruby code.

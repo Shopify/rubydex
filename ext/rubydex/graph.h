@@ -5,6 +5,6 @@
 
 extern const rb_data_type_t graph_type;
 
-void initialize_graph(VALUE mRubydex);
+void rdxi_initialize_graph(VALUE mRubydex);
 
 #endif // RUBYDEX_GRAPH_H
