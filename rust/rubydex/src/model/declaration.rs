@@ -123,11 +123,11 @@ macro_rules! namespace_declaration {
                 }
             }
 
-            pub fn extend(&mut self, other: Namespace) {
+            pub fn extend(&mut self, mut other: Namespace) {
                 self.definition_ids.extend(other.definitions());
                 self.references.extend(other.references());
                 self.members.extend(other.members());
-                self.diagnostics.extend(other.diagnostics().iter().cloned());
+                self.diagnostics.extend(other.take_diagnostics());
             }
 
             pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
@@ -226,10 +226,10 @@ macro_rules! simple_declaration {
                 }
             }
 
-            pub fn extend(&mut self, other: Declaration) {
+            pub fn extend(&mut self, mut other: Declaration) {
                 self.definition_ids.extend(other.definitions());
                 self.references.extend(other.references());
-                self.diagnostics.extend(other.diagnostics().iter().cloned());
+                self.diagnostics.extend(other.take_diagnostics());
             }
         }
     };
@@ -354,6 +354,10 @@ impl Declaration {
         all_declarations!(self, it => &it.diagnostics)
     }
 
+    pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+        all_declarations!(self, it => std::mem::take(&mut it.diagnostics))
+    }
+
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
         all_declarations!(self, it => it.diagnostics.push(diagnostic));
     }
@@ -398,6 +402,10 @@ impl Namespace {
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         all_namespaces!(self, it => &it.diagnostics)
+    }
+
+    pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+        all_namespaces!(self, it => std::mem::take(&mut it.diagnostics))
     }
 
     /// # Panics
