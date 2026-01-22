@@ -1071,7 +1071,8 @@ impl<'a> Resolver<'a> {
                                             self.graph.record_resolved_name(name_id, declaration_id);
                                             return Outcome::Resolved(declaration_id, None);
                                         }
-                                        Outcome::Unresolved(Some(needs_linearization_id)) => {
+                                        Outcome::Retry(Some(needs_linearization_id))
+                                        | Outcome::Unresolved(Some(needs_linearization_id)) => {
                                             missing_linearization_id.get_or_insert(needs_linearization_id);
                                         }
                                         Outcome::Unresolved(None) => {}
@@ -1171,8 +1172,8 @@ impl<'a> Resolver<'a> {
                 NameRef::Unresolved(_) => Outcome::Retry(None),
             };
             match ancestor_outcome {
-                Outcome::Resolved(_, _) | Outcome::Retry(_) => return ancestor_outcome,
-                Outcome::Unresolved(Some(needs_linearization_id)) => {
+                Outcome::Resolved(_, _) | Outcome::Retry(None) => return ancestor_outcome,
+                Outcome::Retry(Some(needs_linearization_id)) | Outcome::Unresolved(Some(needs_linearization_id)) => {
                     missing_linearization_id = Some(needs_linearization_id);
                 }
                 Outcome::Unresolved(None) => {}
@@ -1216,23 +1217,33 @@ impl<'a> Resolver<'a> {
                     }
                 })
                 .unwrap_or(Outcome::Unresolved(None)),
-            Ancestors::Partial(ids) => ids
-                .iter()
-                .find_map(|ancestor_id| {
-                    if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        self.graph
-                            .declarations()
-                            .get(ancestor_id)
-                            .unwrap()
-                            .as_namespace()
-                            .unwrap()
-                            .member(&str_id)
-                            .map(|id| Outcome::Resolved(*id, Some(declaration_id)))
-                    } else {
-                        None
+            Ancestors::Partial(ids) => {
+                for ancestor_id in ids {
+                    match ancestor_id {
+                        Ancestor::Partial(name_id) => {
+                            // Stop at unresolved ancestors to avoid resolving to a later one.
+                            // Skip if the name matches what we're searching for.
+                            if *self.graph.names().get(&name_id).unwrap().str() != str_id {
+                                return Outcome::Retry(Some(declaration_id));
+                            }
+                        }
+                        Ancestor::Complete(ancestor_id) => {
+                            if let Some(id) = self
+                                .graph
+                                .declarations()
+                                .get(&ancestor_id)
+                                .unwrap()
+                                .as_namespace()
+                                .unwrap()
+                                .member(&str_id)
+                            {
+                                return Outcome::Resolved(*id, Some(declaration_id));
+                            }
+                        }
                     }
-                })
-                .unwrap_or(Outcome::Unresolved(Some(declaration_id))),
+                }
+                Outcome::Unresolved(Some(declaration_id))
+            }
         }
     }
 
@@ -4114,5 +4125,68 @@ mod tests {
 
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", ["FOO"]);
+    }
+
+    #[test]
+    fn resolves_constant_with_ancestors_partial() {
+        // B has Ancestors::Partial because its prepend is defined in another file.
+        // X must wait for B's ancestors to resolve, then resolve to A::X.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///1.rb", {
+            r"
+            module A
+              X = 1
+            end
+            class B
+              X = 2
+            end
+            class C < B
+              X
+            end
+            "
+        });
+        context.index_uri("file:///2.rb", {
+            r"
+            class B
+              prepend A
+            end
+            "
+        });
+        context.resolve();
+
+        assert_ancestors_eq!(context, "C", ["C", "A", "B", "Object"]);
+        assert_constant_reference_to!(context, "A::X", "file:///1.rb:7:2-7:3");
+    }
+
+    #[test]
+    fn resolves_constant_with_ancestor_partial() {
+        // C has an Ancestor::Partial entry because O::A is defined in another file.
+        // X must wait for O::A to resolve, then resolve to O::A::X.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///1.rb", {
+            r"
+            class B
+              X = 2
+            end
+            class C
+              include B
+              include O::A
+              X
+            end
+            "
+        });
+        context.index_uri("file:///2.rb", {
+            r"
+            module O
+              module A
+                X = 1
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
+        assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:6:2-6:3");
     }
 }
