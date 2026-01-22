@@ -1815,6 +1815,25 @@ mod tests {
         test_utils::LocalGraphTest,
     };
 
+    // Primitive assertions
+
+    /// Asserts that a `StringId` resolves to the expected string.
+    ///
+    /// Usage:
+    /// - `assert_string_eq!(ctx, str_id, "Foo::Bar::Baz")`
+    macro_rules! assert_string_eq {
+        ($context:expr, $str_id:expr, $expected_str:expr) => {{
+            let string_name = $context.graph().strings().get($str_id).unwrap().as_str();
+            assert_eq!(
+                string_name, $expected_str,
+                "string mismatch: expected `{}`, got `{}`",
+                $expected_str, string_name
+            );
+        }};
+    }
+
+    // Definition assertions
+
     macro_rules! assert_definition_at {
         ($context:expr, $location:expr, $variant:ident, |$var:ident| $body:block) => {{
             let __def = $context.definition_at($location);
@@ -1840,9 +1859,7 @@ mod tests {
 
     macro_rules! assert_name_eq {
         ($context:expr, $expect_name_string:expr, $def:expr) => {{
-            let actual_name = $context.graph().strings().get($def.str_id()).unwrap().as_str();
-
-            assert_eq!($expect_name_string, actual_name);
+            assert_string_eq!($context, $def.str_id(), $expect_name_string);
         }};
     }
 
@@ -2030,13 +2047,6 @@ mod tests {
                 .collect::<Vec<_>>();
 
             assert_eq!($expected_names, actual_names);
-        }};
-    }
-
-    macro_rules! assert_string_eq {
-        ($context:expr, $str_id:expr, $expected_name:expr) => {{
-            let string_name = $context.graph().strings().get($str_id).unwrap().as_str();
-            assert_eq!(string_name, $expected_name);
         }};
     }
 
