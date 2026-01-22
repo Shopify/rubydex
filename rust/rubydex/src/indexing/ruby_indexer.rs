@@ -1905,6 +1905,21 @@ mod tests {
         }};
     }
 
+    /// Asserts that a definition's comments matches the expected comments.
+    ///
+    /// Usage:
+    /// - `assert_def_comments_eq!(ctx, def, ["# Comment 1", "# Comment 2"])`
+    macro_rules! assert_def_comments_eq {
+        ($context:expr, $def:expr, $expected_comments:expr) => {{
+            let actual_comments: Vec<String> = $def.comments().iter().map(|c| c.string().to_string()).collect();
+            assert_eq!(
+                $expected_comments, actual_comments,
+                "comments mismatch: expected `{:?}`, got `{:?}`",
+                $expected_comments, actual_comments
+            );
+        }};
+    }
+
     /// Asserts the full path of a definition's `name_id` matches the expected string.
     /// Works with any definition that has a `name_id()` method.
     ///
@@ -1951,13 +1966,6 @@ mod tests {
                 _ => panic!("expected {} parameter, got {:?}", stringify!($variant), $expr),
             }
         };
-    }
-
-    macro_rules! assert_comments_eq {
-        ($context:expr, $def:expr, $expected_comments:expr) => {{
-            let actual_comments: Vec<String> = $def.comments().iter().map(|c| c.string().to_string()).collect();
-            assert_eq!($expected_comments, actual_comments);
-        }};
     }
 
     macro_rules! assert_constant_references_eq {
@@ -3699,12 +3707,12 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-2:18", Class, |def| {
             assert_def_name_eq!(&context, "Single", def);
-            assert_comments_eq!(&context, def, vec!["# Single comment"]);
+            assert_def_comments_eq!(&context, def, vec!["# Single comment"]);
         });
 
         assert_definition_at!(&context, "7:1-7:18", Module, |def| {
             assert_def_name_eq!(&context, "Multi", def);
-            assert_comments_eq!(
+            assert_def_comments_eq!(
                 &context,
                 def,
                 vec![
@@ -3717,22 +3725,22 @@ mod tests {
 
         assert_definition_at!(&context, "12:1-12:28", Class, |def| {
             assert_def_name_eq!(&context, "EmptyCommentLine", def);
-            assert_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
         });
 
         assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
             assert_def_name_eq!(&context, "NoGap", def);
-            assert_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
+            assert_def_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
         });
 
         assert_definition_at!(&context, "19:1-19:13", Method, |def| {
             assert_def_str_eq!(&context, "foo()", def);
-            assert_comments_eq!(&context, def, vec!["#: ()", "#| -> void"]);
+            assert_def_comments_eq!(&context, def, vec!["#: ()", "#| -> void"]);
         });
 
         assert_definition_at!(&context, "23:1-23:21", Class, |def| {
             assert_def_name_eq!(&context, "BlankLine", def);
-            assert_comments_eq!(&context, def, vec!["# Comment with blank line"]);
+            assert_def_comments_eq!(&context, def, vec!["# Comment with blank line"]);
         });
 
         assert_definition_at!(&context, "28:1-28:21", Class, |def| {
@@ -3764,22 +3772,22 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-12:4", Class, |def| {
             assert_def_name_eq!(&context, "Outer", def);
-            assert_comments_eq!(&context, def, vec!["# Outer class"]);
+            assert_def_comments_eq!(&context, def, vec!["# Outer class"]);
         });
 
         assert_definition_at!(&context, "4:3-7:6", Class, |def| {
             assert_def_name_eq!(&context, "Inner", def);
-            assert_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
+            assert_def_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
         });
 
         assert_definition_at!(&context, "6:5-6:20", Class, |def| {
             assert_def_name_eq!(&context, "Deep", def);
-            assert_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
+            assert_def_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
         });
 
         assert_definition_at!(&context, "11:3-11:26", Class, |def| {
             assert_def_name_eq!(&context, "AnotherInner", def);
-            assert_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
+            assert_def_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
         });
     }
 
