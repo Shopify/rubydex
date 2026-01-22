@@ -1817,6 +1817,54 @@ mod tests {
 
     // Primitive assertions
 
+    /// Asserts that a `NameId` resolves to the expected full path string.
+    ///
+    /// Usage:
+    /// - `assert_name_path_eq!(ctx, "Foo::Bar::Baz", name_id)` - asserts the full path `Foo::Bar::Baz`
+    /// - `assert_name_path_eq!(ctx, "Baz", name_id)` - asserts just `Baz` with no parent scope
+    macro_rules! assert_name_path_eq {
+        ($context:expr, $expect_path:expr, $name_id:expr) => {{
+            let segments: Vec<&str> = $expect_path.split("::").collect();
+            assert!(!segments.is_empty(), "expected path must have at least one segment");
+
+            // The name stores the last segment, with parent_scope chain going backwards
+            let expected_name = segments.last().unwrap();
+            let expected_parents: Vec<&str> = segments[..segments.len() - 1].iter().rev().copied().collect();
+
+            let name = $context.graph().names().get($name_id).unwrap();
+            let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
+            assert_eq!(
+                *expected_name, actual_name,
+                "name mismatch: expected `{}`, got `{}`",
+                expected_name, actual_name
+            );
+
+            let mut current_name = name;
+            for (i, expected_parent) in expected_parents.iter().enumerate() {
+                if let Some(parent_scope_id) = current_name.parent_scope() {
+                    let parent_name = $context.graph().names().get(&parent_scope_id).unwrap();
+                    let actual_parent = $context.graph().strings().get(parent_name.str()).unwrap().as_str();
+                    assert_eq!(
+                        *expected_parent, actual_parent,
+                        "parent_scope mismatch at depth {}: expected `{}`, got `{}`",
+                        i, expected_parent, actual_parent
+                    );
+                    current_name = parent_name;
+                } else {
+                    panic!(
+                        "expected parent_scope `{}` at depth {}, but got None",
+                        expected_parent, i
+                    );
+                }
+            }
+
+            assert!(
+                current_name.parent_scope().is_none(),
+                "expected no more parent_scopes after chain, but got Some"
+            );
+        }};
+    }
+
     /// Asserts that a `StringId` resolves to the expected string.
     ///
     /// Usage:
@@ -1860,54 +1908,6 @@ mod tests {
     macro_rules! assert_name_eq {
         ($context:expr, $expect_name_string:expr, $def:expr) => {{
             assert_string_eq!($context, $def.str_id(), $expect_name_string);
-        }};
-    }
-
-    /// Asserts that a `NameId` resolves to the expected full path string.
-    ///
-    /// Usage:
-    /// - `assert_name_path_eq!(ctx, "Foo::Bar::Baz", name_id)` - asserts the full path `Foo::Bar::Baz`
-    /// - `assert_name_path_eq!(ctx, "Baz", name_id)` - asserts just `Baz` with no parent scope
-    macro_rules! assert_name_path_eq {
-        ($context:expr, $expect_path:expr, $name_id:expr) => {{
-            let segments: Vec<&str> = $expect_path.split("::").collect();
-            assert!(!segments.is_empty(), "expected path must have at least one segment");
-
-            // The name stores the last segment, with parent_scope chain going backwards
-            let expected_name = segments.last().unwrap();
-            let expected_parents: Vec<&str> = segments[..segments.len() - 1].iter().rev().copied().collect();
-
-            let name = $context.graph().names().get($name_id).unwrap();
-            let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
-            assert_eq!(
-                *expected_name, actual_name,
-                "name mismatch: expected '{}', got '{}'",
-                expected_name, actual_name
-            );
-
-            let mut current_name = name;
-            for (i, expected_parent) in expected_parents.iter().enumerate() {
-                if let Some(parent_scope_id) = current_name.parent_scope() {
-                    let parent_name = $context.graph().names().get(&parent_scope_id).unwrap();
-                    let actual_parent = $context.graph().strings().get(parent_name.str()).unwrap().as_str();
-                    assert_eq!(
-                        *expected_parent, actual_parent,
-                        "parent_scope mismatch at depth {}: expected '{}', got '{}'",
-                        i, expected_parent, actual_parent
-                    );
-                    current_name = parent_name;
-                } else {
-                    panic!(
-                        "expected parent_scope '{}' at depth {}, but got None",
-                        expected_parent, i
-                    );
-                }
-            }
-
-            assert!(
-                current_name.parent_scope().is_none(),
-                "expected no more parent_scopes after chain, but got Some"
-            );
         }};
     }
 
