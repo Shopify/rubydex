@@ -1920,6 +1920,44 @@ mod tests {
         }};
     }
 
+    /// Asserts that a definition's mixins matches the expected mixins.
+    ///
+    /// Usage:
+    /// - `assert_def_mixins_eq!(ctx, def, Include, ["Foo", "Bar"])`
+    macro_rules! assert_def_mixins_eq {
+        ($context:expr, $def:expr, $mixin_type:ident, $expected_names:expr) => {{
+            let actual_names = $def
+                .mixins()
+                .iter()
+                .filter_map(|mixin| {
+                    if let Mixin::$mixin_type(def) = mixin {
+                        let name = $context
+                            .graph()
+                            .names()
+                            .get(
+                                $context
+                                    .graph()
+                                    .constant_references()
+                                    .get(def.constant_reference_id())
+                                    .unwrap()
+                                    .name_id(),
+                            )
+                            .unwrap();
+                        Some($context.graph().strings().get(name.str()).unwrap().as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                $expected_names, actual_names,
+                "mixins mismatch: expected `{:?}`, got `{:?}`",
+                $expected_names, actual_names
+            );
+        }};
+    }
+
     /// Asserts the full path of a definition's `name_id` matches the expected string.
     /// Works with any definition that has a `name_id()` method.
     ///
@@ -2059,36 +2097,6 @@ mod tests {
             } else {
                 panic!("expected method to have receiver, got None");
             }
-        }};
-    }
-
-    macro_rules! assert_mixins_eq {
-        ($context:expr, $def:expr, $mixin_type:ident, $expected_names:expr) => {{
-            let actual_names = $def
-                .mixins()
-                .iter()
-                .filter_map(|mixin| {
-                    if let Mixin::$mixin_type(def) = mixin {
-                        let name = $context
-                            .graph()
-                            .names()
-                            .get(
-                                $context
-                                    .graph()
-                                    .constant_references()
-                                    .get(def.constant_reference_id())
-                                    .unwrap()
-                                    .name_id(),
-                            )
-                            .unwrap();
-                        Some($context.graph().strings().get(name.str()).unwrap().as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            assert_eq!($expected_names, actual_names);
         }};
     }
 
@@ -4353,7 +4361,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-            assert_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4371,7 +4379,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-            assert_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4404,7 +4412,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-            assert_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4422,7 +4430,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-            assert_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4440,7 +4448,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
-            assert_mixins_eq!(&context, class_def, Extend, vec!["Bar", "Baz"]);
+            assert_def_mixins_eq!(&context, class_def, Extend, vec!["Bar", "Baz"]);
         });
     }
 
@@ -4459,9 +4467,9 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_mixins_eq!(&context, def, Include, vec!["Foo"]);
-            assert_mixins_eq!(&context, def, Prepend, vec!["Foo"]);
-            assert_mixins_eq!(&context, def, Extend, vec!["Foo"]);
+            assert_def_mixins_eq!(&context, def, Include, vec!["Foo"]);
+            assert_def_mixins_eq!(&context, def, Prepend, vec!["Foo"]);
+            assert_def_mixins_eq!(&context, def, Extend, vec!["Foo"]);
         });
     }
 
@@ -5193,7 +5201,7 @@ mod tests {
             assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
                 assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
 
-                assert_mixins_eq!(&context, anonymous_class, Include, vec!["Bar"]);
+                assert_def_mixins_eq!(&context, anonymous_class, Include, vec!["Bar"]);
             });
         });
     }
