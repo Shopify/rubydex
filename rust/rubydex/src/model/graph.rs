@@ -29,8 +29,6 @@ pub struct Graph {
     // Map of definition nodes
     definitions: IdentityHashMap<DefinitionId, Definition>,
 
-    definitions_to_declarations: IdentityHashMap<DefinitionId, DeclarationId>,
-
     // Map of unqualified names
     strings: IdentityHashMap<StringId, StringRef>,
     // Map of names
@@ -50,7 +48,6 @@ impl Graph {
         Self {
             declarations: IdentityHashMap::default(),
             definitions: IdentityHashMap::default(),
-            definitions_to_declarations: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
@@ -79,8 +76,6 @@ impl Graph {
     where
         F: FnOnce() -> Declaration,
     {
-        self.definitions_to_declarations.insert(definition_id, declaration_id);
-
         let declaration = self.declarations.entry(declaration_id).or_insert_with(constructor);
         declaration.add_definition(definition_id);
     }
@@ -89,7 +84,6 @@ impl Graph {
     ///
     /// Panics if acquiring a write lock fails
     pub fn clear_declarations(&mut self) {
-        self.definitions_to_declarations.clear();
         self.declarations.clear();
     }
 
@@ -153,9 +147,112 @@ impl Graph {
         &self.documents
     }
 
+    /// # Panics
+    ///
+    /// Panics if the definition is not found
     #[must_use]
-    pub fn definitions_to_declarations(&self) -> &IdentityHashMap<DefinitionId, DeclarationId> {
-        &self.definitions_to_declarations
+    pub fn definition_id_to_declaration_id(&self, definition_id: DefinitionId) -> Option<&DeclarationId> {
+        self.definition_to_declaration_id(self.definitions.get(&definition_id).unwrap())
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the definition is not found
+    #[must_use]
+    pub fn definition_to_declaration_id(&self, definition: &Definition) -> Option<&DeclarationId> {
+        let (nesting_name_id, member_str_id) = match definition {
+            Definition::Class(it) => {
+                return self.name_id_to_declaration_id(*it.name_id());
+            }
+            Definition::SingletonClass(it) => {
+                return self.name_id_to_declaration_id(*it.name_id());
+            }
+            Definition::Module(it) => {
+                return self.name_id_to_declaration_id(*it.name_id());
+            }
+            Definition::Constant(it) => {
+                return self.name_id_to_declaration_id(*it.name_id());
+            }
+            Definition::ConstantAlias(it) => {
+                return self.name_id_to_declaration_id(*it.name_id());
+            }
+            Definition::GlobalVariable(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.str_id())
+            }
+            Definition::GlobalVariableAlias(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.new_name_str_id())
+            }
+            Definition::InstanceVariable(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.str_id())
+            }
+            Definition::ClassVariable(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.str_id())
+            }
+            Definition::AttrAccessor(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.str_id())
+            }
+            Definition::AttrReader(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.str_id())
+            }
+            Definition::AttrWriter(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.str_id())
+            }
+            Definition::Method(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.str_id())
+            }
+            Definition::MethodAlias(it) => {
+                let nesting_definition = it
+                    .lexical_nesting_id()
+                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
+                (nesting_definition, it.new_name_str_id())
+            }
+        };
+
+        let nesting_declaration_id = match nesting_name_id {
+            Some(name_id) => self.name_id_to_declaration_id(*name_id),
+            None => Some(&*OBJECT_ID),
+        }?;
+
+        self.declarations
+            .get(nesting_declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .member(member_str_id)
+    }
+
+    #[must_use]
+    pub fn name_id_to_declaration_id(&self, name_id: NameId) -> Option<&DeclarationId> {
+        let name = self.names.get(&name_id);
+
+        match name {
+            Some(NameRef::Resolved(resolved)) => Some(resolved.declaration_id()),
+            Some(NameRef::Unresolved(_)) | None => None,
+        }
     }
 
     // Returns an immutable reference to the constant references map
@@ -497,38 +594,37 @@ impl Graph {
 
         // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
         let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
+        let mut definitions_to_delete: Vec<DefinitionId> = Vec::new();
         let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
         let mut declarations_to_invalidate_ancestor_chains: Vec<DeclarationId> = Vec::new();
 
         for def_id in document.definitions() {
-            if let Some(definition) = self.definitions.remove(def_id) {
-                if let Some(declaration_id) = self.definitions_to_declarations.remove(def_id)
-                    && let Some(declaration) = self.declarations.get_mut(&declaration_id)
-                    && declaration.remove_definition(def_id)
-                {
-                    declaration.clear_diagnostics();
-                    if declaration.as_namespace().is_some() {
-                        declarations_to_invalidate_ancestor_chains.push(declaration_id);
-                    }
+            definitions_to_delete.push(*def_id);
 
-                    if declaration.has_no_definitions() {
-                        let unqualified_str_id = StringId::from(&declaration.unqualified_name());
-                        members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                        declarations_to_delete.push(declaration_id);
-
-                        if let Some(namespace) = declaration.as_namespace()
-                            && let Some(singleton_id) = namespace.singleton_class()
-                        {
-                            declarations_to_delete.push(*singleton_id);
-                        }
-                    }
+            if let Some(declaration_id) = self.definition_id_to_declaration_id(*def_id).copied()
+                && let Some(declaration) = self.declarations.get_mut(&declaration_id)
+                && declaration.remove_definition(def_id)
+            {
+                declaration.clear_diagnostics();
+                if declaration.as_namespace().is_some() {
+                    declarations_to_invalidate_ancestor_chains.push(declaration_id);
                 }
 
-                if let Some(name_id) = definition.name_id() {
-                    self.untrack_name(*name_id);
-                }
+                if declaration.has_no_definitions() {
+                    let unqualified_str_id = StringId::from(&declaration.unqualified_name());
+                    members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
+                    declarations_to_delete.push(declaration_id);
 
-                self.untrack_definition_strings(&definition);
+                    if let Some(namespace) = declaration.as_namespace()
+                        && let Some(singleton_id) = namespace.singleton_class()
+                    {
+                        declarations_to_delete.push(*singleton_id);
+                    }
+                }
+            }
+
+            if let Some(name_id) = self.definitions.get(def_id).unwrap().name_id() {
+                self.untrack_name(*name_id);
             }
         }
 
@@ -555,6 +651,11 @@ impl Graph {
                     _ => {} // Nothing happens
                 }
             }
+        }
+
+        for def_id in definitions_to_delete {
+            let definition = self.definitions.remove(&def_id).unwrap();
+            self.untrack_definition_strings(&definition);
         }
     }
 
@@ -742,7 +843,6 @@ mod tests {
         context.resolve();
 
         assert_eq!(context.graph().definitions.len(), 1);
-        assert_eq!(context.graph().definitions_to_declarations().len(), 1);
         assert_eq!(context.graph().documents.len(), 1);
 
         {
@@ -759,7 +859,6 @@ mod tests {
         context.index_uri("file:///foo.rb", "");
 
         assert!(context.graph().definitions.is_empty());
-        assert!(context.graph().definitions_to_declarations().is_empty());
         // URI remains if the file was not deleted, but definitions and declarations got erased
         assert_eq!(context.graph().documents.len(), 1);
 
