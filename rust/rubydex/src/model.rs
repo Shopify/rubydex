@@ -2,6 +2,8 @@ pub mod comment;
 pub mod declaration;
 pub mod definitions;
 pub mod document;
+pub mod dsl;
+pub mod dsl_processors;
 pub mod encoding;
 pub mod graph;
 pub mod id;

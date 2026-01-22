@@ -26,6 +26,9 @@ pub enum DefinitionKind {
     ClassVariable = 11,
     MethodAlias = 12,
     GlobalVariableAlias = 13,
+    Dsl = 14,
+    DynamicClass = 15,
+    DynamicModule = 16,
 }
 
 pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
@@ -44,6 +47,9 @@ pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
         Definition::ClassVariable(_) => DefinitionKind::ClassVariable,
         Definition::MethodAlias(_) => DefinitionKind::MethodAlias,
         Definition::GlobalVariableAlias(_) => DefinitionKind::GlobalVariableAlias,
+        Definition::Dsl(_) => DefinitionKind::Dsl,
+        Definition::DynamicClass(_) => DefinitionKind::DynamicClass,
+        Definition::DynamicModule(_) => DefinitionKind::DynamicModule,
     }
 }
 

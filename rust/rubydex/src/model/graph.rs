@@ -6,6 +6,9 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
+use crate::model::dsl_processors::{
+    DslProcessor, class_new_matches, handle_class_new, handle_module_new, module_new_matches,
+};
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
@@ -40,12 +43,15 @@ pub struct Graph {
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
+
+    /// Registry of DSL processors that handle specific DSL patterns.
+    dsl_processors: Vec<DslProcessor>,
 }
 
 impl Graph {
     #[must_use]
     pub fn new() -> Self {
-        Self {
+        let mut graph = Self {
             declarations: IdentityHashMap::default(),
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
@@ -54,7 +60,40 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
-        }
+            dsl_processors: Vec::new(),
+        };
+
+        // Register built-in DSL processors
+        graph.register_dsl_processor(DslProcessor {
+            method_name: "new",
+            matches: class_new_matches,
+            handle: handle_class_new,
+        });
+        graph.register_dsl_processor(DslProcessor {
+            method_name: "new",
+            matches: module_new_matches,
+            handle: handle_module_new,
+        });
+
+        graph
+    }
+
+    /// Returns the DSL method names based on registered processors.
+    /// Used to initialize indexers with the set of DSL patterns to capture.
+    #[must_use]
+    pub fn dsl_method_names(&self) -> Vec<&'static str> {
+        self.dsl_processors.iter().map(|p| p.method_name).collect()
+    }
+
+    /// Registers a DSL processor in the graph.
+    pub fn register_dsl_processor(&mut self, processor: DslProcessor) {
+        self.dsl_processors.push(processor);
+    }
+
+    /// Returns the registered DSL processors.
+    #[must_use]
+    pub fn dsl_processors(&self) -> &[DslProcessor] {
+        &self.dsl_processors
     }
 
     // Returns an immutable reference to the declarations map
@@ -85,6 +124,12 @@ impl Graph {
     #[must_use]
     pub fn definitions(&self) -> &IdentityHashMap<DefinitionId, Definition> {
         &self.definitions
+    }
+
+    /// Returns a mutable reference to the definitions map
+    #[must_use]
+    pub fn definitions_mut(&mut self) -> &mut IdentityHashMap<DefinitionId, Definition> {
+        &mut self.definitions
     }
 
     /// Returns the ID of the unqualified name of a definition
@@ -124,6 +169,25 @@ impl Graph {
             Definition::Method(it) => it.str_id(),
             Definition::MethodAlias(it) => it.new_name_str_id(),
             Definition::GlobalVariableAlias(it) => it.new_name_str_id(),
+            Definition::Dsl(it) => it.method_name(),
+            Definition::DynamicClass(it) => {
+                if let Some(name_id) = it.name_id() {
+                    let name = self.names.get(name_id).unwrap();
+                    name.str()
+                } else {
+                    // Anonymous dynamic class - use a placeholder
+                    return StringId::from("<anonymous>");
+                }
+            }
+            Definition::DynamicModule(it) => {
+                if let Some(name_id) = it.name_id() {
+                    let name = self.names.get(name_id).unwrap();
+                    name.str()
+                } else {
+                    // Anonymous dynamic module - use a placeholder
+                    return StringId::from("<anonymous>");
+                }
+            }
         };
 
         *id
@@ -171,63 +235,73 @@ impl Graph {
                 return self.name_id_to_declaration_id(*it.name_id());
             }
             Definition::GlobalVariable(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.str_id())
             }
             Definition::GlobalVariableAlias(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.new_name_str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.new_name_str_id())
             }
             Definition::InstanceVariable(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.str_id())
             }
             Definition::ClassVariable(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.str_id())
             }
             Definition::AttrAccessor(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.str_id())
             }
             Definition::AttrReader(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.str_id())
             }
             Definition::AttrWriter(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.str_id())
             }
             Definition::Method(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.str_id())
             }
             Definition::MethodAlias(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.new_name_str_id())
+                let nesting_name_id = it.lexical_nesting_id().and_then(|id| self.nesting_name_id(id));
+                (nesting_name_id, it.new_name_str_id())
+            }
+            Definition::Dsl(dsl) => {
+                // DSL definitions don't have direct declarations, but if a DynamicClass/DynamicModule
+                // was created from this DSL, we can return that declaration.
+                let dsl_id = dsl.id();
+                for def in self.definitions().values() {
+                    match def {
+                        Definition::DynamicClass(d) if d.dsl_definition_id() == dsl_id => {
+                            return d.name_id().and_then(|name_id| self.name_id_to_declaration_id(*name_id));
+                        }
+                        Definition::DynamicModule(d) if d.dsl_definition_id() == dsl_id => {
+                            return d.name_id().and_then(|name_id| self.name_id_to_declaration_id(*name_id));
+                        }
+                        _ => {}
+                    }
+                }
+                // No dynamic definition found yet - DSL hasn't been processed
+                return None;
+            }
+            Definition::DynamicClass(it) => {
+                return it
+                    .name_id()
+                    .and_then(|name_id| self.name_id_to_declaration_id(*name_id));
+            }
+            Definition::DynamicModule(it) => {
+                return it
+                    .name_id()
+                    .and_then(|name_id| self.name_id_to_declaration_id(*name_id));
             }
         };
 
         let nesting_declaration_id = match nesting_name_id {
-            Some(name_id) => self.name_id_to_declaration_id(*name_id),
+            Some(name_id) => self.name_id_to_declaration_id(name_id),
             None => Some(&*OBJECT_ID),
         }?;
 
@@ -247,6 +321,39 @@ impl Graph {
             Some(NameRef::Resolved(resolved)) => Some(resolved.declaration_id()),
             Some(NameRef::Unresolved(_)) | None => None,
         }
+    }
+
+    /// Returns the `name_id` for a nesting definition.
+    ///
+    /// For most definitions, this returns `definition.name_id()`.
+    /// For `DslDefinition`, this looks up the corresponding `DynamicClassDefinition` or
+    /// `DynamicModuleDefinition` and returns its `name_id`.
+    #[must_use]
+    fn nesting_name_id(&self, definition_id: DefinitionId) -> Option<NameId> {
+        let definition = self.definitions().get(&definition_id)?;
+
+        // First, try getting the name_id directly from the definition
+        if let Some(name_id) = definition.name_id() {
+            return Some(*name_id);
+        }
+
+        // For DslDefinition, look up the corresponding DynamicClass/DynamicModule
+        if let Definition::Dsl(_) = definition {
+            // Find a DynamicClass or DynamicModule that references this DSL
+            for def in self.definitions().values() {
+                match def {
+                    Definition::DynamicClass(d) if d.dsl_definition_id() == definition_id => {
+                        return d.name_id().copied();
+                    }
+                    Definition::DynamicModule(d) if d.dsl_definition_id() == definition_id => {
+                        return d.name_id().copied();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        None
     }
 
     // Returns an immutable reference to the constant references map
@@ -385,7 +492,9 @@ impl Graph {
             | Definition::SingletonClass(_)
             | Definition::Module(_)
             | Definition::Constant(_)
-            | Definition::ConstantAlias(_) => {}
+            | Definition::ConstantAlias(_)
+            | Definition::DynamicClass(_)
+            | Definition::DynamicModule(_) => {}
             Definition::Method(d) => self.untrack_string(*d.str_id()),
             Definition::AttrAccessor(d) => self.untrack_string(*d.str_id()),
             Definition::AttrReader(d) => self.untrack_string(*d.str_id()),
@@ -401,6 +510,7 @@ impl Graph {
                 self.untrack_string(*d.new_name_str_id());
                 self.untrack_string(*d.old_name_str_id());
             }
+            Definition::Dsl(d) => self.untrack_string(*d.method_name()),
         }
     }
 

@@ -5,13 +5,14 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition,
+    ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, DslDefinition, ExtendDefinition,
     GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition, InstanceVariableDefinition,
     MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct, PrependDefinition,
-    SingletonClassDefinition,
+    Receiver, SingletonClassDefinition,
 };
 use crate::model::document::Document;
-use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
+use crate::model::dsl::{DslArgument, DslArgumentList, DslValue};
+use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, ParentScope};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::visibility::Visibility;
@@ -30,17 +31,17 @@ enum Nesting {
     /// Nesting stack entries that produce a new lexical scope to which constant references must be attached to (i.e.:
     /// the class and module keywords). All lexical scopes are also owner, but the opposite is not true
     LexicalScope(DefinitionId),
-    /// An owner entry that will be associated with all members encountered, but will not produce a new lexical scope
-    /// (e.g.: Module.new or Class.new)
-    Owner(DefinitionId),
     /// A method entry that is used to set the correct owner for instance variables, but cannot own anything itself
     Method(DefinitionId),
+    /// A DSL definition entry that owns its block contents. Members defined inside become members of the DSL.
+    /// DSL doesn't create a Ruby lexical scope.
+    Dsl(DefinitionId),
 }
 
 impl Nesting {
     fn id(&self) -> DefinitionId {
         match self {
-            Nesting::LexicalScope(id) | Nesting::Owner(id) | Nesting::Method(id) => *id,
+            Nesting::LexicalScope(id) | Nesting::Method(id) | Nesting::Dsl(id) => *id,
         }
     }
 }
@@ -77,6 +78,16 @@ impl VisibilityModifier {
     }
 }
 
+/// Gets the location for just the constant name (not including the namespace or value).
+fn constant_name_location<'a>(node: &'a ruby_prism::Node<'a>) -> ruby_prism::Location<'a> {
+    match node {
+        ruby_prism::Node::ConstantWriteNode { .. } => node.as_constant_write_node().unwrap().name_loc(),
+        ruby_prism::Node::ConstantOrWriteNode { .. } => node.as_constant_or_write_node().unwrap().name_loc(),
+        ruby_prism::Node::ConstantPathNode { .. } => node.as_constant_path_node().unwrap().name_loc(),
+        _ => node.location(),
+    }
+}
+
 /// The indexer for the definitions found in the Ruby source code.
 ///
 /// It implements the `Visit` trait from `ruby_prism` to visit the AST and create a hash of definitions that must be
@@ -88,11 +99,13 @@ pub struct RubyIndexer<'a> {
     comments: Vec<CommentGroup>,
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<VisibilityModifier>,
+    /// DSL method names to capture as DSL definitions.
+    dsl_method_names: Vec<&'static str>,
 }
 
 impl<'a> RubyIndexer<'a> {
     #[must_use]
-    pub fn new(uri: String, source: &'a str) -> Self {
+    pub fn new(uri: String, source: &'a str, dsl_method_names: Vec<&'static str>) -> Self {
         let uri_id = UriId::from(&uri);
         let local_graph = LocalGraph::new(uri_id, Document::new(uri, source));
 
@@ -103,6 +116,32 @@ impl<'a> RubyIndexer<'a> {
             comments: Vec::new(),
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
+            dsl_method_names,
+        }
+    }
+
+    /// Checks if a method call matches a DSL target by method name.
+    fn is_dsl_target(&self, method_name: &str) -> bool {
+        self.dsl_method_names.contains(&method_name)
+    }
+
+    /// Gets the `NameId` for a chained constant assignment (e.g., for `A = B = ...`, returns B's `NameId`).
+    fn get_chained_constant_name(&mut self, value: &ruby_prism::Node) -> Option<NameId> {
+        match value {
+            ruby_prism::Node::ConstantWriteNode { .. } => {
+                self.index_constant_reference(&value.as_constant_write_node().unwrap().as_node(), false)
+            }
+            ruby_prism::Node::ConstantOrWriteNode { .. } => {
+                self.index_constant_reference(&value.as_constant_or_write_node().unwrap().as_node(), true)
+            }
+            ruby_prism::Node::ConstantPathWriteNode { .. } => {
+                self.index_constant_reference(&value.as_constant_path_write_node().unwrap().target().as_node(), false)
+            }
+            ruby_prism::Node::ConstantPathOrWriteNode { .. } => self.index_constant_reference(
+                &value.as_constant_path_or_write_node().unwrap().target().as_node(),
+                true,
+            ),
+            _ => None,
         }
     }
 
@@ -156,6 +195,91 @@ impl<'a> RubyIndexer<'a> {
 
     fn location_to_string(location: &ruby_prism::Location) -> String {
         String::from_utf8_lossy(location.as_slice()).to_string()
+    }
+
+    /// Parses arguments from a [`CallNode`] into a [`DslArgumentList`].
+    /// Constant references are indexed and stored as `ReferenceId`, other values as strings.
+    fn parse_dsl_arguments(&mut self, call: &ruby_prism::CallNode) -> DslArgumentList {
+        let mut args = DslArgumentList::new();
+
+        if let Some(arguments) = call.arguments() {
+            for argument in &arguments.arguments() {
+                match argument {
+                    ruby_prism::Node::SplatNode { .. } => {
+                        let splat = argument.as_splat_node().unwrap();
+                        if let Some(expr) = splat.expression() {
+                            let text = Self::location_to_string(&expr.location());
+                            args.add(DslArgument::Splat(text));
+                        }
+                    }
+                    ruby_prism::Node::KeywordHashNode { .. } => {
+                        let hash = argument.as_keyword_hash_node().unwrap();
+                        for element in &hash.elements() {
+                            match element {
+                                ruby_prism::Node::AssocNode { .. } => {
+                                    let assoc = element.as_assoc_node().unwrap();
+                                    let key = Self::location_to_string(&assoc.key().location());
+                                    let key = key.trim_end_matches(':').to_string();
+                                    let value_node = assoc.value();
+                                    let value = self.parse_dsl_value(&value_node);
+                                    args.add(DslArgument::KeywordArg { key, value });
+                                }
+                                ruby_prism::Node::AssocSplatNode { .. } => {
+                                    let splat = element.as_assoc_splat_node().unwrap();
+                                    if let Some(expr) = splat.value() {
+                                        let text = Self::location_to_string(&expr.location());
+                                        args.add(DslArgument::DoubleSplat(text));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    ruby_prism::Node::BlockArgumentNode { .. } => {
+                        let block_arg = argument.as_block_argument_node().unwrap();
+                        if let Some(expr) = block_arg.expression() {
+                            let text = Self::location_to_string(&expr.location());
+                            args.add(DslArgument::BlockArg(text));
+                        }
+                    }
+                    _ => {
+                        let value = self.parse_dsl_value(&argument);
+                        args.add(DslArgument::Positional(value));
+                    }
+                }
+            }
+        }
+
+        if let Some(block) = call.block() {
+            args.set_block_offset(Offset::from_prism_location(&block.location()));
+        }
+
+        args
+    }
+
+    /// Parses a DSL value node into a `DslValue`.
+    /// Constant references are indexed and stored as `ReferenceId`, other values as strings.
+    fn parse_dsl_value(&mut self, node: &ruby_prism::Node) -> DslValue {
+        match node {
+            ruby_prism::Node::ConstantReadNode { .. } | ruby_prism::Node::ConstantPathNode { .. } => {
+                // Index the constant reference and store the ReferenceId
+                if let Some(ref_id) = self.index_constant_reference_for_dsl(node) {
+                    DslValue::Reference(ref_id)
+                } else {
+                    // Fallback to string if indexing fails
+                    DslValue::String(Self::location_to_string(&node.location()))
+                }
+            }
+            _ => DslValue::String(Self::location_to_string(&node.location())),
+        }
+    }
+
+    /// Indexes a constant reference for use in DSL arguments.
+    fn index_constant_reference_for_dsl(&mut self, node: &ruby_prism::Node) -> Option<ReferenceId> {
+        let name_id = self.index_constant_reference(node, false)?;
+        let offset = Offset::from_prism_location(&constant_name_location(node));
+        let constant_ref = ConstantReference::new(name_id, self.uri_id, offset);
+        Some(self.local_graph.add_constant_reference(constant_ref))
     }
 
     fn find_comments_for(&self, offset: u32) -> (Vec<Comment>, DefinitionFlags) {
@@ -310,14 +434,7 @@ impl<'a> RubyIndexer<'a> {
     }
 
     /// Gets the `NameId` of the current lexical scope (class/module/singleton class).
-    /// Used to resolve `self` to a concrete `NameId` during indexing.
-    ///
-    /// Iterates through the definitions stack in reverse to find the first class/module/singleton class, skipping
-    /// methods. Ignores `Class.new` and other owners that do not produce lexical scopes
-    ///
-    /// # Panics
-    ///
-    /// Panics if the definition is not a class, module, or singleton class
+    /// DSL blocks are skipped - use `current_owner_name_id()` for resolving `self` in DSL blocks.
     fn current_lexical_scope_name_id(&self) -> Option<NameId> {
         self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
             Nesting::LexicalScope(id) => {
@@ -326,36 +443,47 @@ impl<'a> RubyIndexer<'a> {
                         Definition::Class(class_def) => Some(*class_def.name_id()),
                         Definition::Module(module_def) => Some(*module_def.name_id()),
                         Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
-                        Definition::Method(_) => None,
+                        Definition::Method(_) | Definition::Dsl(_) => None,
                         _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
                     }
                 } else {
                     None
                 }
             }
-            Nesting::Method(_) | Nesting::Owner(_) => None,
+            Nesting::Dsl(_) | Nesting::Method(_) => None,
         })
     }
 
-    /// Gets the `NameId` of the current owner (class/module/singleton class), including `Class.new`/`Module.new`.
+    /// Gets the `NameId` of the current owner (class/module/singleton class), including DSL blocks.
     /// Used to resolve `self` in singleton method definitions (e.g., `def self.bar`).
     ///
-    /// Unlike `current_lexical_scope_name_id`, this method considers `Nesting::Owner` entries,
+    /// Unlike `current_lexical_scope_name_id`, this method considers `Nesting::Dsl` entries,
     /// because `self` inside a `Class.new` block refers to the new class being created.
     fn current_owner_name_id(&self) -> Option<NameId> {
         self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
-            Nesting::LexicalScope(id) | Nesting::Owner(id) => {
+            Nesting::LexicalScope(id) => {
                 if let Some(definition) = self.local_graph.definitions().get(id) {
                     match definition {
                         Definition::Class(class_def) => Some(*class_def.name_id()),
                         Definition::Module(module_def) => Some(*module_def.name_id()),
                         Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
-                        Definition::Method(_) => None,
+                        Definition::Method(_) | Definition::Dsl(_) => None,
                         _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
                     }
                 } else {
                     None
                 }
+            }
+            Nesting::Dsl(id) => {
+                // For DSL definitions assigned to a constant (e.g., `Foo = Class.new`),
+                // follow the `assigned_to` reference to get the constant's NameId.
+                if let Some(Definition::Dsl(dsl)) = self.local_graph.definitions().get(id)
+                    && let Some(constant_id) = dsl.assigned_to()
+                    && let Some(Definition::Constant(constant)) = self.local_graph.definitions().get(&constant_id)
+                {
+                    return Some(*constant.name_id());
+                }
+                None
             }
             Nesting::Method(_) => None,
         })
@@ -574,15 +702,7 @@ impl<'a> RubyIndexer<'a> {
     fn add_constant_definition(&mut self, node: &ruby_prism::Node, also_add_reference: bool) -> Option<DefinitionId> {
         let name_id = self.index_constant_reference(node, also_add_reference)?;
 
-        // Get the location for the constant name/path only (not including the value)
-        let location = match node {
-            ruby_prism::Node::ConstantWriteNode { .. } => node.as_constant_write_node().unwrap().name_loc(),
-            ruby_prism::Node::ConstantOrWriteNode { .. } => node.as_constant_or_write_node().unwrap().name_loc(),
-            ruby_prism::Node::ConstantPathNode { .. } => node.as_constant_path_node().unwrap().name_loc(),
-            _ => node.location(),
-        };
-
-        let offset = Offset::from_prism_location(&location);
+        let offset = Offset::from_prism_location(&constant_name_location(node));
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
@@ -742,59 +862,17 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
-    /// Handle dynamic class or module definitions, like `Module.new`, `Class.new`, `Data.define` and so on
-    fn handle_dynamic_class_or_module(&mut self, node: &ruby_prism::Node, value: &ruby_prism::Node) -> bool {
-        let Some(call_node) = value.as_call_node() else {
-            return false;
-        };
-
-        if call_node.name().as_slice() != b"new" {
-            return false;
-        }
-
-        let Some(receiver) = call_node.receiver() else {
-            return false;
-        };
-
-        let receiver_name = receiver.location().as_slice();
-
-        // Handle `Module.new`
-        if receiver_name == b"Module" || receiver_name == b"::Module" {
-            self.handle_module_definition(&node.location(), Some(node), call_node.block(), Nesting::Owner);
-            return true;
-        }
-
-        // Handle `Class.new`
-        if receiver_name == b"Class" || receiver_name == b"::Class" {
-            self.handle_class_definition(
-                &node.location(),
-                Some(node),
-                call_node.block(),
-                call_node.arguments().and_then(|args| args.arguments().iter().next()),
-                Nesting::Owner,
-            );
-            return true;
-        }
-
-        false
-    }
-
-    /// Returns the definition ID of the current nesting (class, module, or singleton class),
+    /// Returns the definition ID of the current nesting (class, module, singleton class, or DSL),
     /// but skips methods in the definitions stack.
     fn current_nesting_definition_id(&self) -> Option<DefinitionId> {
         self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
-            Nesting::LexicalScope(id) | Nesting::Owner(id) => Some(*id),
+            Nesting::LexicalScope(id) | Nesting::Dsl(id) => Some(*id),
             Nesting::Method(_) => None,
         })
     }
 
-    /// Indexes the final constant target from a value node, unwrapping chained assignments.
-    ///
-    /// For `A = B = C`, when processing `A`, the value is `ConstantWriteNode(B)`.
-    /// This function recursively unwraps to find the final `ConstantReadNode(C)` and indexes it.
-    ///
-    /// Returns `Some(NameId)` if the final value is a constant (`ConstantReadNode` or `ConstantPathNode`),
-    /// or `None` if the chain ends in a non-constant value.
+    /// Gets the final constant target from a value, unwrapping chained assignments.
+    /// For `A = B = C`, returns C's `NameId`. Returns None if the chain ends in a non-constant.
     fn index_constant_alias_target(&mut self, value: &ruby_prism::Node) -> Option<NameId> {
         match value {
             ruby_prism::Node::ConstantReadNode { .. } | ruby_prism::Node::ConstantPathNode { .. } => {
@@ -836,15 +914,7 @@ impl<'a> RubyIndexer<'a> {
     ) -> Option<DefinitionId> {
         let name_id = self.index_constant_reference(name_node, also_add_reference)?;
 
-        // Get the location for just the constant name (not including the namespace or value).
-        let location = match name_node {
-            ruby_prism::Node::ConstantWriteNode { .. } => name_node.as_constant_write_node().unwrap().name_loc(),
-            ruby_prism::Node::ConstantOrWriteNode { .. } => name_node.as_constant_or_write_node().unwrap().name_loc(),
-            ruby_prism::Node::ConstantPathNode { .. } => name_node.as_constant_path_node().unwrap().name_loc(),
-            _ => name_node.location(),
-        };
-
-        let offset = Offset::from_prism_location(&location);
+        let offset = Offset::from_prism_location(&constant_name_location(name_node));
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
@@ -858,10 +928,113 @@ impl<'a> RubyIndexer<'a> {
         Some(definition_id)
     }
 
-    /// Adds a member to the current owner (class, module, or singleton class).
-    ///
-    /// Iterates through the definitions stack in reverse to find the first class/module/singleton
-    /// class, skipping methods, and adds the member to it.
+    /// Indexes a call node as a DSL definition if it matches a DSL target.
+    fn try_index_dsl_call(
+        &mut self,
+        call: &ruby_prism::CallNode,
+        assigned_to: Option<DefinitionId>,
+    ) -> Option<DefinitionId> {
+        let method_name = String::from_utf8_lossy(call.name().as_slice());
+        if !self.is_dsl_target(&method_name) {
+            return None;
+        }
+
+        let method_name_str_id = self.local_graph.intern_string(method_name.to_string());
+
+        let receiver_name_id = call.receiver().and_then(|receiver| match &receiver {
+            ruby_prism::Node::ConstantReadNode { .. } | ruby_prism::Node::ConstantPathNode { .. } => {
+                self.index_constant_reference(&receiver, true)
+            }
+            _ => None,
+        });
+
+        let offset = Offset::from_prism_location(&call.location());
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+        let arguments = self.parse_dsl_arguments(call);
+
+        let dsl_def = DslDefinition::new(
+            receiver_name_id,
+            method_name_str_id,
+            arguments,
+            self.uri_id,
+            offset,
+            lexical_nesting_id,
+            assigned_to,
+        );
+
+        let definition_id = dsl_def.id();
+        self.local_graph.add_definition(Definition::Dsl(Box::new(dsl_def)));
+
+        if let Some(block) = call.block() {
+            self.nesting_stack.push(Nesting::Dsl(definition_id));
+            self.visit(&block);
+            self.nesting_stack.pop();
+        }
+
+        Some(definition_id)
+    }
+
+    /// Creates a constant for DSL assignments, using `parent_nesting_id()` to include DSL parents.
+    fn create_constant_definition(
+        &mut self,
+        name_node: &ruby_prism::Node,
+        also_add_reference: bool,
+    ) -> Option<DefinitionId> {
+        let constant_name = self.index_constant_reference(name_node, also_add_reference)?;
+
+        let offset = Offset::from_prism_location(&constant_name_location(name_node));
+        let (comments, flags) = self.find_comments_for(offset.start());
+        let lexical_nesting_id = self.parent_nesting_id();
+
+        let constant_def =
+            ConstantDefinition::new(constant_name, self.uri_id, offset, comments, flags, lexical_nesting_id);
+        let definition_id = constant_def.id();
+        self.local_graph
+            .add_definition(Definition::Constant(Box::new(constant_def)));
+
+        self.add_member_to_current_owner(definition_id);
+
+        Some(definition_id)
+    }
+
+    /// Indexes a constant assignment. Handles DSL calls, aliases, and chained assignments.
+    fn index_constant_assignment(
+        &mut self,
+        name_node: &ruby_prism::Node,
+        value: &ruby_prism::Node,
+        also_add_reference: bool,
+    ) {
+        // DSL call (e.g., `A = Class.new`) - create constant first for `class << self` resolution
+        if let ruby_prism::Node::CallNode { .. } = value {
+            let call = value.as_call_node().unwrap();
+            let method_name = String::from_utf8_lossy(call.name().as_slice());
+            if self.is_dsl_target(&method_name) {
+                let constant_def_id = self.create_constant_definition(name_node, also_add_reference);
+                self.try_index_dsl_call(&call, constant_def_id);
+                return;
+            }
+        }
+
+        // Alias to existing constant (e.g., `A = Target` or `A = B = Target`)
+        // Note: index_constant_alias_target already creates inner definitions and references,
+        // so we don't need to visit(value) here.
+        if let Some(target_name_id) = self.index_constant_alias_target(value) {
+            self.add_constant_alias_definition(name_node, target_name_id, also_add_reference);
+            return;
+        }
+
+        // Chained assignment (e.g., `A = B = Class.new`) - A aliases B
+        if let Some(inner_name_id) = self.get_chained_constant_name(value) {
+            self.visit(value);
+            self.add_constant_alias_definition(name_node, inner_name_id, also_add_reference);
+            return;
+        }
+
+        self.add_constant_definition(name_node, also_add_reference);
+        self.visit(value);
+    }
+
+    /// Adds a member to the current owner (class, module, singleton class, or DSL).
     fn add_member_to_current_owner(&mut self, member_id: DefinitionId) {
         let Some(owner_id) = self.current_nesting_definition_id() else {
             return;
@@ -876,14 +1049,12 @@ impl<'a> RubyIndexer<'a> {
             Definition::Class(class) => class.add_member(member_id),
             Definition::SingletonClass(singleton_class) => singleton_class.add_member(member_id),
             Definition::Module(module) => module.add_member(member_id),
-            _ => unreachable!("find above only matches anonymous/class/module/singleton"),
+            Definition::Dsl(dsl) => dsl.add_member(member_id),
+            _ => unreachable!("find above only matches class/module/singleton/dsl"),
         }
     }
 
-    /// Adds a member to the current lexical scope
-    ///
-    /// Iterates through the definitions stack in reverse to find the first class/module/singleton class, skipping
-    /// methods, and adds the member to it. Ignores owner nestings such as Class.new
+    /// Adds a member to the current lexical scope (class, module, singleton class - excludes DSLs).
     fn add_member_to_current_lexical_scope(&mut self, member_id: DefinitionId) {
         let Some(owner_id) = self.parent_lexical_scope_id() else {
             return;
@@ -968,6 +1139,7 @@ impl<'a> RubyIndexer<'a> {
                 Definition::Class(class_def) => class_def.add_mixin(mixin),
                 Definition::Module(module_def) => module_def.add_mixin(mixin),
                 Definition::SingletonClass(singleton_class_def) => singleton_class_def.add_mixin(mixin),
+                Definition::Dsl(dsl_def) => dsl_def.add_mixin(mixin),
                 _ => {}
             }
         }
@@ -993,7 +1165,25 @@ impl<'a> RubyIndexer<'a> {
     fn parent_lexical_scope_id(&self) -> Option<DefinitionId> {
         self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
             Nesting::LexicalScope(id) => Some(*id),
-            Nesting::Owner(_) | Nesting::Method(_) => None,
+            Nesting::Method(_) | Nesting::Dsl(_) => None,
+        })
+    }
+
+    /// Gets the parent for definitions that should be nested under DSLs (like singleton classes).
+    /// Unlike `parent_lexical_scope_id`, this includes DSLs that are assigned to a constant.
+    fn parent_for_singleton_class(&self) -> Option<DefinitionId> {
+        self.nesting_stack.iter().rev().find_map(|nesting| match nesting {
+            Nesting::LexicalScope(id) => Some(*id),
+            Nesting::Dsl(id) => {
+                // Include DSLs assigned to a constant, as they create a namespace for singleton classes.
+                if let Some(Definition::Dsl(dsl)) = self.local_graph.definitions().get(id)
+                    && dsl.assigned_to().is_some()
+                {
+                    return Some(*id);
+                }
+                None
+            }
+            Nesting::Method(_) => None,
         })
     }
 
@@ -1021,7 +1211,7 @@ impl<'a> RubyIndexer<'a> {
                 // Implicit or explicit self receiver
 
                 match self.nesting_stack.last() {
-                    Some(Nesting::LexicalScope(id) | Nesting::Owner(id)) => {
+                    Some(Nesting::LexicalScope(id) | Nesting::Dsl(id)) => {
                         let definition = self
                             .local_graph
                             .definitions()
@@ -1032,7 +1222,7 @@ impl<'a> RubyIndexer<'a> {
                             Definition::Class(class_def) => Some(*class_def.name_id()),
                             Definition::Module(module_def) => Some(*module_def.name_id()),
                             Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
-                            Definition::Method(_) => None,
+                            Definition::Method(_) | Definition::Dsl(_) => None,
                             _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
                         }
                     }
@@ -1044,7 +1234,18 @@ impl<'a> RubyIndexer<'a> {
 
                         if let Some(method_def_receiver) = definition.receiver() {
                             is_singleton_name = true;
-                            Some(*method_def_receiver)
+                            match method_def_receiver {
+                                Receiver::ConstantReceiver(name_id) => Some(name_id),
+                                Receiver::SelfReceiver(def_id) => {
+                                    // Get the name_id from the definition
+                                    self.local_graph.definitions().get(&def_id).and_then(|def| match def {
+                                        Definition::Class(c) => Some(*c.name_id()),
+                                        Definition::Module(m) => Some(*m.name_id()),
+                                        Definition::SingletonClass(s) => Some(*s.name_id()),
+                                        _ => None,
+                                    })
+                                }
+                            }
                         } else {
                             self.current_owner_name_id()
                         }
@@ -1192,9 +1393,10 @@ impl Visit<'_> for RubyIndexer<'_> {
         // Determine the attached_target for the singleton class and the name_offset
         let (attached_target, name_offset) = if expression.as_self_node().is_some() {
             // `class << self` - resolve self to current class/module's NameId
+            // For DSL blocks (e.g., `Foo = Class.new do...end`), use the constant's NameId
             // name_offset points to "self"
             (
-                self.current_lexical_scope_name_id(),
+                self.current_owner_name_id(),
                 Offset::from_prism_location(&expression.location()),
             )
         } else if matches!(
@@ -1230,7 +1432,7 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let offset = Offset::from_prism_location(&node.location());
         let (comments, flags) = self.find_comments_for(offset.start());
-        let lexical_nesting_id = self.parent_lexical_scope_id();
+        let lexical_nesting_id = self.parent_for_singleton_class();
 
         let singleton_class_name = {
             let name = self
@@ -1286,26 +1488,11 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_or_write_node(&mut self, node: &ruby_prism::ConstantOrWriteNode) {
-        if let Some(target_name_id) = self.index_constant_alias_target(&node.value()) {
-            self.add_constant_alias_definition(&node.as_node(), target_name_id, true);
-        } else {
-            self.add_constant_definition(&node.as_node(), true);
-            self.visit(&node.value());
-        }
+        self.index_constant_assignment(&node.as_node(), &node.value(), true);
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
-        let value = node.value();
-        if self.handle_dynamic_class_or_module(&node.as_node(), &value) {
-            return;
-        }
-
-        if let Some(target_name_id) = self.index_constant_alias_target(&value) {
-            self.add_constant_alias_definition(&node.as_node(), target_name_id, false);
-        } else {
-            self.add_constant_definition(&node.as_node(), false);
-            self.visit(&value);
-        }
+        self.index_constant_assignment(&node.as_node(), &node.value(), false);
     }
 
     fn visit_constant_path_and_write_node(&mut self, node: &ruby_prism::ConstantPathAndWriteNode) {
@@ -1319,26 +1506,11 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_constant_path_or_write_node(&mut self, node: &ruby_prism::ConstantPathOrWriteNode) {
-        if let Some(target_name_id) = self.index_constant_alias_target(&node.value()) {
-            self.add_constant_alias_definition(&node.target().as_node(), target_name_id, true);
-        } else {
-            self.add_constant_definition(&node.target().as_node(), true);
-            self.visit(&node.value());
-        }
+        self.index_constant_assignment(&node.target().as_node(), &node.value(), true);
     }
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
-        let value = node.value();
-        if self.handle_dynamic_class_or_module(&node.as_node(), &value) {
-            return;
-        }
-
-        if let Some(target_name_id) = self.index_constant_alias_target(&value) {
-            self.add_constant_alias_definition(&node.target().as_node(), target_name_id, false);
-        } else {
-            self.add_constant_definition(&node.target().as_node(), false);
-            self.visit(&value);
-        }
+        self.index_constant_assignment(&node.target().as_node(), &node.value(), false);
     }
 
     fn visit_constant_read_node(&mut self, node: &ruby_prism::ConstantReadNode<'_>) {
@@ -1414,14 +1586,14 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let (comments, flags) = self.find_comments_for(offset_for_comments.start());
 
-        let receiver = if let Some(recv_node) = node.receiver() {
+        let receiver: Option<Receiver> = if let Some(recv_node) = node.receiver() {
             match recv_node {
-                // def self.foo - receiver is the current owner's NameId (includes Class.new/Module.new)
-                ruby_prism::Node::SelfNode { .. } => self.current_owner_name_id(),
-                // def Foo.bar or def Foo::Bar.baz - receiver is the constant's NameId
-                ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {
-                    self.index_constant_reference(&recv_node, true)
-                }
+                // def self.foo - receiver is the enclosing class/module/DSL definition
+                ruby_prism::Node::SelfNode { .. } => self.current_nesting_definition_id().map(Receiver::SelfReceiver),
+                // def Foo.bar or def Foo::Bar.baz - receiver is an explicit constant
+                ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => self
+                    .index_constant_reference(&recv_node, true)
+                    .map(Receiver::ConstantReceiver),
                 // Dynamic receiver (def foo.bar) - visit and then skip
                 // We still want to visit because it could be a variable reference
                 _ => {
@@ -1442,6 +1614,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let definition_id = if receiver.is_none() && visibility == Visibility::ModuleFunction {
             // module_function creates two method definitions:
             // 1. Public singleton method (class/module method)
+            let self_receiver = self.current_nesting_definition_id().map(Receiver::SelfReceiver);
             let method = Definition::Method(Box::new(MethodDefinition::new(
                 str_id,
                 self.uri_id,
@@ -1451,7 +1624,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 parent_nesting_id,
                 parameters.clone(),
                 Visibility::Public,
-                self.current_owner_name_id(),
+                self_receiver,
             )));
             let definition_id = self.local_graph.add_definition(method);
 
@@ -1506,6 +1679,12 @@ impl Visit<'_> for RubyIndexer<'_> {
             Accessor,
             Reader,
             Writer,
+        }
+
+        // Check if this is a standalone DSL call (e.g., Class.new do...end)
+        // DSL calls assigned to constants are handled in visit_constant_write_node
+        if self.try_index_dsl_call(node, None).is_some() {
+            return;
         }
 
         let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
@@ -1701,31 +1880,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
                     *last_visibility = VisibilityModifier::new(visibility, false, offset);
                 }
-            }
-            "new" => {
-                if let Some(receiver) = node.receiver() {
-                    {
-                        let receiver_name = receiver.location().as_slice();
-
-                        if receiver_name == b"Class" || receiver_name == b"::Class" {
-                            self.handle_class_definition(
-                                &node.location(),
-                                None,
-                                node.block(),
-                                node.arguments().and_then(|args| args.arguments().iter().next()),
-                                Nesting::Owner,
-                            );
-                            return;
-                        }
-
-                        if receiver_name == b"Module" || receiver_name == b"::Module" {
-                            self.handle_module_definition(&node.location(), None, node.block(), Nesting::Owner);
-                            return;
-                        }
-                    }
-                }
-
-                self.visit_call_node_parts(node);
             }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
@@ -1996,8 +2150,9 @@ impl Visit<'_> for RubyIndexer<'_> {
 mod tests {
     use crate::{
         model::{
-            definitions::{Definition, Mixin, Parameter},
-            ids::{StringId, UriId},
+            definitions::{Definition, Mixin, Parameter, Receiver},
+            dsl::DslArgument,
+            ids::StringId,
             visibility::Visibility,
         },
         test_utils::LocalGraphTest,
@@ -2086,6 +2241,40 @@ mod tests {
                 $expected_comments,
                 actual_comments
             );
+        }};
+    }
+
+    /// Asserts that a method has the expected receiver.
+    ///
+    /// Usage:
+    /// - `assert_method_has_receiver!(ctx, method, "Foo")` for constant receiver
+    /// - `assert_method_has_receiver!(ctx, method, "Bar")` for self receiver
+    macro_rules! assert_method_has_receiver {
+        ($context:expr, $method:expr, $expected_receiver:expr) => {{
+            use crate::model::definitions::Receiver;
+            if let Some(receiver) = $method.receiver() {
+                let actual_name = match receiver {
+                    Receiver::SelfReceiver(def_id) => {
+                        // Get the definition's name
+                        let def = $context.graph().definitions().get(&def_id).unwrap();
+                        let name_id = match def {
+                            crate::model::definitions::Definition::Class(c) => *c.name_id(),
+                            crate::model::definitions::Definition::Module(m) => *m.name_id(),
+                            crate::model::definitions::Definition::SingletonClass(s) => *s.name_id(),
+                            _ => panic!("unexpected definition type for SelfReceiver"),
+                        };
+                        let name = $context.graph().names().get(&name_id).unwrap();
+                        $context.graph().strings().get(name.str()).unwrap().as_str().to_string()
+                    }
+                    Receiver::ConstantReceiver(name_id) => {
+                        let name = $context.graph().names().get(&name_id).unwrap();
+                        $context.graph().strings().get(name.str()).unwrap().as_str().to_string()
+                    }
+                };
+                assert_eq!($expected_receiver, actual_name);
+            } else {
+                panic!("expected method to have receiver, got None");
+            }
         }};
     }
 
@@ -2202,31 +2391,21 @@ mod tests {
         }};
     }
 
-    // Method assertions
-
-    /// Asserts that a method has the expected receiver.
-    ///
-    /// Usage:
-    /// - `assert_method_has_receiver!(ctx, method, "Foo")`
-    /// - `assert_method_has_receiver!(ctx, method, "<Bar>")`
-    macro_rules! assert_method_has_receiver {
-        ($context:expr, $method:expr, $expected_receiver:expr) => {{
-            if let Some(receiver_name_id) = $method.receiver() {
-                let name = $context.graph().names().get(receiver_name_id).unwrap();
-                let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
-                assert_eq!(
-                    $expected_receiver, actual_name,
-                    "method receiver mismatch: expected `{}`, got `{}`",
-                    $expected_receiver, actual_name
-                );
-            } else {
-                panic!(
-                    "Method receiver mismatch: expected `{}`, got `None`",
-                    $expected_receiver
-                );
-            }
+    macro_rules! assert_block_offset_eq {
+        ($context:expr, $expected_location:expr, $dsl_args:expr) => {{
+            let (_, expected_offset) = $context.parse_location(&format!("{}:{}", $context.uri(), $expected_location));
+            let actual_offset = $dsl_args.block_offset().expect("expected block offset to be set");
+            assert_eq!(
+                &expected_offset,
+                actual_offset,
+                "block_offset mismatch: expected {}, got {}",
+                expected_offset.to_display_range($context.graph().document()),
+                actual_offset.to_display_range($context.graph().document())
+            );
         }};
     }
+
+    // Method assertions
 
     /// Asserts that a parameter matches the expected kind.
     ///
@@ -5128,39 +5307,25 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
-                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_def_name_eq!(&context, bar, "Bar");
-                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                            assert_eq!(foo.members()[0], bar.id());
+            // The constant assignment is at 2:3-2:6 (Bar)
+            assert_definition_at!(&context, "2:3-2:6", Constant, |const_def| {
+                // The DSL call is at 2:9-9:6 (Module.new do ... end)
+                assert_definition_at!(&context, "2:9-9:6", Dsl, |dsl| {
+                    // Check Dsl links to Constant via assigned_to
+                    assert_eq!(Some(const_def.id()), dsl.assigned_to());
+                    assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
 
-                            assert_eq!(bar.members()[0], qux.id());
-                            assert_eq!(bar.members()[1], var.id());
-                            assert_eq!(bar.members()[2], hello.id());
+                    // Check the include mixin is on the Dsl
+                    assert_def_mixins_eq!(&context, dsl, Include, vec!["Baz"]);
 
-                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                            // produce a new lexical scope
-                            let include = bar.mixins().first().unwrap();
-                            let name = context
-                                .graph()
-                                .names()
-                                .get(
-                                    context
-                                        .graph()
-                                        .constant_references()
-                                        .get(include.constant_reference_id())
-                                        .unwrap()
-                                        .name_id(),
-                                )
-                                .unwrap();
-
-                            assert_eq!(StringId::from("Baz"), *name.str());
-                            assert!(name.parent_scope().is_none());
-
-                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                    assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                        assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                            assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                                // Members are on the Dsl definition
+                                assert_eq!(dsl.members()[0], qux.id());
+                                assert_eq!(dsl.members()[1], var.id());
+                                assert_eq!(dsl.members()[2], hello.id());
+                            });
                         });
                     });
                 });
@@ -5187,39 +5352,25 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
-                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_def_name_eq!(&context, bar, "Zip::Bar");
-                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                            assert_eq!(foo.members()[0], bar.id());
+            // The constant assignment is at 2:8-2:11 (Bar in Zip::Bar)
+            assert_definition_at!(&context, "2:8-2:11", Constant, |const_def| {
+                // The DSL call is at 2:14-9:6 (Module.new do ... end)
+                assert_definition_at!(&context, "2:14-9:6", Dsl, |dsl| {
+                    // Check Dsl links to Constant via assigned_to
+                    assert_eq!(Some(const_def.id()), dsl.assigned_to());
+                    assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
 
-                            assert_eq!(bar.members()[0], qux.id());
-                            assert_eq!(bar.members()[1], var.id());
-                            assert_eq!(bar.members()[2], hello.id());
+                    // Check the include mixin is on the Dsl
+                    assert_def_mixins_eq!(&context, dsl, Include, vec!["Baz"]);
 
-                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                            // produce a new lexical scope
-                            let include = bar.mixins().first().unwrap();
-                            let name = context
-                                .graph()
-                                .names()
-                                .get(
-                                    context
-                                        .graph()
-                                        .constant_references()
-                                        .get(include.constant_reference_id())
-                                        .unwrap()
-                                        .name_id(),
-                                )
-                                .unwrap();
-
-                            assert_eq!(StringId::from("Baz"), *name.str());
-                            assert!(name.parent_scope().is_none());
-
-                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                    assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                        assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                            assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                                // Members are on the Dsl definition
+                                assert_eq!(dsl.members()[0], qux.id());
+                                assert_eq!(dsl.members()[1], var.id());
+                                assert_eq!(dsl.members()[2], hello.id());
+                            });
                         });
                     });
                 });
@@ -5246,41 +5397,22 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
-                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_def_name_eq!(&context, bar, "Bar");
-                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                            assert_eq!(foo.members()[0], bar.id());
+            assert_definition_at!(&context, "2:3-2:6", Constant, |const_def| {
+                assert_definition_at!(&context, "2:9-9:6", Dsl, |dsl| {
+                    assert_eq!(Some(const_def.id()), dsl.assigned_to());
+                    assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
+                    // Class.new(Parent) - Parent is indexed as a constant reference
+                    assert!(dsl.arguments().first_positional_reference().is_some());
+                    assert_block_offset_eq!(&context, "2:27-9:6", dsl.arguments());
+                    assert_def_mixins_eq!(&context, dsl, Include, vec!["Baz"]);
 
-                            assert_eq!(bar.members()[0], qux.id());
-                            assert_eq!(bar.members()[1], var.id());
-                            assert_eq!(bar.members()[2], hello.id());
-
-                            assert_def_superclass_ref_eq!(&context, bar, "Parent");
-
-                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                            // produce a new lexical scope
-                            let include = bar.mixins().first().unwrap();
-                            let name = context
-                                .graph()
-                                .names()
-                                .get(
-                                    context
-                                        .graph()
-                                        .constant_references()
-                                        .get(include.constant_reference_id())
-                                        .unwrap()
-                                        .name_id(),
-                                )
-                                .unwrap();
-
-                            assert_eq!(StringId::from("Baz"), *name.str());
-                            assert!(name.parent_scope().is_none());
-
-                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                    assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                        assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                            assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                                assert_eq!(dsl.members()[0], qux.id());
+                                assert_eq!(dsl.members()[1], var.id());
+                                assert_eq!(dsl.members()[2], hello.id());
+                            });
                         });
                     });
                 });
@@ -5307,39 +5439,20 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
-                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_def_name_eq!(&context, bar, "Bar");
-                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                            assert_eq!(foo.members()[0], bar.id());
+            assert_definition_at!(&context, "2:3-2:6", Constant, |const_def| {
+                assert_definition_at!(&context, "2:9-9:6", Dsl, |dsl| {
+                    assert_eq!(Some(const_def.id()), dsl.assigned_to());
+                    assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
+                    assert_block_offset_eq!(&context, "2:19-9:6", dsl.arguments());
+                    assert_def_mixins_eq!(&context, dsl, Include, vec!["Baz"]);
 
-                            assert_eq!(bar.members()[0], qux.id());
-                            assert_eq!(bar.members()[1], var.id());
-                            assert_eq!(bar.members()[2], hello.id());
-
-                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                            // produce a new lexical scope
-                            let include = bar.mixins().first().unwrap();
-                            let name = context
-                                .graph()
-                                .names()
-                                .get(
-                                    context
-                                        .graph()
-                                        .constant_references()
-                                        .get(include.constant_reference_id())
-                                        .unwrap()
-                                        .name_id(),
-                                )
-                                .unwrap();
-
-                            assert_eq!(StringId::from("Baz"), *name.str());
-                            assert!(name.parent_scope().is_none());
-
-                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                    assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                        assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                            assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                                assert_eq!(dsl.members()[0], qux.id());
+                                assert_eq!(dsl.members()[1], var.id());
+                                assert_eq!(dsl.members()[2], hello.id());
+                            });
                         });
                     });
                 });
@@ -5366,41 +5479,22 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
-                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_def_name_eq!(&context, bar, "Zip::Bar");
-                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                            assert_eq!(foo.members()[0], bar.id());
+            assert_definition_at!(&context, "2:8-2:11", Constant, |const_def| {
+                assert_definition_at!(&context, "2:14-9:6", Dsl, |dsl| {
+                    assert_eq!(Some(const_def.id()), dsl.assigned_to());
+                    assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
+                    // Class.new(Parent) - Parent is indexed as a constant reference
+                    assert!(dsl.arguments().first_positional_reference().is_some());
+                    assert_block_offset_eq!(&context, "2:32-9:6", dsl.arguments());
+                    assert_def_mixins_eq!(&context, dsl, Include, vec!["Baz"]);
 
-                            assert_eq!(bar.members()[0], qux.id());
-                            assert_eq!(bar.members()[1], var.id());
-                            assert_eq!(bar.members()[2], hello.id());
-
-                            assert_def_superclass_ref_eq!(&context, bar, "Parent");
-
-                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                            // produce a new lexical scope
-                            let include = bar.mixins().first().unwrap();
-                            let name = context
-                                .graph()
-                                .names()
-                                .get(
-                                    context
-                                        .graph()
-                                        .constant_references()
-                                        .get(include.constant_reference_id())
-                                        .unwrap()
-                                        .name_id(),
-                                )
-                                .unwrap();
-
-                            assert_eq!(StringId::from("Baz"), *name.str());
-                            assert!(name.parent_scope().is_none());
-
-                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                    assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                        assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                            assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                                assert_eq!(dsl.members()[0], qux.id());
+                                assert_eq!(dsl.members()[1], var.id());
+                                assert_eq!(dsl.members()[2], hello.id());
+                            });
                         });
                     });
                 });
@@ -5424,14 +5518,21 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-3:6", Class, |bar| {
-                assert_definition_at!(&context, "5:3-6:6", Module, |baz| {
-                    assert_def_name_eq!(&context, bar, "Bar");
-                    assert_def_name_eq!(&context, baz, "Baz");
-                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                    assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
-                    assert_eq!(foo.members()[0], bar.id());
-                    assert_eq!(foo.members()[1], baz.id());
+            // Bar = ::Class.new do end
+            assert_definition_at!(&context, "2:9-3:6", Dsl, |bar_dsl| {
+                assert_definition_at!(&context, "2:3-2:6", Constant, |bar_const| {
+                    // Baz = ::Module.new do end
+                    assert_definition_at!(&context, "5:9-6:6", Dsl, |baz_dsl| {
+                        assert_definition_at!(&context, "5:3-5:6", Constant, |baz_const| {
+                            // Check Dsl links to Constant via assigned_to
+                            assert_eq!(Some(bar_const.id()), bar_dsl.assigned_to());
+                            assert_eq!(Some(baz_const.id()), baz_dsl.assigned_to());
+
+                            // Check lexical nesting - Dsl definitions are nested in Foo
+                            assert_eq!(foo.id(), bar_dsl.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.id(), baz_dsl.lexical_nesting_id().unwrap());
+                        });
+                    });
                 });
             });
         });
@@ -5455,19 +5556,21 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-9:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-4:6", Class, |anonymous| {
-                assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
+            assert_definition_at!(&context, "2:3-4:6", Dsl, |dsl| {
+                assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
+                assert_block_offset_eq!(&context, "2:13-4:6", dsl.arguments());
 
                 assert_definition_at!(&context, "3:5-3:17", Method, |bar| {
-                    assert_eq!(anonymous.id(), bar.lexical_nesting_id().unwrap());
+                    assert_eq!(dsl.id(), bar.lexical_nesting_id().unwrap());
                 });
             });
 
-            assert_definition_at!(&context, "6:3-8:6", Module, |anonymous| {
-                assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
+            assert_definition_at!(&context, "6:3-8:6", Dsl, |dsl| {
+                assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
+                assert_block_offset_eq!(&context, "6:14-8:6", dsl.arguments());
 
                 assert_definition_at!(&context, "7:5-7:17", Method, |baz| {
-                    assert_eq!(anonymous.id(), baz.lexical_nesting_id().unwrap());
+                    assert_eq!(dsl.id(), baz.lexical_nesting_id().unwrap());
                 });
             });
         });
@@ -5488,11 +5591,13 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
-                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
+            assert_definition_at!(&context, "2:3-5:6", Dsl, |outer_dsl| {
+                assert_eq!(foo.id(), outer_dsl.lexical_nesting_id().unwrap());
+                assert_block_offset_eq!(&context, "2:13-5:6", outer_dsl.arguments());
 
-                assert_definition_at!(&context, "3:5-4:8", Module, |anonymous_module| {
-                    assert_eq!(foo.id(), anonymous_module.lexical_nesting_id().unwrap());
+                assert_definition_at!(&context, "3:5-4:8", Dsl, |inner_dsl| {
+                    assert_eq!(foo.id(), inner_dsl.lexical_nesting_id().unwrap());
+                    assert_block_offset_eq!(&context, "3:16-4:8", inner_dsl.arguments());
                 });
             });
         });
@@ -5513,8 +5618,9 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
-                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
+            assert_definition_at!(&context, "2:3-5:6", Dsl, |dsl| {
+                assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
+                assert_block_offset_eq!(&context, "2:13-5:6", dsl.arguments());
 
                 assert_definition_at!(&context, "3:5-4:8", Module, |bar| {
                     assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
@@ -5537,10 +5643,10 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |foo| {
-            assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
-                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
-
-                assert_def_mixins_eq!(&context, anonymous_class, Include, ["Bar"]);
+            assert_definition_at!(&context, "2:3-4:6", Dsl, |dsl| {
+                assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
+                assert_block_offset_eq!(&context, "2:13-4:6", dsl.arguments());
+                assert_def_mixins_eq!(&context, dsl, Include, vec!["Bar"]);
             });
         });
     }
@@ -5559,13 +5665,20 @@ mod tests {
         });
         assert_no_diagnostics!(&context);
 
-        assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
-            let receiver = bar.receiver().unwrap();
-            let name_ref = context.graph().names().get(&receiver).unwrap();
-            assert_eq!(StringId::from("A"), *name_ref.str());
+        assert_definition_at!(&context, "2:7-5:6", Dsl, |dsl| {
+            assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
+                // def self.bar - receiver is the DSL definition
+                let receiver = bar.receiver().unwrap();
+                match receiver {
+                    Receiver::SelfReceiver(def_id) => {
+                        assert_eq!(dsl.id(), def_id);
+                    }
+                    Receiver::ConstantReceiver(_) => panic!("expected SelfReceiver"),
+                }
 
-            let nesting_name = context.graph().names().get(&name_ref.nesting().unwrap()).unwrap();
-            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                // lexical_nesting_id should point to the DSL definition
+                assert_eq!(Some(dsl.id()), *bar.lexical_nesting_id());
+            });
         });
     }
 
@@ -5585,10 +5698,116 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
-            assert_definition_at!(&context, "4:7-4:12", ClassVariable, |var| {
-                assert_eq!(foo.id(), var.lexical_nesting_id().unwrap());
+            assert_definition_at!(&context, "2:7-6:6", Dsl, |dsl| {
+                assert_eq!(foo.id(), dsl.lexical_nesting_id().unwrap());
+                assert_definition_at!(&context, "4:7-4:12", ClassVariable, |var| {
+                    assert_eq!(foo.id(), var.lexical_nesting_id().unwrap());
+                });
             });
         });
+    }
+
+    #[test]
+    fn index_class_new_with_path_assignment() {
+        let context = index_source({
+            "
+            module Foo; end
+            Foo::Bar = Class.new
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:6-2:9", Constant, |bar| {
+            assert_definition_at!(&context, "2:12-2:21", Dsl, |dsl| {
+                assert_eq!(bar.id(), dsl.assigned_to().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new_with_or_assignment() {
+        let context = index_source({
+            "
+            Foo ||= Class.new
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |foo| {
+            assert_definition_at!(&context, "1:9-1:18", Dsl, |dsl| {
+                assert_eq!(foo.id(), dsl.assigned_to().unwrap());
+                assert_constant_references_eq!(&context, ["Foo", "Class"]);
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new_with_path_or_assignment() {
+        let context = index_source({
+            "
+            module Foo; end
+            Foo::Bar ||= Class.new
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:6-2:9", Constant, |bar| {
+            assert_definition_at!(&context, "2:14-2:23", Dsl, |dsl| {
+                assert_eq!(bar.id(), dsl.assigned_to().unwrap());
+                assert_constant_references_eq!(&context, ["Foo", "Bar", "Class"]);
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new_with_chained_assignment() {
+        // For `A = B = Class.new`, Ruby evaluates right-to-left:
+        // - Class.new creates a class
+        // - Assigned to B first (B is the primary constant)
+        // - Then assigned to A (A is an alias to B)
+        let context = index_source({
+            "
+            A = B = Class.new
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:2", ConstantAlias, |a| {
+            assert_definition_at!(&context, "1:5-1:6", Constant, |b| {
+                assert_definition_at!(&context, "1:9-1:18", Dsl, |dsl| {
+                    assert_eq!(b.id(), dsl.assigned_to().unwrap());
+                    assert_eq!(a.target_name_id(), b.name_id());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_method_in_anonymous_class() {
+        let context = index_source({
+            "
+            Class.new do
+              alias_method :bar, :baz
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+        assert_method_references_eq!(&context, ["baz()"]);
+    }
+
+    #[test]
+    fn index_method_reference_inside_anonymous_class() {
+        let context = index_source({
+            "
+            Class.new do
+              def bar
+                baz
+              end
+            end
+            "
+        });
+        assert_no_diagnostics!(&context);
+        assert_method_references_eq!(&context, ["baz"]);
     }
 
     #[test]
@@ -5605,13 +5824,69 @@ mod tests {
         });
         assert_no_diagnostics!(&context);
 
-        assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
-            let receiver = bar.receiver().unwrap();
-            let name_ref = context.graph().names().get(&receiver).unwrap();
-            let uri_id = UriId::from("file:///foo.rb");
-            assert_eq!(StringId::from(&format!("{uri_id}:13<anonymous>")), *name_ref.str());
-            assert!(name_ref.nesting().is_none());
-            assert!(name_ref.parent_scope().is_none());
+        assert_definition_at!(&context, "2:3-5:6", Dsl, |dsl| {
+            assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
+                // def self.bar - receiver is the DSL definition
+                let receiver = bar.receiver().unwrap();
+                match receiver {
+                    Receiver::SelfReceiver(def_id) => {
+                        assert_eq!(dsl.id(), def_id);
+                    }
+                    Receiver::ConstantReceiver(_) => panic!("expected SelfReceiver"),
+                }
+
+                // lexical_nesting_id should point to the DSL definition
+                assert_eq!(Some(dsl.id()), *bar.lexical_nesting_id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_singleton_class_inside_class_new() {
+        let context = index_source({
+            "
+            Foo = Class.new do
+              class << self
+                def singleton_method; end
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "1:7-5:4", Dsl, |dsl| {
+            assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton| {
+                // Singleton class is nested in the DSL
+                assert_eq!(singleton.lexical_nesting_id(), &Some(dsl.id()));
+
+                // Method inside singleton
+                assert_definition_at!(&context, "3:5-3:30", Method, |method| {
+                    assert_eq!(method.lexical_nesting_id(), &Some(singleton.id()));
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_nested_class_new_inside_singleton_class() {
+        let context = index_source({
+            "
+            Foo = Class.new do
+              class << self
+                Bar = Class.new do
+                  def bar_method; end
+                end
+              end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "2:3-6:6", SingletonClass, |singleton| {
+            assert_definition_at!(&context, "3:5-3:8", Constant, |bar_const| {
+                assert_definition_at!(&context, "3:11-5:8", Dsl, |inner_dsl| {
+                    assert_eq!(Some(bar_const.id()), inner_dsl.assigned_to());
+                    assert_eq!(inner_dsl.lexical_nesting_id(), &Some(singleton.id()));
+                });
+            });
         });
     }
 
@@ -6012,5 +6287,94 @@ mod tests {
         assert_definition_at!(&context, "12:24-12:27", AttrReader, |def| {
             assert_def_comments_eq!(&context, def, ["# Comment"]);
         });
+    }
+
+    #[test]
+    fn index_dsl_captures_all_argument_types() {
+        let context = index_source({
+            r#"
+            Class.new(Parent, "string_arg", *splat_args, key: value, **double_splat) do
+            end
+            "#
+        });
+        assert_no_diagnostics!(&context);
+
+        let dsl_defs: Vec<_> = context
+            .graph()
+            .definitions()
+            .iter()
+            .filter_map(|(_, def)| match def {
+                Definition::Dsl(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(dsl_defs.len(), 1);
+        let args = dsl_defs[0].arguments();
+
+        let arg_list = args.arguments();
+        assert_eq!(arg_list.len(), 5);
+
+        // First argument is a constant reference (Parent)
+        let DslArgument::Positional(v) = &arg_list[0] else {
+            panic!("expected Positional")
+        };
+        let ref_id = v.as_reference().expect("expected constant reference for Parent");
+        let ref_entry = context.graph().constant_references().get(&ref_id).unwrap();
+        let name = context.graph().names().get(ref_entry.name_id()).unwrap();
+        let name_str = context.graph().strings().get(name.str()).unwrap();
+        assert_eq!(name_str.as_str(), "Parent");
+
+        // Second argument is a string literal
+        let DslArgument::Positional(v) = &arg_list[1] else {
+            panic!("expected Positional")
+        };
+        assert_eq!(v.as_str().unwrap(), "\"string_arg\"");
+
+        let DslArgument::Splat(s) = &arg_list[2] else {
+            panic!("expected Splat")
+        };
+        assert_eq!(s, "splat_args");
+
+        let DslArgument::KeywordArg { key, value } = &arg_list[3] else {
+            panic!("expected KeywordArg")
+        };
+        assert_eq!(key, "key");
+        assert_eq!(value.as_str().unwrap(), "value");
+
+        let DslArgument::DoubleSplat(s) = &arg_list[4] else {
+            panic!("expected DoubleSplat")
+        };
+        assert_eq!(s, "double_splat");
+
+        assert_block_offset_eq!(&context, "1:74-2:4", args);
+    }
+
+    #[test]
+    fn index_dsl_captures_block_argument() {
+        // &proc is treated as a block by Prism, not as an argument
+        let context = index_source({
+            "
+            proc = -> { }
+            Class.new(&proc) # Class.new is captured as DSL
+            "
+        });
+        assert_no_diagnostics!(&context);
+
+        let dsl_defs: Vec<_> = context
+            .graph()
+            .definitions()
+            .iter()
+            .filter_map(|(_, def)| match def {
+                Definition::Dsl(d) => Some(d),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(dsl_defs.len(), 1);
+        let args = dsl_defs[0].arguments();
+
+        assert!(args.arguments().is_empty());
+        assert_block_offset_eq!(&context, "2:11-2:16", args);
     }
 }
