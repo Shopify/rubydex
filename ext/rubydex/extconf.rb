@@ -39,9 +39,13 @@ if Gem.win_platform?
   end
 else
   if RUBY_PLATFORM.include?("darwin")
+    # On the precompiled version of the gem, the `dylib` is one folder above the `.bundle/.so` file. For on machine
+    # compilation, they are at the same level
     append_ldflags("-Wl,-rpath,@loader_path")
+    append_ldflags("-Wl,-rpath,@loader_path/..")
   else
     $LDFLAGS << " -Wl,-rpath,\\$$ORIGIN"
+    $LDFLAGS << " -Wl,-rpath,\\$$ORIGIN/.."
   end
 
   # We cannot use append_ldflags here because the Rust code is only compiled later. If it's not compiled yet, this will
