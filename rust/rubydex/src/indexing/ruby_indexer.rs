@@ -2031,14 +2031,51 @@ mod tests {
         }};
     }
 
+    // Method assertions
+
+    /// Asserts that a method has the expected receiver.
+    ///
+    /// Usage:
+    /// - `assert_method_has_receiver!(ctx, method, "Foo")`
+    /// - `assert_method_has_receiver!(ctx, method, "<Bar>")`
+    macro_rules! assert_method_has_receiver {
+        ($context:expr, $method:expr, $expected_receiver:expr) => {{
+            if let Some(receiver_name_id) = $method.receiver() {
+                let name = $context.graph().names().get(receiver_name_id).unwrap();
+                let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
+                assert_eq!(
+                    $expected_receiver, actual_name,
+                    "method receiver mismatch: expected `{}`, got `{}`",
+                    $expected_receiver, actual_name
+                );
+            } else {
+                panic!(
+                    "Method receiver mismatch: expected `{}`, got `None`",
+                    $expected_receiver
+                );
+            }
+        }};
+    }
+
+    /// Asserts that a parameter matches the expected kind.
+    ///
+    /// Usage:
+    /// - `assert_parameter!(parameter, RequiredPositional, |param| { assert_string_eq!(context, param.str(), "a"); })`
+    /// - `assert_parameter!(parameter, OptionalPositional, |param| { assert_string_eq!(context, param.str(), "b"); })`
     macro_rules! assert_parameter {
         ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
             match $expr {
                 Parameter::$variant($param) => $body,
-                _ => panic!("expected {} parameter, got {:?}", stringify!($variant), $expr),
+                _ => panic!(
+                    "parameter kind mismatch: expected `{}`, got `{:?}`",
+                    stringify!($variant),
+                    $expr
+                ),
             }
         };
     }
+
+    // Reference assertions
 
     macro_rules! assert_constant_references_eq {
         ($context:expr, $expected_names:expr) => {{
@@ -2088,17 +2125,7 @@ mod tests {
         }};
     }
 
-    macro_rules! assert_method_has_receiver {
-        ($context:expr, $method:expr, $expected_receiver:expr) => {{
-            if let Some(receiver_name_id) = $method.receiver() {
-                let name = $context.graph().names().get(receiver_name_id).unwrap();
-                let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
-                assert_eq!($expected_receiver, actual_name);
-            } else {
-                panic!("expected method to have receiver, got None");
-            }
-        }};
-    }
+    // Diagnostic assertions
 
     fn format_diagnostics(context: &LocalGraphTest) -> Vec<String> {
         let mut diagnostics = context.graph().diagnostics().iter().collect::<Vec<_>>();
