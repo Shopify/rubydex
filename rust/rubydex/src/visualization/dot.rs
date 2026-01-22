@@ -66,7 +66,7 @@ fn write_definition_nodes(output: &mut String, graph: &Graph) {
         .filter_map(|(def_id, definition)| {
             graph
                 .declarations()
-                .get(graph.definitions_to_declarations().get(def_id).unwrap())
+                .get(graph.definition_to_declaration_id(definition).unwrap())
                 .map(|declaration| {
                     let def_type = definition.kind();
                     let escaped_name = escape_dot_string(declaration.name());

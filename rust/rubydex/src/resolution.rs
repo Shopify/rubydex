@@ -408,8 +408,7 @@ impl<'a> Resolver<'a> {
                         Definition::Class(_) | Definition::Module(_) => {
                             let nesting_decl_id = self
                                 .graph
-                                .definitions_to_declarations()
-                                .get(&nesting_id)
+                                .definition_id_to_declaration_id(nesting_id)
                                 .copied()
                                 .unwrap_or(*OBJECT_ID);
                             let owner_id = self.get_or_create_singleton_class(nesting_decl_id);
@@ -433,8 +432,7 @@ impl<'a> Resolver<'a> {
                         Definition::SingletonClass(_) => {
                             let singleton_class_decl_id = self
                                 .graph
-                                .definitions_to_declarations()
-                                .get(&nesting_id)
+                                .definition_id_to_declaration_id(nesting_id)
                                 .copied()
                                 .unwrap_or(*OBJECT_ID);
                             let owner_id = self.get_or_create_singleton_class(singleton_class_decl_id);
@@ -523,7 +521,7 @@ impl<'a> Resolver<'a> {
                 break;
             }
         }
-        current_nesting.and_then(|id| self.graph.definitions_to_declarations().get(&id).copied())
+        current_nesting.and_then(|id| self.graph.definition_id_to_declaration_id(id).copied())
     }
 
     /// Resolves owner from lexical nesting.
@@ -535,7 +533,7 @@ impl<'a> Resolver<'a> {
         // If no declaration exists yet for this definition, walk up the lexical chain.
         // This handles the case where attr_* definitions inside methods are processed
         // before the method definition itself.
-        let Some(declaration_id) = self.graph.definitions_to_declarations().get(&id) else {
+        let Some(declaration_id) = self.graph.definition_id_to_declaration_id(id) else {
             let definition = self.graph.definitions().get(&id).unwrap();
             return self.resolve_lexical_owner(*definition.lexical_nesting_id());
         };
