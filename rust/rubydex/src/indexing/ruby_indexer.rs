@@ -1959,6 +1959,40 @@ mod tests {
         }};
     }
 
+    /// Asserts that a definition's superclass reference matches the expected name.
+    ///
+    /// Usage:
+    /// - `assert_def_superclass_ref_eq!(ctx, def, "Bar::Baz")`
+    macro_rules! assert_def_superclass_ref_eq {
+        ($context:expr, $def:expr, $expected_name:expr) => {{
+            let name = $context
+                .graph()
+                .strings()
+                .get(
+                    $context
+                        .graph()
+                        .names()
+                        .get(
+                            $context
+                                .graph()
+                                .constant_references()
+                                .get($def.superclass_ref().unwrap())
+                                .unwrap()
+                                .name_id(),
+                        )
+                        .unwrap()
+                        .str(),
+                )
+                .unwrap()
+                .as_str();
+            assert_eq!(
+                $expected_name, name,
+                "superclass reference mismatch: expected `{}`, got `{name}`",
+                $expected_name,
+            );
+        }};
+    }
+
     macro_rules! assert_parameter {
         ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
             match $expr {
@@ -2025,27 +2059,6 @@ mod tests {
             } else {
                 panic!("expected method to have receiver, got None");
             }
-        }};
-    }
-
-    macro_rules! assert_superclass_ref_eq {
-        ($context:expr, $def:expr, $expected_name:expr) => {{
-            let name = $context
-                .graph()
-                .names()
-                .get(
-                    $context
-                        .graph()
-                        .constant_references()
-                        .get($def.superclass_ref().unwrap())
-                        .unwrap()
-                        .name_id(),
-                )
-                .unwrap();
-            assert_eq!(
-                $expected_name,
-                $context.graph().strings().get(name.str()).unwrap().as_str()
-            );
         }};
     }
 
@@ -4249,7 +4262,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:21", Class, |def| {
-            assert_superclass_ref_eq!(&context, def, "Bar");
+            assert_def_superclass_ref_eq!(&context, def, "Bar");
         });
     }
 
@@ -4267,7 +4280,7 @@ mod tests {
         refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
 
         assert_definition_at!(&context, "1:1-1:26", Class, |def| {
-            assert_superclass_ref_eq!(&context, def, "Baz");
+            assert_def_superclass_ref_eq!(&context, def, "Baz");
             assert_def_name_offset_eq!(&context, "1:7-1:10", def);
         });
     }
@@ -4898,7 +4911,7 @@ mod tests {
                             assert_eq!(bar.members()[1], var.id());
                             assert_eq!(bar.members()[2], hello.id());
 
-                            assert_superclass_ref_eq!(&context, bar, "Parent");
+                            assert_def_superclass_ref_eq!(&context, bar, "Parent");
 
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
@@ -5018,7 +5031,7 @@ mod tests {
                             assert_eq!(bar.members()[1], var.id());
                             assert_eq!(bar.members()[2], hello.id());
 
-                            assert_superclass_ref_eq!(&context, bar, "Parent");
+                            assert_def_superclass_ref_eq!(&context, bar, "Parent");
 
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
