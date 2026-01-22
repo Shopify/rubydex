@@ -40,7 +40,6 @@ pub struct Graph {
     // Map of method references that still need to be resolved
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
 
-    diagnostics: Vec<Diagnostic>,
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
 }
@@ -57,7 +56,6 @@ impl Graph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
-            diagnostics: Vec::new(),
             position_encoding: Encoding::default(),
         }
     }
@@ -173,8 +171,22 @@ impl Graph {
     }
 
     #[must_use]
-    pub fn diagnostics(&self) -> &Vec<Diagnostic> {
-        &self.diagnostics
+    pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
+        let document_diagnostics = self.documents.values().flat_map(Document::diagnostics);
+        let declaration_diagnostics = self.declarations.values().flat_map(Declaration::diagnostics);
+        let definition_diagnostics = self.definitions.values().flat_map(Definition::diagnostics);
+        let constant_reference_diagnostics = self
+            .constant_references
+            .values()
+            .flat_map(ConstantReference::diagnostics);
+        let method_reference_diagnostics = self.method_references.values().flat_map(MethodRef::diagnostics);
+
+        document_diagnostics
+            .chain(declaration_diagnostics)
+            .chain(definition_diagnostics)
+            .chain(constant_reference_diagnostics)
+            .chain(method_reference_diagnostics)
+            .collect()
     }
 
     /// Interns a string in the graph unless already interned. This method is only used to back the
@@ -418,7 +430,7 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references, diagnostics) =
+        let (uri_id, document, definitions, strings, names, constant_references, method_references) =
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
@@ -445,7 +457,6 @@ impl Graph {
         }
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
-        self.diagnostics.extend(diagnostics);
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
@@ -495,6 +506,7 @@ impl Graph {
                     && let Some(declaration) = self.declarations.get_mut(&declaration_id)
                     && declaration.remove_definition(def_id)
                 {
+                    declaration.clear_diagnostics();
                     if declaration.as_namespace().is_some() {
                         declarations_to_invalidate_ancestor_chains.push(declaration_id);
                     }
@@ -1155,6 +1167,18 @@ mod tests {
     }
 
     #[test]
+    fn updating_index_with_deleted_diagnostics() {
+        let mut context = GraphTest::new();
+
+        // TODO: Add resolution error to test diagnostics attached to declarations
+        context.index_uri("file:///foo.rb", "class Foo");
+        assert!(!context.graph().all_diagnostics().is_empty());
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        assert!(context.graph().all_diagnostics().is_empty());
+    }
+
+    #[test]
     fn diagnostics_are_collected() {
         let mut context = GraphTest::new();
 
@@ -1170,9 +1194,9 @@ mod tests {
             "
         });
 
-        let mut diagnostics = context
+        let mut diagnostics: Vec<String> = context
             .graph()
-            .diagnostics()
+            .all_diagnostics()
             .iter()
             .map(|d| {
                 format!(
@@ -1182,7 +1206,7 @@ mod tests {
                     context.graph().documents().get(d.uri_id()).unwrap().uri()
                 )
             })
-            .collect::<Vec<_>>();
+            .collect();
 
         diagnostics.sort();
 

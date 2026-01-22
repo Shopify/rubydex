@@ -1,5 +1,6 @@
 use line_index::LineIndex;
 
+use crate::diagnostic::Diagnostic;
 use crate::model::ids::{DefinitionId, ReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
@@ -11,6 +12,7 @@ pub struct Document {
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<ReferenceId>,
     constant_reference_ids: Vec<ReferenceId>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl Document {
@@ -22,6 +24,7 @@ impl Document {
             definition_ids: Vec::new(),
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -65,6 +68,15 @@ impl Document {
 
     pub fn add_constant_reference(&mut self, reference_id: ReferenceId) {
         self.constant_reference_ids.push(reference_id);
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+        self.diagnostics.push(diagnostic);
     }
 }
 

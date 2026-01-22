@@ -43,7 +43,7 @@ impl DiagnosticArray {
 pub unsafe extern "C" fn rdx_graph_diagnostics(pointer: GraphPointer) -> *mut DiagnosticArray {
     with_graph(pointer, |graph| {
         let entries = graph
-            .diagnostics()
+            .all_diagnostics()
             .iter()
             .map(|diagnostic| {
                 let document = graph.documents().get(diagnostic.uri_id()).unwrap();

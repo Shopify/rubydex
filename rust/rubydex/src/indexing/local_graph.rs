@@ -18,7 +18,6 @@ type LocalGraphParts = (
     IdentityHashMap<NameId, NameRef>,
     IdentityHashMap<ReferenceId, ConstantReference>,
     IdentityHashMap<ReferenceId, MethodRef>,
-    Vec<Diagnostic>,
 );
 
 #[derive(Debug)]
@@ -30,7 +29,6 @@ pub struct LocalGraph {
     names: IdentityHashMap<NameId, NameRef>,
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl LocalGraph {
@@ -44,7 +42,6 @@ impl LocalGraph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
-            diagnostics: Vec::new(),
         }
     }
 
@@ -149,13 +146,13 @@ impl LocalGraph {
     // Diagnostics
 
     #[must_use]
-    pub fn diagnostics(&self) -> &Vec<Diagnostic> {
-        &self.diagnostics
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        self.document.diagnostics()
     }
 
     pub fn add_diagnostic(&mut self, rule: Rule, offset: Offset, message: String) {
         let diagnostic = Diagnostic::new(rule, self.uri_id, offset, message);
-        self.diagnostics.push(diagnostic);
+        self.document.add_diagnostic(diagnostic);
     }
 
     // Into parts
@@ -170,7 +167,6 @@ impl LocalGraph {
             self.names,
             self.constant_references,
             self.method_references,
-            self.diagnostics,
         )
     }
 }

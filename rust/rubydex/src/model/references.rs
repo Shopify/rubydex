@@ -1,4 +1,5 @@
 use crate::{
+    diagnostic::Diagnostic,
     model::ids::{NameId, ReferenceId, StringId, UriId},
     offset::Offset,
 };
@@ -12,6 +13,8 @@ pub struct ConstantReference {
     uri_id: UriId,
     /// The offsets inside of the document where we found the reference
     offset: Offset,
+    /// Diagnostics associated with this reference
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl ConstantReference {
@@ -21,6 +24,7 @@ impl ConstantReference {
             name_id,
             uri_id,
             offset,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -51,6 +55,15 @@ impl ConstantReference {
         );
         ReferenceId::from(&key)
     }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+        self.diagnostics.push(diagnostic);
+    }
 }
 
 /// A reference to a method
@@ -62,12 +75,19 @@ pub struct MethodRef {
     uri_id: UriId,
     /// The offsets inside of the document where we found the reference
     offset: Offset,
+    /// Diagnostics associated with this reference
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl MethodRef {
     #[must_use]
     pub fn new(str: StringId, uri_id: UriId, offset: Offset) -> Self {
-        Self { str, uri_id, offset }
+        Self {
+            str,
+            uri_id,
+            offset,
+            diagnostics: Vec::new(),
+        }
     }
 
     #[must_use]
@@ -96,5 +116,14 @@ impl MethodRef {
             self.offset.end()
         );
         ReferenceId::from(&key)
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
+        self.diagnostics.push(diagnostic);
     }
 }
