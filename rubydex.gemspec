@@ -22,12 +22,16 @@ Gem::Specification.new do |spec|
 
   spec.files = ["README.md", "LICENSE.txt"] +
     Dir.glob("lib/**/*.rb") +
-    Dir.glob("lib/rubydex/*.{so,dylib}") +
     Dir.glob("ext/rubydex/**/*.{c,h}") +
     Dir.glob("rust/**/*.{rs,toml,lock,hbs}").reject { |f| f.start_with?("rust/target") }
 
   if ENV["RELEASE"]
     spec.files << "THIRD_PARTY_LICENSES.html"
+    if RUBY_PLATFORM.include?("darwin")
+      spec.files << "lib/rubydex/librubydex_sys.dylib"
+    elsif RUBY_PLATFORM.include?("linux")
+      spec.files << "lib/rubydex/librubydex_sys.so"
+    end
   end
 
   spec.bindir = "exe"
