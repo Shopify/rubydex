@@ -2096,7 +2096,11 @@ mod tests {
 
             let actual_names = actual_references.iter().map(|(_, name)| *name).collect::<Vec<_>>();
 
-            assert_eq!($expected_names, actual_names);
+            assert_eq!(
+                $expected_names, actual_names,
+                "constant references mismatch: expected `{:?}`, got `{:?}`",
+                $expected_names, actual_names
+            );
         }};
     }
 
@@ -2121,7 +2125,11 @@ mod tests {
                 .map(|(_offset, name)| *name)
                 .collect::<Vec<_>>();
 
-            assert_eq!($expected_names, actual_names);
+            assert_eq!(
+                $expected_names, actual_names,
+                "method references mismatch: expected `{:?}`, got `{:?}`",
+                $expected_names, actual_names
+            );
         }};
     }
 
@@ -2139,7 +2147,13 @@ mod tests {
 
     macro_rules! assert_diagnostics_eq {
         ($context:expr, $expected_diagnostics:expr) => {{
-            assert_eq!($expected_diagnostics, format_diagnostics($context));
+            assert_eq!(
+                $expected_diagnostics,
+                format_diagnostics($context),
+                "diagnostics mismatch: expected `{:?}`, got `{:?}`",
+                $expected_diagnostics,
+                format_diagnostics($context)
+            );
         }};
     }
 
