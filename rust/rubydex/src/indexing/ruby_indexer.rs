@@ -1975,7 +1975,7 @@ mod tests {
     /// Usage:
     /// - `assert_def_name_offset_eq!(ctx, "1:7-1:10", def)`
     macro_rules! assert_def_name_offset_eq {
-        ($context:expr, $expected_location:expr, $def:expr) => {{
+        ($context:expr, $def:expr, $expected_location:expr) => {{
             let (_, expected_offset) = $context.parse_location(&format!("{}:{}", $context.uri(), $expected_location));
             assert_eq!(
                 &expected_offset,
@@ -2225,7 +2225,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
             assert_def_name_eq!(&context, def, "Foo");
-            assert_def_name_offset_eq!(&context, "1:7-1:10", def);
+            assert_def_name_offset_eq!(&context, def, "1:7-1:10");
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
@@ -2233,7 +2233,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
             assert_def_name_eq!(&context, def, "Bar");
-            assert_def_name_offset_eq!(&context, "2:9-2:12", def);
+            assert_def_name_offset_eq!(&context, def, "2:9-2:12");
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -2245,7 +2245,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:5-3:19", Class, |def| {
             assert_def_name_eq!(&context, def, "Baz");
-            assert_def_name_offset_eq!(&context, "3:11-3:14", def);
+            assert_def_name_offset_eq!(&context, def, "3:11-3:14");
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -2273,7 +2273,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
             assert_def_name_eq!(&context, def, "Foo::Bar");
-            assert_def_name_offset_eq!(&context, "1:12-1:15", def);
+            assert_def_name_offset_eq!(&context, def, "1:12-1:15");
             assert!(def.superclass_ref().is_none());
             assert!(def.lexical_nesting_id().is_none());
             assert_eq!(1, def.members().len());
@@ -2281,7 +2281,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
             assert_def_name_eq!(&context, def, "Baz::Qux");
-            assert_def_name_offset_eq!(&context, "2:14-2:17", def);
+            assert_def_name_offset_eq!(&context, def, "2:14-2:17");
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -2293,7 +2293,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:5-3:23", Class, |def| {
             assert_def_name_eq!(&context, def, "Quuux");
-            assert_def_name_offset_eq!(&context, "3:13-3:18", def);
+            assert_def_name_offset_eq!(&context, def, "3:13-3:18");
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -2337,14 +2337,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
             assert_def_name_eq!(&context, def, "Foo");
-            assert_def_name_offset_eq!(&context, "1:8-1:11", def);
+            assert_def_name_offset_eq!(&context, def, "1:8-1:11");
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
             assert_def_name_eq!(&context, def, "Bar");
-            assert_def_name_offset_eq!(&context, "2:10-2:13", def);
+            assert_def_name_offset_eq!(&context, def, "2:10-2:13");
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -2355,7 +2355,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:5-3:20", Module, |def| {
             assert_def_name_eq!(&context, def, "Baz");
-            assert_def_name_offset_eq!(&context, "3:12-3:15", def);
+            assert_def_name_offset_eq!(&context, def, "3:12-3:15");
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2381,14 +2381,14 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
             assert_def_name_eq!(&context, def, "Foo::Bar");
-            assert_def_name_offset_eq!(&context, "1:13-1:16", def);
+            assert_def_name_offset_eq!(&context, def, "1:13-1:16");
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
             assert_def_name_eq!(&context, def, "Baz::Qux");
-            assert_def_name_offset_eq!(&context, "2:15-2:18", def);
+            assert_def_name_offset_eq!(&context, def, "2:15-2:18");
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -2399,7 +2399,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:5-3:24", Module, |def| {
             assert_def_name_eq!(&context, def, "Quuux");
-            assert_def_name_offset_eq!(&context, "3:14-3:19", def);
+            assert_def_name_offset_eq!(&context, def, "3:14-3:19");
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2720,19 +2720,19 @@ mod tests {
         // class Bar
         assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
             assert_def_name_eq!(&context, bar_class, "Bar");
-            assert_def_name_offset_eq!(&context, "1:7-1:10", bar_class);
+            assert_def_name_offset_eq!(&context, bar_class, "1:7-1:10");
         });
 
         // class Foo
         assert_definition_at!(&context, "3:1-15:4", Class, |foo_class| {
             assert_def_name_eq!(&context, foo_class, "Foo");
-            assert_def_name_offset_eq!(&context, "3:7-3:10", foo_class);
+            assert_def_name_offset_eq!(&context, foo_class, "3:7-3:10");
 
             // class << self (inside Foo)
             assert_definition_at!(&context, "4:3-14:6", SingletonClass, |foo_singleton| {
                 assert_def_name_eq!(&context, foo_singleton, "Foo::<Foo>");
                 // name_offset points to "self"
-                assert_def_name_offset_eq!(&context, "4:12-4:16", foo_singleton);
+                assert_def_name_offset_eq!(&context, foo_singleton, "4:12-4:16");
                 assert_eq!(foo_singleton.lexical_nesting_id(), &Some(foo_class.id()));
 
                 // def baz (inside class << self)
@@ -2744,7 +2744,7 @@ mod tests {
                 assert_definition_at!(&context, "7:5-9:8", SingletonClass, |bar_singleton| {
                     assert_def_name_eq!(&context, bar_singleton, "Bar::<Bar>");
                     // name_offset points to "Bar"
-                    assert_def_name_offset_eq!(&context, "7:14-7:17", bar_singleton);
+                    assert_def_name_offset_eq!(&context, bar_singleton, "7:14-7:17");
                     assert_eq!(bar_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
 
                     // def self.qux (inside class << Bar)
@@ -2758,7 +2758,7 @@ mod tests {
                 assert_definition_at!(&context, "11:5-13:8", SingletonClass, |nested_singleton| {
                     assert_def_name_eq!(&context, nested_singleton, "Foo::<Foo>::<<Foo>>");
                     // name_offset points to "self"
-                    assert_def_name_offset_eq!(&context, "11:14-11:18", nested_singleton);
+                    assert_def_name_offset_eq!(&context, nested_singleton, "11:14-11:18");
                     assert_eq!(nested_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
 
                     // def quz (inside nested class << self)
@@ -4330,7 +4330,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:26", Class, |def| {
             assert_def_superclass_ref_eq!(&context, def, "Baz");
-            assert_def_name_offset_eq!(&context, "1:7-1:10", def);
+            assert_def_name_offset_eq!(&context, def, "1:7-1:10");
         });
     }
 
