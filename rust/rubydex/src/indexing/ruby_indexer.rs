@@ -5,10 +5,10 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
-    ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition,
-    GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition, InstanceVariableDefinition,
-    MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct, PrependDefinition,
-    Receiver, Signatures, SingletonClassDefinition,
+    ConstantAliasDefinition, ConstantDefinition, ConstantVisibilityDefinition, Definition, DefinitionFlags,
+    ExtendDefinition, GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition,
+    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter,
+    ParameterStruct, PrependDefinition, Receiver, Signatures, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -1164,6 +1164,94 @@ impl<'a> RubyIndexer<'a> {
             .add_constant_reference(ConstantReference::new(new_name_id, self.uri_id, offset));
         Some(new_name_id)
     }
+
+    fn handle_constant_visibility(&mut self, node: &ruby_prism::CallNode, visibility: Visibility) {
+        let receiver = node.receiver();
+
+        let receiver_name_id = match receiver {
+            Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
+                self.index_constant_reference(&receiver.unwrap(), true)
+            }
+            Some(ruby_prism::Node::SelfNode { .. }) | None => match self.nesting_stack.last() {
+                Some(Nesting::Method(_)) => {
+                    // Dynamic private constant (called from a method), we ignore it but don't report an error since it's valid Ruby
+                    // if being called from a singleton method.
+
+                    return;
+                }
+                None => {
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidPrivateConstant,
+                        Offset::from_prism_location(&node.location()),
+                        "Private constant called at top level".to_string(),
+                    );
+
+                    return;
+                }
+                _ => None,
+            },
+            _ => {
+                self.local_graph.add_diagnostic(
+                    Rule::InvalidPrivateConstant,
+                    Offset::from_prism_location(&node.location()),
+                    "Dynamic receiver for private constant".to_string(),
+                );
+
+                return;
+            }
+        };
+
+        let Some(arguments) = node.arguments() else {
+            return;
+        };
+
+        for argument in &arguments.arguments() {
+            let (name, location) = match argument {
+                ruby_prism::Node::SymbolNode { .. } => {
+                    let symbol = argument.as_symbol_node().unwrap();
+                    if let Some(value_loc) = symbol.value_loc() {
+                        (Self::location_to_string(&value_loc), value_loc)
+                    } else {
+                        continue;
+                    }
+                }
+                ruby_prism::Node::StringNode { .. } => {
+                    let string = argument.as_string_node().unwrap();
+                    let name = String::from_utf8_lossy(string.unescaped()).to_string();
+                    (name, argument.location())
+                }
+                _ => {
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidPrivateConstant,
+                        Offset::from_prism_location(&argument.location()),
+                        "Private constant called with non-symbol argument".to_string(),
+                    );
+
+                    return;
+                }
+            };
+
+            let str_id = self.local_graph.intern_string(name);
+            let offset = Offset::from_prism_location(&location);
+            let definition = Definition::ConstantVisibility(Box::new(ConstantVisibilityDefinition::new(
+                self.local_graph.add_name(Name::new(
+                    str_id,
+                    receiver_name_id.map_or(ParentScope::None, ParentScope::Some),
+                    self.current_lexical_scope_name_id(),
+                )),
+                visibility,
+                self.uri_id,
+                offset,
+                Vec::new(),
+                DefinitionFlags::empty(),
+                self.current_nesting_definition_id(),
+            )));
+
+            let definition_id = self.local_graph.add_definition(definition);
+
+            self.add_member_to_current_owner(definition_id);
+        }
+    }
 }
 
 struct CommentGroup {
@@ -1844,6 +1932,12 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
 
                 self.index_method_reference_for_call(node);
+            }
+            "private_constant" => {
+                self.handle_constant_visibility(node, Visibility::Private);
+            }
+            "public_constant" => {
+                self.handle_constant_visibility(node, Visibility::Public);
             }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
@@ -6468,6 +6562,101 @@ mod tests {
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
             assert_promotable!(def);
         });
+    }
+
+    #[test]
+    fn index_private_constant_calls() {
+        let context = index_source({
+            r#"
+            module Foo
+              BAR = 42
+              BAZ = 43
+              FOO = 44
+
+              private_constant :BAR, :BAZ
+              private_constant "FOO"
+
+              class Qux
+                BAR = 42
+                BAZ = 43
+
+                Foo.public_constant :BAR
+                Foo.public_constant "BAZ"
+              end
+
+              self.private_constant :Qux
+            end
+
+            Foo.public_constant :BAR
+            "#
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "6:21-6:24", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "BAR");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "6:27-6:30", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "7:20-7:25", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "13:26-13:29", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "Foo::BAR");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+        assert_definition_at!(&context, "14:25-14:30", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "Foo::BAZ");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+        assert_definition_at!(&context, "17:26-17:29", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "Qux");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "20:22-20:25", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "Foo::BAR");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_private_constant_calls_diagnostics() {
+        let context = index_source({
+            "
+            private_constant :NOT_INDEXED
+            self.private_constant :NOT_INDEXED
+            foo.private_constant :NOT_INDEXED # not indexed, dynamic receiver
+
+            module Foo
+              private_constant NOT_INDEXED, not_indexed # not indexed, not a symbol
+              private_constant # not indexed, no arguments
+
+              def self.qux
+                private_constant :Bar # not indexed, dynamic
+              end
+
+              def foo
+                private_constant :Bar # not indexed, dynamic
+              end
+            end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec![
+                "invalid-private-constant: Private constant called at top level (1:1-1:30)",
+                "invalid-private-constant: Private constant called at top level (2:1-2:35)",
+                "invalid-private-constant: Dynamic receiver for private constant (3:1-3:34)",
+                "invalid-private-constant: Private constant called with non-symbol argument (6:20-6:31)",
+            ]
+        );
+
+        assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
     }
 }
 
