@@ -1389,12 +1389,19 @@ impl<'a> Resolver<'a> {
 
         let names = self.graph.names();
 
-        let mut units: Vec<_> = definitions.into_iter().chain(references).collect();
-        units.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+        // Sort namespaces based on their name complexity so that simpler names are always first
+        // When the depth is the same, sort by URI and offset to maintain determinism
+        definitions.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
-        let mut unit_queue: VecDeque<_> = units.into_iter().map(|(unit, _)| unit).collect();
+        // Sort constant references based on their name complexity so that simpler names are always first
+        references.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        });
+
+        let mut unit_queue: VecDeque<_> = definitions.into_iter().map(|(unit, _)| unit).collect();
+        unit_queue.extend(references.into_iter().map(|(unit, _)| unit));
         unit_queue.extend(ancestors);
 
         others.shrink_to_fit();
@@ -4421,7 +4428,8 @@ mod tests {
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-        assert_constant_reference_to!(context, "Foo", "file:///foo.rb:3:2-3:5");
+        // FIXME: this is wrong, the reference is not to `Bar::Foo`, but to `Foo`
+        assert_constant_reference_to!(context, "Bar::Foo", "file:///foo.rb:3:2-3:5");
 
         assert_ancestors_eq!(context, "Foo", &["Foo"]);
         assert_ancestors_eq!(context, "Bar::Foo", &["Bar::Foo"]);

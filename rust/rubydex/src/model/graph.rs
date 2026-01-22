@@ -416,11 +416,8 @@ impl Graph {
                     }
                 }
                 NameRef::Resolved(_) => {
-                    if let NameRef::Resolved(resolved) = entry.remove() {
-                        let new_resolved =
-                            NameRef::Resolved(Box::new(ResolvedName::new(resolved.name().clone(), declaration_id)));
-                        self.names.insert(name_id, new_resolved);
-                    }
+                    // TODO: consider if this is a valid scenario with the resolution phase design. Either collect
+                    // metrics here or panic if it's never supposed to occur
                 }
             },
             Entry::Vacant(_) => panic!("Trying to record resolved name for a name ID that does not exist"),
