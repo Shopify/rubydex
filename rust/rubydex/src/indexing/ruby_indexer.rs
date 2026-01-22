@@ -2094,8 +2094,8 @@ mod tests {
         assert_diagnostics_eq!(
             &context,
             vec![
-                "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)",
-                "parse-error: expected an `end` to close the `class` statement (2:1-2:1)"
+                "parse-error: expected an `end` to close the `class` statement (1:1-1:6)",
+                "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)"
             ]
         );
 

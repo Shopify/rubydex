@@ -706,20 +706,20 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
 name = "ruby-prism"
-version = "1.6.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2486ac87dae4e4cbc31f5b7a5aa711a51d3c3fcd412d88745a34fa2f4721df8"
+checksum = "5c950685ad401193788a593f2d7be6d2cb16ec722cbc1aa6c85f16375e59b2db"
 dependencies = [
  "ruby-prism-sys",
  "serde",
- "serde_yaml",
+ "serde_json",
 ]
 
 [[package]]
 name = "ruby-prism-sys"
-version = "1.6.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2646504a4f369cad36018453a60b1b69b8068ae054db40fdb343e224b86d8061"
+checksum = "de44d9a3c0456612160a31294485b2acaf6ffeb49e165c7a0bf4a70655c20b1b"
 dependencies = [
  "bindgen",
  "cc",
@@ -823,19 +823,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
 ]
 
 [[package]]
@@ -965,12 +952,6 @@ name = "unicode-ident"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
-
-[[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "url"
