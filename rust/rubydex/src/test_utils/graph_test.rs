@@ -285,7 +285,7 @@ macro_rules! assert_ancestors_eq {
                             $crate::model::declaration::Ancestor::Complete($crate::model::ids::DeclarationId::from(*n))
                         })
                         .collect::<Vec<_>>(),
-                    ancestors,
+                    *ancestors,
                     "Incorrect ancestors {}",
                     ancestors
                         .iter()

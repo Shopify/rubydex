@@ -625,7 +625,7 @@ impl<'a> Resolver<'a> {
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
             // again
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
-                let cached = declaration.as_namespace().unwrap().ancestors();
+                let cached = declaration.as_namespace().unwrap().clone_ancestors();
                 self.propagate_descendants(&mut context.descendants, &cached);
                 context.descendants.remove(&declaration_id);
                 return cached;
@@ -2117,7 +2117,7 @@ mod tests {
 
         let declaration = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
         assert!(matches!(
-            declaration.as_namespace().unwrap().ancestors(),
+            declaration.as_namespace().unwrap().clone_ancestors(),
             Ancestors::Partial(_)
         ));
     }

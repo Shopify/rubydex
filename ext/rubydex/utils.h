@@ -10,4 +10,10 @@ char **rdxi_str_array_to_char(VALUE array, size_t length);
 // Verify that the Ruby object is an array of strings or raise `TypeError`
 void rdxi_check_array_of_strings(VALUE array);
 
+// Yield body for iterating over declarations
+VALUE rdxi_declarations_yield(VALUE args);
+
+// Ensure function for iterating over declarations to always free the iterator
+VALUE rdxi_declarations_ensure(VALUE args);
+
 #endif // RUBYDEX_UTILS_H
