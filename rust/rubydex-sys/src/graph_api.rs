@@ -29,6 +29,16 @@ pub extern "C" fn rdx_graph_free(pointer: GraphPointer) {
 
 pub fn with_graph<F, T>(pointer: GraphPointer, action: F) -> T
 where
+    F: FnOnce(&Graph) -> T,
+{
+    let mut graph = unsafe { Box::from_raw(pointer.cast::<Graph>()) };
+    let result = action(&mut graph);
+    mem::forget(graph);
+    result
+}
+
+fn with_mut_graph<F, T>(pointer: GraphPointer, action: F) -> T
+where
     F: FnOnce(&mut Graph) -> T,
 {
     let mut graph = unsafe { Box::from_raw(pointer.cast::<Graph>()) };
@@ -76,7 +86,7 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
     nesting: *const *const c_char,
     count: usize,
 ) -> *const i64 {
-    with_graph(pointer, |graph| {
+    with_mut_graph(pointer, |graph| {
         let nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, count).unwrap() };
         let const_name: String = unsafe { utils::convert_char_ptr_to_string(const_name).unwrap() };
         let (name_id, names_to_untrack) = name_api::nesting_stack_to_name_id(graph, &const_name, nesting);
@@ -124,7 +134,7 @@ pub unsafe extern "C" fn rdx_index_all(
         return CString::new(error_messages).unwrap().into_raw().cast_const();
     }
 
-    with_graph(pointer, |graph| {
+    with_mut_graph(pointer, |graph| {
         let errors = indexing::index_files(graph, file_paths);
 
         if !errors.is_empty() {
@@ -144,7 +154,7 @@ pub unsafe extern "C" fn rdx_index_all(
 /// Runs the resolver to compute declarations, ownership and related structures
 #[unsafe(no_mangle)]
 pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
-    with_graph(pointer, |graph| {
+    with_mut_graph(pointer, |graph| {
         let mut resolver = Resolver::new(graph);
         resolver.resolve_all();
     });
@@ -168,7 +178,7 @@ pub unsafe extern "C" fn rdx_graph_set_encoding(pointer: GraphPointer, encoding_
         }
     };
 
-    with_graph(pointer, |graph| {
+    with_mut_graph(pointer, |graph| {
         graph.set_encoding(encoding_variant);
     });
 
