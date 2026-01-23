@@ -35,13 +35,14 @@ enum Outcome {
     Unresolved(Option<DeclarationId>),
     /// We couldn't resolve this constant right now because certain dependencies were missing. For example, a constant
     /// reference involved in computing ancestors (like an include) was found, but wasn't resolved yet. We need to place
-    /// this back in the queue to retry once we have progressed further
-    Retry,
+    /// this back in the queue to retry once we have progressed further. The optional declaration ID is an ancestor that
+    /// needs to be linearized before we can retry.
+    Retry(Option<DeclarationId>),
 }
 
 impl Outcome {
     fn is_resolved_or_retry(&self) -> bool {
-        matches!(self, Outcome::Resolved(_, _) | Outcome::Retry)
+        matches!(self, Outcome::Resolved(_, _) | Outcome::Retry(_))
     }
 }
 
@@ -153,7 +154,7 @@ impl<'a> Resolver<'a> {
     pub fn resolve_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
         match self.resolve_constant_internal(name_id) {
             Outcome::Resolved(id, _) => Some(id),
-            Outcome::Unresolved(_) | Outcome::Retry => None,
+            Outcome::Unresolved(_) | Outcome::Retry(_) => None,
         }
     }
 
@@ -197,14 +198,14 @@ impl<'a> Resolver<'a> {
         };
 
         match outcome {
-            Outcome::Retry => {
+            Outcome::Retry(None) => {
                 // There might be dependencies we haven't figured out yet, so we need to retry
                 unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
             }
-            Outcome::Unresolved(Some(id_needing_linearization)) => {
+            Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
                 unit_queue.push_back(unit_id);
                 unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             }
@@ -230,14 +231,14 @@ impl<'a> Resolver<'a> {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
         match self.resolve_constant_internal(*constant_ref.name_id()) {
-            Outcome::Retry => {
+            Outcome::Retry(None) => {
                 // There might be dependencies we haven't figured out yet, so we need to retry
                 unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
             }
-            Outcome::Unresolved(Some(id_needing_linearization)) => {
+            Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
                 unit_queue.push_back(unit_id);
                 unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             }
@@ -984,7 +985,7 @@ impl<'a> Resolver<'a> {
                 NameRef::Unresolved(_) => {
                     // The only case where we wouldn't have the nesting resolved at this point is if it's available through
                     // inheritance or if it doesn't exist, so we need to retry later
-                    Outcome::Retry
+                    Outcome::Retry(None)
                 }
             }
         } else {
@@ -1004,7 +1005,7 @@ impl<'a> Resolver<'a> {
 
         // Get the primary (first) resolved target
         let Some(&primary_id) = resolved_ids.first() else {
-            return Outcome::Retry;
+            return Outcome::Retry(None);
         };
 
         // Check if the primary result is still an unresolved alias
@@ -1012,7 +1013,7 @@ impl<'a> Resolver<'a> {
             self.graph.declarations().get(&primary_id),
             Some(Declaration::ConstantAlias(_))
         ) {
-            return Outcome::Retry;
+            return Outcome::Retry(None);
         }
 
         Outcome::Resolved(primary_id, linearization)
@@ -1061,7 +1062,7 @@ impl<'a> Resolver<'a> {
                             match self.graph.declarations().get(&id) {
                                 Some(Declaration::ConstantAlias(_)) => {
                                     // Alias not fully resolved yet
-                                    return Outcome::Retry;
+                                    return Outcome::Retry(None);
                                 }
                                 Some(Declaration::Namespace(_)) => {
                                     found_namespace = true;
@@ -1074,7 +1075,7 @@ impl<'a> Resolver<'a> {
                                             missing_linearization_id.get_or_insert(needs_linearization_id);
                                         }
                                         Outcome::Unresolved(None) => {}
-                                        Outcome::Retry => unreachable!("search_ancestors never returns Retry"),
+                                        Outcome::Retry(_) => unreachable!("search_ancestors never returns Retry"),
                                     }
                                 }
                                 _ => {
@@ -1089,10 +1090,11 @@ impl<'a> Resolver<'a> {
                         }
 
                         // Member not found in any namespace yet - retry in case it's added later
-                        return missing_linearization_id.map_or(Outcome::Retry, |id| Outcome::Unresolved(Some(id)));
+                        return missing_linearization_id
+                            .map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)));
                     }
 
-                    return Outcome::Retry;
+                    return Outcome::Retry(None);
                 }
 
                 // Otherwise, it's a simple constant read and we can resolve it directly
@@ -1166,10 +1168,10 @@ impl<'a> Resolver<'a> {
                 NameRef::Resolved(nesting_name_ref) => {
                     self.search_ancestors(*nesting_name_ref.declaration_id(), str_id)
                 }
-                NameRef::Unresolved(_) => Outcome::Retry,
+                NameRef::Unresolved(_) => Outcome::Retry(None),
             };
             match ancestor_outcome {
-                Outcome::Resolved(_, _) | Outcome::Retry => return ancestor_outcome,
+                Outcome::Resolved(_, _) | Outcome::Retry(_) => return ancestor_outcome,
                 Outcome::Unresolved(Some(needs_linearization_id)) => {
                     missing_linearization_id = Some(needs_linearization_id);
                 }
@@ -1185,7 +1187,7 @@ impl<'a> Resolver<'a> {
             match outcome {
                 Outcome::Resolved(id, _) => Outcome::Resolved(id, Some(linearization_id)),
                 Outcome::Unresolved(_) => Outcome::Unresolved(Some(linearization_id)),
-                Outcome::Retry => {
+                Outcome::Retry(_) => {
                     panic!("Retry shouldn't happen when searching the top level")
                 }
             }
@@ -1249,7 +1251,7 @@ impl<'a> Resolver<'a> {
 
                 current_name = nesting_name_ref.name();
             } else {
-                return Outcome::Retry;
+                return Outcome::Retry(None);
             }
         }
 
