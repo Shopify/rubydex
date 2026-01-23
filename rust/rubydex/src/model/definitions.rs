@@ -26,7 +26,6 @@
 use bitflags::bitflags;
 
 use crate::{
-    diagnostic::Diagnostic,
     model::{
         comment::Comment,
         ids::ReferenceId,
@@ -160,15 +159,6 @@ impl Definition {
     pub fn is_deprecated(&self) -> bool {
         all_definitions!(self, it => it.flags().is_deprecated())
     }
-
-    #[must_use]
-    pub fn diagnostics(&self) -> &[Diagnostic] {
-        all_definitions!(self, it => &it.diagnostics)
-    }
-
-    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
-        all_definitions!(self, it => it.diagnostics.push(diagnostic));
-    }
 }
 
 /// Represents a mixin: include, prepend, or extend.
@@ -237,7 +227,6 @@ pub struct ClassDefinition {
     members: Vec<DefinitionId>,
     superclass_ref: Option<ReferenceId>,
     mixins: Vec<Mixin>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl ClassDefinition {
@@ -264,7 +253,6 @@ impl ClassDefinition {
             superclass_ref,
             members: Vec::new(),
             mixins: Vec::new(),
-            diagnostics: Vec::new(),
         }
     }
 
@@ -363,7 +351,6 @@ pub struct SingletonClassDefinition {
     members: Vec<DefinitionId>,
     /// Mixins declared in this singleton class
     mixins: Vec<Mixin>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl SingletonClassDefinition {
@@ -387,7 +374,6 @@ impl SingletonClassDefinition {
             lexical_nesting_id,
             members: Vec::new(),
             mixins: Vec::new(),
-            diagnostics: Vec::new(),
         }
     }
 
@@ -468,7 +454,6 @@ pub struct ModuleDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     members: Vec<DefinitionId>,
     mixins: Vec<Mixin>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl ModuleDefinition {
@@ -492,7 +477,6 @@ impl ModuleDefinition {
             lexical_nesting_id,
             members: Vec::new(),
             mixins: Vec::new(),
-            diagnostics: Vec::new(),
         }
     }
 
@@ -569,7 +553,6 @@ pub struct ConstantDefinition {
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl ConstantDefinition {
@@ -589,7 +572,6 @@ impl ConstantDefinition {
             flags,
             comments,
             lexical_nesting_id,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -640,7 +622,6 @@ impl ConstantDefinition {
 pub struct ConstantAliasDefinition {
     alias_constant: ConstantDefinition,
     target_name_id: NameId,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl ConstantAliasDefinition {
@@ -649,7 +630,6 @@ impl ConstantAliasDefinition {
         Self {
             alias_constant,
             target_name_id,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -718,7 +698,6 @@ pub struct MethodDefinition {
     parameters: Vec<Parameter>,
     visibility: Visibility,
     receiver: Option<NameId>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl MethodDefinition {
@@ -745,7 +724,6 @@ impl MethodDefinition {
             parameters,
             visibility,
             receiver,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -857,7 +835,6 @@ pub struct AttrAccessorDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl AttrAccessorDefinition {
@@ -879,7 +856,6 @@ impl AttrAccessorDefinition {
             comments,
             lexical_nesting_id,
             visibility,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -939,7 +915,6 @@ pub struct AttrReaderDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl AttrReaderDefinition {
@@ -961,7 +936,6 @@ impl AttrReaderDefinition {
             comments,
             lexical_nesting_id,
             visibility,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -1021,7 +995,6 @@ pub struct AttrWriterDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl AttrWriterDefinition {
@@ -1043,7 +1016,6 @@ impl AttrWriterDefinition {
             comments,
             lexical_nesting_id,
             visibility,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -1102,7 +1074,6 @@ pub struct GlobalVariableDefinition {
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl GlobalVariableDefinition {
@@ -1122,7 +1093,6 @@ impl GlobalVariableDefinition {
             flags,
             comments,
             lexical_nesting_id,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -1176,7 +1146,6 @@ pub struct InstanceVariableDefinition {
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl InstanceVariableDefinition {
@@ -1196,7 +1165,6 @@ impl InstanceVariableDefinition {
             flags,
             comments,
             lexical_nesting_id,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -1250,7 +1218,6 @@ pub struct ClassVariableDefinition {
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl ClassVariableDefinition {
@@ -1270,7 +1237,6 @@ impl ClassVariableDefinition {
             flags,
             comments,
             lexical_nesting_id,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -1319,7 +1285,6 @@ pub struct MethodAliasDefinition {
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl MethodAliasDefinition {
@@ -1341,7 +1306,6 @@ impl MethodAliasDefinition {
             flags,
             comments,
             lexical_nesting_id,
-            diagnostics: Vec::new(),
         }
     }
 
@@ -1401,7 +1365,6 @@ pub struct GlobalVariableAliasDefinition {
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl GlobalVariableAliasDefinition {
@@ -1423,7 +1386,6 @@ impl GlobalVariableAliasDefinition {
             flags,
             comments,
             lexical_nesting_id,
-            diagnostics: Vec::new(),
         }
     }
 
