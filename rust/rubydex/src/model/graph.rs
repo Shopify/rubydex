@@ -79,6 +79,10 @@ impl Graph {
 
     pub fn clear_declarations(&mut self) {
         self.declarations.clear();
+
+        for name_ref in self.names.values_mut() {
+            name_ref.reset_to_unresolved();
+        }
     }
 
     // Returns an immutable reference to the definitions map
