@@ -954,7 +954,33 @@ impl<'a> Resolver<'a> {
                 self.graph.record_resolved_name(name_id, declaration_id);
                 Outcome::Resolved(declaration_id, id_needing_linearization)
             }
-            other => other,
+            other => {
+                println!("Other: unresoveld declaration");
+
+                let mut fully_qualified_name = self.graph.strings().get(&str_id).unwrap().to_string();
+                let owner = self.graph.declarations().get(&*OBJECT_ID).unwrap();
+                let owner_id = *OBJECT_ID;
+                let declaration_id = DeclarationId::from(&fully_qualified_name);
+
+                // if singleton {
+                //     self.graph
+                //         .declarations_mut()
+                //         .get_mut(&owner_id)
+                //         .unwrap()
+                //         .as_namespace_mut()
+                //         .unwrap()
+                //         .set_singleton_class_id(declaration_id);
+                // } else {
+                //     self.graph.add_member(&owner_id, declaration_id, str_id);
+                // }
+
+                // self.graph.add_declaration(declaration_id, definition_id, || {
+                //     declaration_builder(fully_qualified_name, owner_id)
+                // });
+                // self.graph.record_resolved_name(name_id, declaration_id);
+
+                other
+            }
         }
     }
 
@@ -969,7 +995,10 @@ impl<'a> Resolver<'a> {
             // If `A` is an alias, resolve through to get the actual namespace.
             match self.resolve_constant_internal(*parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
-                other => other,
+                other => {
+                    println!("name_owner_id: other");
+                    other
+                }
             }
         } else if let Some(nesting_id) = name_ref.nesting() {
             // Lexical nesting from block structure, e.g.:
@@ -4097,5 +4126,34 @@ mod tests {
 
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", vec!["FOO"]);
+    }
+
+    #[test]
+    fn test_minitest() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo::Bar
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        println!(
+            "{:?}",
+            context
+                .graph()
+                .declarations()
+                .values()
+                .collect::<Vec<_>>()
+                .iter()
+                .map(|d| d.name())
+                .collect::<Vec<_>>()
+        );
+
+        assert_members_eq!(context, "Foo::Bar", vec!["foo()"]);
     }
 }
