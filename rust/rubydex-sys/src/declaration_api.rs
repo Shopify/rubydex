@@ -93,10 +93,6 @@ pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer,
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - The returned pointer must be freed with `rdx_declaration_definitions_iter_free`.
-///
-/// # Panics
-///
-/// This function will panic if acquiring a read lock fails
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
     pointer: GraphPointer,

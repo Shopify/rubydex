@@ -202,10 +202,6 @@ pub struct DeclarationsIter {
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - The returned pointer must be freed with `rdx_graph_declarations_iter_free`.
-///
-/// # Panics
-///
-/// Will panic if acquiring a read lock on the graph's declarations fails
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) -> *mut DeclarationsIter {
     // Snapshot the IDs at iterator creation to avoid borrowing across FFI calls
@@ -372,10 +368,6 @@ pub unsafe extern "C" fn rdx_graph_documents_iter_free(iter: *mut DocumentsIter)
 /// - `pointer` must be a valid `GraphPointer`
 /// - `name` must be a valid, null-terminated UTF-8 string
 /// - `out_id` must be a valid, writable pointer
-///
-/// # Panics
-///
-/// Will panic if acquiring a read lock on the graph's declarations fails
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const i64 {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
