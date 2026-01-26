@@ -75,6 +75,10 @@ impl LocalGraph {
         definition_id
     }
 
+    pub fn add_top_level_definition_id(&mut self, definition_id: DefinitionId) {
+        self.document.add_top_level_definition_id(definition_id);
+    }
+
     // Strings
 
     #[must_use]

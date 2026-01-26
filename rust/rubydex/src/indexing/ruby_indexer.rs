@@ -488,6 +488,10 @@ impl<'a> RubyIndexer<'a> {
         let definition = builder(str_id, offset, comments, flags, parent_nesting_id, uri_id);
         let definition_id = self.local_graph.add_definition(definition);
 
+        if parent_nesting_id.is_none() {
+            self.local_graph.add_top_level_definition_id(definition_id);
+        }
+
         self.add_member_to_current_owner(definition_id);
 
         definition_id

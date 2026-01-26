@@ -10,6 +10,7 @@ use crate::model::ids::{DefinitionId, ReferenceId};
 pub struct Document {
     uri: String,
     line_index: LineIndex,
+    top_level_definition_ids: Vec<DefinitionId>,
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<ReferenceId>,
     constant_reference_ids: Vec<ReferenceId>,
@@ -24,6 +25,7 @@ impl Document {
         Self {
             uri,
             line_index: LineIndex::new(source),
+            top_level_definition_ids: Vec::new(),
             definition_ids: Vec::new(),
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
@@ -41,6 +43,15 @@ impl Document {
     #[must_use]
     pub fn line_index(&self) -> &LineIndex {
         &self.line_index
+    }
+
+    #[must_use]
+    pub fn top_level_definition_ids(&self) -> &[DefinitionId] {
+        &self.top_level_definition_ids
+    }
+
+    pub fn add_top_level_definition_id(&mut self, definition_id: DefinitionId) {
+        self.top_level_definition_ids.push(definition_id);
     }
 
     #[must_use]

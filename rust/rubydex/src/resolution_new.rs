@@ -1,9 +1,20 @@
+use std::sync::LazyLock;
+
+use crate::model::declaration::ClassDeclaration;
 use crate::model::declaration::Declaration;
 use crate::model::declaration::Namespace;
 use crate::model::declaration::{Ancestor, Ancestors};
+use crate::model::definitions::Definition;
+use crate::model::document::Document;
 use crate::model::graph::Graph;
 use crate::model::ids::DeclarationId;
+use crate::model::ids::DefinitionId;
+use crate::model::ids::UriId;
 use crate::model::name::NameRef;
+
+pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
+pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
+pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
 
 pub struct ResolverNew<'a> {
     graph: &'a mut Graph,
@@ -16,6 +27,62 @@ impl<'a> ResolverNew<'a> {
 
     pub fn resolve_all(&mut self) {
         self.graph.clear_declarations();
+
+        {
+            self.graph.declarations_mut().insert(
+                *OBJECT_ID,
+                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                    "Object".to_string(),
+                    *OBJECT_ID,
+                )))),
+            );
+            self.graph.declarations_mut().insert(
+                *MODULE_ID,
+                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                    "Module".to_string(),
+                    *OBJECT_ID,
+                )))),
+            );
+            self.graph.declarations_mut().insert(
+                *CLASS_ID,
+                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                    "Class".to_string(),
+                    *OBJECT_ID,
+                )))),
+            );
+        }
+
+        let uri_ids = self.graph.documents().keys().cloned().collect::<Vec<_>>();
+        for uri_id in uri_ids {
+            self.resolve_document(uri_id);
+        }
+    }
+
+    fn resolve_document(&mut self, uri_id: UriId) {
+        let document = self.graph.documents().get(&uri_id).unwrap();
+        let definition_ids = document.top_level_definition_ids().to_vec();
+
+        for definition_id in definition_ids {
+            self.resolve_definition(definition_id);
+        }
+    }
+
+    fn resolve_definition(&mut self, definition_id: DefinitionId) {
+        let definition = self.graph.definitions().get(&definition_id).unwrap();
+
+        if let Some(name_id) = definition.name_id() {
+            // Resolve and create the full_name
+        }
+
+        // create the declaration
+        // visit the members
+
+        match definition {
+            Definition::Class(class) => {
+                self.resolve_class(class);
+            }
+            _ => panic!("Expected a class definition"),
+        }
     }
 }
 
