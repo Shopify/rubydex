@@ -1815,6 +1815,52 @@ mod tests {
         test_utils::LocalGraphTest,
     };
 
+    // Primitive assertions
+
+    /// Asserts that a `NameId` resolves to the expected full path string.
+    ///
+    /// Usage:
+    /// - `assert_name_path_eq!(ctx, "Foo::Bar::Baz", name_id)` - asserts the full path `Foo::Bar::Baz`
+    /// - `assert_name_path_eq!(ctx, "Baz", name_id)` - asserts just `Baz` with no parent scope
+    macro_rules! assert_name_path_eq {
+        ($context:expr, $expect_path:expr, $name_id:expr) => {{
+            let mut name_parts = Vec::new();
+            let mut current_name_id = Some($name_id);
+
+            while let Some(name_id) = current_name_id {
+                let name = $context.graph().names().get(name_id).unwrap();
+                name_parts.push($context.graph().strings().get(name.str()).unwrap().as_str());
+                current_name_id = name.parent_scope().as_ref();
+            }
+
+            name_parts.reverse();
+
+            let actual_path = name_parts.join("::");
+            assert_eq!(
+                $expect_path, actual_path,
+                "name path mismatch: expected `{}`, got `{}`",
+                $expect_path, actual_path
+            );
+        }};
+    }
+
+    /// Asserts that a `StringId` resolves to the expected string.
+    ///
+    /// Usage:
+    /// - `assert_string_eq!(ctx, str_id, "Foo::Bar::Baz")`
+    macro_rules! assert_string_eq {
+        ($context:expr, $str_id:expr, $expected_str:expr) => {{
+            let string_name = $context.graph().strings().get($str_id).unwrap().as_str();
+            assert_eq!(
+                string_name, $expected_str,
+                "string mismatch: expected `{}`, got `{}`",
+                $expected_str, string_name
+            );
+        }};
+    }
+
+    // Definition assertions
+
     macro_rules! assert_definition_at {
         ($context:expr, $location:expr, $variant:ident, |$var:ident| $body:block) => {{
             let __def = $context.definition_at($location);
@@ -1838,172 +1884,26 @@ mod tests {
         }};
     }
 
-    macro_rules! assert_name_eq {
-        ($context:expr, $expect_name_string:expr, $def:expr) => {{
-            let actual_name = $context.graph().strings().get($def.str_id()).unwrap().as_str();
-
-            assert_eq!($expect_name_string, actual_name);
-        }};
-    }
-
-    /// Asserts that a `NameId` resolves to the expected full path string.
+    /// Asserts that a definition's comments matches the expected comments.
     ///
     /// Usage:
-    /// - `assert_name_path_eq!(ctx, "Foo::Bar::Baz", name_id)` - asserts the full path `Foo::Bar::Baz`
-    /// - `assert_name_path_eq!(ctx, "Baz", name_id)` - asserts just `Baz` with no parent scope
-    macro_rules! assert_name_path_eq {
-        ($context:expr, $expect_path:expr, $name_id:expr) => {{
-            let segments: Vec<&str> = $expect_path.split("::").collect();
-            assert!(!segments.is_empty(), "expected path must have at least one segment");
-
-            // The name stores the last segment, with parent_scope chain going backwards
-            let expected_name = segments.last().unwrap();
-            let expected_parents: Vec<&str> = segments[..segments.len() - 1].iter().rev().copied().collect();
-
-            let name = $context.graph().names().get($name_id).unwrap();
-            let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
-            assert_eq!(
-                *expected_name, actual_name,
-                "name mismatch: expected '{}', got '{}'",
-                expected_name, actual_name
-            );
-
-            let mut current_name = name;
-            for (i, expected_parent) in expected_parents.iter().enumerate() {
-                if let Some(parent_scope_id) = current_name.parent_scope() {
-                    let parent_name = $context.graph().names().get(&parent_scope_id).unwrap();
-                    let actual_parent = $context.graph().strings().get(parent_name.str()).unwrap().as_str();
-                    assert_eq!(
-                        *expected_parent, actual_parent,
-                        "parent_scope mismatch at depth {}: expected '{}', got '{}'",
-                        i, expected_parent, actual_parent
-                    );
-                    current_name = parent_name;
-                } else {
-                    panic!(
-                        "expected parent_scope '{}' at depth {}, but got None",
-                        expected_parent, i
-                    );
-                }
-            }
-
-            assert!(
-                current_name.parent_scope().is_none(),
-                "expected no more parent_scopes after chain, but got Some"
-            );
-        }};
-    }
-
-    /// Asserts the full path of a definition's `name_id` matches the expected string.
-    /// Works with any definition that has a `name_id()` method.
-    ///
-    /// Usage:
-    /// - `assert_name_id_to_string_eq!(ctx, "Foo::Bar::Baz", def)` - asserts the full path `Foo::Bar::Baz`
-    /// - `assert_name_id_to_string_eq!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
-    macro_rules! assert_name_id_to_string_eq {
-        ($context:expr, $expect_path:expr, $def:expr) => {{
-            assert_name_path_eq!($context, $expect_path, $def.name_id());
-        }};
-    }
-
-    macro_rules! assert_parameter {
-        ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
-            match $expr {
-                Parameter::$variant($param) => $body,
-                _ => panic!("expected {} parameter, got {:?}", stringify!($variant), $expr),
-            }
-        };
-    }
-
-    macro_rules! assert_comments_eq {
+    /// - `assert_def_comments_eq!(ctx, def, ["# Comment 1", "# Comment 2"])`
+    macro_rules! assert_def_comments_eq {
         ($context:expr, $def:expr, $expected_comments:expr) => {{
             let actual_comments: Vec<String> = $def.comments().iter().map(|c| c.string().to_string()).collect();
-            assert_eq!($expected_comments, actual_comments);
-        }};
-    }
-
-    macro_rules! assert_constant_references_eq {
-        ($context:expr, $expected_names:expr) => {{
-            let mut actual_references = $context
-                .graph()
-                .constant_references()
-                .values()
-                .map(|r| {
-                    let name = $context.graph().names().get(r.name_id()).unwrap();
-                    (
-                        r.offset().start(),
-                        $context.graph().strings().get(name.str()).unwrap().as_str(),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            actual_references.sort();
-
-            let actual_names = actual_references.iter().map(|(_, name)| *name).collect::<Vec<_>>();
-
-            assert_eq!($expected_names, actual_names);
-        }};
-    }
-
-    macro_rules! assert_method_references_eq {
-        ($context:expr, $expected_names:expr) => {{
-            let mut actual_references = $context
-                .graph()
-                .method_references()
-                .values()
-                .map(|m| {
-                    (
-                        m.offset().start(),
-                        $context.graph().strings().get(m.str()).unwrap().as_str(),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            actual_references.sort();
-
-            let actual_names = actual_references
-                .iter()
-                .map(|(_offset, name)| *name)
-                .collect::<Vec<_>>();
-
-            assert_eq!($expected_names, actual_names);
-        }};
-    }
-
-    macro_rules! assert_method_has_receiver {
-        ($context:expr, $method:expr, $expected_receiver:expr) => {{
-            if let Some(receiver_name_id) = $method.receiver() {
-                let name = $context.graph().names().get(receiver_name_id).unwrap();
-                let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
-                assert_eq!($expected_receiver, actual_name);
-            } else {
-                panic!("expected method to have receiver, got None");
-            }
-        }};
-    }
-
-    macro_rules! assert_superclass_ref_eq {
-        ($context:expr, $def:expr, $expected_name:expr) => {{
-            let name = $context
-                .graph()
-                .names()
-                .get(
-                    $context
-                        .graph()
-                        .constant_references()
-                        .get($def.superclass_ref().unwrap())
-                        .unwrap()
-                        .name_id(),
-                )
-                .unwrap();
             assert_eq!(
-                $expected_name,
-                $context.graph().strings().get(name.str()).unwrap().as_str()
+                $expected_comments, actual_comments,
+                "comments mismatch: expected `{:?}`, got `{:?}`",
+                $expected_comments, actual_comments
             );
         }};
     }
 
-    macro_rules! assert_mixins_eq {
+    /// Asserts that a definition's mixins matches the expected mixins.
+    ///
+    /// Usage:
+    /// - `assert_def_mixins_eq!(ctx, def, Include, ["Foo", "Bar"])`
+    macro_rules! assert_def_mixins_eq {
         ($context:expr, $def:expr, $mixin_type:ident, $expected_names:expr) => {{
             let actual_names = $def
                 .mixins()
@@ -2029,29 +1929,190 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
 
-            assert_eq!($expected_names, actual_names);
+            assert_eq!(
+                $expected_names, actual_names,
+                "mixins mismatch: expected `{:?}`, got `{:?}`",
+                $expected_names, actual_names
+            );
         }};
     }
 
-    macro_rules! assert_string_eq {
-        ($context:expr, $str_id:expr, $expected_name:expr) => {{
-            let string_name = $context.graph().strings().get($str_id).unwrap().as_str();
-            assert_eq!(string_name, $expected_name);
+    /// Asserts the full path of a definition's `name_id` matches the expected string.
+    /// Works with any definition that has a `name_id()` method.
+    ///
+    /// Usage:
+    /// - `assert_def_name_eq!(ctx, "Foo::Bar::Baz", def)` - asserts the full path `Foo::Bar::Baz`
+    /// - `assert_def_name_eq!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
+    macro_rules! assert_def_name_eq {
+        ($context:expr, $def:expr, $expect_path:expr) => {{
+            assert_name_path_eq!($context, $expect_path, $def.name_id());
         }};
     }
 
-    macro_rules! assert_name_offset_eq {
-        ($context:expr, $expected_location:expr, $def:expr) => {{
+    /// Asserts that a definition's name offset matches the expected location.
+    ///
+    /// Usage:
+    /// - `assert_def_name_offset_eq!(ctx, "1:7-1:10", def)`
+    macro_rules! assert_def_name_offset_eq {
+        ($context:expr, $def:expr, $expected_location:expr) => {{
             let (_, expected_offset) = $context.parse_location(&format!("{}:{}", $context.uri(), $expected_location));
             assert_eq!(
                 &expected_offset,
                 $def.name_offset(),
-                "name_offset mismatch: expected {}, got {}",
+                "name_offset mismatch: expected `{}`, got `{}`",
                 expected_offset.to_display_range($context.graph().document()),
                 $def.name_offset().to_display_range($context.graph().document())
             );
         }};
     }
+
+    /// Asserts that a definition's string matches the expected string.
+    ///
+    /// Usage:
+    /// - `assert_def_str_eq!(ctx, "baz()", def)`
+    macro_rules! assert_def_str_eq {
+        ($context:expr, $def:expr, $expect_name_string:expr) => {{
+            assert_string_eq!($context, $def.str_id(), $expect_name_string);
+        }};
+    }
+
+    /// Asserts that a definition's superclass reference matches the expected name.
+    ///
+    /// Usage:
+    /// - `assert_def_superclass_ref_eq!(ctx, def, "Bar::Baz")`
+    macro_rules! assert_def_superclass_ref_eq {
+        ($context:expr, $def:expr, $expected_name:expr) => {{
+            let name = $context
+                .graph()
+                .strings()
+                .get(
+                    $context
+                        .graph()
+                        .names()
+                        .get(
+                            $context
+                                .graph()
+                                .constant_references()
+                                .get($def.superclass_ref().unwrap())
+                                .unwrap()
+                                .name_id(),
+                        )
+                        .unwrap()
+                        .str(),
+                )
+                .unwrap()
+                .as_str();
+            assert_eq!(
+                $expected_name, name,
+                "superclass reference mismatch: expected `{}`, got `{name}`",
+                $expected_name,
+            );
+        }};
+    }
+
+    // Method assertions
+
+    /// Asserts that a method has the expected receiver.
+    ///
+    /// Usage:
+    /// - `assert_method_has_receiver!(ctx, method, "Foo")`
+    /// - `assert_method_has_receiver!(ctx, method, "<Bar>")`
+    macro_rules! assert_method_has_receiver {
+        ($context:expr, $method:expr, $expected_receiver:expr) => {{
+            if let Some(receiver_name_id) = $method.receiver() {
+                let name = $context.graph().names().get(receiver_name_id).unwrap();
+                let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
+                assert_eq!(
+                    $expected_receiver, actual_name,
+                    "method receiver mismatch: expected `{}`, got `{}`",
+                    $expected_receiver, actual_name
+                );
+            } else {
+                panic!(
+                    "Method receiver mismatch: expected `{}`, got `None`",
+                    $expected_receiver
+                );
+            }
+        }};
+    }
+
+    /// Asserts that a parameter matches the expected kind.
+    ///
+    /// Usage:
+    /// - `assert_parameter!(parameter, RequiredPositional, |param| { assert_string_eq!(context, param.str(), "a"); })`
+    /// - `assert_parameter!(parameter, OptionalPositional, |param| { assert_string_eq!(context, param.str(), "b"); })`
+    macro_rules! assert_parameter {
+        ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
+            match $expr {
+                Parameter::$variant($param) => $body,
+                _ => panic!(
+                    "parameter kind mismatch: expected `{}`, got `{:?}`",
+                    stringify!($variant),
+                    $expr
+                ),
+            }
+        };
+    }
+
+    // Reference assertions
+
+    macro_rules! assert_constant_references_eq {
+        ($context:expr, $expected_names:expr) => {{
+            let mut actual_references = $context
+                .graph()
+                .constant_references()
+                .values()
+                .map(|r| {
+                    let name = $context.graph().names().get(r.name_id()).unwrap();
+                    (
+                        r.offset().start(),
+                        $context.graph().strings().get(name.str()).unwrap().as_str(),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            actual_references.sort();
+
+            let actual_names = actual_references.iter().map(|(_, name)| *name).collect::<Vec<_>>();
+
+            assert_eq!(
+                $expected_names, actual_names,
+                "constant references mismatch: expected `{:?}`, got `{:?}`",
+                $expected_names, actual_names
+            );
+        }};
+    }
+
+    macro_rules! assert_method_references_eq {
+        ($context:expr, $expected_names:expr) => {{
+            let mut actual_references = $context
+                .graph()
+                .method_references()
+                .values()
+                .map(|m| {
+                    (
+                        m.offset().start(),
+                        $context.graph().strings().get(m.str()).unwrap().as_str(),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            actual_references.sort();
+
+            let actual_names = actual_references
+                .iter()
+                .map(|(_offset, name)| *name)
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                $expected_names, actual_names,
+                "method references mismatch: expected `{:?}`, got `{:?}`",
+                $expected_names, actual_names
+            );
+        }};
+    }
+
+    // Diagnostic assertions
 
     fn format_diagnostics(context: &LocalGraphTest) -> Vec<String> {
         let mut diagnostics = context.graph().diagnostics().iter().collect::<Vec<_>>();
@@ -2065,7 +2126,13 @@ mod tests {
 
     macro_rules! assert_diagnostics_eq {
         ($context:expr, $expected_diagnostics:expr) => {{
-            assert_eq!($expected_diagnostics, format_diagnostics($context));
+            assert_eq!(
+                $expected_diagnostics,
+                format_diagnostics($context),
+                "diagnostics mismatch: expected `{:?}`, got `{:?}`",
+                $expected_diagnostics,
+                format_diagnostics($context)
+            );
         }};
     }
 
@@ -2102,7 +2169,7 @@ mod tests {
         // We still index the definition, even though it has errors
         assert_eq!(context.graph().definitions().len(), 1);
         assert_definition_at!(&context, "1:1-2:1", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo", def);
+            assert_def_name_eq!(&context, def, "Foo");
         });
     }
 
@@ -2136,16 +2203,16 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo", def);
-            assert_name_offset_eq!(&context, "1:7-1:10", def);
+            assert_def_name_eq!(&context, def, "Foo");
+            assert_def_name_offset_eq!(&context, def, "1:7-1:10");
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Bar", def);
-            assert_name_offset_eq!(&context, "2:9-2:12", def);
+            assert_def_name_eq!(&context, def, "Bar");
+            assert_def_name_offset_eq!(&context, def, "2:9-2:12");
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -2156,8 +2223,8 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:19", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Baz", def);
-            assert_name_offset_eq!(&context, "3:11-3:14", def);
+            assert_def_name_eq!(&context, def, "Baz");
+            assert_def_name_offset_eq!(&context, def, "3:11-3:14");
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -2184,16 +2251,16 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
-            assert_name_offset_eq!(&context, "1:12-1:15", def);
+            assert_def_name_eq!(&context, def, "Foo::Bar");
+            assert_def_name_offset_eq!(&context, def, "1:12-1:15");
             assert!(def.superclass_ref().is_none());
             assert!(def.lexical_nesting_id().is_none());
             assert_eq!(1, def.members().len());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Baz::Qux", def);
-            assert_name_offset_eq!(&context, "2:14-2:17", def);
+            assert_def_name_eq!(&context, def, "Baz::Qux");
+            assert_def_name_offset_eq!(&context, def, "2:14-2:17");
             assert!(def.superclass_ref().is_none());
             assert_eq!(1, def.members().len());
 
@@ -2204,8 +2271,8 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:23", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Quuux", def);
-            assert_name_offset_eq!(&context, "3:13-3:18", def);
+            assert_def_name_eq!(&context, def, "Quuux");
+            assert_def_name_offset_eq!(&context, def, "3:13-3:18");
             assert!(def.superclass_ref().is_none());
             assert!(def.members().is_empty());
 
@@ -2248,15 +2315,15 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo", def);
-            assert_name_offset_eq!(&context, "1:8-1:11", def);
+            assert_def_name_eq!(&context, def, "Foo");
+            assert_def_name_offset_eq!(&context, def, "1:8-1:11");
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Bar", def);
-            assert_name_offset_eq!(&context, "2:10-2:13", def);
+            assert_def_name_eq!(&context, def, "Bar");
+            assert_def_name_offset_eq!(&context, def, "2:10-2:13");
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -2266,8 +2333,8 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:20", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Baz", def);
-            assert_name_offset_eq!(&context, "3:12-3:15", def);
+            assert_def_name_eq!(&context, def, "Baz");
+            assert_def_name_offset_eq!(&context, def, "3:12-3:15");
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2292,15 +2359,15 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Foo::Bar", def);
-            assert_name_offset_eq!(&context, "1:13-1:16", def);
+            assert_def_name_eq!(&context, def, "Foo::Bar");
+            assert_def_name_offset_eq!(&context, def, "1:13-1:16");
             assert_eq!(1, def.members().len());
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:3-4:6", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Baz::Qux", def);
-            assert_name_offset_eq!(&context, "2:15-2:18", def);
+            assert_def_name_eq!(&context, def, "Baz::Qux");
+            assert_def_name_offset_eq!(&context, def, "2:15-2:18");
             assert_eq!(1, def.members().len());
 
             assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
@@ -2310,8 +2377,8 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:5-3:24", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Quuux", def);
-            assert_name_offset_eq!(&context, "3:14-3:19", def);
+            assert_def_name_eq!(&context, def, "Quuux");
+            assert_def_name_offset_eq!(&context, def, "3:14-3:19");
 
             assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2352,12 +2419,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_def_name_eq!(&context, def, "FOO");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_def_name_eq!(&context, def, "FOO");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2383,12 +2450,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert_def_name_eq!(&context, def, "FOO::BAR");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert_def_name_eq!(&context, def, "FOO::BAR");
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2397,7 +2464,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAZ", def);
+            assert_def_name_eq!(&context, def, "BAZ");
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2422,12 +2489,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_def_name_eq!(&context, def, "FOO");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAZ", def);
+            assert_def_name_eq!(&context, def, "BAZ");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2455,12 +2522,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert_def_name_eq!(&context, def, "FOO::BAR");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO::BAR", def);
+            assert_def_name_eq!(&context, def, "FOO::BAR");
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2469,7 +2536,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAZ", def);
+            assert_def_name_eq!(&context, def, "BAZ");
 
             assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2496,16 +2563,16 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_def_name_eq!(&context, def, "FOO");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAR::BAZ", def);
+            assert_def_name_eq!(&context, def, "BAR::BAZ");
         });
 
         assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "FOO", def);
+            assert_def_name_eq!(&context, def, "FOO");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2514,7 +2581,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAR::BAZ", def);
+            assert_def_name_eq!(&context, def, "BAR::BAZ");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2523,7 +2590,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "BAZ", def);
+            assert_def_name_eq!(&context, def, "BAZ");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2553,7 +2620,7 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:1-1:13", Method, |def| {
-            assert_name_eq!(&context, "foo()", def);
+            assert_def_str_eq!(&context, def, "foo()");
             assert_eq!(def.parameters().len(), 0);
             assert!(def.receiver().is_none());
             assert!(def.lexical_nesting_id().is_none());
@@ -2561,7 +2628,7 @@ mod tests {
 
         assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
             assert_definition_at!(&context, "4:3-4:15", Method, |bar_def| {
-                assert_name_eq!(&context, "bar()", bar_def);
+                assert_def_str_eq!(&context, bar_def, "bar()");
                 assert_eq!(bar_def.parameters().len(), 0);
                 assert!(bar_def.receiver().is_none());
                 assert_eq!(foo_class_def.id(), bar_def.lexical_nesting_id().unwrap());
@@ -2569,7 +2636,7 @@ mod tests {
             });
 
             assert_definition_at!(&context, "5:3-5:20", Method, |baz_def| {
-                assert_name_eq!(&context, "baz()", baz_def);
+                assert_def_str_eq!(&context, baz_def, "baz()");
                 assert_eq!(baz_def.parameters().len(), 0);
                 assert_method_has_receiver!(&context, baz_def, "Foo");
                 assert_eq!(foo_class_def.id(), baz_def.lexical_nesting_id().unwrap());
@@ -2578,10 +2645,10 @@ mod tests {
         });
 
         assert_definition_at!(&context, "8:1-10:4", Class, |bar_class_def| {
-            assert_name_id_to_string_eq!(&context, "Bar", bar_class_def);
+            assert_def_name_eq!(&context, bar_class_def, "Bar");
 
             assert_definition_at!(&context, "9:3-9:19", Method, |quz_def| {
-                assert_name_eq!(&context, "quz()", quz_def);
+                assert_def_str_eq!(&context, quz_def, "quz()");
                 assert_eq!(quz_def.parameters().len(), 0);
                 assert_method_has_receiver!(&context, quz_def, "Foo");
                 assert_eq!(bar_class_def.id(), quz_def.lexical_nesting_id().unwrap());
@@ -2631,20 +2698,20 @@ mod tests {
 
         // class Bar
         assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
-            assert_name_id_to_string_eq!(&context, "Bar", bar_class);
-            assert_name_offset_eq!(&context, "1:7-1:10", bar_class);
+            assert_def_name_eq!(&context, bar_class, "Bar");
+            assert_def_name_offset_eq!(&context, bar_class, "1:7-1:10");
         });
 
         // class Foo
         assert_definition_at!(&context, "3:1-15:4", Class, |foo_class| {
-            assert_name_id_to_string_eq!(&context, "Foo", foo_class);
-            assert_name_offset_eq!(&context, "3:7-3:10", foo_class);
+            assert_def_name_eq!(&context, foo_class, "Foo");
+            assert_def_name_offset_eq!(&context, foo_class, "3:7-3:10");
 
             // class << self (inside Foo)
             assert_definition_at!(&context, "4:3-14:6", SingletonClass, |foo_singleton| {
-                assert_name_id_to_string_eq!(&context, "Foo::<Foo>", foo_singleton);
+                assert_def_name_eq!(&context, foo_singleton, "Foo::<Foo>");
                 // name_offset points to "self"
-                assert_name_offset_eq!(&context, "4:12-4:16", foo_singleton);
+                assert_def_name_offset_eq!(&context, foo_singleton, "4:12-4:16");
                 assert_eq!(foo_singleton.lexical_nesting_id(), &Some(foo_class.id()));
 
                 // def baz (inside class << self)
@@ -2654,9 +2721,9 @@ mod tests {
 
                 // class << Bar (inside class << self of Foo)
                 assert_definition_at!(&context, "7:5-9:8", SingletonClass, |bar_singleton| {
-                    assert_name_id_to_string_eq!(&context, "Bar::<Bar>", bar_singleton);
+                    assert_def_name_eq!(&context, bar_singleton, "Bar::<Bar>");
                     // name_offset points to "Bar"
-                    assert_name_offset_eq!(&context, "7:14-7:17", bar_singleton);
+                    assert_def_name_offset_eq!(&context, bar_singleton, "7:14-7:17");
                     assert_eq!(bar_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
 
                     // def self.qux (inside class << Bar)
@@ -2668,9 +2735,9 @@ mod tests {
 
                 // class << self (nested inside outer class << self)
                 assert_definition_at!(&context, "11:5-13:8", SingletonClass, |nested_singleton| {
-                    assert_name_id_to_string_eq!(&context, "Foo::<Foo>::<<Foo>>", nested_singleton);
+                    assert_def_name_eq!(&context, nested_singleton, "Foo::<Foo>::<<Foo>>");
                     // name_offset points to "self"
-                    assert_name_offset_eq!(&context, "11:14-11:18", nested_singleton);
+                    assert_def_name_offset_eq!(&context, nested_singleton, "11:14-11:18");
                     assert_eq!(nested_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
 
                     // def quz (inside nested class << self)
@@ -2697,7 +2764,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
-            assert_name_id_to_string_eq!(&context, "Foo::Bar", class_def);
+            assert_def_name_eq!(&context, class_def, "Foo::Bar");
             assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
                 assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
                 assert_definition_at!(&context, "3:5-3:17", Method, |method| {
@@ -2727,7 +2794,7 @@ mod tests {
             assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
                 assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
                 assert_definition_at!(&context, "3:5-3:6", Constant, |def| {
-                    assert_name_id_to_string_eq!(&context, "A", def);
+                    assert_def_name_eq!(&context, def, "A");
                     assert_eq!(Some(singleton_class.id()), def.lexical_nesting_id().clone());
                 });
             });
@@ -2769,7 +2836,7 @@ mod tests {
         // The resolution phase handles bypassing singleton classes for class variable ownership.
         assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
             assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@var", def);
+                assert_def_str_eq!(&context, def, "@@var");
                 assert_eq!(Some(singleton_class.id()), *def.lexical_nesting_id());
             });
         });
@@ -2795,7 +2862,7 @@ mod tests {
         // The resolution phase handles bypassing singleton classes for class variable ownership.
         assert_definition_at!(&context, "3:5-5:8", SingletonClass, |nested_singleton| {
             assert_definition_at!(&context, "4:7-4:12", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@var", def);
+                assert_def_str_eq!(&context, def, "@@var");
                 assert_eq!(Some(nested_singleton.id()), *def.lexical_nesting_id());
             });
         });
@@ -2817,7 +2884,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
             assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@var", def);
+                assert_def_str_eq!(&context, def, "@@var");
                 assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
             });
         });
@@ -2905,17 +2972,17 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:12", Method, |def| {
-            assert_name_eq!(&context, "m1()", def);
+            assert_def_str_eq!(&context, def, "m1()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
 
         assert_definition_at!(&context, "3:11-3:22", Method, |def| {
-            assert_name_eq!(&context, "m2()", def);
+            assert_def_str_eq!(&context, def, "m2()");
             assert_eq!(def.visibility(), &Visibility::Protected);
         });
 
         assert_definition_at!(&context, "7:1-7:12", Method, |def| {
-            assert_name_eq!(&context, "m3()", def);
+            assert_def_str_eq!(&context, def, "m3()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
@@ -2946,7 +3013,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:3-2:15", Method, |def| {
-            assert_name_eq!(&context, "bar()", def);
+            assert_def_str_eq!(&context, def, "bar()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
@@ -2964,7 +3031,7 @@ mod tests {
         let Definition::Method(instance_method) = instance_method else {
             panic!()
         };
-        assert_name_eq!(&context, "baz()", instance_method);
+        assert_def_str_eq!(&context, instance_method, "baz()");
         assert_eq!(instance_method.visibility(), &Visibility::Private);
 
         let singleton_method = definitions
@@ -2974,16 +3041,16 @@ mod tests {
         let Definition::Method(singleton_method) = singleton_method else {
             panic!()
         };
-        assert_name_eq!(&context, "baz()", singleton_method);
+        assert_def_str_eq!(&context, singleton_method, "baz()");
         assert_eq!(singleton_method.visibility(), &Visibility::Public);
 
         assert_definition_at!(&context, "7:16-7:25", AttrReader, |def| {
-            assert_name_eq!(&context, "attribute()", def);
+            assert_def_str_eq!(&context, def, "attribute()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
 
         assert_definition_at!(&context, "11:3-11:15", Method, |def| {
-            assert_name_eq!(&context, "qux()", def);
+            assert_def_str_eq!(&context, def, "qux()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
@@ -3001,7 +3068,7 @@ mod tests {
         let Definition::Method(instance_method) = instance_method else {
             panic!()
         };
-        assert_name_eq!(&context, "boop()", instance_method);
+        assert_def_str_eq!(&context, instance_method, "boop()");
         assert_eq!(instance_method.visibility(), &Visibility::Private);
 
         let singleton_method = definitions
@@ -3011,11 +3078,11 @@ mod tests {
         let Definition::Method(singleton_method) = singleton_method else {
             panic!()
         };
-        assert_name_eq!(&context, "boop()", singleton_method);
+        assert_def_str_eq!(&context, singleton_method, "boop()");
         assert_eq!(singleton_method.visibility(), &Visibility::Public);
 
         assert_definition_at!(&context, "15:3-15:15", Method, |def| {
-            assert_name_eq!(&context, "zip()", def);
+            assert_def_str_eq!(&context, def, "zip()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
@@ -3049,22 +3116,22 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "4:3-4:14", Method, |def| {
-            assert_name_eq!(&context, "m1()", def);
+            assert_def_str_eq!(&context, def, "m1()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
         assert_definition_at!(&context, "9:5-9:16", Method, |def| {
-            assert_name_eq!(&context, "m2()", def);
+            assert_def_str_eq!(&context, def, "m2()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
         assert_definition_at!(&context, "13:5-13:16", Method, |def| {
-            assert_name_eq!(&context, "m3()", def);
+            assert_def_str_eq!(&context, def, "m3()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
 
         assert_definition_at!(&context, "18:3-18:14", Method, |def| {
-            assert_name_eq!(&context, "m4()", def);
+            assert_def_str_eq!(&context, def, "m4()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
     }
@@ -3090,17 +3157,17 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:1-3:17", Method, |def| {
-            assert_name_eq!(&context, "m1()", def);
+            assert_def_str_eq!(&context, def, "m1()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
         assert_definition_at!(&context, "5:11-5:27", Method, |def| {
-            assert_name_eq!(&context, "m2()", def);
+            assert_def_str_eq!(&context, def, "m2()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
         assert_definition_at!(&context, "10:3-10:19", Method, |def| {
-            assert_name_eq!(&context, "m3()", def);
+            assert_def_str_eq!(&context, def, "m3()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
@@ -3128,17 +3195,17 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "5:5-5:16", Method, |def| {
-            assert_name_eq!(&context, "m1()", def);
+            assert_def_str_eq!(&context, def, "m1()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
         assert_definition_at!(&context, "9:5-9:16", Method, |def| {
-            assert_name_eq!(&context, "m2()", def);
+            assert_def_str_eq!(&context, def, "m2()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
 
         assert_definition_at!(&context, "12:3-12:14", Method, |def| {
-            assert_name_eq!(&context, "m3()", def);
+            assert_def_str_eq!(&context, def, "m3()");
             assert_eq!(def.visibility(), &Visibility::Protected);
         });
     }
@@ -3161,12 +3228,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-            assert_name_eq!(&context, "foo()", def);
+            assert_def_str_eq!(&context, def, "foo()");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-            assert_name_eq!(&context, "bar()", def);
+            assert_def_str_eq!(&context, def, "bar()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3175,7 +3242,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:24-4:27", AttrAccessor, |def| {
-            assert_name_eq!(&context, "baz()", def);
+            assert_def_str_eq!(&context, def, "baz()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3200,12 +3267,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
-            assert_name_eq!(&context, "foo()", def);
+            assert_def_str_eq!(&context, def, "foo()");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
-            assert_name_eq!(&context, "bar()", def);
+            assert_def_str_eq!(&context, def, "bar()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3214,7 +3281,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
-            assert_name_eq!(&context, "baz()", def);
+            assert_def_str_eq!(&context, def, "baz()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3239,12 +3306,12 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
-            assert_name_eq!(&context, "foo()", def);
+            assert_def_str_eq!(&context, def, "foo()");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
-            assert_name_eq!(&context, "bar()", def);
+            assert_def_str_eq!(&context, def, "bar()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3253,7 +3320,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
-            assert_name_eq!(&context, "baz()", def);
+            assert_def_str_eq!(&context, def, "baz()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3280,17 +3347,17 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
-            assert_name_eq!(&context, "a1()", def);
+            assert_def_str_eq!(&context, def, "a1()");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "1:13-1:15", AttrReader, |def| {
-            assert_name_eq!(&context, "a2()", def);
+            assert_def_str_eq!(&context, def, "a2()");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
-            assert_name_eq!(&context, "a3()", def);
+            assert_def_str_eq!(&context, def, "a3()");
 
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3299,7 +3366,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "5:9-5:11", AttrReader, |def| {
-            assert_name_eq!(&context, "a4()", def);
+            assert_def_str_eq!(&context, def, "a4()");
 
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3308,7 +3375,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "6:9-6:11", AttrReader, |def| {
-            assert_name_eq!(&context, "a5()", def);
+            assert_def_str_eq!(&context, def, "a5()");
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
@@ -3333,17 +3400,17 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-            assert_name_eq!(&context, "foo()", def);
+            assert_def_str_eq!(&context, def, "foo()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
 
         assert_definition_at!(&context, "3:24-3:27", AttrReader, |def| {
-            assert_name_eq!(&context, "bar()", def);
+            assert_def_str_eq!(&context, def, "bar()");
             assert_eq!(def.visibility(), &Visibility::Protected);
         });
 
         assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
-            assert_name_eq!(&context, "baz()", def);
+            assert_def_str_eq!(&context, def, "baz()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
@@ -3377,22 +3444,22 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-            assert_name_eq!(&context, "foo()", def);
+            assert_def_str_eq!(&context, def, "foo()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
         assert_definition_at!(&context, "9:20-9:23", AttrAccessor, |def| {
-            assert_name_eq!(&context, "bar()", def);
+            assert_def_str_eq!(&context, def, "bar()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
 
         assert_definition_at!(&context, "13:18-13:21", AttrReader, |def| {
-            assert_name_eq!(&context, "baz()", def);
+            assert_def_str_eq!(&context, def, "baz()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
 
         assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
-            assert_name_eq!(&context, "qux()", def);
+            assert_def_str_eq!(&context, def, "qux()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
     }
@@ -3418,22 +3485,22 @@ mod tests {
         assert_eq!(context.graph().definitions().len(), 8);
 
         assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
-            assert_name_eq!(&context, "$foo", def);
+            assert_def_str_eq!(&context, def, "$foo");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:1-2:5", GlobalVariable, |def| {
-            assert_name_eq!(&context, "$bar", def);
+            assert_def_str_eq!(&context, def, "$bar");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "2:7-2:11", GlobalVariable, |def| {
-            assert_name_eq!(&context, "$baz", def);
+            assert_def_str_eq!(&context, def, "$baz");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "5:3-5:7", GlobalVariable, |def| {
-            assert_name_eq!(&context, "$qux", def);
+            assert_def_str_eq!(&context, def, "$qux");
 
             assert_definition_at!(&context, "4:1-6:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -3442,17 +3509,17 @@ mod tests {
         });
 
         assert_definition_at!(&context, "8:1-8:5", GlobalVariable, |def| {
-            assert_name_eq!(&context, "$one", def);
+            assert_def_str_eq!(&context, def, "$one");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "9:1-9:5", GlobalVariable, |def| {
-            assert_name_eq!(&context, "$two", def);
+            assert_def_str_eq!(&context, def, "$two");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "10:1-10:7", GlobalVariable, |def| {
-            assert_name_eq!(&context, "$three", def);
+            assert_def_str_eq!(&context, def, "$three");
             assert!(def.lexical_nesting_id().is_none());
         });
     }
@@ -3483,60 +3550,60 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@foo", def);
+            assert_def_str_eq!(&context, def, "@foo");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
             assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
-                assert_name_eq!(&context, "@bar", def);
+                assert_def_str_eq!(&context, def, "@bar");
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(foo_class_def.members()[0], def.id());
             });
 
             assert_definition_at!(&context, "5:3-5:7", InstanceVariable, |def| {
-                assert_name_eq!(&context, "@baz", def);
+                assert_def_str_eq!(&context, def, "@baz");
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(foo_class_def.members()[1], def.id());
             });
 
             assert_definition_at!(&context, "5:9-5:13", InstanceVariable, |def| {
-                assert_name_eq!(&context, "@qux", def);
+                assert_def_str_eq!(&context, def, "@qux");
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(foo_class_def.members()[2], def.id());
             });
         });
 
         assert_definition_at!(&context, "8:1-8:5", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@bar", def);
+            assert_def_str_eq!(&context, def, "@bar");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "9:1-9:5", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@baz", def);
+            assert_def_str_eq!(&context, def, "@baz");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "10:1-10:5", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@qux", def);
+            assert_def_str_eq!(&context, def, "@qux");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "12:1-16:4", Class, |bar_class_def| {
             assert_definition_at!(&context, "13:3-13:7", InstanceVariable, |def| {
-                assert_name_eq!(&context, "@foo", def);
+                assert_def_str_eq!(&context, def, "@foo");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(bar_class_def.members()[0], def.id());
             });
 
             assert_definition_at!(&context, "14:3-14:7", InstanceVariable, |def| {
-                assert_name_eq!(&context, "@bar", def);
+                assert_def_str_eq!(&context, def, "@bar");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(bar_class_def.members()[1], def.id());
             });
 
             assert_definition_at!(&context, "15:3-15:7", InstanceVariable, |def| {
-                assert_name_eq!(&context, "@baz", def);
+                assert_def_str_eq!(&context, def, "@baz");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(bar_class_def.members()[2], def.id());
             });
@@ -3575,67 +3642,67 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
-            assert_name_eq!(&context, "@@foo", def);
+            assert_def_str_eq!(&context, def, "@@foo");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
             assert_definition_at!(&context, "4:3-4:8", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@bar", def);
+                assert_def_str_eq!(&context, def, "@@bar");
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(foo_class_def.members()[0], def.id());
             });
 
             assert_definition_at!(&context, "5:3-5:8", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@baz", def);
+                assert_def_str_eq!(&context, def, "@@baz");
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(foo_class_def.members()[1], def.id());
             });
 
             assert_definition_at!(&context, "5:10-5:15", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@qux", def);
+                assert_def_str_eq!(&context, def, "@@qux");
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(foo_class_def.members()[2], def.id());
             });
         });
 
         assert_definition_at!(&context, "8:1-8:6", ClassVariable, |def| {
-            assert_name_eq!(&context, "@@bar", def);
+            assert_def_str_eq!(&context, def, "@@bar");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "9:1-9:6", ClassVariable, |def| {
-            assert_name_eq!(&context, "@@baz", def);
+            assert_def_str_eq!(&context, def, "@@baz");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "10:1-10:6", ClassVariable, |def| {
-            assert_name_eq!(&context, "@@qux", def);
+            assert_def_str_eq!(&context, def, "@@qux");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "12:1-20:4", Class, |bar_class_def| {
             assert_definition_at!(&context, "13:3-13:8", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@foo", def);
+                assert_def_str_eq!(&context, def, "@@foo");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(bar_class_def.members()[0], def.id());
             });
 
             assert_definition_at!(&context, "14:3-14:8", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@bar", def);
+                assert_def_str_eq!(&context, def, "@@bar");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(bar_class_def.members()[1], def.id());
             });
 
             assert_definition_at!(&context, "15:3-15:8", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@baz", def);
+                assert_def_str_eq!(&context, def, "@@baz");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(bar_class_def.members()[2], def.id());
             });
 
             // Method `set_foo` is members()[3], class variable inside method is members()[4]
             assert_definition_at!(&context, "18:5-18:10", ClassVariable, |def| {
-                assert_name_eq!(&context, "@@foo", def);
+                assert_def_str_eq!(&context, def, "@@foo");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(bar_class_def.members()[4], def.id());
             });
@@ -3680,13 +3747,13 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:18", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Single", def);
-            assert_comments_eq!(&context, def, vec!["# Single comment"]);
+            assert_def_name_eq!(&context, def, "Single");
+            assert_def_comments_eq!(&context, def, vec!["# Single comment"]);
         });
 
         assert_definition_at!(&context, "7:1-7:18", Module, |def| {
-            assert_name_id_to_string_eq!(&context, "Multi", def);
-            assert_comments_eq!(
+            assert_def_name_eq!(&context, def, "Multi");
+            assert_def_comments_eq!(
                 &context,
                 def,
                 vec![
@@ -3698,27 +3765,27 @@ mod tests {
         });
 
         assert_definition_at!(&context, "12:1-12:28", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "EmptyCommentLine", def);
-            assert_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
+            assert_def_name_eq!(&context, def, "EmptyCommentLine");
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
         });
 
         assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
-            assert_name_id_to_string_eq!(&context, "NoGap", def);
-            assert_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
+            assert_def_name_eq!(&context, def, "NoGap");
+            assert_def_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
         });
 
         assert_definition_at!(&context, "19:1-19:13", Method, |def| {
-            assert_name_eq!(&context, "foo()", def);
-            assert_comments_eq!(&context, def, vec!["#: ()", "#| -> void"]);
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_def_comments_eq!(&context, def, vec!["#: ()", "#| -> void"]);
         });
 
         assert_definition_at!(&context, "23:1-23:21", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "BlankLine", def);
-            assert_comments_eq!(&context, def, vec!["# Comment with blank line"]);
+            assert_def_name_eq!(&context, def, "BlankLine");
+            assert_def_comments_eq!(&context, def, vec!["# Comment with blank line"]);
         });
 
         assert_definition_at!(&context, "28:1-28:21", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "NoComment", def);
+            assert_def_name_eq!(&context, def, "NoComment");
             assert!(def.comments().is_empty());
         });
     }
@@ -3745,23 +3812,23 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-12:4", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Outer", def);
-            assert_comments_eq!(&context, def, vec!["# Outer class"]);
+            assert_def_name_eq!(&context, def, "Outer");
+            assert_def_comments_eq!(&context, def, vec!["# Outer class"]);
         });
 
         assert_definition_at!(&context, "4:3-7:6", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Inner", def);
-            assert_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
+            assert_def_name_eq!(&context, def, "Inner");
+            assert_def_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
         });
 
         assert_definition_at!(&context, "6:5-6:20", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "Deep", def);
-            assert_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
+            assert_def_name_eq!(&context, def, "Deep");
+            assert_def_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
         });
 
         assert_definition_at!(&context, "11:3-11:26", Class, |def| {
-            assert_name_id_to_string_eq!(&context, "AnotherInner", def);
-            assert_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
+            assert_def_name_eq!(&context, def, "AnotherInner");
+            assert_def_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
         });
     }
 
@@ -4223,7 +4290,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:21", Class, |def| {
-            assert_superclass_ref_eq!(&context, def, "Bar");
+            assert_def_superclass_ref_eq!(&context, def, "Bar");
         });
     }
 
@@ -4241,8 +4308,8 @@ mod tests {
         refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
 
         assert_definition_at!(&context, "1:1-1:26", Class, |def| {
-            assert_superclass_ref_eq!(&context, def, "Baz");
-            assert_name_offset_eq!(&context, "1:7-1:10", def);
+            assert_def_superclass_ref_eq!(&context, def, "Baz");
+            assert_def_name_offset_eq!(&context, def, "1:7-1:10");
         });
     }
 
@@ -4314,7 +4381,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-            assert_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4332,7 +4399,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-            assert_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4365,7 +4432,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-            assert_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4383,7 +4450,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-            assert_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4401,7 +4468,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
-            assert_mixins_eq!(&context, class_def, Extend, vec!["Bar", "Baz"]);
+            assert_def_mixins_eq!(&context, class_def, Extend, vec!["Bar", "Baz"]);
         });
     }
 
@@ -4420,9 +4487,9 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_mixins_eq!(&context, def, Include, vec!["Foo"]);
-            assert_mixins_eq!(&context, def, Prepend, vec!["Foo"]);
-            assert_mixins_eq!(&context, def, Extend, vec!["Foo"]);
+            assert_def_mixins_eq!(&context, def, Include, vec!["Foo"]);
+            assert_def_mixins_eq!(&context, def, Prepend, vec!["Foo"]);
+            assert_def_mixins_eq!(&context, def, Extend, vec!["Foo"]);
         });
     }
 
@@ -4497,13 +4564,13 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-7:4", Class, |foo_class_def| {
             assert_definition_at!(&context, "2:3-2:7", InstanceVariable, |foo_var_def| {
-                assert_name_eq!(&context, "@foo", foo_var_def);
+                assert_def_str_eq!(&context, foo_var_def, "@foo");
                 assert_eq!(foo_class_def.id(), foo_var_def.lexical_nesting_id().unwrap());
             });
 
             assert_definition_at!(&context, "4:3-6:6", SingletonClass, |foo_singleton_def| {
                 assert_definition_at!(&context, "5:5-5:9", InstanceVariable, |bar_var_def| {
-                    assert_name_eq!(&context, "@bar", bar_var_def);
+                    assert_def_str_eq!(&context, bar_var_def, "@bar");
                     assert_eq!(foo_singleton_def.id(), bar_var_def.lexical_nesting_id().unwrap());
                 });
             });
@@ -4535,15 +4602,15 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@bar", def);
+            assert_def_str_eq!(&context, def, "@bar");
         });
 
         assert_definition_at!(&context, "7:5-7:9", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@baz", def);
+            assert_def_str_eq!(&context, def, "@baz");
         });
 
         assert_definition_at!(&context, "12:7-12:11", InstanceVariable, |def| {
-            assert_name_eq!(&context, "@qux", def);
+            assert_def_str_eq!(&context, def, "@qux");
         });
     }
 
@@ -4567,7 +4634,7 @@ mod tests {
         assert_definition_at!(&context, "1:1-5:4", Class, |_foo_class_def| {
             assert_definition_at!(&context, "2:3-4:6", Method, |method_def| {
                 assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |var_def| {
-                    assert_name_eq!(&context, "@var", var_def);
+                    assert_def_str_eq!(&context, var_def, "@var");
                     // The lexical nesting of the ivar is the method
                     assert_eq!(method_def.id(), var_def.lexical_nesting_id().unwrap());
                 });
@@ -4746,7 +4813,7 @@ mod tests {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
                         assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert_def_name_eq!(&context, bar, "Bar");
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4805,7 +4872,7 @@ mod tests {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
                         assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_name_id_to_string_eq!(&context, "Zip::Bar", bar);
+                            assert_def_name_eq!(&context, bar, "Zip::Bar");
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4864,7 +4931,7 @@ mod tests {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
                         assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert_def_name_eq!(&context, bar, "Bar");
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4872,7 +4939,7 @@ mod tests {
                             assert_eq!(bar.members()[1], var.id());
                             assert_eq!(bar.members()[2], hello.id());
 
-                            assert_superclass_ref_eq!(&context, bar, "Parent");
+                            assert_def_superclass_ref_eq!(&context, bar, "Parent");
 
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
@@ -4925,7 +4992,7 @@ mod tests {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
                         assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_name_id_to_string_eq!(&context, "Bar", bar);
+                            assert_def_name_eq!(&context, bar, "Bar");
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4984,7 +5051,7 @@ mod tests {
                 assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
                     assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
                         assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                            assert_name_id_to_string_eq!(&context, "Zip::Bar", bar);
+                            assert_def_name_eq!(&context, bar, "Zip::Bar");
                             assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                             assert_eq!(foo.members()[0], bar.id());
 
@@ -4992,7 +5059,7 @@ mod tests {
                             assert_eq!(bar.members()[1], var.id());
                             assert_eq!(bar.members()[2], hello.id());
 
-                            assert_superclass_ref_eq!(&context, bar, "Parent");
+                            assert_def_superclass_ref_eq!(&context, bar, "Parent");
 
                             // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
                             // produce a new lexical scope
@@ -5040,8 +5107,8 @@ mod tests {
         assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-3:6", Class, |bar| {
                 assert_definition_at!(&context, "5:3-6:6", Module, |baz| {
-                    assert_name_id_to_string_eq!(&context, "Bar", bar);
-                    assert_name_id_to_string_eq!(&context, "Baz", baz);
+                    assert_def_name_eq!(&context, bar, "Bar");
+                    assert_def_name_eq!(&context, baz, "Baz");
                     assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
                     assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
                     assert_eq!(foo.members()[0], bar.id());
@@ -5154,7 +5221,7 @@ mod tests {
             assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
                 assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
 
-                assert_mixins_eq!(&context, anonymous_class, Include, vec!["Bar"]);
+                assert_def_mixins_eq!(&context, anonymous_class, Include, vec!["Bar"]);
             });
         });
     }
@@ -5265,11 +5332,11 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "ALIAS1", def);
+            assert_def_name_eq!(&context, def, "ALIAS1");
             assert_name_path_eq!(&context, "Foo", def.target_name_id());
         });
         assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "ALIAS2", def);
+            assert_def_name_eq!(&context, def, "ALIAS2");
             assert_name_path_eq!(&context, "Foo", def.target_name_id());
         });
     }
@@ -5288,7 +5355,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "4:1-4:6", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "ALIAS", def);
+            assert_def_name_eq!(&context, def, "ALIAS");
             assert_name_path_eq!(&context, "Foo::Bar", def.target_name_id());
         });
 
@@ -5310,7 +5377,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-4:4", Module, |bar_module_def| {
             assert_definition_at!(&context, "3:3-3:8", ConstantAlias, |def| {
-                assert_name_id_to_string_eq!(&context, "MyFoo", def);
+                assert_def_name_eq!(&context, def, "MyFoo");
                 assert_eq!(bar_module_def.id(), def.lexical_nesting_id().unwrap());
             });
         });
@@ -5329,7 +5396,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:6-3:11", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "Bar::ALIAS", def);
+            assert_def_name_eq!(&context, def, "Bar::ALIAS");
         });
     }
 
@@ -5345,11 +5412,11 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:2", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "A", def);
+            assert_def_name_eq!(&context, def, "A");
             assert_name_path_eq!(&context, "Target", def.target_name_id());
         });
         assert_definition_at!(&context, "2:5-2:6", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "B", def);
+            assert_def_name_eq!(&context, def, "B");
             assert_name_path_eq!(&context, "Target", def.target_name_id());
         });
 
@@ -5368,7 +5435,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:6", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "ALIAS", def);
+            assert_def_name_eq!(&context, def, "ALIAS");
             assert_name_path_eq!(&context, "Foo", def.target_name_id());
         });
     }
@@ -5386,11 +5453,11 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "ALIAS1", def);
+            assert_def_name_eq!(&context, def, "ALIAS1");
             assert_name_path_eq!(&context, "Foo", def.target_name_id());
         });
         assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
-            assert_name_id_to_string_eq!(&context, "ALIAS2", def);
+            assert_def_name_eq!(&context, def, "ALIAS2");
             assert_name_path_eq!(&context, "ALIAS1", def.target_name_id());
         });
     }
