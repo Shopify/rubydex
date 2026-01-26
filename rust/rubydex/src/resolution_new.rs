@@ -3,12 +3,15 @@ use std::sync::LazyLock;
 use crate::model::declaration::ClassDeclaration;
 use crate::model::declaration::Declaration;
 use crate::model::declaration::DeclarationKind;
+use crate::model::declaration::MethodDeclaration;
 use crate::model::declaration::ModuleDeclaration;
 use crate::model::declaration::Namespace;
+use crate::model::declaration::SingletonClassDeclaration;
 use crate::model::declaration::{Ancestor, Ancestors};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::graph::Graph;
+use crate::model::identity_maps::IdentityHashSet;
 use crate::model::ids::DeclarationId;
 use crate::model::ids::DefinitionId;
 use crate::model::ids::NameId;
@@ -24,11 +27,15 @@ pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::f
 
 pub struct ResolverNew<'a> {
     graph: &'a mut Graph,
+    todos: IdentityHashSet<DefinitionId>,
 }
 
 impl<'a> ResolverNew<'a> {
     pub fn new(graph: &'a mut Graph) -> Self {
-        Self { graph }
+        Self {
+            graph,
+            todos: IdentityHashSet::default(),
+        }
     }
 
     pub fn resolve_all(&mut self) {
@@ -59,14 +66,42 @@ impl<'a> ResolverNew<'a> {
         }
 
         let uri_ids = self.graph.documents().keys().cloned().collect::<Vec<_>>();
-        for uri_id in uri_ids {
-            self.resolve_document(uri_id);
+        for uri_id in &uri_ids {
+            self.resolve_document(*uri_id);
+        }
+
+        let mut todo_ids = self.todos.iter().cloned().collect::<Vec<_>>();
+        self.todos.clear();
+        while let Some(definition_id) = todo_ids.pop() {
+            println!("resolving todo: {:?}", definition_id);
+            self.resolve_definition(definition_id);
+        }
+
+        let reference_ids = self.graph.constant_references().keys().cloned().collect::<Vec<_>>();
+        for reference_id in &reference_ids {
+            let constant_reference = self.graph.constant_references().get(reference_id).unwrap();
+
+            match self.graph.names().get(constant_reference.name_id()).unwrap() {
+                NameRef::Resolved(resolved) => {
+                    let declaration_id = *resolved.declaration_id();
+
+                    self.graph
+                        .declarations_mut()
+                        .get_mut(&declaration_id)
+                        .unwrap()
+                        .as_namespace_mut()
+                        .unwrap()
+                        .add_reference(*reference_id);
+                }
+                NameRef::Unresolved(_) => {
+                    // TODO: resolve the constant reference
+                    println!("unresolved constant reference: {:?}", constant_reference);
+                }
+            }
         }
     }
 
     fn resolve_document(&mut self, uri_id: UriId) {
-        println!("resolve_document: {:?}", uri_id);
-
         let document = self.graph.documents().get(&uri_id).unwrap();
         let definition_ids = document.top_level_definition_ids().to_vec();
 
@@ -76,9 +111,10 @@ impl<'a> ResolverNew<'a> {
     }
 
     fn resolve_definition(&mut self, definition_id: DefinitionId) {
-        println!("resolve_definition: {:?}", definition_id);
+        let definition = self.graph.definitions().get(&definition_id).unwrap();
+        println!("resolve_definition: {:?}", definition);
 
-        match self.graph.definitions().get(&definition_id).unwrap() {
+        match definition {
             Definition::Class(class) => {
                 let members = class.members().to_vec();
                 self.resolve_namespace(*class.name_id(), definition_id);
@@ -103,8 +139,43 @@ impl<'a> ResolverNew<'a> {
                     self.resolve_definition(member_id);
                 }
             }
+            Definition::Method(method) => {
+                let mut owner_declaration_id = *OBJECT_ID;
+
+                let owner_id = method.lexical_nesting_id();
+                if let Some(owner_id) = owner_id {
+                    let owner_definition = self.graph.definitions().get(owner_id).unwrap();
+                    let owner_name_id = owner_definition.name_id().unwrap();
+                    let owner_name = self.graph.names().get(owner_name_id).unwrap();
+                    match owner_name {
+                        NameRef::Resolved(resolved) => {
+                            owner_declaration_id = *resolved.declaration_id();
+                        }
+                        NameRef::Unresolved(_) => {
+                            // TODO: resolve the nested name
+                            println!("unresolved nested name: {:?}", owner_name.str().to_string());
+                        }
+                    }
+                }
+
+                let owner_declaration = self.graph.declarations().get(&owner_declaration_id).unwrap();
+                let fully_qualified_name = format!(
+                    "{}::{}",
+                    owner_declaration.name(),
+                    **self.graph.strings().get(method.str_id()).unwrap()
+                );
+                let declaration_id = DeclarationId::from(&fully_qualified_name);
+                self.create_declaration(
+                    *method.str_id(),
+                    fully_qualified_name,
+                    declaration_id,
+                    owner_declaration_id,
+                    definition_id,
+                );
+            }
             _ => {
                 // TODO: add diagnostic
+                println!("unhandled definition: {:?}", definition);
             }
         }
 
@@ -148,13 +219,22 @@ impl<'a> ResolverNew<'a> {
                     }
                 }
 
-                if let Some(_parent_scope) = unresolved.parent_scope() {
-                    // TODO: resolve the parent scope
-                    println!(
-                        "unresolved parent scope: {:?}",
-                        unresolved.parent_scope().unwrap().to_string()
-                    );
-                    return;
+                if let Some(parent_scope) = unresolved.parent_scope() {
+                    match self.graph.names().get(parent_scope).unwrap() {
+                        NameRef::Resolved(resolved) => {
+                            owner_id = *resolved.declaration_id();
+                            let owner_name = self.graph.declarations().get(&owner_id).unwrap().name();
+                            fully_qualified_name = format!("{owner_name}::{fully_qualified_name}");
+                        }
+                        NameRef::Unresolved(unresolved) => {
+                            println!(
+                                "unresolved parent scope: {:?}",
+                                **self.graph.strings().get(unresolved.str()).unwrap()
+                            );
+                            self.todos.insert(definition_id);
+                            return;
+                        }
+                    }
                 }
 
                 let declaration_id = DeclarationId::from(&fully_qualified_name);
@@ -190,7 +270,28 @@ impl<'a> ResolverNew<'a> {
                 ))));
                 self.graph.declarations_mut().insert(declaration_id, declaration);
             }
+            Definition::SingletonClass(_singleton) => {
+                let declaration = Declaration::Namespace(Namespace::SingletonClass(Box::new(
+                    SingletonClassDeclaration::new(fully_qualified_name, owner_id),
+                )));
+                self.graph.declarations_mut().insert(declaration_id, declaration);
+
+                let owner = self
+                    .graph
+                    .declarations_mut()
+                    .get_mut(&owner_id)
+                    .unwrap()
+                    .as_namespace_mut()
+                    .unwrap();
+                owner.set_singleton_class_id(declaration_id);
+                return;
+            }
+            Definition::Method(_method) => {
+                let declaration = Declaration::Method(Box::new(MethodDeclaration::new(fully_qualified_name, owner_id)));
+                self.graph.declarations_mut().insert(declaration_id, declaration);
+            }
             _ => {
+                println!("unhandled create declaration: {:?}", fully_qualified_name);
                 // TODO
             }
         }

@@ -401,6 +401,10 @@ impl Namespace {
         all_namespaces!(self, it => &it.references)
     }
 
+    pub fn add_reference(&mut self, reference_id: ReferenceId) {
+        all_namespaces!(self, it => it.references.insert(reference_id));
+    }
+
     #[must_use]
     pub fn definitions(&self) -> &[DefinitionId] {
         all_namespaces!(self, it => &it.definition_ids)
