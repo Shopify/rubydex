@@ -2,6 +2,8 @@ use std::sync::LazyLock;
 
 use crate::model::declaration::ClassDeclaration;
 use crate::model::declaration::Declaration;
+use crate::model::declaration::DeclarationKind;
+use crate::model::declaration::ModuleDeclaration;
 use crate::model::declaration::Namespace;
 use crate::model::declaration::{Ancestor, Ancestors};
 use crate::model::definitions::Definition;
@@ -9,6 +11,7 @@ use crate::model::document::Document;
 use crate::model::graph::Graph;
 use crate::model::ids::DeclarationId;
 use crate::model::ids::DefinitionId;
+use crate::model::ids::NameId;
 use crate::model::ids::UriId;
 use crate::model::name::NameRef;
 
@@ -59,6 +62,8 @@ impl<'a> ResolverNew<'a> {
     }
 
     fn resolve_document(&mut self, uri_id: UriId) {
+        println!("resolve_document: {:?}", uri_id);
+
         let document = self.graph.documents().get(&uri_id).unwrap();
         let definition_ids = document.top_level_definition_ids().to_vec();
 
@@ -68,21 +73,102 @@ impl<'a> ResolverNew<'a> {
     }
 
     fn resolve_definition(&mut self, definition_id: DefinitionId) {
+        println!("resolve_definition: {:?}", definition_id);
+
         let definition = self.graph.definitions().get(&definition_id).unwrap();
 
-        if let Some(name_id) = definition.name_id() {
-            // Resolve and create the full_name
+        match definition {
+            Definition::Class(class) => {
+                self.resolve_namespace(*class.name_id(), definition_id);
+            }
+            _ => {
+                // TODO: add diagnostic
+            }
         }
 
         // create the declaration
         // visit the members
 
-        match definition {
-            Definition::Class(class) => {
-                self.resolve_class(class);
+        // match definition {
+        //     Definition::Class(class) => {
+        //         self.resolve_class(class);
+        //     }
+        //     _ => panic!("Expected a class definition"),
+        // }
+    }
+
+    fn resolve_namespace(&mut self, name_id: NameId, definition_id: DefinitionId) {
+        println!("resolve_namespace: {:?}", name_id);
+
+        let name_ref = self.graph.names().get(&name_id).unwrap();
+
+        match name_ref {
+            NameRef::Resolved(resolved) => {
+                let declaration_id = resolved.declaration_id();
+                self.extend_declaration(*declaration_id, definition_id);
             }
-            _ => panic!("Expected a class definition"),
+            NameRef::Unresolved(unresolved) => {
+                let mut fully_qualified_name = self.graph.strings().get(unresolved.str()).unwrap().to_string();
+                let mut owner_id = *OBJECT_ID;
+
+                if let Some(nesting) = unresolved.nesting() {
+                    match self.graph.names().get(nesting).unwrap() {
+                        NameRef::Resolved(resolved) => {
+                            owner_id = *resolved.declaration_id();
+                            let owner_name = self.graph.declarations().get(&owner_id).unwrap().name();
+                            fully_qualified_name = format!("{owner_name}::{fully_qualified_name}");
+                        }
+                        NameRef::Unresolved(_) => {
+                            // TODO: resolve the nested name
+                            return;
+                        }
+                    }
+                }
+
+                if let Some(_parent_scope) = unresolved.parent_scope() {
+                    // TODO: resolve the parent scope
+                    return;
+                }
+
+                let declaration_id = DeclarationId::from(&fully_qualified_name);
+                self.create_declaration(fully_qualified_name, declaration_id, owner_id, definition_id);
+            }
         }
+    }
+
+    fn create_declaration(
+        &mut self,
+        fully_qualified_name: String,
+        declaration_id: DeclarationId,
+        owner_id: DeclarationId,
+        definition_id: DefinitionId,
+    ) {
+        let definition = self.graph.definitions().get(&definition_id).unwrap();
+
+        match definition {
+            Definition::Class(_class) => {
+                let declaration = Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                    fully_qualified_name,
+                    owner_id,
+                ))));
+                self.graph.declarations_mut().insert(declaration_id, declaration);
+            }
+            Definition::Module(_module) => {
+                let declaration = Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(
+                    fully_qualified_name,
+                    owner_id,
+                ))));
+                self.graph.declarations_mut().insert(declaration_id, declaration);
+            }
+            _ => {
+                // TODO
+            }
+        }
+    }
+
+    fn extend_declaration(&mut self, declaration_id: DeclarationId, definition_id: DefinitionId) {
+        let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
+        declaration.add_definition(definition_id);
     }
 }
 
@@ -287,7 +373,7 @@ mod tests {
                 .graph()
                 .declarations()
                 .get(&DeclarationId::from($declaration_id))
-                .unwrap()
+                .expect(&format!("Declaration '{}' not found in graph", $declaration_id))
                 .as_namespace()
                 .unwrap()
                 .members()
@@ -414,6 +500,27 @@ mod tests {
             let diagnostics = format_diagnostics($context, $ignore_rules);
             assert!(diagnostics.is_empty(), "expected no diagnostics, got {:?}", diagnostics);
         }};
+    }
+
+    #[test]
+    fn resolving_top_level_class_declaration() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class Bar; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
+
+        assert_no_members!(context, "Foo::Bar");
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
     }
 
     #[test]

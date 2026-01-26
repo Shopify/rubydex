@@ -644,6 +644,10 @@ impl<'a> RubyIndexer<'a> {
 
             let definition_id = self.local_graph.add_definition(definition);
 
+            if lexical_nesting_id.is_none() {
+                self.local_graph.add_top_level_definition_id(definition_id);
+            }
+
             self.add_member_to_current_lexical_scope(definition_id);
 
             if let Some(body) = body_node {
@@ -702,6 +706,10 @@ impl<'a> RubyIndexer<'a> {
             )));
 
             let definition_id = self.local_graph.add_definition(definition);
+
+            if lexical_nesting_id.is_none() {
+                self.local_graph.add_top_level_definition_id(definition_id);
+            }
 
             self.add_member_to_current_lexical_scope(definition_id);
 

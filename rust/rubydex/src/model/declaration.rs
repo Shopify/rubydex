@@ -249,6 +249,18 @@ pub enum Declaration {
     ClassVariable(Box<ClassVariableDeclaration>),
 }
 
+pub enum DeclarationKind {
+    Class,
+    Module,
+    SingletonClass,
+    Constant,
+    ConstantAlias,
+    Method,
+    GlobalVariable,
+    InstanceVariable,
+    ClassVariable,
+}
+
 impl Declaration {
     #[must_use]
     pub fn name(&self) -> &str {
