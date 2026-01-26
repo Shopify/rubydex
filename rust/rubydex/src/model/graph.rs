@@ -69,9 +69,6 @@ impl Graph {
         &mut self.declarations
     }
 
-    /// # Panics
-    ///
-    /// Panics if acquiring a write lock fails
     pub fn add_declaration<F>(&mut self, declaration_id: DeclarationId, definition_id: DefinitionId, constructor: F)
     where
         F: FnOnce() -> Declaration,
@@ -80,9 +77,6 @@ impl Graph {
         declaration.add_definition(definition_id);
     }
 
-    /// # Panics
-    ///
-    /// Panics if acquiring a write lock fails
     pub fn clear_declarations(&mut self) {
         self.declarations.clear();
     }
@@ -308,9 +302,6 @@ impl Graph {
         name_id
     }
 
-    /// # Panics
-    ///
-    /// Panics if acquiring a read lock fails
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
         let declaration_id = DeclarationId::from(name);
@@ -497,9 +488,6 @@ impl Graph {
         }
     }
 
-    /// # Panics
-    ///
-    /// Panics if acquiring a write lock fails
     pub fn record_resolved_reference(&mut self, reference_id: ReferenceId, declaration_id: DeclarationId) {
         if let Some(declaration) = self.declarations.get_mut(&declaration_id) {
             declaration.add_reference(reference_id);
@@ -701,9 +689,6 @@ impl Graph {
         &self.position_encoding
     }
 
-    /// # Panics
-    ///
-    /// Panics if acquiring a read lock fails
     #[allow(clippy::cast_precision_loss)]
     pub fn print_query_statistics(&self) {
         use std::collections::HashMap;
