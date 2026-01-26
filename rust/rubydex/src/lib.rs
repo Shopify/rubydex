@@ -8,6 +8,7 @@ pub mod offset;
 pub mod position;
 pub mod query;
 pub mod resolution;
+pub mod resolution_new;
 pub mod stats;
 pub mod visualization;
 

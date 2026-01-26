@@ -9,7 +9,7 @@ use crate::model::graph::Graph;
 use crate::model::ids::UriId;
 use crate::offset::Offset;
 use crate::position::Position;
-use crate::resolution::Resolver;
+use crate::resolution_new::ResolverNew;
 
 #[derive(Default)]
 pub struct GraphTest {
@@ -45,7 +45,7 @@ impl GraphTest {
     }
 
     pub fn resolve(&mut self) {
-        let mut resolver = Resolver::new(&mut self.graph);
+        let mut resolver = ResolverNew::new(&mut self.graph);
         resolver.resolve_all();
     }
 
