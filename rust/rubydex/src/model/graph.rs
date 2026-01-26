@@ -785,6 +785,7 @@ mod tests {
     use crate::model::comment::Comment;
     use crate::model::declaration::Ancestors;
     use crate::test_utils::GraphTest;
+    use crate::{assert_descendants, assert_members_eq, assert_no_diagnostics, assert_no_members};
 
     #[test]
     fn deleting_a_uri() {
@@ -921,20 +922,14 @@ mod tests {
         ));
 
         {
-            let Declaration::Namespace(Namespace::Module(bar)) =
+            let Declaration::Namespace(Namespace::Module(_bar)) =
                 context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
             else {
                 panic!("Expected Bar to be a module");
             };
-            assert!(bar.descendants().contains(&DeclarationId::from("Foo")));
-
-            let Declaration::Namespace(Namespace::Class(foo)) =
-                context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
-            else {
-                panic!("Expected Foo to be a class");
-            };
-            assert!(foo.descendants().contains(&DeclarationId::from("Baz")));
+            assert_descendants!(context, "Bar", ["Foo"]);
         }
+        assert_descendants!(context, "Foo", ["Baz"]);
 
         context.index_uri("file:///a.rb", "");
 
@@ -971,14 +966,7 @@ mod tests {
             Ancestors::Complete(_)
         ));
 
-        {
-            let Declaration::Namespace(Namespace::Class(foo)) =
-                context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
-            else {
-                panic!("Expected Foo to be a class");
-            };
-            assert!(foo.descendants().contains(&DeclarationId::from("Baz")));
-        }
+        assert_descendants!(context, "Foo", ["Baz"]);
     }
 
     #[test]
@@ -1226,15 +1214,7 @@ mod tests {
         });
         context.resolve();
 
-        {
-            if let Declaration::Namespace(Namespace::Module(foo)) =
-                context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
-            {
-                assert!(foo.members().contains_key(&StringId::from("Bar")));
-            } else {
-                panic!("Expected Foo to be a module");
-            }
-        }
+        assert_members_eq!(context, "Foo", vec!["Bar"]);
 
         // Delete `Bar`
         context.index_uri("file:///foo2.rb", {
@@ -1245,13 +1225,7 @@ mod tests {
         });
         context.resolve();
 
-        if let Declaration::Namespace(Namespace::Module(foo)) =
-            context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
-        {
-            assert!(!foo.members().contains_key(&StringId::from("Bar")));
-        } else {
-            panic!("Expected Foo to be a module");
-        }
+        assert_no_members!(context, "Foo");
     }
 
     #[test]
@@ -1263,7 +1237,7 @@ mod tests {
         assert!(!context.graph().all_diagnostics().is_empty());
 
         context.index_uri("file:///foo.rb", "class Foo; end");
-        assert!(context.graph().all_diagnostics().is_empty());
+        assert_no_diagnostics!(&context);
     }
 
     #[test]
