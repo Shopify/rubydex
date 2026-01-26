@@ -411,6 +411,10 @@ impl Namespace {
         all_namespaces!(self, it => &it.members)
     }
 
+    pub fn add_member(&mut self, string_id: StringId, declaration_id: DeclarationId) {
+        all_namespaces!(self, it => it.add_member(string_id, declaration_id));
+    }
+
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         all_namespaces!(self, it => &it.diagnostics)

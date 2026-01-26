@@ -358,6 +358,11 @@ impl Graph {
         &self.names
     }
 
+    #[must_use]
+    pub fn names_mut(&mut self) -> &mut IdentityHashMap<NameId, NameRef> {
+        &mut self.names
+    }
+
     /// Decrements the ref count for a name and removes it if the count reaches zero.
     ///
     /// This does not recursively untrack `parent_scope` or `nesting` names.
@@ -492,6 +497,13 @@ impl Graph {
         if let Some(declaration) = self.declarations.get_mut(&declaration_id) {
             declaration.add_reference(reference_id);
         }
+    }
+
+    pub fn resolve_name(&mut self, name_id: NameId, unresolved: Name, declaration_id: DeclarationId) {
+        self.names_mut().insert(
+            name_id,
+            NameRef::Resolved(Box::new(ResolvedName::new(unresolved, declaration_id))),
+        );
     }
 
     //// Handles the deletion of a document identified by `uri`

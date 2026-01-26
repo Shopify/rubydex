@@ -12,8 +12,11 @@ use crate::model::graph::Graph;
 use crate::model::ids::DeclarationId;
 use crate::model::ids::DefinitionId;
 use crate::model::ids::NameId;
+use crate::model::ids::StringId;
 use crate::model::ids::UriId;
+use crate::model::name::Name;
 use crate::model::name::NameRef;
+use crate::model::name::ResolvedName;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
@@ -75,11 +78,30 @@ impl<'a> ResolverNew<'a> {
     fn resolve_definition(&mut self, definition_id: DefinitionId) {
         println!("resolve_definition: {:?}", definition_id);
 
-        let definition = self.graph.definitions().get(&definition_id).unwrap();
-
-        match definition {
+        match self.graph.definitions().get(&definition_id).unwrap() {
             Definition::Class(class) => {
+                let members = class.members().to_vec();
                 self.resolve_namespace(*class.name_id(), definition_id);
+
+                for member_id in members {
+                    self.resolve_definition(member_id);
+                }
+            }
+            Definition::Module(module) => {
+                let members = module.members().to_vec();
+                self.resolve_namespace(*module.name_id(), definition_id);
+
+                for member_id in members {
+                    self.resolve_definition(member_id);
+                }
+            }
+            Definition::SingletonClass(singleton) => {
+                let members = singleton.members().to_vec();
+                self.resolve_namespace(*singleton.name_id(), definition_id);
+
+                for member_id in members {
+                    self.resolve_definition(member_id);
+                }
             }
             _ => {
                 // TODO: add diagnostic
@@ -100,15 +122,15 @@ impl<'a> ResolverNew<'a> {
     fn resolve_namespace(&mut self, name_id: NameId, definition_id: DefinitionId) {
         println!("resolve_namespace: {:?}", name_id);
 
-        let name_ref = self.graph.names().get(&name_id).unwrap();
-
-        match name_ref {
+        match self.graph.names().get(&name_id).unwrap() {
             NameRef::Resolved(resolved) => {
                 let declaration_id = resolved.declaration_id();
                 self.extend_declaration(*declaration_id, definition_id);
             }
             NameRef::Unresolved(unresolved) => {
-                let mut fully_qualified_name = self.graph.strings().get(unresolved.str()).unwrap().to_string();
+                let str_id = *unresolved.str();
+                let name = self.graph.strings().get(&str_id).unwrap().to_string();
+                let mut fully_qualified_name = name.clone();
                 let mut owner_id = *OBJECT_ID;
 
                 if let Some(nesting) = unresolved.nesting() {
@@ -120,6 +142,7 @@ impl<'a> ResolverNew<'a> {
                         }
                         NameRef::Unresolved(_) => {
                             // TODO: resolve the nested name
+                            println!("unresolved nested name: {:?}", unresolved.str().to_string());
                             return;
                         }
                     }
@@ -127,17 +150,24 @@ impl<'a> ResolverNew<'a> {
 
                 if let Some(_parent_scope) = unresolved.parent_scope() {
                     // TODO: resolve the parent scope
+                    println!(
+                        "unresolved parent scope: {:?}",
+                        unresolved.parent_scope().unwrap().to_string()
+                    );
                     return;
                 }
 
                 let declaration_id = DeclarationId::from(&fully_qualified_name);
-                self.create_declaration(fully_qualified_name, declaration_id, owner_id, definition_id);
+                self.graph.resolve_name(name_id, *unresolved.clone(), declaration_id);
+                println!("create declaration: {:?}", fully_qualified_name);
+                self.create_declaration(str_id, fully_qualified_name, declaration_id, owner_id, definition_id);
             }
         }
     }
 
     fn create_declaration(
         &mut self,
+        str_id: StringId,
         fully_qualified_name: String,
         declaration_id: DeclarationId,
         owner_id: DeclarationId,
@@ -164,6 +194,16 @@ impl<'a> ResolverNew<'a> {
                 // TODO
             }
         }
+
+        let owner = self
+            .graph
+            .declarations_mut()
+            .get_mut(&owner_id)
+            .unwrap()
+            .as_namespace_mut()
+            .unwrap();
+
+        owner.add_member(str_id, declaration_id);
     }
 
     fn extend_declaration(&mut self, declaration_id: DeclarationId, definition_id: DefinitionId) {
