@@ -12,7 +12,7 @@ use crate::model::definitions::{
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
-use crate::model::name::Name;
+use crate::model::name::{Name, ParentScope};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::visibility::Visibility;
 use crate::offset::Offset;
@@ -362,8 +362,7 @@ impl<'a> RubyIndexer<'a> {
     }
 
     fn index_constant_reference(&mut self, node: &ruby_prism::Node, push_final_reference: bool) -> Option<NameId> {
-        let mut parent_scope_id = None;
-        let mut top_level_ref = false;
+        let mut parent_scope_id = ParentScope::None;
 
         let location = match node {
             ruby_prism::Node::ConstantPathNode { .. } => {
@@ -384,9 +383,11 @@ impl<'a> RubyIndexer<'a> {
                         }
                     }
 
-                    parent_scope_id = self.index_constant_reference(&parent, true);
+                    parent_scope_id = self
+                        .index_constant_reference(&parent, true)
+                        .map_or(ParentScope::None, ParentScope::Some);
                 } else {
-                    top_level_ref = true;
+                    parent_scope_id = ParentScope::TopLevel;
                 }
 
                 constant.name_loc()
@@ -404,9 +405,11 @@ impl<'a> RubyIndexer<'a> {
                         }
                     }
 
-                    parent_scope_id = self.index_constant_reference(&parent, true);
+                    parent_scope_id = self
+                        .index_constant_reference(&parent, true)
+                        .map_or(ParentScope::None, ParentScope::Some);
                 } else {
-                    top_level_ref = true;
+                    parent_scope_id = ParentScope::TopLevel;
                 }
 
                 target.name_loc()
@@ -430,7 +433,11 @@ impl<'a> RubyIndexer<'a> {
                         }
                     }
 
-                    parent_scope_id = self.index_constant_reference(&parent, true);
+                    parent_scope_id = self
+                        .index_constant_reference(&parent, true)
+                        .map_or(ParentScope::None, ParentScope::Some);
+                } else {
+                    parent_scope_id = ParentScope::TopLevel;
                 }
 
                 target.name_loc()
@@ -442,22 +449,12 @@ impl<'a> RubyIndexer<'a> {
 
         let offset = Offset::from_prism_location(&location);
         let name = Self::location_to_string(&location);
-
-        // There are 3 possible cases here:
-        //
-        //  - A top level reference starting with `::` (if branch)
-        //  - A reference inside of a nesting
-        //  - A reference outside of any nesting
-        let nesting = if top_level_ref {
-            None
-        } else {
-            self.current_lexical_scope_name_id()
-        };
-
         let string_id = self.local_graph.intern_string(name);
-        let name_id = self
-            .local_graph
-            .add_name(Name::new(string_id, parent_scope_id, nesting));
+        let name_id = self.local_graph.add_name(Name::new(
+            string_id,
+            parent_scope_id,
+            self.current_lexical_scope_name_id(),
+        ));
 
         if push_final_reference {
             self.local_graph
@@ -621,7 +618,7 @@ impl<'a> RubyIndexer<'a> {
                 .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
 
             (
-                Some(self.local_graph.add_name(Name::new(string_id, None, None))),
+                Some(self.local_graph.add_name(Name::new(string_id, ParentScope::None, None))),
                 offset.clone(),
             )
         };
@@ -681,7 +678,7 @@ impl<'a> RubyIndexer<'a> {
                 .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
 
             (
-                Some(self.local_graph.add_name(Name::new(string_id, None, None))),
+                Some(self.local_graph.add_name(Name::new(string_id, ParentScope::None, None))),
                 offset.clone(),
             )
         };
@@ -1115,7 +1112,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let string_id = self.local_graph.intern_string(singleton_class_name);
         let name_id = self
             .local_graph
-            .add_name(Name::new(string_id, Some(attached_target), None));
+            .add_name(Name::new(string_id, ParentScope::Some(attached_target), None));
 
         let definition = Definition::SingletonClass(Box::new(SingletonClassDefinition::new(
             name_id,
@@ -1810,6 +1807,7 @@ mod tests {
         model::{
             definitions::{Definition, Mixin, Parameter},
             ids::{StringId, UriId},
+            name::ParentScope,
             visibility::Visibility,
         },
         test_utils::LocalGraphTest,
@@ -1825,12 +1823,12 @@ mod tests {
     macro_rules! assert_name_path_eq {
         ($context:expr, $expect_path:expr, $name_id:expr) => {{
             let mut name_parts = Vec::new();
-            let mut current_name_id = Some($name_id);
+            let mut current_name_id = ParentScope::Some($name_id);
 
-            while let Some(name_id) = current_name_id {
-                let name = $context.graph().names().get(name_id).unwrap();
+            while let ParentScope::Some(name_id) = current_name_id {
+                let name = $context.graph().names().get(&name_id).unwrap();
                 name_parts.push($context.graph().strings().get(name.str()).unwrap().as_str());
-                current_name_id = name.parent_scope().as_ref();
+                current_name_id = *name.parent_scope();
             }
 
             name_parts.reverse();
@@ -1945,7 +1943,7 @@ mod tests {
     /// - `assert_def_name_eq!(ctx, "Baz", def)` - asserts just `Baz` with no parent scope
     macro_rules! assert_def_name_eq {
         ($context:expr, $def:expr, $expect_path:expr) => {{
-            assert_name_path_eq!($context, $expect_path, $def.name_id());
+            assert_name_path_eq!($context, $expect_path, *$def.name_id());
         }};
     }
 
@@ -5333,11 +5331,11 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS1");
-            assert_name_path_eq!(&context, "Foo", def.target_name_id());
+            assert_name_path_eq!(&context, "Foo", *def.target_name_id());
         });
         assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS2");
-            assert_name_path_eq!(&context, "Foo", def.target_name_id());
+            assert_name_path_eq!(&context, "Foo", *def.target_name_id());
         });
     }
 
@@ -5356,7 +5354,7 @@ mod tests {
 
         assert_definition_at!(&context, "4:1-4:6", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS");
-            assert_name_path_eq!(&context, "Foo::Bar", def.target_name_id());
+            assert_name_path_eq!(&context, "Foo::Bar", *def.target_name_id());
         });
 
         assert_constant_references_eq!(&context, vec!["Foo", "Bar"]);
@@ -5413,11 +5411,11 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-2:2", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "A");
-            assert_name_path_eq!(&context, "Target", def.target_name_id());
+            assert_name_path_eq!(&context, "Target", *def.target_name_id());
         });
         assert_definition_at!(&context, "2:5-2:6", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "B");
-            assert_name_path_eq!(&context, "Target", def.target_name_id());
+            assert_name_path_eq!(&context, "Target", *def.target_name_id());
         });
 
         assert_constant_references_eq!(&context, vec!["Target"]);
@@ -5436,7 +5434,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-2:6", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS");
-            assert_name_path_eq!(&context, "Foo", def.target_name_id());
+            assert_name_path_eq!(&context, "Foo", *def.target_name_id());
         });
     }
 
@@ -5454,11 +5452,11 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS1");
-            assert_name_path_eq!(&context, "Foo", def.target_name_id());
+            assert_name_path_eq!(&context, "Foo", *def.target_name_id());
         });
         assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS2");
-            assert_name_path_eq!(&context, "ALIAS1", def.target_name_id());
+            assert_name_path_eq!(&context, "ALIAS1", *def.target_name_id());
         });
     }
 }

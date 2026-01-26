@@ -9,7 +9,7 @@ use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
-use crate::model::name::{Name, NameRef, ResolvedName};
+use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::stats;
@@ -421,18 +421,18 @@ impl Graph {
             return;
         };
 
-        let parent_scope = *name_ref.parent_scope();
+        let parent_scope = name_ref.parent_scope();
         let nesting = *name_ref.nesting();
 
-        self.untrack_name(name_id);
-
-        if let Some(parent_scope_id) = parent_scope {
-            self.untrack_name_recursive(parent_scope_id);
+        if let ParentScope::Some(parent_scope_id) = parent_scope {
+            self.untrack_name_recursive(*parent_scope_id);
         }
 
         if let Some(nesting_id) = nesting {
             self.untrack_name_recursive(nesting_id);
         }
+
+        self.untrack_name(name_id);
     }
 
     /// Register a member relationship from a declaration to another declaration through its unqualified name id. For example, in

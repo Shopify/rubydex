@@ -13,7 +13,7 @@ use crate::model::{
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
-    name::{Name, NameRef},
+    name::{Name, NameRef, ParentScope},
 };
 
 pub enum Unit {
@@ -964,14 +964,16 @@ impl<'a> Resolver<'a> {
     fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap();
 
-        if let Some(parent_scope) = name_ref.parent_scope() {
+        if let ParentScope::Some(parent_scope) = name_ref.parent_scope() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
             match self.resolve_constant_internal(*parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
                 other => other,
             }
-        } else if let Some(nesting_id) = name_ref.nesting() {
+        } else if let Some(nesting_id) = name_ref.nesting()
+            && !name_ref.parent_scope().is_top_level()
+        {
             // Lexical nesting from block structure, e.g.:
             //   class ALIAS::Target
             //     CONST = 1  # CONST's nesting is the class, which may resolve to an alias target
@@ -1024,10 +1026,21 @@ impl<'a> Resolver<'a> {
 
         match name_ref {
             NameRef::Unresolved(name) => {
+                // For top level constant references starting with `::`, we can search the top level directly
+                if name.parent_scope().is_top_level() {
+                    let result = self.search_top_level(*name.str());
+
+                    if let Outcome::Resolved(declaration_id, _) = result {
+                        self.graph.record_resolved_name(name_id, declaration_id);
+                    }
+
+                    return result;
+                }
+
                 // If there's a parent scope for this constant, it means it's a constant path. We must first resolve the
                 // outer most parent, so that we can then continue resolution from there, recording the results along the
                 // way
-                if let Some(parent_scope_id) = name.parent_scope() {
+                if let ParentScope::Some(parent_scope_id) = name.parent_scope() {
                     if let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() {
                         let declaration = self.graph.declarations().get(parent_scope.declaration_id()).unwrap();
 
@@ -1292,10 +1305,15 @@ impl<'a> Resolver<'a> {
     ///
     /// Will panic if there is inconsistent data in the graph
     fn name_depth(name: &NameRef, names: &IdentityHashMap<NameId, NameRef>) -> u32 {
+        if name.parent_scope().is_top_level() {
+            return 1;
+        }
+
         let parent_depth = name.parent_scope().map_or(0, |id| {
-            let name_ref = names.get(&id).unwrap();
+            let name_ref = names.get(id).unwrap();
             Self::name_depth(name_ref, names)
         });
+
         let nesting_depth = name.nesting().map_or(0, |id| {
             let name_ref = names.get(&id).unwrap();
             Self::name_depth(name_ref, names)
@@ -1779,7 +1797,7 @@ mod tests {
 
         assert_eq!(
             vec![
-                "Top", "Foo", "Qux", "AfterTop", "Bar", "Baz", "Zip", "Zap", "Zop", "Boop"
+                "Top", "Foo", "Qux", "Bar", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
             ],
             names
                 .iter()
