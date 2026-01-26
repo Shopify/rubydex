@@ -1,5 +1,6 @@
 use crate::diagnostic::Diagnostic;
 use crate::model::{
+    definitions::DefinitionKind,
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
 };
@@ -49,6 +50,56 @@ impl<'a> IntoIterator for &'a Ancestors {
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeclarationKind {
+    Class,
+    SingletonClass,
+    Module,
+    Constant,
+    ConstantAlias,
+    Method,
+    GlobalVariable,
+    InstanceVariable,
+    ClassVariable,
+}
+
+impl DeclarationKind {
+    #[must_use]
+    pub fn from_definition_kind(definition_kind: DefinitionKind) -> Self {
+        match definition_kind {
+            DefinitionKind::Class => DeclarationKind::Class,
+            DefinitionKind::SingletonClass => DeclarationKind::SingletonClass,
+            DefinitionKind::Module => DeclarationKind::Module,
+            DefinitionKind::Constant => DeclarationKind::Constant,
+            DefinitionKind::ConstantAlias => DeclarationKind::ConstantAlias,
+            DefinitionKind::Method
+            | DefinitionKind::MethodAlias
+            | DefinitionKind::AttrAccessor
+            | DefinitionKind::AttrReader
+            | DefinitionKind::AttrWriter => DeclarationKind::Method,
+            DefinitionKind::InstanceVariable => DeclarationKind::InstanceVariable,
+            DefinitionKind::ClassVariable => DeclarationKind::ClassVariable,
+            DefinitionKind::GlobalVariable | DefinitionKind::GlobalVariableAlias => DeclarationKind::GlobalVariable,
+        }
+    }
+}
+
+impl std::fmt::Display for DeclarationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeclarationKind::Class => write!(f, "class"),
+            DeclarationKind::SingletonClass => write!(f, "singleton class"),
+            DeclarationKind::Module => write!(f, "module"),
+            DeclarationKind::Constant => write!(f, "constant"),
+            DeclarationKind::ConstantAlias => write!(f, "constant alias"),
+            DeclarationKind::Method => write!(f, "method"),
+            DeclarationKind::GlobalVariable => write!(f, "global variable"),
+            DeclarationKind::InstanceVariable => write!(f, "instance variable"),
+            DeclarationKind::ClassVariable => write!(f, "class variable"),
+        }
     }
 }
 
@@ -256,15 +307,15 @@ impl Declaration {
     }
 
     #[must_use]
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> DeclarationKind {
         match self {
             Declaration::Namespace(namespace) => namespace.kind(),
-            Declaration::Constant(_) => "Constant",
-            Declaration::ConstantAlias(_) => "ConstantAlias",
-            Declaration::Method(_) => "Method",
-            Declaration::GlobalVariable(_) => "GlobalVariable",
-            Declaration::InstanceVariable(_) => "InstanceVariable",
-            Declaration::ClassVariable(_) => "ClassVariable",
+            Declaration::Constant(_) => DeclarationKind::Constant,
+            Declaration::ConstantAlias(_) => DeclarationKind::ConstantAlias,
+            Declaration::Method(_) => DeclarationKind::Method,
+            Declaration::GlobalVariable(_) => DeclarationKind::GlobalVariable,
+            Declaration::InstanceVariable(_) => DeclarationKind::InstanceVariable,
+            Declaration::ClassVariable(_) => DeclarationKind::ClassVariable,
         }
     }
 
@@ -376,11 +427,11 @@ pub enum Namespace {
 
 impl Namespace {
     #[must_use]
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> DeclarationKind {
         match self {
-            Namespace::Class(_) => "Class",
-            Namespace::SingletonClass(_) => "SingletonClass",
-            Namespace::Module(_) => "Module",
+            Namespace::Class(_) => DeclarationKind::Class,
+            Namespace::SingletonClass(_) => DeclarationKind::SingletonClass,
+            Namespace::Module(_) => DeclarationKind::Module,
         }
     }
 

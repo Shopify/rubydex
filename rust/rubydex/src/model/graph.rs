@@ -3,8 +3,8 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration, Namespace};
-use crate::model::definitions::Definition;
+use crate::model::declaration::{Ancestor, Declaration, DeclarationKind, Namespace};
+use crate::model::definitions::{Definition, DefinitionKind};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
@@ -267,12 +267,19 @@ impl Graph {
         &self.method_references
     }
 
+    // Diagnostics
+
     #[must_use]
     pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
         let document_diagnostics = self.documents.values().flat_map(Document::all_diagnostics);
         let declaration_diagnostics = self.declarations.values().flat_map(Declaration::diagnostics);
 
         document_diagnostics.chain(declaration_diagnostics).collect()
+    }
+
+    #[must_use]
+    pub fn diagnostics_mut(&mut self) -> &mut Vec<Diagnostic> {
+        &mut self.diagnostics
     }
 
     /// Interns a string in the graph unless already interned. This method is only used to back the
@@ -710,8 +717,8 @@ impl Graph {
 
         let mut declarations_with_docs = 0;
         let mut total_doc_size = 0;
-        let mut declarations_types: HashMap<&str, usize> = HashMap::new();
-        let mut definition_types: HashMap<&str, usize> = HashMap::new();
+        let mut declarations_types: HashMap<DeclarationKind, usize> = HashMap::new();
+        let mut definition_types: HashMap<DefinitionKind, usize> = HashMap::new();
         let mut multi_definition_count = 0;
 
         for declaration in self.declarations.values() {
@@ -766,7 +773,7 @@ impl Graph {
         let mut types: Vec<_> = declarations_types.iter().collect();
         types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
         for (kind, count) in types {
-            println!("  {kind:20} {count:6}");
+            println!("  {kind:20} {count:6}", kind = kind.to_string());
         }
 
         println!();
@@ -774,7 +781,7 @@ impl Graph {
         let mut types: Vec<_> = definition_types.iter().collect();
         types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
         for (kind, count) in types {
-            println!("  {kind:20} {count:6}");
+            println!("  {kind:20} {count:6}", kind = kind.to_string());
         }
     }
 }
