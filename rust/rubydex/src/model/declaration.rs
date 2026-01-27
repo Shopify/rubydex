@@ -58,6 +58,7 @@ macro_rules! all_declarations {
             Declaration::Namespace(Namespace::Class($var)) => $expr,
             Declaration::Namespace(Namespace::Module($var)) => $expr,
             Declaration::Namespace(Namespace::SingletonClass($var)) => $expr,
+            Declaration::Namespace(Namespace::Todo($var)) => $expr,
             Declaration::Constant($var) => $expr,
             Declaration::ConstantAlias($var) => $expr,
             Declaration::Method($var) => $expr,
@@ -74,6 +75,7 @@ macro_rules! all_namespaces {
             Namespace::Class($var) => $expr,
             Namespace::Module($var) => $expr,
             Namespace::SingletonClass($var) => $expr,
+            Namespace::Todo($var) => $expr,
         }
     };
 }
@@ -372,6 +374,7 @@ pub enum Namespace {
     Class(Box<ClassDeclaration>),
     SingletonClass(Box<SingletonClassDeclaration>),
     Module(Box<ModuleDeclaration>),
+    Todo(Box<TodoDeclaration>),
 }
 
 impl Namespace {
@@ -381,6 +384,7 @@ impl Namespace {
             Namespace::Class(_) => "Class",
             Namespace::SingletonClass(_) => "SingletonClass",
             Namespace::Module(_) => "Module",
+            Namespace::Todo(_) => "<TODO>",
         }
     }
 
@@ -473,6 +477,7 @@ impl Namespace {
 namespace_declaration!(Class, ClassDeclaration);
 namespace_declaration!(Module, ModuleDeclaration);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
+namespace_declaration!(Todo, TodoDeclaration);
 simple_declaration!(ConstantDeclaration);
 simple_declaration!(MethodDeclaration);
 simple_declaration!(GlobalVariableDeclaration);
