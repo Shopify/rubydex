@@ -1365,11 +1365,13 @@ impl Visit<'_> for RubyIndexer<'_> {
         }
 
         let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
+            let call_offset = Offset::from_prism_location(&call.location());
+
             Self::each_string_or_symbol_arg(call, |name, location| {
                 let str_id = self.local_graph.intern_string(format!("{name}()"));
                 let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
-                let (comments, flags) = self.find_comments_for(offset.start());
+                let (comments, flags) = self.find_comments_for(call_offset.start());
 
                 // module_function makes attr_* methods private (without creating singleton methods)
                 let visibility = match self.current_visibility() {
@@ -3710,153 +3712,6 @@ mod tests {
     }
 
     #[test]
-    fn index_comments_attached_to_definitions() {
-        let context = index_source({
-            "
-            # Single comment
-            class Single; end
-
-            # Multi-line comment 1
-            # Multi-line comment 2
-            # Multi-line comment 3
-            module Multi; end
-
-            # Comment 1
-            #
-            # Comment 2
-            class EmptyCommentLine; end
-
-            # Comment directly above (no gap)
-            NoGap = 42
-
-            #: ()
-            #| -> void
-            def foo; end
-
-            # Comment with blank line
-
-            class BlankLine; end
-
-            # Too far away
-
-
-            class NoComment; end
-            "
-        });
-
-        assert_no_diagnostics!(&context);
-
-        assert_definition_at!(&context, "2:1-2:18", Class, |def| {
-            assert_def_name_eq!(&context, def, "Single");
-            assert_def_comments_eq!(&context, def, vec!["# Single comment"]);
-        });
-
-        assert_definition_at!(&context, "7:1-7:18", Module, |def| {
-            assert_def_name_eq!(&context, def, "Multi");
-            assert_def_comments_eq!(
-                &context,
-                def,
-                vec![
-                    "# Multi-line comment 1",
-                    "# Multi-line comment 2",
-                    "# Multi-line comment 3"
-                ]
-            );
-        });
-
-        assert_definition_at!(&context, "12:1-12:28", Class, |def| {
-            assert_def_name_eq!(&context, def, "EmptyCommentLine");
-            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
-        });
-
-        assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
-            assert_def_name_eq!(&context, def, "NoGap");
-            assert_def_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
-        });
-
-        assert_definition_at!(&context, "19:1-19:13", Method, |def| {
-            assert_def_str_eq!(&context, def, "foo()");
-            assert_def_comments_eq!(&context, def, vec!["#: ()", "#| -> void"]);
-        });
-
-        assert_definition_at!(&context, "23:1-23:21", Class, |def| {
-            assert_def_name_eq!(&context, def, "BlankLine");
-            assert_def_comments_eq!(&context, def, vec!["# Comment with blank line"]);
-        });
-
-        assert_definition_at!(&context, "28:1-28:21", Class, |def| {
-            assert_def_name_eq!(&context, def, "NoComment");
-            assert!(def.comments().is_empty());
-        });
-    }
-
-    #[test]
-    fn index_comments_indented_and_nested() {
-        let context = index_source({
-            "
-            # Outer class
-            class Outer
-              # Inner class at 2 spaces
-              class Inner
-                # Deep class at 4 spaces
-                class Deep; end
-              end
-
-              # Another inner class
-              # with multiple lines
-              class AnotherInner; end
-            end
-            "
-        });
-
-        assert_no_diagnostics!(&context);
-
-        assert_definition_at!(&context, "2:1-12:4", Class, |def| {
-            assert_def_name_eq!(&context, def, "Outer");
-            assert_def_comments_eq!(&context, def, vec!["# Outer class"]);
-        });
-
-        assert_definition_at!(&context, "4:3-7:6", Class, |def| {
-            assert_def_name_eq!(&context, def, "Inner");
-            assert_def_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
-        });
-
-        assert_definition_at!(&context, "6:5-6:20", Class, |def| {
-            assert_def_name_eq!(&context, def, "Deep");
-            assert_def_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
-        });
-
-        assert_definition_at!(&context, "11:3-11:26", Class, |def| {
-            assert_def_name_eq!(&context, def, "AnotherInner");
-            assert_def_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
-        });
-    }
-
-    #[test]
-    fn index_comments_with_tags() {
-        let context = index_source({
-            "
-            # @deprecated
-            class Deprecated; end
-
-            class NotDeprecated; end
-
-            # Multi-line comment
-            # @deprecated Use something else
-            def deprecated_method; end
-
-            # Not @deprecated
-            def not_deprecated_method; end
-            "
-        });
-
-        assert!(context.definition_at("2:1-2:22").is_deprecated());
-        assert!(!context.definition_at("4:1-4:25").is_deprecated());
-        assert!(context.definition_at("8:1-8:27").is_deprecated());
-        assert!(!context.definition_at("11:1-11:31").is_deprecated());
-    }
-
-    #[test]
     fn index_unresolved_constant_references() {
         let context = index_source({
             r##"
@@ -5459,6 +5314,202 @@ mod tests {
         assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS2");
             assert_name_path_eq!(&context, "ALIAS1", def.target_name_id());
+        });
+    }
+
+    // Comments
+
+    #[test]
+    fn index_comments_attached_to_definitions() {
+        let context = index_source({
+            "
+            # Single comment
+            class Single; end
+
+            # Multi-line comment 1
+            # Multi-line comment 2
+            # Multi-line comment 3
+            module Multi; end
+
+            # Comment 1
+            #
+            # Comment 2
+            class EmptyCommentLine; end
+
+            # Comment directly above (no gap)
+            NoGap = 42
+
+            #: ()
+            #| -> void
+            def foo; end
+
+            # Comment with blank line
+
+            class BlankLine; end
+
+            # Too far away
+
+
+            class NoComment; end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:18", Class, |def| {
+            assert_def_name_eq!(&context, def, "Single");
+            assert_def_comments_eq!(&context, def, vec!["# Single comment"]);
+        });
+
+        assert_definition_at!(&context, "7:1-7:18", Module, |def| {
+            assert_def_name_eq!(&context, def, "Multi");
+            assert_def_comments_eq!(
+                &context,
+                def,
+                vec![
+                    "# Multi-line comment 1",
+                    "# Multi-line comment 2",
+                    "# Multi-line comment 3"
+                ]
+            );
+        });
+
+        assert_definition_at!(&context, "12:1-12:28", Class, |def| {
+            assert_def_name_eq!(&context, def, "EmptyCommentLine");
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
+        });
+
+        assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
+            assert_def_name_eq!(&context, def, "NoGap");
+            assert_def_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
+        });
+
+        assert_definition_at!(&context, "19:1-19:13", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_def_comments_eq!(&context, def, vec!["#: ()", "#| -> void"]);
+        });
+
+        assert_definition_at!(&context, "23:1-23:21", Class, |def| {
+            assert_def_name_eq!(&context, def, "BlankLine");
+            assert_def_comments_eq!(&context, def, vec!["# Comment with blank line"]);
+        });
+
+        assert_definition_at!(&context, "28:1-28:21", Class, |def| {
+            assert_def_name_eq!(&context, def, "NoComment");
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
+    fn index_comments_indented_and_nested() {
+        let context = index_source({
+            "
+            # Outer class
+            class Outer
+              # Inner class at 2 spaces
+              class Inner
+                # Deep class at 4 spaces
+                class Deep; end
+              end
+
+              # Another inner class
+              # with multiple lines
+              class AnotherInner; end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-12:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Outer");
+            assert_def_comments_eq!(&context, def, vec!["# Outer class"]);
+        });
+
+        assert_definition_at!(&context, "4:3-7:6", Class, |def| {
+            assert_def_name_eq!(&context, def, "Inner");
+            assert_def_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
+        });
+
+        assert_definition_at!(&context, "6:5-6:20", Class, |def| {
+            assert_def_name_eq!(&context, def, "Deep");
+            assert_def_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
+        });
+
+        assert_definition_at!(&context, "11:3-11:26", Class, |def| {
+            assert_def_name_eq!(&context, def, "AnotherInner");
+            assert_def_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_with_tags() {
+        let context = index_source({
+            "
+            # @deprecated
+            class Deprecated; end
+
+            class NotDeprecated; end
+
+            # Multi-line comment
+            # @deprecated Use something else
+            def deprecated_method; end
+
+            # Not @deprecated
+            def not_deprecated_method; end
+            "
+        });
+
+        assert!(context.definition_at("2:1-2:22").is_deprecated());
+        assert!(!context.definition_at("4:1-4:25").is_deprecated());
+        assert!(context.definition_at("8:1-8:27").is_deprecated());
+        assert!(!context.definition_at("11:1-11:31").is_deprecated());
+    }
+
+    #[test]
+    fn index_comments_attr_accessor() {
+        let context = index_source({
+            "
+            class Foo
+              # Comment
+              attr_reader :foo
+
+              # Comment 1
+              # Comment 2
+              # Comment 3
+              attr_writer :bar
+
+              # Comment 1
+              # Comment 2
+              # Comment 3
+              attr_accessor :baz, :qux
+
+              # Comment
+              attr :quux, true
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:16-3:19", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "8:16-8:19", AttrWriter, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "13:18-13:21", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "13:24-13:27", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "16:9-16:13", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment"]);
         });
     }
 }
