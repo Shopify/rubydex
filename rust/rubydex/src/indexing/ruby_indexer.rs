@@ -1410,12 +1410,21 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let str_id = self.local_graph.intern_string(format!("{name}()"));
                 let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
-                let (comments, flags) = self.find_comments_for(call_offset.start());
+
+                let current_visibility = self.current_visibility();
+                let (visibility, offset_for_comments) = if current_visibility.is_inline() {
+                    // If the visibility is inline, we use its offset for the comments
+                    (*current_visibility.visibility(), current_visibility.offset().clone())
+                } else {
+                    (*current_visibility.visibility(), call_offset.clone())
+                };
+
+                let (comments, flags) = self.find_comments_for(offset_for_comments.start());
 
                 // module_function makes attr_* methods private (without creating singleton methods)
-                let visibility = match self.current_visibility().visibility() {
+                let visibility = match visibility {
                     Visibility::ModuleFunction => Visibility::Private,
-                    v => *v,
+                    v => v,
                 };
 
                 let definition = match kind {
@@ -5576,6 +5585,9 @@ mod tests {
 
               # Comment
               public def baz; end
+
+              # Comment
+              private attr_reader :qux
             end
             "
         });
@@ -5589,6 +5601,10 @@ mod tests {
         });
 
         assert_definition_at!(&context, "9:10-9:22", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "12:24-12:27", AttrReader, |def| {
             assert_def_comments_eq!(&context, def, ["# Comment"]);
         });
     }
