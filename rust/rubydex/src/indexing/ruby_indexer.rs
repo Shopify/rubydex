@@ -1365,11 +1365,13 @@ impl Visit<'_> for RubyIndexer<'_> {
         }
 
         let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
+            let call_offset = Offset::from_prism_location(&call.location());
+
             Self::each_string_or_symbol_arg(call, |name, location| {
                 let str_id = self.local_graph.intern_string(format!("{name}()"));
                 let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
-                let (comments, flags) = self.find_comments_for(offset.start());
+                let (comments, flags) = self.find_comments_for(call_offset.start());
 
                 // module_function makes attr_* methods private (without creating singleton methods)
                 let visibility = match self.current_visibility() {
@@ -5462,5 +5464,52 @@ mod tests {
         assert!(!context.definition_at("4:1-4:25").is_deprecated());
         assert!(context.definition_at("8:1-8:27").is_deprecated());
         assert!(!context.definition_at("11:1-11:31").is_deprecated());
+    }
+
+    #[test]
+    fn index_comments_attr_accessor() {
+        let context = index_source({
+            "
+            class Foo
+              # Comment
+              attr_reader :foo
+
+              # Comment 1
+              # Comment 2
+              # Comment 3
+              attr_writer :bar
+
+              # Comment 1
+              # Comment 2
+              # Comment 3
+              attr_accessor :baz, :qux
+
+              # Comment
+              attr :quux, true
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:16-3:19", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "8:16-8:19", AttrWriter, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "13:18-13:21", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "13:24-13:27", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "16:9-16:13", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, vec!["# Comment"]);
+        });
     }
 }
