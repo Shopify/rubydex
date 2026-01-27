@@ -45,6 +45,38 @@ impl Nesting {
     }
 }
 
+struct VisibilityModifier {
+    visibility: Visibility,
+    is_inline: bool,
+    offset: Offset,
+}
+
+impl VisibilityModifier {
+    #[must_use]
+    pub fn new(visibility: Visibility, is_inline: bool, offset: Offset) -> Self {
+        Self {
+            visibility,
+            is_inline,
+            offset,
+        }
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
+    }
+
+    #[must_use]
+    pub fn is_inline(&self) -> bool {
+        self.is_inline
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+}
+
 /// The indexer for the definitions found in the Ruby source code.
 ///
 /// It implements the `Visit` trait from `ruby_prism` to visit the AST and create a hash of definitions that must be
@@ -55,7 +87,7 @@ pub struct RubyIndexer<'a> {
     source: &'a str,
     comments: Vec<CommentGroup>,
     nesting_stack: Vec<Nesting>,
-    visibility_stack: Vec<Visibility>,
+    visibility_stack: Vec<VisibilityModifier>,
 }
 
 impl<'a> RubyIndexer<'a> {
@@ -70,7 +102,7 @@ impl<'a> RubyIndexer<'a> {
             source,
             comments: Vec::new(),
             nesting_stack: Vec::new(),
-            visibility_stack: vec![Visibility::Private],
+            visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
         }
     }
 
@@ -627,7 +659,7 @@ impl<'a> RubyIndexer<'a> {
             let definition = Definition::Class(Box::new(ClassDefinition::new(
                 name_id,
                 self.uri_id,
-                offset,
+                offset.clone(),
                 name_offset,
                 comments,
                 flags,
@@ -641,7 +673,8 @@ impl<'a> RubyIndexer<'a> {
 
             if let Some(body) = body_node {
                 self.nesting_stack.push(nesting_type(definition_id));
-                self.visibility_stack.push(Visibility::Public);
+                self.visibility_stack
+                    .push(VisibilityModifier::new(Visibility::Public, false, offset));
                 self.visit(&body);
                 self.visibility_stack.pop();
                 self.nesting_stack.pop();
@@ -687,7 +720,7 @@ impl<'a> RubyIndexer<'a> {
             let definition = Definition::Module(Box::new(ModuleDefinition::new(
                 name_id,
                 self.uri_id,
-                offset,
+                offset.clone(),
                 name_offset,
                 comments,
                 flags,
@@ -700,7 +733,8 @@ impl<'a> RubyIndexer<'a> {
 
             if let Some(body) = body_node {
                 self.nesting_stack.push(nesting_type(definition_id));
-                self.visibility_stack.push(Visibility::Public);
+                self.visibility_stack
+                    .push(VisibilityModifier::new(Visibility::Public, false, offset));
                 self.visit(&body);
                 self.visibility_stack.pop();
                 self.nesting_stack.pop();
@@ -963,8 +997,10 @@ impl<'a> RubyIndexer<'a> {
     }
 
     #[must_use]
-    fn current_visibility(&self) -> &Visibility {
-        self.visibility_stack.last().unwrap()
+    fn current_visibility(&self) -> &VisibilityModifier {
+        self.visibility_stack
+            .last()
+            .expect("visibility stack should not be empty")
     }
 }
 
@@ -1117,7 +1153,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let definition = Definition::SingletonClass(Box::new(SingletonClassDefinition::new(
             name_id,
             self.uri_id,
-            offset,
+            offset.clone(),
             name_offset,
             comments,
             flags,
@@ -1130,7 +1166,8 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         if let Some(body) = node.body() {
             self.nesting_stack.push(Nesting::LexicalScope(definition_id));
-            self.visibility_stack.push(Visibility::Public);
+            self.visibility_stack
+                .push(VisibilityModifier::new(Visibility::Public, false, offset));
             self.visit(&body);
             self.visibility_stack.pop();
             self.nesting_stack.pop();
@@ -1264,7 +1301,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let visibility = if is_singleton {
             Visibility::Public
         } else {
-            *self.current_visibility()
+            *self.current_visibility().visibility()
         };
 
         let receiver = if let Some(recv_node) = node.receiver() {
@@ -1371,7 +1408,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let (comments, flags) = self.find_comments_for(call_offset.start());
 
                 // module_function makes attr_* methods private (without creating singleton methods)
-                let visibility = match self.current_visibility() {
+                let visibility = match self.current_visibility().visibility() {
                     Visibility::ModuleFunction => Visibility::Private,
                     v => *v,
                 };
@@ -1517,6 +1554,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
 
                 let visibility = Visibility::from_string(message.as_str());
+                let offset = Offset::from_prism_location(&node.location());
 
                 if let Some(arguments) = node.arguments() {
                     // With this case:
@@ -1526,7 +1564,8 @@ impl Visit<'_> for RubyIndexer<'_> {
                     // ```
                     //
                     // We push the new visibility to the stack and then pop it after visiting the arguments so it only affects the method definition.
-                    self.visibility_stack.push(visibility);
+                    self.visibility_stack
+                        .push(VisibilityModifier::new(visibility, true, offset));
                     self.visit_arguments_node(&arguments);
                     self.visibility_stack.pop();
                 } else {
@@ -1540,7 +1579,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     //
                     // We replace the current visibility with the new one so it only affects all the subsequent method definitions.
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
-                    *last_visibility = visibility;
+                    *last_visibility = VisibilityModifier::new(visibility, false, offset);
                 }
             }
             "new" => {
