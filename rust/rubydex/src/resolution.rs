@@ -121,7 +121,7 @@ impl<'a> Resolver<'a> {
         while let Some(unit) = unit_queue.pop_front() {
             match unit {
                 Unit::Definition(id) => match self.handle_definition_unit(id) {
-                    Outcome::Resolved(_, maybe_ancestor_task) => {
+                    Outcome::Resolved(declaration_id, maybe_ancestor_task) => {
                         let name_id = match self.graph.definitions().get(&id).unwrap() {
                             Definition::Class(class) => *class.name_id(),
                             Definition::Module(module) => *module.name_id(),
@@ -130,6 +130,8 @@ impl<'a> Resolver<'a> {
                             Definition::SingletonClass(singleton) => *singleton.name_id(),
                             _ => panic!("Expected constant definitions"),
                         };
+
+                        unit_queue.push_back(Unit::Ancestors(declaration_id));
 
                         if let Some(wakers) = pending_names.remove(&name_id) {
                             for waker in wakers {
