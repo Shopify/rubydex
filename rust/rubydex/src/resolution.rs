@@ -1,19 +1,23 @@
 use std::{
     collections::{HashSet, VecDeque},
     hash::BuildHasher,
+    ops::Deref,
 };
 
-use crate::model::{
-    declaration::{
-        Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
-        Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        Namespace, SingletonClassDeclaration,
+use crate::{
+    diagnostic::{Diagnostic, Rule},
+    model::{
+        declaration::{
+            Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration,
+            ConstantDeclaration, Declaration, DeclarationKind, GlobalVariableDeclaration, InstanceVariableDeclaration,
+            MethodDeclaration, ModuleDeclaration, Namespace, SingletonClassDeclaration,
+        },
+        definitions::{Definition, Mixin},
+        graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
+        identity_maps::{IdentityHashMap, IdentityHashSet},
+        ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+        name::{Name, NameRef},
     },
-    definitions::{Definition, Mixin},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
-    identity_maps::{IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
-    name::{Name, NameRef},
 };
 
 pub enum Unit {
@@ -146,6 +150,32 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+
+        for left_unit in unit_queue {
+            if let Unit::Reference(id) = left_unit {
+                let reference = self.graph.constant_references().get(&id).unwrap();
+                let uri_id = reference.uri_id();
+                let offset = reference.offset().clone();
+                let name = self
+                    .graph
+                    .strings()
+                    .get(self.graph.names().get(reference.name_id()).unwrap().str())
+                    .unwrap()
+                    .deref()
+                    .clone();
+
+                self.graph
+                    .documents_mut()
+                    .get_mut(&uri_id)
+                    .unwrap()
+                    .add_diagnostic(Diagnostic::new(
+                        Rule::UnresolvedConstantReference,
+                        uri_id,
+                        offset,
+                        format!("Unresolved constant reference: `{name}`"),
+                    ));
+            }
+        }
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -236,6 +266,7 @@ impl<'a> Resolver<'a> {
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
+                unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(Some(id_needing_linearization)) => {
                 unit_queue.push_back(unit_id);
@@ -615,6 +646,7 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
         {
             let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
@@ -680,28 +712,44 @@ impl<'a> Resolver<'a> {
         if let Declaration::Namespace(Namespace::SingletonClass(_)) = declaration {
             let attached_decl = self.graph.declarations().get(declaration.owner_id()).unwrap();
 
+            let attached_mixins = attached_decl
+                .definitions()
+                .iter()
+                .filter_map(|definition_id| {
+                    self.mixins_of(*definition_id)
+                        .map(|mixins| mixins.into_iter().map(|mixin| (mixin, *definition_id)))
+                })
+                .flatten()
+                .collect::<Vec<(Mixin, DefinitionId)>>();
+
             mixins.extend(
-                attached_decl
-                    .definitions()
-                    .iter()
-                    .filter_map(|definition_id| self.mixins_of(*definition_id))
-                    .flatten()
+                attached_mixins
+                    .into_iter()
+                    .map(|(mixin, _)| mixin)
                     .filter(|mixin| matches!(mixin, Mixin::Extend(_))),
             );
         }
 
         // Consider only prepends and includes for the current declaration
+        let decl_mixins = declaration
+            .definitions()
+            .iter()
+            .filter_map(|definition_id| {
+                self.mixins_of(*definition_id)
+                    .map(|mixins| mixins.into_iter().map(|mixin| (mixin, *definition_id)))
+            })
+            .flatten()
+            .collect::<Vec<(Mixin, DefinitionId)>>();
+
         mixins.extend(
-            declaration
-                .definitions()
-                .iter()
-                .filter_map(|definition_id| self.mixins_of(*definition_id))
-                .flatten()
+            decl_mixins
+                .into_iter()
+                .map(|(mixin, _)| mixin)
                 .filter(|mixin| matches!(mixin, Mixin::Prepend(_) | Mixin::Include(_))),
         );
 
         let (linearized_prepends, linearized_includes) =
-            self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
+            self.linearize_mixins(declaration_id, context, &mixins, parent_ancestors.as_ref());
 
         // Build the final list
         let mut ancestors = Vec::new();
@@ -746,17 +794,19 @@ impl<'a> Resolver<'a> {
             Declaration::Namespace(Namespace::Class(_)) => {
                 let definition_ids = declaration.definitions().to_vec();
 
-                Some(match self.linearize_parent_class(&definition_ids, context) {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        context.partial = true;
-                        ids
-                    }
-                })
+                Some(
+                    match self.linearize_parent_class(declaration_id, &definition_ids, context) {
+                        Ancestors::Complete(ids) => ids,
+                        Ancestors::Cyclic(ids) => {
+                            context.cyclic = true;
+                            ids
+                        }
+                        Ancestors::Partial(ids) => {
+                            context.partial = true;
+                            ids
+                        }
+                    },
+                )
             }
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
@@ -784,14 +834,17 @@ impl<'a> Resolver<'a> {
 
     /// Linearize all mixins into a prepend and include list. This function requires the parent ancestors because included
     /// modules are deduplicated against them
+    #[allow(clippy::too_many_lines)]
     fn linearize_mixins(
         &mut self,
+        declaration_id: DeclarationId,
         context: &mut LinearizationContext,
-        mixins: Vec<Mixin>,
+        mixins: &Vec<Mixin>,
         parent_ancestors: Option<&Vec<Ancestor>>,
     ) -> (VecDeque<Ancestor>, VecDeque<Ancestor>) {
         let mut linearized_prepends = VecDeque::new();
         let mut linearized_includes = VecDeque::new();
+        let mut diagnostics = Vec::new();
 
         // IMPORTANT! In the slice of mixins we receive, extends are the ones that occurred in the attached object, which we
         // collect ahead of time. This is the reason why we apparently treat an extend like an include, because an extend in
@@ -807,6 +860,20 @@ impl<'a> Resolver<'a> {
                 Mixin::Prepend(_) => {
                     match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
+                            let mixin_declaration = self.graph.declarations().get(resolved.declaration_id()).unwrap();
+
+                            if mixin_declaration.kind() != DeclarationKind::Module {
+                                diagnostics.push(Diagnostic::new(
+                                    Rule::NonModuleMixin,
+                                    constant_reference.uri_id(),
+                                    constant_reference.offset().clone(),
+                                    format!(
+                                        "Mixin `{}` is not a module",
+                                        self.graph.strings().get(resolved.name().str()).unwrap().deref()
+                                    ),
+                                ));
+                            }
+
                             let ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
@@ -842,6 +909,20 @@ impl<'a> Resolver<'a> {
                 Mixin::Include(_) | Mixin::Extend(_) => {
                     match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
+                            let mixin_declaration = self.graph.declarations().get(resolved.declaration_id()).unwrap();
+
+                            if mixin_declaration.kind() != DeclarationKind::Module {
+                                diagnostics.push(Diagnostic::new(
+                                    Rule::NonModuleMixin,
+                                    constant_reference.uri_id(),
+                                    constant_reference.offset().clone(),
+                                    format!(
+                                        "Mixin `{}` is not a module",
+                                        self.graph.strings().get(resolved.name().str()).unwrap().deref()
+                                    ),
+                                ));
+                            }
+
                             let mut ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
@@ -875,6 +956,39 @@ impl<'a> Resolver<'a> {
                         }
                     }
                 }
+            }
+        }
+
+        self.graph
+            .declarations_mut()
+            .get_mut(&declaration_id)
+            .unwrap()
+            .diagnostics_mut()
+            .extend(diagnostics);
+
+        if context.cyclic {
+            for mixin in mixins {
+                let constant_reference = self
+                    .graph
+                    .constant_references()
+                    .get(mixin.constant_reference_id())
+                    .unwrap();
+
+                let diagnostic = Diagnostic::new(
+                    Rule::CircularDependency,
+                    constant_reference.uri_id(),
+                    constant_reference.offset().clone(),
+                    format!(
+                        "Circular dependency: `{}` is parent of itself",
+                        self.graph.declarations().get(&declaration_id).unwrap().name()
+                    ),
+                );
+
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&declaration_id)
+                    .unwrap()
+                    .add_diagnostic(diagnostic);
             }
         }
 
@@ -1415,7 +1529,7 @@ impl<'a> Resolver<'a> {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
 
-                let (picked_parent, partial) = self.get_parent_class(&definition_ids);
+                let (picked_parent, _parent_info, partial) = self.get_parent_class(attached_id, &definition_ids);
                 (self.get_or_create_singleton_class(picked_parent), partial)
             }
             _ => {
@@ -1426,7 +1540,11 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (DeclarationId, bool) {
+    fn get_parent_class(
+        &mut self,
+        declaration_id: DeclarationId,
+        definition_ids: &[DefinitionId],
+    ) -> (DeclarationId, Option<(ReferenceId, DefinitionId)>, bool) {
         let mut explicit_parents = Vec::new();
         let mut partial = false;
 
@@ -1444,7 +1562,7 @@ impl<'a> Resolver<'a> {
 
                 match name {
                     NameRef::Resolved(resolved) => {
-                        explicit_parents.push(*resolved.declaration_id());
+                        explicit_parents.push((*resolved.declaration_id(), *superclass, *definition_id));
                     }
                     NameRef::Unresolved(_) => {
                         partial = true;
@@ -1453,18 +1571,110 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
-        // mismatch error. TODO: We should add a diagnostic here
-        (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), partial)
+        // Dedup explicit parents that resolve to the same declaration
+        explicit_parents.dedup_by(|(name_a, _, _), (name_b, _, _)| name_a == name_b);
+
+        for (parent_declaration_id, superclass_ref_id, definition_id) in &explicit_parents {
+            let parent_declaration = self.graph.declarations().get(parent_declaration_id).unwrap();
+
+            if parent_declaration.kind() != DeclarationKind::Class {
+                let diagnostic = Diagnostic::new(
+                    Rule::NonClassSuperclass,
+                    *self.graph.definitions().get(definition_id).unwrap().uri_id(),
+                    self.graph
+                        .constant_references()
+                        .get(superclass_ref_id)
+                        .unwrap()
+                        .offset()
+                        .clone(),
+                    format!(
+                        "Superclass `{}` of `{}` is not a class (found `{}`)",
+                        parent_declaration.name(),
+                        self.graph.declarations().get(&declaration_id).unwrap().name(),
+                        parent_declaration.kind()
+                    ),
+                );
+
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&declaration_id)
+                    .unwrap()
+                    .add_diagnostic(diagnostic);
+            }
+        }
+
+        if explicit_parents.len() > 1 {
+            let (first_parent_id, _first_superclass_ref_id, _first_definition_id) = explicit_parents[0];
+
+            for (parent_declaration_id, superclass_ref_id, definition_id) in explicit_parents.iter().skip(1) {
+                let diagnostic = Diagnostic::new(
+                    Rule::ParentRedefinition,
+                    *self.graph.definitions().get(definition_id).unwrap().uri_id(),
+                    self.graph
+                        .constant_references()
+                        .get(superclass_ref_id)
+                        .unwrap()
+                        .offset()
+                        .clone(),
+                    format!(
+                        "Parent of class `{}` redefined from `{}` to `{}`",
+                        self.graph.declarations().get(&declaration_id).unwrap().name(),
+                        self.graph.declarations().get(&first_parent_id).unwrap().name(),
+                        self.graph.declarations().get(parent_declaration_id).unwrap().name()
+                    ),
+                );
+
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&declaration_id)
+                    .unwrap()
+                    .add_diagnostic(diagnostic);
+            }
+        }
+
+        explicit_parents.first().map_or(
+            (*OBJECT_ID, None, partial),
+            |(parent_id, superclass_ref_id, definition_id)| {
+                (*parent_id, Some((*superclass_ref_id, *definition_id)), partial)
+            },
+        )
     }
 
     fn linearize_parent_class(
         &mut self,
+        declaration_id: DeclarationId,
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Ancestors {
-        let (picked_parent, partial) = self.get_parent_class(definition_ids);
+        let (picked_parent, parent_info, partial) = self.get_parent_class(declaration_id, definition_ids);
+
         let result = self.linearize_ancestors(picked_parent, context);
+
+        if matches!(result, Ancestors::Cyclic(_))
+            && let Some((superclass_ref_id, definition_id)) = parent_info
+        {
+            let diagnostic = Diagnostic::new(
+                Rule::CircularDependency,
+                *self.graph.definitions().get(&definition_id).unwrap().uri_id(),
+                self.graph
+                    .constant_references()
+                    .get(&superclass_ref_id)
+                    .unwrap()
+                    .offset()
+                    .clone(),
+                format!(
+                    "Circular dependency: `{}` is parent of itself",
+                    self.graph.declarations().get(&declaration_id).unwrap().name()
+                ),
+            );
+
+            self.graph
+                .declarations_mut()
+                .get_mut(&declaration_id)
+                .unwrap()
+                .add_diagnostic(diagnostic);
+        }
+
         if partial { result.to_partial() } else { result }
     }
 
@@ -1590,7 +1800,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `Foo` (1:1-1:4)"],
+            &[Rule::ParseWarning]
+        );
 
         let reference = context.graph().constant_references().values().next().unwrap();
 
@@ -1721,6 +1935,13 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `Foo` (1:7-1:10)"],
+            &[Rule::ParseWarning]
+        );
+
         assert!(
             context
                 .graph()
@@ -1742,8 +1963,6 @@ mod tests {
                 .get(&DeclarationId::from("Foo::Bar::Baz"))
                 .is_none()
         );
-
-        assert_no_diagnostics!(&context);
     }
 
     #[test]
@@ -2082,7 +2301,14 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "circular-dependency: Circular dependency: `Foo` is parent of itself (1:13-1:16)",
+                "circular-dependency: Circular dependency: `Bar` is parent of itself (2:13-2:16)",
+                "circular-dependency: Circular dependency: `Baz` is parent of itself (3:13-3:16)"
+            ]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
     }
@@ -2120,7 +2346,14 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "unresolved-constant-reference: Unresolved constant reference: `Foo` (1:13-1:16)",
+                "unresolved-constant-reference: Unresolved constant reference: `CONST` (2:3-2:8)",
+            ],
+            &[Rule::ParseWarning]
+        );
 
         let declaration = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
         assert!(matches!(
@@ -2456,7 +2689,7 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context, &[Rule::UnresolvedConstantReference]);
 
         assert_ancestors_eq!(context, "B", ["B"]);
         // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
@@ -2499,7 +2732,10 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["circular-dependency: Circular dependency: `Foo` is parent of itself (2:11-2:14)"]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
@@ -2749,7 +2985,7 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context, &[Rule::UnresolvedConstantReference]);
 
         assert_ancestors_eq!(context, "B", ["B"]);
         // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
@@ -2770,7 +3006,10 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["circular-dependency: Circular dependency: `Foo` is parent of itself (2:11-2:14)"]
+        );
 
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
@@ -3478,7 +3717,12 @@ mod tests {
             "
         });
         context.resolve();
-        assert_no_diagnostics!(&context);
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `NonExistent` (1:11-1:22)"],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS_2", "ALIAS_1");
         assert_no_constant_alias_target!(context, "ALIAS_1");
@@ -3495,7 +3739,12 @@ mod tests {
             "
         });
         context.resolve();
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `NOPE` (3:8-3:12)"],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
 
@@ -3714,7 +3963,13 @@ mod tests {
             "
         });
         context.resolve();
-        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "kind-redefinition: Redefining `Outer::NESTED` as `class`, previously defined as `constant alias` (9:1-11:4)"
+            ],
+            &[Rule::ParseWarning]
+        );
 
         assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
         assert_constant_alias_target_eq!(context, "Outer::NESTED", "Outer::Inner");
@@ -4097,5 +4352,133 @@ mod tests {
 
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", vec!["FOO"]);
+    }
+
+    // Diagnostics tests
+
+    #[test]
+    fn resolution_diagnostics_for_kind_redefinition() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            class Foo; end
+
+            class Bar; end
+            module Bar; end
+
+            class Baz; end
+            Baz = 123
+
+            module Qux; end
+            module Qux; end
+
+            def foo; end
+            attr_reader :foo
+
+            class Qaz
+              class Array; end
+              def Array; end
+            end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "kind-redefinition: Redefining `Foo` as `class`, previously defined as `module` (2:1-2:15)",
+                "kind-redefinition: Redefining `Bar` as `module`, previously defined as `class` (5:1-5:16)",
+                "kind-redefinition: Redefining `Baz` as `constant`, previously defined as `class` (8:1-8:4)",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolution_diagnostics_for_parent_redefinition() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent1; end
+            class Parent2; end
+
+            class Child1; end
+            class Child1; end
+            class Child1 < Object; end
+            class Child1 < ::Object; end
+
+            class Child2; end
+            class Child2 < Parent1; end
+            class ::Child2 < ::Parent1; end
+
+            class Child3; end
+            class Child3 < Parent1; end
+            class Child3 < Parent2; end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                // FIXME: Object should resolve
+                "unresolved-constant-reference: Unresolved constant reference: `Object` (6:16-6:22)",
+                "unresolved-constant-reference: Unresolved constant reference: `Object` (7:16-7:24)",
+                "parent-redefinition: Parent of class `Child3` redefined from `Parent1` to `Parent2` (15:16-15:23)",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolution_diagnostics_for_non_class_superclass() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Parent1; end
+            Parent2 = 42
+
+            class Child1 < Parent1; end
+            class Child2 < Parent2; end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "non-class-superclass: Superclass `Parent1` of `Child1` is not a class (found `module`) (4:16-4:23)",
+                "non-class-superclass: Superclass `Parent2` of `Child2` is not a class (found `constant`) (5:16-5:23)",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolution_diagnostics_for_non_module_mixin() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Mixin; end
+
+            class Child
+              include Mixin;
+              prepend Mixin;
+              extend Mixin;
+            end
+            "
+        });
+
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "non-module-mixin: Mixin `Mixin` is not a module (4:11-4:16)",
+                "non-module-mixin: Mixin `Mixin` is not a module (5:11-5:16)",
+                // "non-module-mixin: Mixin `Mixin` is not a module (6:10-6:15)", FIXME: we should report this once we linearize the ancestors of singleton classes
+            ]
+        );
     }
 }

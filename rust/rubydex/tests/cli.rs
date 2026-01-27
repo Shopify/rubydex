@@ -101,7 +101,7 @@ fn visualize_simple_class() {
                 "Name:SimpleClass" [label="SimpleClass",shape=hexagon];
                 "Name:SimpleClass" -> "def_<ID>" [dir=both];
 
-                "def_<ID>" [label="Class(SimpleClass)",shape=ellipse];
+                "def_<ID>" [label="class(SimpleClass)",shape=ellipse];
 
                 "file://<PATH>/simple.rb" [label="simple.rb",shape=box];
                 "def_<ID>" -> "file://<PATH>/simple.rb";

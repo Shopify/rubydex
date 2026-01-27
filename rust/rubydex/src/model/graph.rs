@@ -1,10 +1,10 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration, Namespace};
-use crate::model::definitions::Definition;
+use crate::model::declaration::{Ancestor, Declaration, DeclarationKind, Namespace};
+use crate::model::definitions::{Definition, DefinitionKind};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
@@ -73,8 +73,36 @@ impl Graph {
     where
         F: FnOnce() -> Declaration,
     {
-        let declaration = self.declarations.entry(declaration_id).or_insert_with(constructor);
-        declaration.add_definition(definition_id);
+        let entry = self.declarations.entry(declaration_id);
+
+        match entry {
+            Entry::Occupied(mut entry) => {
+                let declaration = entry.get_mut();
+
+                let definition = self.definitions.get(&definition_id).unwrap();
+                let definition_declaration_kind = DeclarationKind::from_definition_kind(definition.kind());
+                if definition_declaration_kind != declaration.kind() {
+                    declaration.add_diagnostic(Diagnostic::new(
+                        Rule::KindRedefinition,
+                        *definition.uri_id(),
+                        definition.offset().clone(),
+                        format!(
+                            "Redefining `{}` as `{}`, previously defined as `{}`",
+                            declaration.name(),
+                            definition_declaration_kind,
+                            declaration.kind()
+                        ),
+                    ));
+                }
+
+                declaration.add_definition(definition_id);
+            }
+            Entry::Vacant(entry) => {
+                let mut declaration = constructor();
+                declaration.add_definition(definition_id);
+                entry.insert(declaration);
+            }
+        }
     }
 
     pub fn clear_declarations(&mut self) {
@@ -139,6 +167,11 @@ impl Graph {
     #[must_use]
     pub fn documents(&self) -> &IdentityHashMap<UriId, Document> {
         &self.documents
+    }
+
+    #[must_use]
+    pub fn documents_mut(&mut self) -> &mut IdentityHashMap<UriId, Document> {
+        &mut self.documents
     }
 
     /// # Panics
@@ -255,11 +288,18 @@ impl Graph {
         &self.constant_references
     }
 
+    #[must_use]
+    pub fn constant_references_mut(&mut self) -> &mut IdentityHashMap<ReferenceId, ConstantReference> {
+        &mut self.constant_references
+    }
+
     // Returns an immutable reference to the method references map
     #[must_use]
     pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
         &self.method_references
     }
+
+    // Diagnostics
 
     #[must_use]
     pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
@@ -695,8 +735,8 @@ impl Graph {
 
         let mut declarations_with_docs = 0;
         let mut total_doc_size = 0;
-        let mut declarations_types: HashMap<&str, usize> = HashMap::new();
-        let mut definition_types: HashMap<&str, usize> = HashMap::new();
+        let mut declarations_types: HashMap<DeclarationKind, usize> = HashMap::new();
+        let mut definition_types: HashMap<DefinitionKind, usize> = HashMap::new();
         let mut multi_definition_count = 0;
 
         for declaration in self.declarations.values() {
@@ -751,7 +791,7 @@ impl Graph {
         let mut types: Vec<_> = declarations_types.iter().collect();
         types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
         for (kind, count) in types {
-            println!("  {kind:20} {count:6}");
+            println!("  {kind:20} {count:6}", kind = kind.to_string());
         }
 
         println!();
@@ -759,7 +799,7 @@ impl Graph {
         let mut types: Vec<_> = definition_types.iter().collect();
         types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
         for (kind, count) in types {
-            println!("  {kind:20} {count:6}");
+            println!("  {kind:20} {count:6}", kind = kind.to_string());
         }
     }
 }
