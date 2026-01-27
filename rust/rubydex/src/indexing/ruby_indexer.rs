@@ -1293,16 +1293,21 @@ impl Visit<'_> for RubyIndexer<'_> {
         let name = Self::location_to_string(&node.name_loc());
         let str_id = self.local_graph.intern_string(format!("{name}()"));
         let offset = Offset::from_prism_location(&node.location());
-        let (comments, flags) = self.find_comments_for(offset.start());
         let parent_nesting_id = self.current_nesting_definition_id();
         let parameters = self.collect_parameters(node);
         let is_singleton = node.receiver().is_some();
 
-        let visibility = if is_singleton {
-            Visibility::Public
+        let current_visibility = self.current_visibility();
+        let (visibility, offset_for_comments) = if is_singleton {
+            (Visibility::Public, offset.clone())
+        } else if current_visibility.is_inline() {
+            // If the visibility is inline, we use its offset for the comments
+            (*current_visibility.visibility(), current_visibility.offset().clone())
         } else {
-            *self.current_visibility().visibility()
+            (*current_visibility.visibility(), offset.clone())
         };
+
+        let (comments, flags) = self.find_comments_for(offset_for_comments.start());
 
         let receiver = if let Some(recv_node) = node.receiver() {
             match recv_node {
@@ -5554,6 +5559,36 @@ mod tests {
         });
 
         assert_definition_at!(&context, "16:9-16:13", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_visibility() {
+        let context = index_source({
+            "
+            class Foo
+              # Comment
+              private def foo; end
+
+              # Comment
+              protected def bar; end
+
+              # Comment
+              public def baz; end
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "3:11-3:23", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "6:13-6:25", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "9:10-9:22", Method, |def| {
             assert_def_comments_eq!(&context, def, ["# Comment"]);
         });
     }
