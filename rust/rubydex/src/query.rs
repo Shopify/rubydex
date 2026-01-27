@@ -98,6 +98,6 @@ mod tests {
             "
         });
         context.resolve();
-        assert_results_eq!(context, "Fo", vec!["Foo"]);
+        assert_results_eq!(context, "Fo", ["Foo"]);
     }
 }

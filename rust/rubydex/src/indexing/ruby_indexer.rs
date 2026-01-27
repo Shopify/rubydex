@@ -1892,9 +1892,11 @@ mod tests {
         ($context:expr, $def:expr, $expected_comments:expr) => {{
             let actual_comments: Vec<String> = $def.comments().iter().map(|c| c.string().to_string()).collect();
             assert_eq!(
-                $expected_comments, actual_comments,
+                $expected_comments,
+                actual_comments.as_slice(),
                 "comments mismatch: expected `{:?}`, got `{:?}`",
-                $expected_comments, actual_comments
+                $expected_comments,
+                actual_comments
             );
         }};
     }
@@ -1930,9 +1932,11 @@ mod tests {
                 .collect::<Vec<_>>();
 
             assert_eq!(
-                $expected_names, actual_names,
+                $expected_names,
+                actual_names.as_slice(),
                 "mixins mismatch: expected `{:?}`, got `{:?}`",
-                $expected_names, actual_names
+                $expected_names,
+                actual_names
             );
         }};
     }
@@ -2076,9 +2080,11 @@ mod tests {
             let actual_names = actual_references.iter().map(|(_, name)| *name).collect::<Vec<_>>();
 
             assert_eq!(
-                $expected_names, actual_names,
+                $expected_names,
+                actual_names.as_slice(),
                 "constant references mismatch: expected `{:?}`, got `{:?}`",
-                $expected_names, actual_names
+                $expected_names,
+                actual_names
             );
         }};
     }
@@ -2105,9 +2111,11 @@ mod tests {
                 .collect::<Vec<_>>();
 
             assert_eq!(
-                $expected_names, actual_names,
+                $expected_names,
+                actual_names.as_slice(),
                 "method references mismatch: expected `{:?}`, got `{:?}`",
-                $expected_names, actual_names
+                $expected_names,
+                actual_names
             );
         }};
     }
@@ -2128,7 +2136,7 @@ mod tests {
         ($context:expr, $expected_diagnostics:expr) => {{
             assert_eq!(
                 $expected_diagnostics,
-                format_diagnostics($context),
+                format_diagnostics($context).as_slice(),
                 "diagnostics mismatch: expected `{:?}`, got `{:?}`",
                 $expected_diagnostics,
                 format_diagnostics($context)
@@ -2160,7 +2168,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec![
+            [
                 "parse-error: expected an `end` to close the `class` statement (1:1-1:6)",
                 "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)"
             ]
@@ -2183,7 +2191,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
+            ["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
         );
     }
 
@@ -2294,7 +2302,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"]
+            ["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"]
         );
         assert!(context.graph().definitions().is_empty());
     }
@@ -2398,7 +2406,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["dynamic-constant-reference: Dynamic constant reference (1:8-1:11)"]
+            ["dynamic-constant-reference: Dynamic constant reference (1:8-1:11)"]
         );
         assert!(context.graph().definitions().is_empty());
     }
@@ -2502,7 +2510,7 @@ mod tests {
             });
         });
 
-        assert_constant_references_eq!(&context, vec!["FOO", "BAZ"]);
+        assert_constant_references_eq!(&context, ["FOO", "BAZ"]);
     }
 
     #[test]
@@ -2544,7 +2552,7 @@ mod tests {
             });
         });
 
-        assert_constant_references_eq!(&context, vec!["FOO", "BAR", "FOO", "BAR", "BAZ"]);
+        assert_constant_references_eq!(&context, ["FOO", "BAR", "FOO", "BAR", "BAZ"]);
     }
 
     #[test]
@@ -2666,10 +2674,10 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
+            ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
         );
         assert_eq!(context.graph().definitions().len(), 0);
-        assert_method_references_eq!(&context, vec!["foo"]);
+        assert_method_references_eq!(&context, ["foo"]);
     }
 
     #[test]
@@ -2773,7 +2781,7 @@ mod tests {
             });
         });
 
-        assert_constant_references_eq!(&context, vec!["Foo"]);
+        assert_constant_references_eq!(&context, ["Foo"]);
     }
 
     #[test]
@@ -2813,7 +2821,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
+            ["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
         );
         assert_eq!(context.graph().definitions().len(), 0);
     }
@@ -3738,7 +3746,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec![
+            [
                 "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
                 "parse-warning: assigned but unused variable - foo (5:1-5:4)",
             ]
@@ -3746,7 +3754,7 @@ mod tests {
 
         assert_constant_references_eq!(
             &context,
-            vec![
+            [
                 "C1", "C2", "C3", "C4", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17",
                 "C18", "C19", "C20", "C21", "C22", "C23"
             ]
@@ -3771,7 +3779,7 @@ mod tests {
 
         assert_constant_references_eq!(
             &context,
-            vec![
+            [
                 "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14"
             ]
         );
@@ -3789,7 +3797,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_constant_references_eq!(&context, vec!["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
+        assert_constant_references_eq!(&context, ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
     }
 
     #[test]
@@ -3813,7 +3821,7 @@ mod tests {
 
         assert_constant_references_eq!(
             &context,
-            vec!["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"]
+            ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"]
         );
     }
 
@@ -3856,7 +3864,7 @@ mod tests {
 
         assert_constant_references_eq!(
             &context,
-            vec![
+            [
                 "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16",
                 "M17", "M18", "M19", "M20", "M21", "M22",
             ]
@@ -3903,12 +3911,12 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
+            ["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
         );
 
         assert_method_references_eq!(
             &context,
-            vec![
+            [
                 "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16",
                 "m17", "m18", "m19", "m20", "m21", "m22", "m23", "m24", "m25", "m26", "!", "m27", "m28", "m29", "m30",
                 "m31", "m32", "m33", "m34", "m35", "m36", "[]", "m37", "m38", "m39", "m40", "m41", "m42", "m43", "m44",
@@ -3931,7 +3939,7 @@ mod tests {
 
         assert_method_references_eq!(
             &context,
-            vec![
+            [
                 "m1=", "m2", "m3", "m4", "m5=", "m6", "m7", "m8", "m9=", "m10=", "m11", "m12"
             ]
         );
@@ -3955,7 +3963,7 @@ mod tests {
 
         assert_method_references_eq!(
             &context,
-            vec![
+            [
                 "m1", "m1=", "m2", "m2=", "m3", "m3=", "m4", "m4=", "m5", "m6", "m6=", "m7", "m8", "m9", "m9=", "m10",
                 "m11", "m12", "m12=", "m13",
             ]
@@ -3988,7 +3996,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec![
+            [
                 "parse-warning: possibly useless use of != in void context (1:1-1:7)",
                 "parse-warning: possibly useless use of % in void context (2:1-2:6)",
                 "parse-warning: possibly useless use of & in void context (3:1-3:6)",
@@ -4006,7 +4014,7 @@ mod tests {
 
         assert_method_references_eq!(
             &context,
-            vec![
+            [
                 "!=", "%", "&", "&&", "*", "**", "+", "-", "/", "<<", "==", "===", ">>", "^", "|", "||", "<=>",
             ]
         );
@@ -4022,10 +4030,10 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
+            ["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
         );
 
-        assert_method_references_eq!(&context, vec!["x", "<", "<=>", "y"]);
+        assert_method_references_eq!(&context, ["x", "<", "<=>", "y"]);
     }
 
     #[test]
@@ -4038,10 +4046,10 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
+            ["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
         );
 
-        assert_method_references_eq!(&context, vec!["x", "<=", "<=>", "y"]);
+        assert_method_references_eq!(&context, ["x", "<=", "<=>", "y"]);
     }
 
     #[test]
@@ -4054,10 +4062,10 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
+            ["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
         );
 
-        assert_method_references_eq!(&context, vec!["x", "<=>", ">", "y"]);
+        assert_method_references_eq!(&context, ["x", "<=>", ">", "y"]);
     }
 
     #[test]
@@ -4070,10 +4078,10 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
+            ["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
         );
 
-        assert_method_references_eq!(&context, vec!["x", "<=>", ">=", "y"]);
+        assert_method_references_eq!(&context, ["x", "<=>", ">=", "y"]);
     }
 
     #[test]
@@ -4087,7 +4095,7 @@ mod tests {
         });
 
         assert_no_diagnostics!(&context);
-        assert_method_references_eq!(&context, vec!["m1()", "m2()"]);
+        assert_method_references_eq!(&context, ["m1()", "m2()"]);
     }
 
     #[test]
@@ -4179,7 +4187,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec![
+            [
                 "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
                 "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
                 "dynamic-ancestor: Dynamic superclass (3:21-3:49)",
@@ -4234,7 +4242,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-            assert_def_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Include, ["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4252,7 +4260,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-            assert_def_mixins_eq!(&context, def, Include, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Include, ["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4285,7 +4293,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-            assert_def_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Prepend, ["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4303,7 +4311,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-            assert_def_mixins_eq!(&context, def, Prepend, vec!["Baz", "Bar", "Qux"]);
+            assert_def_mixins_eq!(&context, def, Prepend, ["Baz", "Bar", "Qux"]);
         });
     }
 
@@ -4321,7 +4329,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
-            assert_def_mixins_eq!(&context, class_def, Extend, vec!["Bar", "Baz"]);
+            assert_def_mixins_eq!(&context, class_def, Extend, ["Bar", "Baz"]);
         });
     }
 
@@ -4340,9 +4348,9 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-            assert_def_mixins_eq!(&context, def, Include, vec!["Foo"]);
-            assert_def_mixins_eq!(&context, def, Prepend, vec!["Foo"]);
-            assert_def_mixins_eq!(&context, def, Extend, vec!["Foo"]);
+            assert_def_mixins_eq!(&context, def, Include, ["Foo"]);
+            assert_def_mixins_eq!(&context, def, Prepend, ["Foo"]);
+            assert_def_mixins_eq!(&context, def, Extend, ["Foo"]);
         });
     }
 
@@ -4362,7 +4370,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec![
+            [
                 "dynamic-constant-reference: Dynamic constant reference (1:9-1:12)",
                 "dynamic-ancestor: Dynamic mixin argument (1:9-1:17)",
                 "dynamic-constant-reference: Dynamic constant reference (2:9-2:12)",
@@ -4389,7 +4397,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec![
+            [
                 "top-level-mixin-self: Top level mixin self (1:9-1:13)",
                 "top-level-mixin-self: Top level mixin self (2:9-2:13)",
                 "top-level-mixin-self: Top level mixin self (3:8-3:12)"
@@ -5074,7 +5082,7 @@ mod tests {
             assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
                 assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
 
-                assert_def_mixins_eq!(&context, anonymous_class, Include, vec!["Bar"]);
+                assert_def_mixins_eq!(&context, anonymous_class, Include, ["Bar"]);
             });
         });
     }
@@ -5212,7 +5220,7 @@ mod tests {
             assert_name_path_eq!(&context, "Foo::Bar", *def.target_name_id());
         });
 
-        assert_constant_references_eq!(&context, vec!["Foo", "Bar"]);
+        assert_constant_references_eq!(&context, ["Foo", "Bar"]);
     }
 
     #[test]
@@ -5273,7 +5281,7 @@ mod tests {
             assert_name_path_eq!(&context, "Target", *def.target_name_id());
         });
 
-        assert_constant_references_eq!(&context, vec!["Target"]);
+        assert_constant_references_eq!(&context, ["Target"]);
     }
 
     #[test]
@@ -5356,7 +5364,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-2:18", Class, |def| {
             assert_def_name_eq!(&context, def, "Single");
-            assert_def_comments_eq!(&context, def, vec!["# Single comment"]);
+            assert_def_comments_eq!(&context, def, ["# Single comment"]);
         });
 
         assert_definition_at!(&context, "7:1-7:18", Module, |def| {
@@ -5364,7 +5372,7 @@ mod tests {
             assert_def_comments_eq!(
                 &context,
                 def,
-                vec![
+                [
                     "# Multi-line comment 1",
                     "# Multi-line comment 2",
                     "# Multi-line comment 3"
@@ -5374,22 +5382,22 @@ mod tests {
 
         assert_definition_at!(&context, "12:1-12:28", Class, |def| {
             assert_def_name_eq!(&context, def, "EmptyCommentLine");
-            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "#", "# Comment 2"]);
+            assert_def_comments_eq!(&context, def, ["# Comment 1", "#", "# Comment 2"]);
         });
 
         assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
             assert_def_name_eq!(&context, def, "NoGap");
-            assert_def_comments_eq!(&context, def, vec!["# Comment directly above (no gap)"]);
+            assert_def_comments_eq!(&context, def, ["# Comment directly above (no gap)"]);
         });
 
         assert_definition_at!(&context, "19:1-19:13", Method, |def| {
             assert_def_str_eq!(&context, def, "foo()");
-            assert_def_comments_eq!(&context, def, vec!["#: ()", "#| -> void"]);
+            assert_def_comments_eq!(&context, def, ["#: ()", "#| -> void"]);
         });
 
         assert_definition_at!(&context, "23:1-23:21", Class, |def| {
             assert_def_name_eq!(&context, def, "BlankLine");
-            assert_def_comments_eq!(&context, def, vec!["# Comment with blank line"]);
+            assert_def_comments_eq!(&context, def, ["# Comment with blank line"]);
         });
 
         assert_definition_at!(&context, "28:1-28:21", Class, |def| {
@@ -5421,22 +5429,22 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-12:4", Class, |def| {
             assert_def_name_eq!(&context, def, "Outer");
-            assert_def_comments_eq!(&context, def, vec!["# Outer class"]);
+            assert_def_comments_eq!(&context, def, ["# Outer class"]);
         });
 
         assert_definition_at!(&context, "4:3-7:6", Class, |def| {
             assert_def_name_eq!(&context, def, "Inner");
-            assert_def_comments_eq!(&context, def, vec!["# Inner class at 2 spaces"]);
+            assert_def_comments_eq!(&context, def, ["# Inner class at 2 spaces"]);
         });
 
         assert_definition_at!(&context, "6:5-6:20", Class, |def| {
             assert_def_name_eq!(&context, def, "Deep");
-            assert_def_comments_eq!(&context, def, vec!["# Deep class at 4 spaces"]);
+            assert_def_comments_eq!(&context, def, ["# Deep class at 4 spaces"]);
         });
 
         assert_definition_at!(&context, "11:3-11:26", Class, |def| {
             assert_def_name_eq!(&context, def, "AnotherInner");
-            assert_def_comments_eq!(&context, def, vec!["# Another inner class", "# with multiple lines"]);
+            assert_def_comments_eq!(&context, def, ["# Another inner class", "# with multiple lines"]);
         });
     }
 
@@ -5491,23 +5499,23 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:16-3:19", AttrReader, |def| {
-            assert_def_comments_eq!(&context, def, vec!["# Comment"]);
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
         });
 
         assert_definition_at!(&context, "8:16-8:19", AttrWriter, |def| {
-            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+            assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
         });
 
         assert_definition_at!(&context, "13:18-13:21", AttrAccessor, |def| {
-            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+            assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
         });
 
         assert_definition_at!(&context, "13:24-13:27", AttrAccessor, |def| {
-            assert_def_comments_eq!(&context, def, vec!["# Comment 1", "# Comment 2", "# Comment 3"]);
+            assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
         });
 
         assert_definition_at!(&context, "16:9-16:13", AttrAccessor, |def| {
-            assert_def_comments_eq!(&context, def, vec!["# Comment"]);
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
         });
     }
 }

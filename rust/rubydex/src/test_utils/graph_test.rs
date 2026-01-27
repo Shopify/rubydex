@@ -409,7 +409,7 @@ macro_rules! assert_members_eq {
 
         actual_members.sort();
 
-        assert_eq!($expected_members, actual_members);
+        assert_eq!($expected_members, actual_members.as_slice());
     };
 }
 
@@ -417,7 +417,7 @@ macro_rules! assert_members_eq {
 #[macro_export]
 macro_rules! assert_no_members {
     ($context:expr, $declaration_id:expr) => {
-        assert_members_eq!($context, $declaration_id, vec![] as Vec<&str>);
+        assert_members_eq!($context, $declaration_id, [] as [&str; 0]);
     };
 }
 
@@ -485,7 +485,7 @@ macro_rules! assert_instance_variables_eq {
 
         actual_instance_variables.sort();
 
-        assert_eq!($expected_instance_variables, actual_instance_variables);
+        assert_eq!($expected_instance_variables, actual_instance_variables.as_slice());
     };
 }
 
@@ -493,7 +493,7 @@ macro_rules! assert_instance_variables_eq {
 #[macro_export]
 macro_rules! assert_diagnostics_eq {
     ($context:expr, $expected_diagnostics:expr) => {{
-        assert_eq!($expected_diagnostics, $context.format_diagnostics(&[]));
+        assert_eq!($expected_diagnostics, $context.format_diagnostics(&[]).as_slice());
     }};
     ($context:expr, $expected_diagnostics:expr, $ignore_rules:expr) => {{
         assert_eq!($expected_diagnostics, $context.format_diagnostics($ignore_rules));
