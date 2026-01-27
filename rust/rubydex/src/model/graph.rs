@@ -232,10 +232,8 @@ impl Graph {
         }?;
 
         self.declarations
-            .get(nesting_declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
+            .get(nesting_declaration_id)?
+            .as_namespace()?
             .member(member_str_id)
     }
 

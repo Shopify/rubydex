@@ -7,7 +7,7 @@ use crate::model::{
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        Namespace, SingletonClassDeclaration,
+        Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
     definitions::{Definition, Mixin},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
@@ -69,6 +69,8 @@ pub struct Resolver<'a> {
     unit_queue: VecDeque<Unit>,
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
+    /// Allow the resolver to create TODO declarations for unresolved constants
+    create_todo_declarations: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -77,6 +79,7 @@ impl<'a> Resolver<'a> {
             graph,
             unit_queue: VecDeque::new(),
             made_progress: false,
+            create_todo_declarations: false,
         }
     }
 
@@ -122,6 +125,17 @@ impl<'a> Resolver<'a> {
 
         let other_ids = self.prepare_units();
 
+        self.process_queue();
+
+        // Once we've processed the queue and create all we could, what's remaining is depending on other unresolved units.
+        // We'll create TODO declarations for these and process the queue again to resolve what we can.
+        self.create_todo_declarations = true;
+        self.process_queue();
+
+        self.handle_remaining_definitions(other_ids);
+    }
+
+    fn process_queue(&mut self) {
         loop {
             // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
             // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
@@ -152,8 +166,6 @@ impl<'a> Resolver<'a> {
                 break;
             }
         }
-
-        self.handle_remaining_definitions(other_ids);
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -205,6 +217,7 @@ impl<'a> Resolver<'a> {
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
+                self.unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(Some(id_needing_linearization)) => {
                 self.unit_queue.push_back(unit_id);
@@ -957,12 +970,47 @@ impl<'a> Resolver<'a> {
     fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap();
 
-        if let Some(parent_scope) = name_ref.parent_scope() {
+        if let Some(parent_scope) = *name_ref.parent_scope() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
-            match self.resolve_constant_internal(*parent_scope) {
+            match self.resolve_constant_internal(parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
-                other => other,
+                other => {
+                    let parent_name = self.graph.names().get(&parent_scope).unwrap();
+                    let parent_str_id = *parent_name.str();
+
+                    if !self.create_todo_declarations {
+                        return other;
+                    }
+
+                    let parent_owner_id = match self.name_owner_id(parent_scope) {
+                        Outcome::Resolved(id, _) => id,
+                        _ => *OBJECT_ID,
+                    };
+
+                    let fully_qualified_name = if parent_owner_id == *OBJECT_ID {
+                        self.graph.strings().get(&parent_str_id).unwrap().to_string()
+                    } else {
+                        format!(
+                            "{}::{}",
+                            self.graph.declarations().get(&parent_owner_id).unwrap().name(),
+                            self.graph.strings().get(&parent_str_id).unwrap().as_str()
+                        )
+                    };
+
+                    let declaration_id = DeclarationId::from(&fully_qualified_name);
+
+                    self.graph.declarations_mut().insert(
+                        declaration_id,
+                        Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(
+                            fully_qualified_name,
+                            parent_owner_id,
+                        )))),
+                    );
+                    self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+
+                    Outcome::Resolved(declaration_id, None)
+                }
             }
         } else if let Some(nesting_id) = name_ref.nesting() {
             // Lexical nesting from block structure, e.g.:
@@ -1711,29 +1759,13 @@ mod tests {
             "
         });
         context.resolve();
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo"))
-                .is_none()
-        );
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo::Bar"))
-                .is_none()
-        );
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo::Bar::Baz"))
-                .is_none()
-        );
 
         assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["Baz"]);
+        assert_no_members!(context, "Foo::Bar::Baz");
     }
 
     #[test]
@@ -4087,5 +4119,43 @@ mod tests {
 
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", vec!["FOO"]);
+    }
+
+    #[test]
+    fn resolve_missing_declaration_to_todo() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo::Bar
+              include Foo::Baz
+
+              def bar; end
+            end
+
+            module Foo::Baz
+              def baz; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        println!(
+            "{:?}",
+            context
+                .graph()
+                .declarations()
+                .values()
+                .collect::<Vec<_>>()
+                .iter()
+                .map(|d| d.name())
+                .collect::<Vec<_>>()
+        );
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "Baz"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+        assert_members_eq!(context, "Foo::Baz", vec!["baz()"]);
     }
 }
