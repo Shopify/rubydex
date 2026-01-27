@@ -37,6 +37,8 @@ enum Outcome {
     /// reference involved in computing ancestors (like an include) was found, but wasn't resolved yet. We need to place
     /// this back in the queue to retry once we have progressed further
     Retry,
+    /// We couldn't resolve this constant right now because the name was missing.
+    MissingName(NameId),
 }
 
 impl Outcome {
@@ -153,7 +155,7 @@ impl<'a> Resolver<'a> {
     pub fn resolve_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
         match self.resolve_constant_internal(name_id) {
             Outcome::Resolved(id, _) => Some(id),
-            Outcome::Unresolved(_) | Outcome::Retry => None,
+            Outcome::Unresolved(_) | Outcome::Retry | Outcome::MissingName(_) => None,
         }
     }
 
