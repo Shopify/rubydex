@@ -30,20 +30,20 @@ enum Outcome {
     /// declaration that still needs to have its ancestors linearized
     Resolved(DeclarationId, Option<DeclarationId>),
     /// We had everything we needed to resolved this constant, but we couldn't find it. This means it's not defined (or
-    /// defined in a way that static analysis won't discover it). Failing to resolve a constant may also uncovered
-    /// ancestors that require linearization, which is the second element
-    Unresolved(Option<DeclarationId>),
-    /// We couldn't resolve this constant right now because certain dependencies were missing. For example, a constant
-    /// reference involved in computing ancestors (like an include) was found, but wasn't resolved yet. We need to place
-    /// this back in the queue to retry once we have progressed further
-    Retry,
-    /// We couldn't resolve this constant right now because the name was missing.
+    /// defined in a way that static analysis won't discover it)
+    Unresolved,
+    /// We couldn't resolve this constant right now because the name was missing
     MissingName(NameId),
+    /// We couldn't resolve this constant right now because the ancestors needed to be linearized
+    MissingAncestors(DeclarationId),
 }
 
 impl Outcome {
-    fn is_resolved_or_retry(&self) -> bool {
-        matches!(self, Outcome::Resolved(_, _) | Outcome::Retry)
+    fn is_resolved_or_missing_something(&self) -> bool {
+        matches!(
+            self,
+            Outcome::Resolved(_, _) | Outcome::MissingName(_) | Outcome::MissingAncestors(_)
+        )
     }
 }
 
@@ -115,35 +115,68 @@ impl<'a> Resolver<'a> {
         }
 
         let (mut unit_queue, other_ids) = self.sorted_units();
+        let mut pending_names: IdentityHashMap<NameId, Vec<Unit>> = IdentityHashMap::default();
+        let mut pending_ancestors: IdentityHashMap<DeclarationId, Vec<Unit>> = IdentityHashMap::default();
 
-        loop {
-            // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
-            // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
-            // to be done
-            let mut made_progress = false;
+        while let Some(unit) = unit_queue.pop_front() {
+            match unit {
+                Unit::Definition(id) => match self.handle_definition_unit(id) {
+                    Outcome::Resolved(_, maybe_ancestor_task) => {
+                        let name_id = match self.graph.definitions().get(&id).unwrap() {
+                            Definition::Class(class) => *class.name_id(),
+                            Definition::Module(module) => *module.name_id(),
+                            Definition::Constant(constant) => *constant.name_id(),
+                            Definition::ConstantAlias(alias) => *alias.name_id(),
+                            Definition::SingletonClass(singleton) => *singleton.name_id(),
+                            _ => panic!("Expected constant definitions"),
+                        };
 
-            // Loop through the current length of the queue, which won't change during this pass. Retries pushed to the back
-            // are only processed in the next pass, so that we can assess whether we made any progress
-            for _ in 0..unit_queue.len() {
-                let Some(unit_id) = unit_queue.pop_front() else {
-                    break;
-                };
+                        if let Some(wakers) = pending_names.remove(&name_id) {
+                            for waker in wakers {
+                                unit_queue.push_front(waker);
+                            }
+                        }
 
-                match unit_id {
-                    Unit::Definition(id) => {
-                        self.handle_definition_unit(&mut unit_queue, &mut made_progress, unit_id, id);
+                        if let Some(ancestor_task) = maybe_ancestor_task {
+                            unit_queue.push_back(Unit::Ancestors(ancestor_task));
+                        }
                     }
-                    Unit::Reference(id) => {
-                        self.handle_reference_unit(&mut unit_queue, &mut made_progress, unit_id, id);
+                    Outcome::MissingName(name_id) => {
+                        pending_names.entry(name_id).or_default().push(unit);
                     }
-                    Unit::Ancestors(id) => {
-                        self.handle_ancestor_unit(&mut unit_queue, &mut made_progress, id);
+                    Outcome::MissingAncestors(id) => {
+                        pending_ancestors.entry(id).or_default().push(unit);
+                        unit_queue.push_back(Unit::Ancestors(id));
                     }
-                }
-            }
-
-            if !made_progress || unit_queue.is_empty() {
-                break;
+                    Outcome::Unresolved => {}
+                },
+                Unit::Reference(id) => match self.handle_reference_unit(id) {
+                    Outcome::Resolved(_, maybe_ancestor_task) => {
+                        if let Some(ancestor_task) = maybe_ancestor_task {
+                            unit_queue.push_back(Unit::Ancestors(ancestor_task));
+                        }
+                    }
+                    Outcome::MissingName(name_id) => {
+                        pending_names.entry(name_id).or_default().push(unit);
+                    }
+                    Outcome::MissingAncestors(declaration_id) => {
+                        pending_ancestors.entry(declaration_id).or_default().push(unit);
+                        unit_queue.push_back(Unit::Ancestors(declaration_id));
+                    }
+                    Outcome::Unresolved => {}
+                },
+                Unit::Ancestors(id) => match self.handle_ancestor_unit(id) {
+                    Ok(()) => {
+                        if let Some(wakers) = pending_ancestors.remove(&id) {
+                            for waker in wakers {
+                                unit_queue.push_front(waker);
+                            }
+                        }
+                    }
+                    Err(name_id) => {
+                        pending_names.entry(name_id).or_default().push(unit);
+                    }
+                },
             }
         }
 
@@ -155,19 +188,13 @@ impl<'a> Resolver<'a> {
     pub fn resolve_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
         match self.resolve_constant_internal(name_id) {
             Outcome::Resolved(id, _) => Some(id),
-            Outcome::Unresolved(_) | Outcome::Retry | Outcome::MissingName(_) => None,
+            Outcome::Unresolved | Outcome::MissingName(_) | Outcome::MissingAncestors(_) => None,
         }
     }
 
     /// Handles a unit of work for resolving a constant definition
-    fn handle_definition_unit(
-        &mut self,
-        unit_queue: &mut VecDeque<Unit>,
-        made_progress: &mut bool,
-        unit_id: Unit,
-        id: DefinitionId,
-    ) {
-        let outcome = match self.graph.definitions().get(&id).unwrap() {
+    fn handle_definition_unit(&mut self, id: DefinitionId) -> Outcome {
+        match self.graph.definitions().get(&id).unwrap() {
             Definition::Class(class) => {
                 self.handle_constant_declaration(*class.name_id(), id, false, |name, owner_id| {
                     Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(name, owner_id))))
@@ -196,76 +223,36 @@ impl<'a> Resolver<'a> {
                 })
             }
             _ => panic!("Expected constant definitions"),
-        };
-
-        match outcome {
-            Outcome::Retry => {
-                // There might be dependencies we haven't figured out yet, so we need to retry
-                unit_queue.push_back(unit_id);
-            }
-            Outcome::Unresolved(None) => {
-                // We couldn't resolve this name. Emit a diagnostic
-            }
-            Outcome::Unresolved(Some(id_needing_linearization)) => {
-                unit_queue.push_back(unit_id);
-                unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
-            }
-            Outcome::Resolved(id, None) => {
-                unit_queue.push_back(Unit::Ancestors(id));
-                *made_progress = true;
-            }
-            Outcome::Resolved(_, Some(id_needing_linearization)) => {
-                unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
-                *made_progress = true;
-            }
         }
     }
 
     /// Handles a unit of work for resolving a constant reference
-    fn handle_reference_unit(
-        &mut self,
-        unit_queue: &mut VecDeque<Unit>,
-        made_progress: &mut bool,
-        unit_id: Unit,
-        id: ReferenceId,
-    ) {
+    fn handle_reference_unit(&mut self, id: ReferenceId) -> Outcome {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
-        match self.resolve_constant_internal(*constant_ref.name_id()) {
-            Outcome::Retry => {
-                // There might be dependencies we haven't figured out yet, so we need to retry
-                unit_queue.push_back(unit_id);
-            }
-            Outcome::Unresolved(None) => {
-                // We couldn't resolve this name. Emit a diagnostic
-            }
-            Outcome::Unresolved(Some(id_needing_linearization)) => {
-                unit_queue.push_back(unit_id);
-                unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
-            }
-            Outcome::Resolved(declaration_id, None) => {
-                self.graph.record_resolved_reference(id, declaration_id);
-                *made_progress = true;
-            }
-            Outcome::Resolved(resolved_id, Some(id_needing_linearization)) => {
-                self.graph.record_resolved_reference(id, resolved_id);
-                *made_progress = true;
-                unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
-            }
+        let outcome = self.resolve_constant_internal(*constant_ref.name_id());
+
+        if let Outcome::Resolved(declaration_id, _) = outcome {
+            self.graph.record_resolved_reference(id, declaration_id);
         }
+
+        outcome
     }
 
     /// Handles a unit of work for linearizing ancestors of a declaration
-    fn handle_ancestor_unit(&mut self, unit_queue: &mut VecDeque<Unit>, made_progress: &mut bool, id: DeclarationId) {
+    fn handle_ancestor_unit(&mut self, id: DeclarationId) -> Result<(), NameId> {
         match self.ancestors_of(id) {
-            Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
-                // We succeeded in some capacity this time
-                *made_progress = true;
-            }
-            Ancestors::Partial(_) => {
-                // We still couldn't linearize ancestors, but there's a chance that this will succeed next time. We
-                // re-enqueue for another try, but we don't consider it as making progress
-                unit_queue.push_back(Unit::Ancestors(id));
+            Ancestors::Complete(_) | Ancestors::Cyclic(_) => Ok(()),
+            Ancestors::Partial(ancestors) => {
+                let missing_name_id = ancestors.iter().find_map(|ancestor| {
+                    if let Ancestor::Partial(name_id) = ancestor {
+                        Some(*name_id)
+                    } else {
+                        None
+                    }
+                });
+
+                Err(missing_name_id.unwrap())
             }
         }
     }
@@ -763,12 +750,9 @@ impl<'a> Resolver<'a> {
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
 
-                let (singleton_parent_id, partial_singleton) = self.singleton_parent_id(owner_id);
-                if partial_singleton {
-                    context.partial = true;
-                }
+                let (singleton_parent_id, missing_name) = self.singleton_parent_id(owner_id);
 
-                Some(match self.linearize_ancestors(singleton_parent_id, context) {
+                let mut result = match self.linearize_ancestors(singleton_parent_id, context) {
                     Ancestors::Complete(ids) => ids,
                     Ancestors::Cyclic(ids) => {
                         context.cyclic = true;
@@ -778,7 +762,14 @@ impl<'a> Resolver<'a> {
                         context.partial = true;
                         ids
                     }
-                })
+                };
+
+                if let Some(missing_name_id) = missing_name {
+                    context.partial = true;
+                    result.push(Ancestor::Partial(missing_name_id));
+                }
+
+                Some(result)
             }
             _ => None,
         }
@@ -986,7 +977,7 @@ impl<'a> Resolver<'a> {
                 NameRef::Unresolved(_) => {
                     // The only case where we wouldn't have the nesting resolved at this point is if it's available through
                     // inheritance or if it doesn't exist, so we need to retry later
-                    Outcome::Retry
+                    Outcome::MissingName(*nesting_id)
                 }
             }
         } else {
@@ -996,7 +987,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolves a declaration ID through any alias chain to get the primary (first) namespace.
-    /// Returns `Retry` if the primary alias target hasn't been resolved yet.
+    /// Returns `MissingName` if the primary alias target hasn't been resolved yet.
     fn resolve_to_primary_namespace(
         &self,
         declaration_id: DeclarationId,
@@ -1006,7 +997,7 @@ impl<'a> Resolver<'a> {
 
         // Get the primary (first) resolved target
         let Some(&primary_id) = resolved_ids.first() else {
-            return Outcome::Retry;
+            return Outcome::Unresolved;
         };
 
         // Check if the primary result is still an unresolved alias
@@ -1014,7 +1005,9 @@ impl<'a> Resolver<'a> {
             self.graph.declarations().get(&primary_id),
             Some(Declaration::ConstantAlias(_))
         ) {
-            return Outcome::Retry;
+            return self
+                .missing_alias_target_name(primary_id)
+                .map_or(Outcome::Unresolved, Outcome::MissingName);
         }
 
         Outcome::Resolved(primary_id, linearization)
@@ -1049,7 +1042,7 @@ impl<'a> Resolver<'a> {
                         // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
                         // `Module.new`, which now seem like constants, but are actually namespaces
                         if matches!(declaration, Declaration::Constant(_)) {
-                            return Outcome::Unresolved(None);
+                            return Outcome::Unresolved;
                         }
 
                         // Resolve the namespace in case it's an alias (e.g., ALIAS::CONST where ALIAS = Foo)
@@ -1063,7 +1056,9 @@ impl<'a> Resolver<'a> {
                             match self.graph.declarations().get(&id) {
                                 Some(Declaration::ConstantAlias(_)) => {
                                     // Alias not fully resolved yet
-                                    return Outcome::Retry;
+                                    return self
+                                        .missing_alias_target_name(id)
+                                        .map_or(Outcome::Unresolved, Outcome::MissingName);
                                 }
                                 Some(Declaration::Namespace(_)) => {
                                     found_namespace = true;
@@ -1072,11 +1067,13 @@ impl<'a> Resolver<'a> {
                                             self.graph.record_resolved_name(name_id, declaration_id);
                                             return Outcome::Resolved(declaration_id, None);
                                         }
-                                        Outcome::Unresolved(Some(needs_linearization_id)) => {
+                                        Outcome::MissingAncestors(needs_linearization_id) => {
                                             missing_linearization_id.get_or_insert(needs_linearization_id);
                                         }
-                                        Outcome::Unresolved(None) => {}
-                                        Outcome::Retry => unreachable!("search_ancestors never returns Retry"),
+                                        Outcome::Unresolved => {}
+                                        Outcome::MissingName(_) => {
+                                            unreachable!("search_ancestors never returns MissingName")
+                                        }
                                     }
                                 }
                                 _ => {
@@ -1087,14 +1084,14 @@ impl<'a> Resolver<'a> {
 
                         // If no namespaces were found, this constant path can never resolve.
                         if !found_namespace {
-                            return Outcome::Unresolved(None);
+                            return Outcome::Unresolved;
                         }
 
                         // Member not found in any namespace yet - retry in case it's added later
-                        return missing_linearization_id.map_or(Outcome::Retry, |id| Outcome::Unresolved(Some(id)));
+                        return missing_linearization_id.map_or(Outcome::Unresolved, Outcome::MissingAncestors);
                     }
 
-                    return Outcome::Retry;
+                    return Outcome::MissingName(*parent_scope_id);
                 }
 
                 // Otherwise, it's a simple constant read and we can resolve it directly
@@ -1132,7 +1129,7 @@ impl<'a> Resolver<'a> {
                 Some(Declaration::ConstantAlias(_)) => {
                     let targets = self.graph.alias_targets(&current).unwrap_or_default();
                     if targets.is_empty() {
-                        // Target not resolved yet, keep the alias for retry
+                        // Target not resolved yet, keep the alias as unresolved
                         results.push(current);
                     } else {
                         queue.extend(targets);
@@ -1151,6 +1148,16 @@ impl<'a> Resolver<'a> {
         results
     }
 
+    fn missing_alias_target_name(&self, alias_id: DeclarationId) -> Option<NameId> {
+        let declaration = self.graph.declarations().get(&alias_id).unwrap();
+        declaration.definitions().iter().find_map(|definition_id| {
+            match self.graph.definitions().get(definition_id).unwrap() {
+                Definition::ConstantAlias(alias_def) => Some(*alias_def.target_name_id()),
+                _ => None,
+            }
+        })
+    }
+
     fn run_resolution(&mut self, name: &Name) -> Outcome {
         let str_id = *name.str();
         let mut missing_linearization_id = None;
@@ -1158,8 +1165,8 @@ impl<'a> Resolver<'a> {
         if let Some(nesting) = name.nesting() {
             let scope_outcome = self.search_lexical_scopes(name, str_id);
 
-            // If we already resolved or need to retry, return early
-            if scope_outcome.is_resolved_or_retry() {
+            // If we already resolved or need to wait for a name to be resolved, return early
+            if scope_outcome.is_resolved_or_missing_something() {
                 return scope_outcome;
             }
 
@@ -1168,14 +1175,14 @@ impl<'a> Resolver<'a> {
                 NameRef::Resolved(nesting_name_ref) => {
                     self.search_ancestors(*nesting_name_ref.declaration_id(), str_id)
                 }
-                NameRef::Unresolved(_) => Outcome::Retry,
+                NameRef::Unresolved(_) => Outcome::MissingName(*nesting),
             };
             match ancestor_outcome {
-                Outcome::Resolved(_, _) | Outcome::Retry => return ancestor_outcome,
-                Outcome::Unresolved(Some(needs_linearization_id)) => {
+                Outcome::Resolved(_, _) | Outcome::MissingName(_) => return ancestor_outcome,
+                Outcome::MissingAncestors(needs_linearization_id) => {
                     missing_linearization_id = Some(needs_linearization_id);
                 }
-                Outcome::Unresolved(None) => {}
+                Outcome::Unresolved => {}
             }
         }
 
@@ -1186,9 +1193,9 @@ impl<'a> Resolver<'a> {
         if let Some(linearization_id) = missing_linearization_id {
             match outcome {
                 Outcome::Resolved(id, _) => Outcome::Resolved(id, Some(linearization_id)),
-                Outcome::Unresolved(_) => Outcome::Unresolved(Some(linearization_id)),
-                Outcome::Retry => {
-                    panic!("Retry shouldn't happen when searching the top level")
+                Outcome::Unresolved => Outcome::MissingAncestors(linearization_id),
+                Outcome::MissingName(_) | Outcome::MissingAncestors(_) => {
+                    panic!("MissingName or MissingAncestors shouldn't happen when searching the top level")
                 }
             }
         } else {
@@ -1215,7 +1222,7 @@ impl<'a> Resolver<'a> {
                         None
                     }
                 })
-                .unwrap_or(Outcome::Unresolved(None)),
+                .unwrap_or(Outcome::Unresolved),
             Ancestors::Partial(ids) => ids
                 .iter()
                 .find_map(|ancestor_id| {
@@ -1232,7 +1239,7 @@ impl<'a> Resolver<'a> {
                         None
                     }
                 })
-                .unwrap_or(Outcome::Unresolved(Some(declaration_id))),
+                .unwrap_or(Outcome::MissingAncestors(declaration_id)),
         }
     }
 
@@ -1251,11 +1258,11 @@ impl<'a> Resolver<'a> {
 
                 current_name = nesting_name_ref.name();
             } else {
-                return Outcome::Retry;
+                return Outcome::MissingName(*nesting_id);
             }
         }
 
-        Outcome::Unresolved(None)
+        Outcome::Unresolved
     }
 
     /// Look for the constant at the top level (member of Object)
@@ -1270,7 +1277,7 @@ impl<'a> Resolver<'a> {
             .member(&str_id)
         {
             Some(member_id) => Outcome::Resolved(*member_id, None),
-            None => Outcome::Unresolved(None),
+            None => Outcome::Unresolved,
         }
     }
 
@@ -1413,42 +1420,42 @@ impl<'a> Resolver<'a> {
     /// - Module: parent is the `Module` class
     /// - Class: parent is the singleton class of the original parent class
     /// - Singleton class: recurse as many times as necessary to wrap the original attached object's parent class
-    fn singleton_parent_id(&mut self, attached_id: DeclarationId) -> (DeclarationId, bool) {
+    fn singleton_parent_id(&mut self, attached_id: DeclarationId) -> (DeclarationId, Option<NameId>) {
         // Base case: if we reached `Object`, then the parent is `Class`
         if attached_id == *OBJECT_ID {
-            return (*CLASS_ID, false);
+            return (*CLASS_ID, None);
         }
 
         let decl = self.graph.declarations().get(&attached_id).unwrap();
 
         match decl {
-            Declaration::Namespace(Namespace::Module(_)) => (*MODULE_ID, false),
+            Declaration::Namespace(Namespace::Module(_)) => (*MODULE_ID, None),
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 // For singleton classes, we keep recursively wrapping parents until we can reach the original attached
                 // object
                 let owner_id = *decl.owner_id();
 
-                let (inner_parent, partial) = self.singleton_parent_id(owner_id);
-                (self.get_or_create_singleton_class(inner_parent), partial)
+                let (inner_parent, missing_name) = self.singleton_parent_id(owner_id);
+                (self.get_or_create_singleton_class(inner_parent), missing_name)
             }
             Declaration::Namespace(Namespace::Class(_)) => {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
 
-                let (picked_parent, partial) = self.get_parent_class(&definition_ids);
-                (self.get_or_create_singleton_class(picked_parent), partial)
+                let (picked_parent, missing_name) = self.get_parent_class(&definition_ids);
+                (self.get_or_create_singleton_class(picked_parent), missing_name)
             }
             _ => {
                 // Other declaration types (constants, methods, etc.) shouldn't reach here,
                 // but default to Object's singleton parent
-                (*CLASS_ID, false)
+                (*CLASS_ID, None)
             }
         }
     }
 
-    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (DeclarationId, bool) {
+    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (DeclarationId, Option<NameId>) {
         let mut explicit_parents = Vec::new();
-        let mut partial = false;
+        let mut missing_name = None;
 
         for definition_id in definition_ids {
             let definition = self.graph.definitions().get(definition_id).unwrap();
@@ -1467,7 +1474,9 @@ impl<'a> Resolver<'a> {
                         explicit_parents.push(*resolved.declaration_id());
                     }
                     NameRef::Unresolved(_) => {
-                        partial = true;
+                        if missing_name.is_none() {
+                            missing_name = Some(*self.graph.constant_references().get(superclass).unwrap().name_id());
+                        }
                     }
                 }
             }
@@ -1475,7 +1484,7 @@ impl<'a> Resolver<'a> {
 
         // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
         // mismatch error. TODO: We should add a diagnostic here
-        (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), partial)
+        (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), missing_name)
     }
 
     fn linearize_parent_class(
@@ -1483,9 +1492,20 @@ impl<'a> Resolver<'a> {
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Ancestors {
-        let (picked_parent, partial) = self.get_parent_class(definition_ids);
-        let result = self.linearize_ancestors(picked_parent, context);
-        if partial { result.to_partial() } else { result }
+        let (picked_parent, missing_name) = self.get_parent_class(definition_ids);
+        let mut result = self.linearize_ancestors(picked_parent, context);
+
+        if let Some(missing_name) = missing_name {
+            context.partial = true;
+            match &mut result {
+                Ancestors::Complete(ids) | Ancestors::Cyclic(ids) | Ancestors::Partial(ids) => {
+                    ids.push(Ancestor::Partial(missing_name));
+                }
+            }
+            result.to_partial()
+        } else {
+            result
+        }
     }
 
     fn mixins_of(&self, definition_id: DefinitionId) -> Option<Vec<Mixin>> {
