@@ -1,4 +1,5 @@
 use crate::{
+    assert_mem_size,
     model::ids::{NameId, ReferenceId, StringId, UriId},
     offset::Offset,
 };
@@ -13,6 +14,7 @@ pub struct ConstantReference {
     /// The offsets inside of the document where we found the reference
     offset: Offset,
 }
+assert_mem_size!(ConstantReference, 24);
 
 impl ConstantReference {
     #[must_use]
@@ -62,12 +64,20 @@ pub struct MethodRef {
     uri_id: UriId,
     /// The offsets inside of the document where we found the reference
     offset: Offset,
+    /// The receiver of the method call if it's a constant
+    receiver: Option<NameId>,
 }
+assert_mem_size!(MethodRef, 40);
 
 impl MethodRef {
     #[must_use]
-    pub fn new(str: StringId, uri_id: UriId, offset: Offset) -> Self {
-        Self { str, uri_id, offset }
+    pub fn new(str: StringId, uri_id: UriId, offset: Offset, receiver: Option<NameId>) -> Self {
+        Self {
+            str,
+            uri_id,
+            offset,
+            receiver,
+        }
     }
 
     #[must_use]
@@ -83,6 +93,11 @@ impl MethodRef {
     #[must_use]
     pub fn offset(&self) -> &Offset {
         &self.offset
+    }
+
+    #[must_use]
+    pub fn receiver(&self) -> Option<NameId> {
+        self.receiver
     }
 
     #[must_use]

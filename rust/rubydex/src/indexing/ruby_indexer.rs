@@ -496,10 +496,10 @@ impl<'a> RubyIndexer<'a> {
         Some(name_id)
     }
 
-    fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location) {
+    fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location, receiver: Option<NameId>) {
         let offset = Offset::from_prism_location(location);
         let str_id = self.local_graph.intern_string(name);
-        let reference = MethodRef::new(str_id, self.uri_id, offset);
+        let reference = MethodRef::new(str_id, self.uri_id, offset, receiver);
         self.local_graph.add_method_reference(reference);
     }
 
@@ -1002,6 +1002,92 @@ impl<'a> RubyIndexer<'a> {
             .last()
             .expect("visibility stack should not be empty")
     }
+
+    fn method_receiver(&mut self, receiver: Option<&ruby_prism::Node>) -> Option<NameId> {
+        let mut is_singleton_name = false;
+
+        let name_id = match receiver {
+            Some(ruby_prism::Node::SelfNode { .. }) | None => {
+                // Implicit or explicit self receiver
+
+                match self.nesting_stack.last() {
+                    Some(Nesting::LexicalScope(id) | Nesting::Owner(id)) => {
+                        let definition = self
+                            .local_graph
+                            .definitions()
+                            .get(id)
+                            .expect("Nesting definition should exist");
+
+                        match definition {
+                            Definition::Class(class_def) => Some(*class_def.name_id()),
+                            Definition::Module(module_def) => Some(*module_def.name_id()),
+                            Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
+                            Definition::Method(_) => None,
+                            _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
+                        }
+                    }
+                    Some(Nesting::Method(id)) => {
+                        // If we're inside a method definition, we need to check what its receiver is as that changes the type of `self`
+                        let Some(Definition::Method(definition)) = self.local_graph.definitions().get(id) else {
+                            unreachable!("method definition for nesting should exist")
+                        };
+
+                        if let Some(method_def_receiver) = definition.receiver() {
+                            is_singleton_name = true;
+                            Some(*method_def_receiver)
+                        } else {
+                            self.current_owner_name_id()
+                        }
+                    }
+                    None => {
+                        let str_id = self.local_graph.intern_string("Object".into());
+                        Some(self.local_graph.add_name(Name::new(str_id, ParentScope::None, None)))
+                    }
+                }
+            }
+            Some(ruby_prism::Node::CallNode { .. }) => {
+                // Check if the receiver is `singleton_class`
+                let call_node = receiver.unwrap().as_call_node().unwrap();
+
+                if call_node.name().as_slice() == b"singleton_class" {
+                    is_singleton_name = true;
+                    self.method_receiver(call_node.receiver().as_ref())
+                } else {
+                    None
+                }
+            }
+            Some(node) => {
+                is_singleton_name = true;
+                self.index_constant_reference(node, true)
+            }
+        }?;
+
+        if !is_singleton_name {
+            return Some(name_id);
+        }
+
+        let singleton_class_name = {
+            let name = self
+                .local_graph
+                .names()
+                .get(&name_id)
+                .expect("Indexed constant name should exist");
+
+            let target_str = self
+                .local_graph
+                .strings()
+                .get(name.str())
+                .expect("Indexed constant string should exist");
+
+            format!("<{}>", target_str.as_str())
+        };
+
+        let string_id = self.local_graph.intern_string(singleton_class_name);
+        Some(
+            self.local_graph
+                .add_name(Name::new(string_id, ParentScope::Some(name_id), None)),
+        )
+    }
 }
 
 struct CommentGroup {
@@ -1277,10 +1363,14 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
                 ruby_prism::Node::CallTargetNode { .. } => {
                     let call_target_node = left.as_call_target_node().unwrap();
-                    self.visit(&call_target_node.receiver());
+                    let method_receiver = self.method_receiver(Some(&call_target_node.receiver()));
+
+                    if method_receiver.is_none() {
+                        self.visit(&call_target_node.receiver());
+                    }
 
                     let name = String::from_utf8_lossy(call_target_node.name().as_slice()).to_string();
-                    self.index_method_reference(name, &call_target_node.location());
+                    self.index_method_reference(name, &call_target_node.location(), method_receiver);
                 }
                 _ => {}
             }
@@ -1517,7 +1607,8 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let new_name_str_id = self.local_graph.intern_string(format!("{new_name}()"));
                 let old_name_str_id = self.local_graph.intern_string(format!("{old_name}()"));
 
-                let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone());
+                let method_receiver = self.method_receiver(node.receiver().as_ref());
+                let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone(), method_receiver);
                 self.local_graph.add_method_reference(reference);
 
                 let offset = Offset::from_prism_location(&node.location());
@@ -1624,12 +1715,27 @@ impl Visit<'_> for RubyIndexer<'_> {
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
                 // may discover something inside
-                self.visit_call_node_parts(node);
-                self.index_method_reference(message.clone(), &node.message_loc().unwrap());
+                if let Some(arguments) = node.arguments() {
+                    self.visit_arguments_node(&arguments);
+                }
+
+                if let Some(block) = node.block() {
+                    self.visit(&block);
+                }
+
+                let method_receiver = self.method_receiver(node.receiver().as_ref());
+
+                if method_receiver.is_none()
+                    && let Some(receiver) = node.receiver()
+                {
+                    self.visit(&receiver);
+                }
+
+                self.index_method_reference(message.clone(), &node.message_loc().unwrap(), method_receiver);
 
                 match message.as_str() {
                     ">" | "<" | ">=" | "<=" => {
-                        self.index_method_reference("<=>".to_string(), &node.message_loc().unwrap());
+                        self.index_method_reference("<=>".to_string(), &node.message_loc().unwrap(), method_receiver);
                     }
                     _ => {}
                 }
@@ -1642,11 +1748,12 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
+        let method_receiver = self.method_receiver(node.receiver().as_ref());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.operator_loc());
+        self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
 
         let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.operator_loc());
+        self.index_method_reference(write_name, &node.operator_loc(), method_receiver);
 
         self.visit(&node.value());
     }
@@ -1656,11 +1763,12 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
+        let method_receiver = self.method_receiver(node.receiver().as_ref());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.call_operator_loc().unwrap());
+        self.index_method_reference(read_name, &node.call_operator_loc().unwrap(), method_receiver);
 
         let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.call_operator_loc().unwrap());
+        self.index_method_reference(write_name, &node.call_operator_loc().unwrap(), method_receiver);
 
         self.visit(&node.value());
     }
@@ -1670,11 +1778,12 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
+        let method_receiver = self.method_receiver(node.receiver().as_ref());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.operator_loc());
+        self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
 
         let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.operator_loc());
+        self.index_method_reference(write_name, &node.operator_loc(), method_receiver);
 
         self.visit(&node.value());
     }
@@ -1779,7 +1888,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 ruby_prism::Node::SymbolNode { .. } => {
                     let symbol = expression.as_symbol_node().unwrap();
                     let name = Self::location_to_string(&symbol.value_loc().unwrap());
-                    self.index_method_reference(name, &node.location());
+                    self.index_method_reference(name, &node.location(), None);
                 }
                 _ => {
                     self.visit(&expression);
@@ -1819,7 +1928,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let definition_id = self.local_graph.add_definition(definition);
 
         self.add_member_to_current_owner(definition_id);
-        self.index_method_reference(old_name, &node.old_name().location());
+        self.index_method_reference(old_name, &node.old_name().location(), None);
     }
 
     fn visit_alias_global_variable_node(&mut self, node: &ruby_prism::AliasGlobalVariableNode<'_>) {
@@ -1844,14 +1953,24 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_and_node(&mut self, node: &ruby_prism::AndNode) {
-        self.visit(&node.left());
-        self.index_method_reference("&&".to_string(), &node.location());
+        let method_receiver = self.method_receiver(Some(&node.left()));
+
+        if method_receiver.is_none() {
+            self.visit(&node.left());
+        }
+
+        self.index_method_reference("&&".to_string(), &node.location(), method_receiver);
         self.visit(&node.right());
     }
 
     fn visit_or_node(&mut self, node: &ruby_prism::OrNode) {
-        self.visit(&node.left());
-        self.index_method_reference("||".to_string(), &node.location());
+        let method_receiver = self.method_receiver(Some(&node.left()));
+
+        if method_receiver.is_none() {
+            self.visit(&node.left());
+        }
+
+        self.index_method_reference("||".to_string(), &node.location(), method_receiver);
         self.visit(&node.right());
     }
 }
@@ -4122,6 +4241,213 @@ mod tests {
     }
 
     #[test]
+    fn index_method_reference_constant_receiver() {
+        let context = index_source({
+            "
+            Foo.bar
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("bar"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                baz
+              end
+
+              def baz
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+        assert!(receiver.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_explicit_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                self.baz
+              end
+
+              def baz
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+        assert!(receiver.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver_in_method_ref_with_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def Bar.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Bar>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Bar"), *parent_scope.str());
+        assert!(parent_scope.parent_scope().is_none());
+
+        let nesting = context.graph().names().get(&parent_scope.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *nesting.str());
+        assert!(nesting.nesting().is_none());
+        assert!(nesting.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver_in_singleton_method() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.parent_scope().is_none());
+        assert!(parent_scope.nesting().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_empty_message() {
+        // Indexing this method reference is necessary for triggering the creation of the singleton class and its
+        // ancestor linearization, which then triggers correct completion
+        let context = index_source({
+            "
+            Foo.
+            "
+        });
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from(""), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_singleton_class_receiver() {
+        let context = index_source({
+            "
+            Foo.singleton_class.bar
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("bar"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<<Foo>>"), *receiver.str(),);
+        assert!(receiver.nesting().is_none());
+
+        let singleton = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("<Foo>"), *singleton.str());
+        assert!(singleton.nesting().is_none());
+
+        let attached = context
+            .graph()
+            .names()
+            .get(&singleton.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *attached.str());
+        assert!(attached.nesting().is_none());
+        assert!(attached.parent_scope().is_none());
+    }
+
+    #[test]
     fn index_method_reference_greater_than_or_equal_to_operator_references() {
         let context = index_source({
             "
@@ -4135,6 +4461,60 @@ mod tests {
         );
 
         assert_method_references_eq!(&context, ["x", "<=>", ">=", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_and_node_constant_receiver() {
+        let context = index_source({
+            "
+            Foo && bar
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("&&"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_or_node_constant_receiver() {
+        let context = index_source({
+            "
+            Foo || bar
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("||"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
     }
 
     #[test]
