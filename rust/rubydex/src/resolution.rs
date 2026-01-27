@@ -1636,7 +1636,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo", vec!["Bar", "Baz"]);
+        assert_members_eq!(context, "Foo", ["Bar", "Baz"]);
         assert_owner_eq!(context, "Foo", "Object");
 
         assert_no_members!(context, "Foo::Bar");
@@ -1662,7 +1662,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo", vec!["@name", "initialize()"]);
+        assert_members_eq!(context, "Foo", ["@name", "initialize()"]);
         assert_owner_eq!(context, "Foo", "Object");
     }
 
@@ -1696,7 +1696,7 @@ mod tests {
         assert_no_members!(context, "Foo");
         assert_owner_eq!(context, "Foo", "Object");
 
-        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_members_eq!(context, "Bar", ["Baz"]);
         assert_owner_eq!(context, "Bar", "Object");
     }
 
@@ -1720,7 +1720,7 @@ mod tests {
         assert_no_members!(context, "Foo");
         assert_owner_eq!(context, "Foo", "Object");
 
-        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_members_eq!(context, "Bar", ["Baz"]);
         assert_owner_eq!(context, "Bar", "Object");
 
         assert_no_members!(context, "Bar::Baz");
@@ -1796,13 +1796,14 @@ mod tests {
         names.sort_by_key(|a| Resolver::name_depth(a, context.graph().names()));
 
         assert_eq!(
-            vec![
+            [
                 "Top", "Foo", "Qux", "Bar", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
             ],
             names
                 .iter()
                 .map(|n| context.graph().strings().get(n.str()).unwrap().as_str())
                 .collect::<Vec<_>>()
+                .as_slice()
         );
     }
 
@@ -1827,7 +1828,7 @@ mod tests {
         assert_owner_eq!(context, "Foo", "Object");
         assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
 
-        assert_members_eq!(context, "Foo::<Foo>", vec!["BAZ", "bar()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["BAZ", "bar()"]);
         assert_owner_eq!(context, "Foo::<Foo>", "Foo");
     }
 
@@ -1855,7 +1856,7 @@ mod tests {
         assert_no_members!(context, "Foo::<Foo>");
         assert_singleton_class_eq!(context, "Foo::<Foo>", "Foo::<Foo>::<<Foo>>");
 
-        assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["baz()"]);
+        assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", ["baz()"]);
         assert_owner_eq!(context, "Foo::<Foo>::<<Foo>>", "Foo::<Foo>");
     }
 
@@ -1885,7 +1886,7 @@ mod tests {
         assert_no_members!(context, "Bar");
         assert_owner_eq!(context, "Bar", "Object");
 
-        assert_members_eq!(context, "Foo::<Foo>", vec!["Baz", "baz()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["Baz", "baz()"]);
         assert_owner_eq!(context, "Foo::<Foo>", "Foo");
     }
 
@@ -1909,7 +1910,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo", vec!["@@bar", "@@baz"]);
+        assert_members_eq!(context, "Foo", ["@@bar", "@@baz"]);
         assert_owner_eq!(context, "Foo", "Object");
     }
 
@@ -1929,7 +1930,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo", vec!["@@baz", "bar()"]);
+        assert_members_eq!(context, "Foo", ["@@baz", "bar()"]);
     }
 
     #[test]
@@ -1956,7 +1957,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_no_members!(context, "Foo");
-        assert_members_eq!(context, "Bar", vec!["@@cvar1", "@@cvar2"]);
+        assert_members_eq!(context, "Bar", ["@@cvar1", "@@cvar2"]);
     }
 
     #[test]
@@ -2032,13 +2033,13 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo::<Foo>", vec!["bar()", "baz()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["bar()", "baz()"]);
         assert_owner_eq!(context, "Foo::<Foo>", "Foo");
 
-        assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["nested_bar()"]);
+        assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", ["nested_bar()"]);
         assert_owner_eq!(context, "Foo::<Foo>::<<Foo>>", "Foo::<Foo>");
 
-        assert_members_eq!(context, "Bar::<Bar>", vec!["qux()"]);
+        assert_members_eq!(context, "Bar::<Bar>", ["qux()"]);
         assert_owner_eq!(context, "Bar::<Bar>", "Bar");
     }
 
@@ -2203,10 +2204,10 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variables_eq!(context, "Foo", vec!["@bar"]);
+        assert_instance_variables_eq!(context, "Foo", ["@bar"]);
         // @qux in `class << self; def qux` - self is Foo when called, so @qux belongs to Foo's singleton class
-        assert_instance_variables_eq!(context, "Foo::<Foo>", vec!["@baz", "@foo", "@qux"]);
-        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["@nested"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>", ["@baz", "@foo", "@qux"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", ["@nested"]);
     }
 
     #[test]
@@ -2234,8 +2235,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variables_eq!(context, "Foo::<Foo>", vec!["@foo"]);
-        assert_instance_variables_eq!(context, "Bar::<Bar>", vec!["@baz"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>", ["@foo"]);
+        assert_instance_variables_eq!(context, "Bar::<Bar>", ["@baz"]);
     }
 
     #[test]
@@ -2257,7 +2258,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
-        assert_instance_variables_eq!(context, "Bar::Baz::<Baz>", vec!["@baz"]);
+        assert_instance_variables_eq!(context, "Bar::Baz::<Baz>", ["@baz"]);
     }
 
     #[test]
@@ -2280,8 +2281,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", vec!["@bar"]);
-        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", vec!["@baz"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", ["@bar"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", ["@baz"]);
     }
 
     #[test]
@@ -2318,7 +2319,7 @@ mod tests {
 
         assert_diagnostics_eq!(
             &context,
-            vec!["dynamic-singleton-definition: Dynamic receiver for singleton method definition (2:3-4:6)",]
+            ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (2:3-4:6)",]
         );
 
         // Instance variable in method with unresolved receiver should not create a declaration
@@ -2345,7 +2346,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo", vec!["bar()", "foo()"]);
+        assert_members_eq!(context, "Foo", ["bar()", "foo()"]);
     }
 
     #[test]
@@ -2361,7 +2362,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Object", vec!["$bar", "$foo"]);
+        assert_members_eq!(context, "Object", ["$bar", "$foo"]);
     }
 
     #[test]
@@ -2676,7 +2677,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo::Bar", vec!["Qux"]);
+        assert_members_eq!(context, "Foo::Bar", ["Qux"]);
         assert_owner_eq!(context, "Foo::Bar", "Foo");
 
         assert_no_members!(context, "Foo::Bar::Qux");
@@ -2927,7 +2928,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo::Bar", vec!["Qux"]);
+        assert_members_eq!(context, "Foo::Bar", ["Qux"]);
         assert_owner_eq!(context, "Foo::Bar", "Foo");
 
         assert_no_members!(context, "Foo::Bar::Qux");
@@ -3327,7 +3328,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // Global variable aliases should still be owned by Object, regardless of where defined
-        assert_members_eq!(context, "Object", vec!["$bar", "Foo"]);
+        assert_members_eq!(context, "Object", ["$bar", "Foo"]);
     }
 
     #[test]
@@ -3347,7 +3348,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // inner_method should be owned by Foo, not by setup
-        assert_members_eq!(context, "Foo", vec!["inner_method()", "setup()"]);
+        assert_members_eq!(context, "Foo", ["inner_method()", "setup()"]);
     }
 
     #[test]
@@ -3368,14 +3369,10 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo::<Foo>", vec!["setup()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["setup()"]);
 
         // All attr_* should be owned by Foo, not by setup
-        assert_members_eq!(
-            context,
-            "Foo",
-            vec!["accessor_attr()", "reader_attr()", "writer_attr()"]
-        );
+        assert_members_eq!(context, "Foo", ["accessor_attr()", "reader_attr()", "writer_attr()"]);
     }
 
     #[test]
@@ -3978,7 +3975,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Foo", vec!["CONST"]);
+        assert_members_eq!(context, "Foo", ["CONST"]);
         assert_no_members!(context, "Bar");
     }
 
@@ -3998,7 +3995,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // Both entries exist as unique members
-        assert_members_eq!(context, "Foo", vec!["Array", "Array()"]);
+        assert_members_eq!(context, "Foo", ["Array", "Array()"]);
 
         // Both declarations exist with unique IDs
         assert!(
@@ -4114,6 +4111,6 @@ mod tests {
         assert_ancestors_eq!(context, "Bar::Foo", &["Bar::Foo"]);
 
         assert_no_members!(context, "Foo");
-        assert_members_eq!(context, "Bar::Foo", vec!["FOO"]);
+        assert_members_eq!(context, "Bar::Foo", ["FOO"]);
     }
 }

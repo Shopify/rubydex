@@ -461,7 +461,7 @@ mod tests {
         let graph_ptr = Box::into_raw(Box::new(graph)) as GraphPointer;
 
         // Build the nesting array: ["Foo"] since BAR is inside class Foo
-        let nesting_strings: Vec<CString> = vec![CString::new("Foo").unwrap()];
+        let nesting_strings = [CString::new("Foo").unwrap()];
         let nesting_ptrs: Vec<*const c_char> = nesting_strings.iter().map(|s| s.as_ptr()).collect();
 
         unsafe {

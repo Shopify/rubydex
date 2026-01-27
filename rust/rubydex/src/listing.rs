@@ -196,7 +196,7 @@ mod tests {
 
         assert_eq!(
             files,
-            vec![
+            [
                 baz.to_str().unwrap().to_string(),
                 qux.to_str().unwrap().to_string(),
                 bar.to_str().unwrap().to_string()
@@ -221,7 +221,7 @@ mod tests {
 
         assert_eq!(
             files,
-            vec![baz.to_str().unwrap().to_string(), qux.to_str().unwrap().to_string()]
+            [baz.to_str().unwrap().to_string(), qux.to_str().unwrap().to_string()]
         );
     }
 
@@ -240,7 +240,7 @@ mod tests {
 
         assert_eq!(
             errors,
-            vec![Errors::FileError(format!(
+            [Errors::FileError(format!(
                 "Path `{}` does not exist",
                 context.absolute_path_to("non_existing_path").display()
             ))]

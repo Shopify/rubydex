@@ -1165,14 +1165,14 @@ mod tests {
         let def = definitions.first().unwrap();
         assert_eq!(
             def.comments().iter().map(Comment::string).collect::<Vec<&String>>(),
-            vec!["# This is a class comment", "# Multi-line comment"]
+            ["# This is a class comment", "# Multi-line comment"]
         );
 
         let definitions = context.graph().get("CommentedModule").unwrap();
         let def = definitions.first().unwrap();
         assert_eq!(
             def.comments().iter().map(Comment::string).collect::<Vec<&String>>(),
-            vec!["# Module comment"]
+            ["# Module comment"]
         );
 
         let definitions = context.graph().get("NoCommentClass").unwrap();
@@ -1199,7 +1199,7 @@ mod tests {
         });
         context.resolve();
 
-        assert_members_eq!(context, "Foo", vec!["Bar"]);
+        assert_members_eq!(context, "Foo", ["Bar"]);
 
         // Delete `Bar`
         context.index_uri("file:///foo2.rb", {
