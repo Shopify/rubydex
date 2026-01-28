@@ -13,6 +13,12 @@ pub enum ParentScope {
     TopLevel,
     /// There's a parent scope in this reference (e.g.: `Foo::Bar`)
     Some(NameId),
+    /// Parent scope representing the class attached to a singleton class context
+    ///
+    ///  `Foo::<Foo>::<<Foo>>`
+    ///  ^ Attached for <Foo>
+    ///        ^ Attached for <<Foo>>
+    Attached(NameId),
 }
 assert_mem_size!(ParentScope, 8);
 
@@ -22,7 +28,7 @@ impl ParentScope {
         F: FnOnce(&NameId) -> T,
     {
         match self {
-            ParentScope::Some(id) => f(id),
+            ParentScope::Some(id) | ParentScope::Attached(id) => f(id),
             _ => default,
         }
     }
@@ -30,7 +36,7 @@ impl ParentScope {
     #[must_use]
     pub fn as_ref(&self) -> Option<&NameId> {
         match self {
-            ParentScope::Some(id) => Some(id),
+            ParentScope::Some(id) | ParentScope::Attached(id) => Some(id),
             _ => None,
         }
     }
@@ -51,7 +57,7 @@ impl ParentScope {
     #[must_use]
     pub fn expect(&self, message: &str) -> NameId {
         match self {
-            ParentScope::Some(id) => *id,
+            ParentScope::Some(id) | ParentScope::Attached(id) => *id,
             _ => panic!("{}", message),
         }
     }
@@ -63,6 +69,7 @@ impl Display for ParentScope {
             ParentScope::None => write!(f, "None"),
             ParentScope::TopLevel => write!(f, "TopLevel"),
             ParentScope::Some(id) => write!(f, "Some({id})"),
+            ParentScope::Attached(id) => write!(f, "Attached({id})"),
         }
     }
 }
