@@ -26,10 +26,10 @@
 use bitflags::bitflags;
 
 use crate::{
+    assert_mem_size,
     model::{
         comment::Comment,
-        ids::ReferenceId,
-        ids::{DefinitionId, NameId, StringId, UriId},
+        ids::{DefinitionId, NameId, ReferenceId, StringId, UriId},
         visibility::Visibility,
     },
     offset::Offset,
@@ -66,6 +66,7 @@ pub enum Definition {
     MethodAlias(Box<MethodAliasDefinition>),
     GlobalVariableAlias(Box<GlobalVariableAliasDefinition>),
 }
+assert_mem_size!(Definition, 16);
 
 macro_rules! all_definitions {
     ($value:expr, $var:ident => $expr:expr) => {
@@ -228,6 +229,7 @@ pub struct ClassDefinition {
     superclass_ref: Option<ReferenceId>,
     mixins: Vec<Mixin>,
 }
+assert_mem_size!(ClassDefinition, 144);
 
 impl ClassDefinition {
     #[must_use]
@@ -352,6 +354,7 @@ pub struct SingletonClassDefinition {
     /// Mixins declared in this singleton class
     mixins: Vec<Mixin>,
 }
+assert_mem_size!(SingletonClassDefinition, 128);
 
 impl SingletonClassDefinition {
     #[must_use]
@@ -455,6 +458,7 @@ pub struct ModuleDefinition {
     members: Vec<DefinitionId>,
     mixins: Vec<Mixin>,
 }
+assert_mem_size!(ModuleDefinition, 128);
 
 impl ModuleDefinition {
     #[must_use]
@@ -554,6 +558,7 @@ pub struct ConstantDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
+assert_mem_size!(ConstantDefinition, 72);
 
 impl ConstantDefinition {
     #[must_use]
@@ -623,6 +628,7 @@ pub struct ConstantAliasDefinition {
     alias_constant: ConstantDefinition,
     target_name_id: NameId,
 }
+assert_mem_size!(ConstantAliasDefinition, 80);
 
 impl ConstantAliasDefinition {
     #[must_use]
@@ -699,6 +705,7 @@ pub struct MethodDefinition {
     visibility: Visibility,
     receiver: Option<NameId>,
 }
+assert_mem_size!(MethodDefinition, 112);
 
 impl MethodDefinition {
     #[allow(clippy::too_many_arguments)]
@@ -796,12 +803,14 @@ pub enum Parameter {
     Forward(ParameterStruct),
     Block(ParameterStruct),
 }
+assert_mem_size!(Parameter, 24);
 
 #[derive(Debug, Clone)]
 pub struct ParameterStruct {
     offset: Offset,
     str: StringId,
 }
+assert_mem_size!(ParameterStruct, 16);
 
 impl ParameterStruct {
     #[must_use]
@@ -836,6 +845,7 @@ pub struct AttrAccessorDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
+assert_mem_size!(AttrAccessorDefinition, 72);
 
 impl AttrAccessorDefinition {
     #[must_use]
@@ -916,6 +926,7 @@ pub struct AttrReaderDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
+assert_mem_size!(AttrReaderDefinition, 72);
 
 impl AttrReaderDefinition {
     #[must_use]
@@ -996,6 +1007,7 @@ pub struct AttrWriterDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
+assert_mem_size!(AttrWriterDefinition, 72);
 
 impl AttrWriterDefinition {
     #[must_use]
@@ -1075,6 +1087,7 @@ pub struct GlobalVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
+assert_mem_size!(GlobalVariableDefinition, 72);
 
 impl GlobalVariableDefinition {
     #[must_use]
@@ -1147,6 +1160,7 @@ pub struct InstanceVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
+assert_mem_size!(InstanceVariableDefinition, 72);
 
 impl InstanceVariableDefinition {
     #[must_use]
@@ -1219,6 +1233,7 @@ pub struct ClassVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
+assert_mem_size!(ClassVariableDefinition, 72);
 
 impl ClassVariableDefinition {
     #[must_use]
@@ -1286,6 +1301,7 @@ pub struct MethodAliasDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
+assert_mem_size!(MethodAliasDefinition, 80);
 
 impl MethodAliasDefinition {
     #[must_use]
@@ -1366,6 +1382,7 @@ pub struct GlobalVariableAliasDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
+assert_mem_size!(GlobalVariableAliasDefinition, 80);
 
 impl GlobalVariableAliasDefinition {
     #[must_use]
