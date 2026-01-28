@@ -82,7 +82,7 @@ pub struct Name {
     /// The ID of the name for the nesting where we found this name. This effectively turns the structure into a linked
     /// list of names to represent the nesting
     nesting: Option<NameId>,
-    ref_count: usize,
+    ref_count: u32,
 }
 assert_mem_size!(Name, 48);
 
@@ -190,18 +190,24 @@ impl NameRef {
     }
 
     #[must_use]
-    pub fn ref_count(&self) -> usize {
+    pub fn ref_count(&self) -> u32 {
         match self {
             NameRef::Unresolved(name) => name.ref_count,
             NameRef::Resolved(resolved_name) => resolved_name.name.ref_count,
         }
     }
 
-    pub fn increment_ref_count(&mut self, count: usize) {
-        match self {
-            NameRef::Unresolved(name) => name.ref_count += count,
-            NameRef::Resolved(resolved_name) => resolved_name.name.ref_count += count,
-        }
+    /// # Panics
+    ///
+    /// Panics if we exceed the maximum size of the reference count
+    pub fn increment_ref_count(&mut self, count: u32) {
+        let ref_count = match self {
+            NameRef::Unresolved(name) => &mut name.ref_count,
+            NameRef::Resolved(resolved_name) => &mut resolved_name.name.ref_count,
+        };
+        *ref_count = ref_count
+            .checked_add(count)
+            .expect("Should not exceed maximum name ref count");
     }
 
     #[must_use]
