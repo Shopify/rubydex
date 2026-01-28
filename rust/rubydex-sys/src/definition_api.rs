@@ -57,7 +57,7 @@ pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
 ///
 /// This function will panic if the definition cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_definition_kind(pointer: GraphPointer, definition_id: i64) -> DefinitionKind {
+pub unsafe extern "C" fn rdx_definition_kind(pointer: GraphPointer, definition_id: u32) -> DefinitionKind {
     with_graph(pointer, |graph| {
         let definition_id = DefinitionId::new(definition_id);
         if let Some(defn) = graph.definitions().get(&definition_id) {
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn rdx_definition_kind(pointer: GraphPointer, definition_i
 ///
 /// This function will panic if the definition cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_id: i64) -> *const c_char {
+pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_id: u32) -> *const c_char {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         if let Some(defn) = graph.definitions().get(&def_id) {
@@ -99,13 +99,13 @@ pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_i
 /// Shared iterator over definition (id, kind) pairs
 #[derive(Debug)]
 pub struct DefinitionsIter {
-    pub entries: Box<[(i64, DefinitionKind)]>,
+    pub entries: Box<[(u32, DefinitionKind)]>,
     pub index: usize,
 }
 
 impl DefinitionsIter {
     #[must_use]
-    pub fn new(entries: Box<[(i64, DefinitionKind)]>) -> *mut DefinitionsIter {
+    pub fn new(entries: Box<[(u32, DefinitionKind)]>) -> *mut DefinitionsIter {
         Box::into_raw(Box::new(DefinitionsIter { entries, index: 0 }))
     }
 }
@@ -131,7 +131,7 @@ pub unsafe extern "C" fn rdx_definitions_iter_len(iter: *const DefinitionsIter) 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_definitions_iter_next(
     iter: *mut DefinitionsIter,
-    out_id: *mut i64,
+    out_id: *mut u32,
     out_kind: *mut DefinitionKind,
 ) -> bool {
     if iter.is_null() || out_id.is_null() || out_kind.is_null() {
@@ -191,7 +191,7 @@ pub struct CommentArray {
 /// # Panics
 /// This function will panic if a definition or document cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_definition_comments(pointer: GraphPointer, definition_id: i64) -> *mut CommentArray {
+pub unsafe extern "C" fn rdx_definition_comments(pointer: GraphPointer, definition_id: u32) -> *mut CommentArray {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         let Some(defn) = graph.definitions().get(&def_id) else {
@@ -265,7 +265,7 @@ pub unsafe extern "C" fn rdx_definition_comments_free(ptr: *mut CommentArray) {
 ///
 /// This function will panic if a definition or document cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_definition_location(pointer: GraphPointer, definition_id: i64) -> *mut Location {
+pub unsafe extern "C" fn rdx_definition_location(pointer: GraphPointer, definition_id: u32) -> *mut Location {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         let Some(defn) = graph.definitions().get(&def_id) else {
@@ -299,7 +299,7 @@ where
                 .map_or_else(|| panic!("Definition not found: {id:?}"), map_definition_to_kind);
             (id, kind)
         })
-        .collect::<Vec<(i64, DefinitionKind)>>()
+        .collect::<Vec<(u32, DefinitionKind)>>()
         .into_boxed_slice();
 
     DefinitionsIter::new(entries)
@@ -314,7 +314,7 @@ where
 /// # Panics
 /// This function will panic if a definition cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_definition_is_deprecated(pointer: GraphPointer, definition_id: i64) -> bool {
+pub unsafe extern "C" fn rdx_definition_is_deprecated(pointer: GraphPointer, definition_id: u32) -> bool {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         let defn = graph.definitions().get(&def_id).expect("definition not found");
@@ -335,7 +335,7 @@ pub unsafe extern "C" fn rdx_definition_is_deprecated(pointer: GraphPointer, def
 /// # Panics
 /// Panics if the definition's document does not exist in the graph.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_definition_name_location(pointer: GraphPointer, definition_id: i64) -> *mut Location {
+pub unsafe extern "C" fn rdx_definition_name_location(pointer: GraphPointer, definition_id: u32) -> *mut Location {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         let Some(defn) = graph.definitions().get(&def_id) else {

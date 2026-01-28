@@ -18,7 +18,7 @@ test_utils = ["dep:tempfile"]
 [dependencies]
 ruby-prism = "1.8.0"
 url = "2.5.4"
-xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
+xxhash-rust = { version = "0.8.15", features = ["xxh32"] }
 clap = { version = "4.5.16", features = ["derive"] }
 glob = "0.3.2"
 bitflags = "2.9"

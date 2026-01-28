@@ -1,26 +1,20 @@
-//! This module contains stable ID representations that compose the `Graph` global representation
-
 use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
     ops::Deref,
 };
-use xxhash_rust::xxh3::xxh3_64;
+use xxhash_rust::xxh32;
 
-/// A stable ID representation using i64.
-///
-/// We use i64 instead of u64 because `SQLite` doesn't support unsigned integers.
-/// IDs are generated from `xxh3_64` hashes (u64) then cast to i64, preserving all bits.
-/// Negative values are expected and normal - not a sign of memory corruption.
+/// A deterministic type-safe ID representation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Id<T> {
-    value: i64,
+    value: u32,
     _marker: PhantomData<T>,
 }
 
 impl<T> Id<T> {
     #[must_use]
-    pub fn new(value: i64) -> Self {
+    pub fn new(value: u32) -> Self {
         Self {
             value,
             _marker: PhantomData,
@@ -29,7 +23,7 @@ impl<T> Id<T> {
 }
 
 impl<T> Deref for Id<T> {
-    type Target = i64;
+    type Target = u32;
 
     fn deref(&self) -> &Self::Target {
         &self.value
@@ -44,21 +38,21 @@ impl<T> std::fmt::Display for Id<T> {
 
 impl<T> Hash for Id<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_i64(self.value);
+        state.write_u32(self.value);
     }
 }
 
 impl<T> From<&str> for Id<T> {
     fn from(value: &str) -> Self {
-        let hash = xxh3_64(value.as_bytes());
-        Self::new(hash.cast_signed())
+        let hash = xxh32::xxh32(value.as_bytes(), 0);
+        Self::new(hash)
     }
 }
 
 impl<T> From<&String> for Id<T> {
     fn from(value: &String) -> Self {
-        let hash = xxh3_64(value.as_bytes());
-        Self::new(hash.cast_signed())
+        let hash = xxh32::xxh32(value.as_bytes(), 0);
+        Self::new(hash)
     }
 }
 

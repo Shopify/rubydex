@@ -65,7 +65,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_search(
         query::declaration_search(graph, &query)
             .into_iter()
             .map(|id| *id)
-            .collect::<Vec<i64>>()
+            .collect::<Vec<u32>>()
             .into_boxed_slice()
     });
 
@@ -85,7 +85,7 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
     const_name: *const c_char,
     nesting: *const *const c_char,
     count: usize,
-) -> *const i64 {
+) -> *const u32 {
     with_mut_graph(pointer, |graph| {
         let nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, count).unwrap() };
         let const_name: String = unsafe { utils::convert_char_ptr_to_string(const_name).unwrap() };
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn rdx_graph_set_encoding(pointer: GraphPointer, encoding_
 #[derive(Debug)]
 pub struct DeclarationsIter {
     /// The snapshot of declaration IDs
-    ids: Box<[i64]>,
+    ids: Box<[u32]>,
     /// The current index of the iterator
     index: usize,
 }
@@ -210,7 +210,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) 
             .declarations()
             .keys()
             .map(|name_id| **name_id)
-            .collect::<Vec<i64>>()
+            .collect::<Vec<u32>>()
             .into_boxed_slice()
     });
 
@@ -239,7 +239,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_len(iter: *const Declaratio
 /// - `iter` must be a valid pointer previously returned by `rdx_graph_declarations_iter_new`.
 /// - `out_id` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_declarations_iter_next(iter: *mut DeclarationsIter, out_id: *mut i64) -> bool {
+pub unsafe extern "C" fn rdx_graph_declarations_iter_next(iter: *mut DeclarationsIter, out_id: *mut u32) -> bool {
     if iter.is_null() || out_id.is_null() {
         return false;
     }
@@ -279,7 +279,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_free(iter: *mut Declaration
 #[derive(Debug)]
 pub struct DocumentsIter {
     /// The snapshot of document (URI) IDs
-    ids: Box<[i64]>,
+    ids: Box<[u32]>,
     /// The current index of the iterator
     index: usize,
 }
@@ -298,7 +298,7 @@ pub unsafe extern "C" fn rdx_graph_documents_iter_new(pointer: GraphPointer) -> 
             .documents()
             .keys()
             .map(|uri_id| **uri_id)
-            .collect::<Vec<i64>>()
+            .collect::<Vec<u32>>()
             .into_boxed_slice()
     });
 
@@ -327,7 +327,7 @@ pub unsafe extern "C" fn rdx_graph_documents_iter_len(iter: *const DocumentsIter
 /// - `iter` must be a valid pointer previously returned by `rdx_graph_documents_iter_new`.
 /// - `out_id` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_documents_iter_next(iter: *mut DocumentsIter, out_id: *mut i64) -> bool {
+pub unsafe extern "C" fn rdx_graph_documents_iter_next(iter: *mut DocumentsIter, out_id: *mut u32) -> bool {
     if iter.is_null() || out_id.is_null() {
         return false;
     }
@@ -369,7 +369,7 @@ pub unsafe extern "C" fn rdx_graph_documents_iter_free(iter: *mut DocumentsIter)
 /// - `name` must be a valid, null-terminated UTF-8 string
 /// - `out_id` must be a valid, writable pointer
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const i64 {
+pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const u32 {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
         return ptr::null();
     };
@@ -392,7 +392,7 @@ pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
     with_graph(pointer, |graph| {
-        let refs: Vec<(i64, ReferenceKind)> = graph
+        let refs: Vec<(u32, ReferenceKind)> = graph
             .constant_references()
             .keys()
             .map(|id| (**id, ReferenceKind::Constant))
@@ -409,7 +409,7 @@ pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPo
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
     with_graph(pointer, |graph| {
-        let refs: Vec<(i64, ReferenceKind)> = graph
+        let refs: Vec<(u32, ReferenceKind)> = graph
             .method_references()
             .keys()
             .map(|id| (**id, ReferenceKind::Method))

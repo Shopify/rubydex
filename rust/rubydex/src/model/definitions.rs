@@ -229,7 +229,7 @@ pub struct ClassDefinition {
     superclass_ref: Option<ReferenceId>,
     mixins: Vec<Mixin>,
 }
-assert_mem_size!(ClassDefinition, 144);
+assert_mem_size!(ClassDefinition, 120);
 
 impl ClassDefinition {
     #[must_use]
@@ -354,7 +354,7 @@ pub struct SingletonClassDefinition {
     /// Mixins declared in this singleton class
     mixins: Vec<Mixin>,
 }
-assert_mem_size!(SingletonClassDefinition, 128);
+assert_mem_size!(SingletonClassDefinition, 112);
 
 impl SingletonClassDefinition {
     #[must_use]
@@ -458,7 +458,7 @@ pub struct ModuleDefinition {
     members: Vec<DefinitionId>,
     mixins: Vec<Mixin>,
 }
-assert_mem_size!(ModuleDefinition, 128);
+assert_mem_size!(ModuleDefinition, 112);
 
 impl ModuleDefinition {
     #[must_use]
@@ -558,7 +558,7 @@ pub struct ConstantDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(ConstantDefinition, 72);
+assert_mem_size!(ConstantDefinition, 56);
 
 impl ConstantDefinition {
     #[must_use]
@@ -628,7 +628,7 @@ pub struct ConstantAliasDefinition {
     alias_constant: ConstantDefinition,
     target_name_id: NameId,
 }
-assert_mem_size!(ConstantAliasDefinition, 80);
+assert_mem_size!(ConstantAliasDefinition, 64);
 
 impl ConstantAliasDefinition {
     #[must_use]
@@ -705,7 +705,7 @@ pub struct MethodDefinition {
     visibility: Visibility,
     receiver: Option<NameId>,
 }
-assert_mem_size!(MethodDefinition, 112);
+assert_mem_size!(MethodDefinition, 88);
 
 impl MethodDefinition {
     #[allow(clippy::too_many_arguments)]
@@ -803,14 +803,14 @@ pub enum Parameter {
     Forward(ParameterStruct),
     Block(ParameterStruct),
 }
-assert_mem_size!(Parameter, 24);
+assert_mem_size!(Parameter, 16);
 
 #[derive(Debug, Clone)]
 pub struct ParameterStruct {
     offset: Offset,
     str: StringId,
 }
-assert_mem_size!(ParameterStruct, 16);
+assert_mem_size!(ParameterStruct, 12);
 
 impl ParameterStruct {
     #[must_use]
@@ -845,7 +845,7 @@ pub struct AttrAccessorDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
-assert_mem_size!(AttrAccessorDefinition, 72);
+assert_mem_size!(AttrAccessorDefinition, 56);
 
 impl AttrAccessorDefinition {
     #[must_use]
@@ -926,7 +926,7 @@ pub struct AttrReaderDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
-assert_mem_size!(AttrReaderDefinition, 72);
+assert_mem_size!(AttrReaderDefinition, 56);
 
 impl AttrReaderDefinition {
     #[must_use]
@@ -1007,7 +1007,7 @@ pub struct AttrWriterDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
-assert_mem_size!(AttrWriterDefinition, 72);
+assert_mem_size!(AttrWriterDefinition, 56);
 
 impl AttrWriterDefinition {
     #[must_use]
@@ -1087,7 +1087,7 @@ pub struct GlobalVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(GlobalVariableDefinition, 72);
+assert_mem_size!(GlobalVariableDefinition, 56);
 
 impl GlobalVariableDefinition {
     #[must_use]
@@ -1160,7 +1160,7 @@ pub struct InstanceVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(InstanceVariableDefinition, 72);
+assert_mem_size!(InstanceVariableDefinition, 56);
 
 impl InstanceVariableDefinition {
     #[must_use]
@@ -1233,7 +1233,7 @@ pub struct ClassVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(ClassVariableDefinition, 72);
+assert_mem_size!(ClassVariableDefinition, 56);
 
 impl ClassVariableDefinition {
     #[must_use]
@@ -1301,7 +1301,7 @@ pub struct MethodAliasDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(MethodAliasDefinition, 80);
+assert_mem_size!(MethodAliasDefinition, 56);
 
 impl MethodAliasDefinition {
     #[must_use]
@@ -1382,7 +1382,7 @@ pub struct GlobalVariableAliasDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(GlobalVariableAliasDefinition, 80);
+assert_mem_size!(GlobalVariableAliasDefinition, 56);
 
 impl GlobalVariableAliasDefinition {
     #[must_use]

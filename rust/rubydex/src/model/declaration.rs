@@ -475,11 +475,11 @@ impl Namespace {
 }
 
 namespace_declaration!(Class, ClassDeclaration);
-assert_mem_size!(ClassDeclaration, 224);
+assert_mem_size!(ClassDeclaration, 216);
 namespace_declaration!(Module, ModuleDeclaration);
-assert_mem_size!(ModuleDeclaration, 224);
+assert_mem_size!(ModuleDeclaration, 216);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
-assert_mem_size!(SingletonClassDeclaration, 224);
+assert_mem_size!(SingletonClassDeclaration, 216);
 
 simple_declaration!(ConstantDeclaration);
 assert_mem_size!(ConstantDeclaration, 112);
