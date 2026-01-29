@@ -13,7 +13,7 @@ use crate::model::{
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
-    name::{Name, NameRef, ParentScope},
+    name::{Name, ParentScope},
 };
 
 pub enum Unit {
@@ -280,20 +280,17 @@ impl<'a> Resolver<'a> {
                 Definition::Method(method_definition) => {
                     let str_id = *method_definition.str_id();
                     let owner_id = if let Some(receiver) = method_definition.receiver() {
-                        let receiver_decl_id = match self.graph.names().get(receiver).unwrap() {
-                            NameRef::Resolved(resolved) => *resolved.declaration_id(),
-                            NameRef::Unresolved(_) => {
-                                // Error diagnostic: if we couldn't resolve the constant being used, then we don't know
-                                // where this method is being defined. For example:
-                                //
-                                // def Foo.bar; end
-                                //
-                                // where Foo is undefined
-                                continue;
-                            }
+                        let Some(receiver_decl_id) = self.graph.resolved_names().get(receiver) else {
+                            // Error diagnostic: if we couldn't resolve the constant being used, then we don't know
+                            // where this method is being defined. For example:
+                            //
+                            // def Foo.bar; end
+                            //
+                            // where Foo is undefined
+                            continue;
                         };
 
-                        self.get_or_create_singleton_class(receiver_decl_id)
+                        self.get_or_create_singleton_class(*receiver_decl_id)
                     } else {
                         self.resolve_lexical_owner(*method_definition.lexical_nesting_id())
                     };
@@ -353,11 +350,11 @@ impl<'a> Resolver<'a> {
                         Definition::Method(method) => {
                             // Method has explicit receiver (def self.foo or def Foo.bar)
                             if let Some(receiver_name_id) = method.receiver() {
-                                let Some(NameRef::Resolved(resolved)) = self.graph.names().get(receiver_name_id) else {
+                                let Some(receiver_decl_id) = self.graph.resolved_names().get(receiver_name_id) else {
                                     // TODO: add diagnostic for unresolved receiver
                                     continue;
                                 };
-                                let receiver_decl_id = *resolved.declaration_id();
+                                let receiver_decl_id = *receiver_decl_id;
 
                                 // Instance variable in singleton method - owned by the receiver's singleton class
                                 let owner_id = self.get_or_create_singleton_class(receiver_decl_id);
@@ -806,74 +803,68 @@ impl<'a> Resolver<'a> {
 
             match mixin {
                 Mixin::Prepend(_) => {
-                    match self.graph.names().get(constant_reference.name_id()).unwrap() {
-                        NameRef::Resolved(resolved) => {
-                            let ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
-                                Ancestors::Complete(ids) => ids,
-                                Ancestors::Cyclic(ids) => {
-                                    context.cyclic = true;
-                                    ids
-                                }
-                                Ancestors::Partial(ids) => {
-                                    context.partial = true;
-                                    ids
-                                }
-                            };
+                    if let Some(declaration_id) = self.graph.resolved_names().get(constant_reference.name_id()) {
+                        let ids = match self.linearize_ancestors(*declaration_id, context) {
+                            Ancestors::Complete(ids) => ids,
+                            Ancestors::Cyclic(ids) => {
+                                context.cyclic = true;
+                                ids
+                            }
+                            Ancestors::Partial(ids) => {
+                                context.partial = true;
+                                ids
+                            }
+                        };
 
-                            // Only reorder if there are new modules to add. If all modules being
-                            // prepended are already in the chain (e.g., `prepend A` when A is already
-                            // prepended via B), Ruby treats it as a no-op and keeps the existing order.
-                            if ids.iter().any(|id| !linearized_prepends.contains(id)) {
-                                // Remove existing entries that will be re-added from the new chain
-                                linearized_prepends.retain(|id| !ids.contains(id));
+                        // Only reorder if there are new modules to add. If all modules being
+                        // prepended are already in the chain (e.g., `prepend A` when A is already
+                        // prepended via B), Ruby treats it as a no-op and keeps the existing order.
+                        if ids.iter().any(|id| !linearized_prepends.contains(id)) {
+                            // Remove existing entries that will be re-added from the new chain
+                            linearized_prepends.retain(|id| !ids.contains(id));
 
-                                for id in ids.into_iter().rev() {
-                                    linearized_prepends.push_front(id);
-                                }
+                            for id in ids.into_iter().rev() {
+                                linearized_prepends.push_front(id);
                             }
                         }
-                        NameRef::Unresolved(_) => {
-                            // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
-                            // later
-                            context.partial = true;
-                            linearized_prepends.push_front(Ancestor::Partial(*constant_reference.name_id()));
-                        }
+                    } else {
+                        // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
+                        // later
+                        context.partial = true;
+                        linearized_prepends.push_front(Ancestor::Partial(*constant_reference.name_id()));
                     }
                 }
                 Mixin::Include(_) | Mixin::Extend(_) => {
-                    match self.graph.names().get(constant_reference.name_id()).unwrap() {
-                        NameRef::Resolved(resolved) => {
-                            let mut ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
-                                Ancestors::Complete(ids) => ids,
-                                Ancestors::Cyclic(ids) => {
-                                    context.cyclic = true;
-                                    ids
-                                }
-                                Ancestors::Partial(ids) => {
-                                    context.partial = true;
-                                    ids
-                                }
-                            };
-
-                            // Prepended module are deduped based only on other prepended modules
-                            ids.retain(|id| {
-                                !linearized_prepends.contains(id)
-                                    && !linearized_includes.contains(id)
-                                    && parent_ancestors
-                                        .as_ref()
-                                        .is_none_or(|parent_ids| !parent_ids.contains(id))
-                            });
-
-                            for id in ids.into_iter().rev() {
-                                linearized_includes.push_front(id);
+                    if let Some(declaration_id) = self.graph.resolved_names().get(constant_reference.name_id()) {
+                        let mut ids = match self.linearize_ancestors(*declaration_id, context) {
+                            Ancestors::Complete(ids) => ids,
+                            Ancestors::Cyclic(ids) => {
+                                context.cyclic = true;
+                                ids
                             }
+                            Ancestors::Partial(ids) => {
+                                context.partial = true;
+                                ids
+                            }
+                        };
+
+                        // Prepended module are deduped based only on other prepended modules
+                        ids.retain(|id| {
+                            !linearized_prepends.contains(id)
+                                && !linearized_includes.contains(id)
+                                && parent_ancestors
+                                    .as_ref()
+                                    .is_none_or(|parent_ids| !parent_ids.contains(id))
+                        });
+
+                        for id in ids.into_iter().rev() {
+                            linearized_includes.push_front(id);
                         }
-                        NameRef::Unresolved(_) => {
-                            // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
-                            // later
-                            context.partial = true;
-                            linearized_includes.push_front(Ancestor::Partial(*constant_reference.name_id()));
-                        }
+                    } else {
+                        // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
+                        // later
+                        context.partial = true;
+                        linearized_includes.push_front(Ancestor::Partial(*constant_reference.name_id()));
                     }
                 }
             }
@@ -963,30 +954,29 @@ impl<'a> Resolver<'a> {
     // either the nesting or Object. If the name has a parent scope, we attempt to resolve the reference and that should be
     // the name's owner. For aliases, resolves through to get the actual namespace.
     fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
-        let name_ref = self.graph.names().get(&name_id).unwrap();
+        let name = self.graph.names().get(&name_id).unwrap();
 
-        if let ParentScope::Some(parent_scope) = name_ref.parent_scope() {
+        if let ParentScope::Some(parent_scope) = name.parent_scope() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
             match self.resolve_constant_internal(*parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
                 other => other,
             }
-        } else if let Some(nesting_id) = name_ref.nesting()
-            && !name_ref.parent_scope().is_top_level()
+        } else if let Some(nesting_id) = name.nesting()
+            && !name.parent_scope().is_top_level()
         {
             // Lexical nesting from block structure, e.g.:
             //   class ALIAS::Target
             //     CONST = 1  # CONST's nesting is the class, which may resolve to an alias target
             //   end
             // If `ALIAS` points to `Outer`, `CONST` should be owned by `Outer::Target`, not `ALIAS::Target`.
-            match self.graph.names().get(nesting_id).unwrap() {
-                NameRef::Resolved(resolved) => self.resolve_to_primary_namespace(*resolved.declaration_id(), None),
-                NameRef::Unresolved(_) => {
-                    // The only case where we wouldn't have the nesting resolved at this point is if it's available through
-                    // inheritance or if it doesn't exist, so we need to retry later
-                    Outcome::Retry(None)
-                }
+            if let Some(declaration_id) = self.graph.resolved_names().get(nesting_id) {
+                self.resolve_to_primary_namespace(*declaration_id, None)
+            } else {
+                // The only case where we wouldn't have the nesting resolved at this point is if it's available through
+                // inheritance or if it doesn't exist, so we need to retry later
+                Outcome::Retry(None)
             }
         } else {
             // Any constants at the top level are owned by Object
@@ -1023,91 +1013,90 @@ impl<'a> Resolver<'a> {
     /// reference is related to or `None`. This method mutates the graph to remember which constants have already been
     /// resolved
     fn resolve_constant_internal(&mut self, name_id: NameId) -> Outcome {
-        let name_ref = self.graph.names().get(&name_id).unwrap().clone();
+        if let Some(declaration_id) = self.graph.resolved_names().get(&name_id) {
+            Outcome::Resolved(*declaration_id, None)
+        } else {
+            let name = self.graph.names().get(&name_id).unwrap().clone();
 
-        match name_ref {
-            NameRef::Unresolved(name) => {
-                // For top level constant references starting with `::`, we can search the top level directly
-                if name.parent_scope().is_top_level() {
-                    let result = self.search_top_level(*name.str());
-
-                    if let Outcome::Resolved(declaration_id, _) = result {
-                        self.graph.record_resolved_name(name_id, declaration_id);
-                    }
-
-                    return result;
-                }
-
-                // If there's a parent scope for this constant, it means it's a constant path. We must first resolve the
-                // outer most parent, so that we can then continue resolution from there, recording the results along the
-                // way
-                if let ParentScope::Some(parent_scope_id) = name.parent_scope() {
-                    if let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() {
-                        let declaration = self.graph.declarations().get(parent_scope.declaration_id()).unwrap();
-
-                        // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
-                        // `Module.new`, which now seem like constants, but are actually namespaces
-                        if matches!(declaration, Declaration::Constant(_)) {
-                            return Outcome::Unresolved(None);
-                        }
-
-                        // Resolve the namespace in case it's an alias (e.g., ALIAS::CONST where ALIAS = Foo)
-                        // An alias can have multiple targets, so we try all of them in order.
-                        let resolved_ids = self.resolve_alias_chains(*parent_scope.declaration_id());
-
-                        // Search each resolved target for the constant. Return early if found.
-                        let mut missing_linearization_id = None;
-                        let mut found_namespace = false;
-                        for &id in &resolved_ids {
-                            match self.graph.declarations().get(&id) {
-                                Some(Declaration::ConstantAlias(_)) => {
-                                    // Alias not fully resolved yet
-                                    return Outcome::Retry(None);
-                                }
-                                Some(Declaration::Namespace(_)) => {
-                                    found_namespace = true;
-                                    match self.search_ancestors(id, *name.str()) {
-                                        Outcome::Resolved(declaration_id, _) => {
-                                            self.graph.record_resolved_name(name_id, declaration_id);
-                                            return Outcome::Resolved(declaration_id, None);
-                                        }
-                                        Outcome::Retry(Some(needs_linearization_id))
-                                        | Outcome::Unresolved(Some(needs_linearization_id)) => {
-                                            missing_linearization_id.get_or_insert(needs_linearization_id);
-                                        }
-                                        Outcome::Unresolved(None) => {}
-                                        Outcome::Retry(_) => unreachable!("search_ancestors never returns Retry"),
-                                    }
-                                }
-                                _ => {
-                                    // Not a namespace (e.g., a constant) - skip
-                                }
-                            }
-                        }
-
-                        // If no namespaces were found, this constant path can never resolve.
-                        if !found_namespace {
-                            return Outcome::Unresolved(None);
-                        }
-
-                        // Member not found in any namespace yet - retry in case it's added later
-                        return missing_linearization_id
-                            .map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)));
-                    }
-
-                    return Outcome::Retry(None);
-                }
-
-                // Otherwise, it's a simple constant read and we can resolve it directly
-                let result = self.run_resolution(&name);
+            // For top level constant references starting with `::`, we can search the top level directly
+            if name.parent_scope().is_top_level() {
+                let result = self.search_top_level(*name.str());
 
                 if let Outcome::Resolved(declaration_id, _) = result {
                     self.graph.record_resolved_name(name_id, declaration_id);
                 }
 
-                result
+                return result;
             }
-            NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
+
+            // If there's a parent scope for this constant, it means it's a constant path. We must first resolve the
+            // outer most parent, so that we can then continue resolution from there, recording the results along the
+            // way
+            if let ParentScope::Some(parent_scope_id) = name.parent_scope() {
+                if let Some(parent_decl_id) = self.graph.resolved_names().get(parent_scope_id) {
+                    let parent_decl_id = *parent_decl_id;
+                    let declaration = self.graph.declarations().get(&parent_decl_id).unwrap();
+
+                    // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
+                    // `Module.new`, which now seem like constants, but are actually namespaces
+                    if matches!(declaration, Declaration::Constant(_)) {
+                        return Outcome::Unresolved(None);
+                    }
+
+                    // Resolve the namespace in case it's an alias (e.g., ALIAS::CONST where ALIAS = Foo)
+                    // An alias can have multiple targets, so we try all of them in order.
+                    let resolved_ids = self.resolve_alias_chains(parent_decl_id);
+
+                    // Search each resolved target for the constant. Return early if found.
+                    let mut missing_linearization_id = None;
+                    let mut found_namespace = false;
+                    for &id in &resolved_ids {
+                        match self.graph.declarations().get(&id) {
+                            Some(Declaration::ConstantAlias(_)) => {
+                                // Alias not fully resolved yet
+                                return Outcome::Retry(None);
+                            }
+                            Some(Declaration::Namespace(_)) => {
+                                found_namespace = true;
+                                match self.search_ancestors(id, *name.str()) {
+                                    Outcome::Resolved(declaration_id, _) => {
+                                        self.graph.record_resolved_name(name_id, declaration_id);
+                                        return Outcome::Resolved(declaration_id, None);
+                                    }
+                                    Outcome::Retry(Some(needs_linearization_id))
+                                    | Outcome::Unresolved(Some(needs_linearization_id)) => {
+                                        missing_linearization_id.get_or_insert(needs_linearization_id);
+                                    }
+                                    Outcome::Unresolved(None) => {}
+                                    Outcome::Retry(_) => unreachable!("search_ancestors never returns Retry"),
+                                }
+                            }
+                            _ => {
+                                // Not a namespace (e.g., a constant) - skip
+                            }
+                        }
+                    }
+
+                    // If no namespaces were found, this constant path can never resolve.
+                    if !found_namespace {
+                        return Outcome::Unresolved(None);
+                    }
+
+                    // Member not found in any namespace yet - retry in case it's added later
+                    return missing_linearization_id.map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)));
+                }
+
+                return Outcome::Retry(None);
+            }
+
+            // Otherwise, it's a simple constant read and we can resolve it directly
+            let result = self.run_resolution(&name);
+
+            if let Outcome::Resolved(declaration_id, _) = result {
+                self.graph.record_resolved_name(name_id, declaration_id);
+            }
+
+            result
         }
     }
 
@@ -1165,11 +1154,10 @@ impl<'a> Resolver<'a> {
             }
 
             // Search inheritance chain
-            let ancestor_outcome = match self.graph.names().get(nesting).unwrap() {
-                NameRef::Resolved(nesting_name_ref) => {
-                    self.search_ancestors(*nesting_name_ref.declaration_id(), str_id)
-                }
-                NameRef::Unresolved(_) => Outcome::Retry(None),
+            let ancestor_outcome = if let Some(nesting_decl_id) = self.graph.resolved_names().get(nesting) {
+                self.search_ancestors(*nesting_decl_id, str_id)
+            } else {
+                Outcome::Retry(None)
             };
             match ancestor_outcome {
                 Outcome::Resolved(_, _) | Outcome::Retry(None) => return ancestor_outcome,
@@ -1249,18 +1237,18 @@ impl<'a> Resolver<'a> {
 
     /// Look for the constant in the lexical scopes that are a part of its nesting
     fn search_lexical_scopes(&self, name: &Name, str_id: StringId) -> Outcome {
-        let mut current_name = name;
+        let mut current_nesting_id = *name.nesting();
 
-        while let Some(nesting_id) = current_name.nesting() {
-            if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(nesting_id).unwrap() {
-                if let Some(declaration) = self.graph.declarations().get(nesting_name_ref.declaration_id())
+        while let Some(nesting_id) = current_nesting_id {
+            if let Some(declaration_id) = self.graph.resolved_names().get(&nesting_id) {
+                if let Some(declaration) = self.graph.declarations().get(declaration_id)
                     && !matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
                     && let Some(member) = declaration.as_namespace().unwrap().member(&str_id)
                 {
                     return Outcome::Resolved(*member, None);
                 }
 
-                current_name = nesting_name_ref.name();
+                current_nesting_id = *self.graph.names().get(&nesting_id).unwrap().nesting();
             } else {
                 return Outcome::Retry(None);
             }
@@ -1317,19 +1305,19 @@ impl<'a> Resolver<'a> {
     /// # Panics
     ///
     /// Will panic if there is inconsistent data in the graph
-    fn name_depth(name: &NameRef, names: &IdentityHashMap<NameId, NameRef>) -> u32 {
+    fn name_depth(name: &Name, names: &IdentityHashMap<NameId, Name>) -> u32 {
         if name.parent_scope().is_top_level() {
             return 1;
         }
 
         let parent_depth = name.parent_scope().map_or(0, |id| {
-            let name_ref = names.get(id).unwrap();
-            Self::name_depth(name_ref, names)
+            let parent_name = names.get(id).unwrap();
+            Self::name_depth(parent_name, names)
         });
 
         let nesting_depth = name.nesting().map_or(0, |id| {
-            let name_ref = names.get(&id).unwrap();
-            Self::name_depth(name_ref, names)
+            let nesting_name = names.get(&id).unwrap();
+            Self::name_depth(nesting_name, names)
         });
 
         parent_depth + nesting_depth + 1
@@ -1467,19 +1455,12 @@ impl<'a> Resolver<'a> {
             if let Definition::Class(class) = definition
                 && let Some(superclass) = class.superclass_ref()
             {
-                let name = self
-                    .graph
-                    .names()
-                    .get(self.graph.constant_references().get(superclass).unwrap().name_id())
-                    .unwrap();
+                let name_id = self.graph.constant_references().get(superclass).unwrap().name_id();
 
-                match name {
-                    NameRef::Resolved(resolved) => {
-                        explicit_parents.push(*resolved.declaration_id());
-                    }
-                    NameRef::Unresolved(_) => {
-                        partial = true;
-                    }
+                if let Some(declaration_id) = self.graph.resolved_names().get(name_id) {
+                    explicit_parents.push(*declaration_id);
+                } else {
+                    partial = true;
                 }
             }
         }
@@ -1625,9 +1606,8 @@ mod tests {
 
         let reference = context.graph().constant_references().values().next().unwrap();
 
-        match context.graph().names().get(reference.name_id()) {
-            Some(NameRef::Unresolved(_)) => {}
-            _ => panic!("expected unresolved constant reference"),
+        if context.graph().resolved_names().contains_key(reference.name_id()) {
+            panic!("expected unresolved constant reference");
         }
     }
 

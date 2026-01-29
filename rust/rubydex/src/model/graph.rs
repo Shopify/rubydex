@@ -9,7 +9,7 @@ use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
-use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
+use crate::model::name::{Name, ParentScope};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::stats;
@@ -31,8 +31,10 @@ pub struct Graph {
 
     // Map of unqualified names
     strings: IdentityHashMap<StringId, StringRef>,
-    // Map of names
-    names: IdentityHashMap<NameId, NameRef>,
+    // Map of names (indexing artifact)
+    names: IdentityHashMap<NameId, Name>,
+    // Map of resolved names to their declarations (resolution artifact)
+    resolved_names: IdentityHashMap<NameId, DeclarationId>,
     // Map of constant references
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
@@ -51,6 +53,7 @@ impl Graph {
             documents: IdentityHashMap::default(),
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
+            resolved_names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
@@ -79,6 +82,10 @@ impl Graph {
 
     pub fn clear_declarations(&mut self) {
         self.declarations.clear();
+    }
+
+    pub fn clear_resolved_names(&mut self) {
+        self.resolved_names.clear();
     }
 
     // Returns an immutable reference to the definitions map
@@ -241,12 +248,7 @@ impl Graph {
 
     #[must_use]
     pub fn name_id_to_declaration_id(&self, name_id: NameId) -> Option<&DeclarationId> {
-        let name = self.names.get(&name_id);
-
-        match name {
-            Some(NameRef::Resolved(resolved)) => Some(resolved.declaration_id()),
-            Some(NameRef::Unresolved(_)) | None => None,
-        }
+        self.resolved_names.get(&name_id)
     }
 
     // Returns an immutable reference to the constant references map
@@ -295,7 +297,7 @@ impl Graph {
                 entry.get_mut().increment_ref_count(1);
             }
             Entry::Vacant(entry) => {
-                entry.insert(NameRef::Unresolved(Box::new(name)));
+                entry.insert(name);
             }
         }
 
@@ -338,15 +340,11 @@ impl Graph {
             };
 
             let target_name_id = alias_def.target_name_id();
-            let Some(name_ref) = self.names.get(target_name_id) else {
-                continue;
-            };
 
-            if let NameRef::Resolved(resolved) = name_ref {
-                let target_id = *resolved.declaration_id();
-                if !targets.contains(&target_id) {
-                    targets.push(target_id);
-                }
+            if let Some(target_id) = self.resolved_names.get(target_name_id)
+                && !targets.contains(target_id)
+            {
+                targets.push(*target_id);
             }
         }
 
@@ -354,18 +352,24 @@ impl Graph {
     }
 
     #[must_use]
-    pub fn names(&self) -> &IdentityHashMap<NameId, NameRef> {
+    pub fn names(&self) -> &IdentityHashMap<NameId, Name> {
         &self.names
+    }
+
+    #[must_use]
+    pub fn resolved_names(&self) -> &IdentityHashMap<NameId, DeclarationId> {
+        &self.resolved_names
     }
 
     /// Decrements the ref count for a name and removes it if the count reaches zero.
     ///
     /// This does not recursively untrack `parent_scope` or `nesting` names.
     pub fn untrack_name(&mut self, name_id: NameId) {
-        if let Some(name_ref) = self.names.get_mut(&name_id) {
-            let string_id = *name_ref.str();
-            if !name_ref.decrement_ref_count() {
+        if let Some(name) = self.names.get_mut(&name_id) {
+            let string_id = *name.str();
+            if !name.decrement_ref_count() {
                 self.names.remove(&name_id);
+                self.resolved_names.remove(&name_id);
             }
             self.untrack_string(string_id);
         }
@@ -467,25 +471,18 @@ impl Graph {
         }
     }
 
+    /// Records that a name has been resolved to a declaration.
+    ///
     /// # Panics
     ///
-    /// This function will panic when trying to record a resolve name for a name ID that does not exist
+    /// This function will panic when trying to record a resolved name for a name ID that does not exist
     pub fn record_resolved_name(&mut self, name_id: NameId, declaration_id: DeclarationId) {
-        match self.names.entry(name_id) {
-            Entry::Occupied(entry) => match entry.get() {
-                NameRef::Unresolved(_) => {
-                    if let NameRef::Unresolved(unresolved) = entry.remove() {
-                        let resolved_name = NameRef::Resolved(Box::new(ResolvedName::new(*unresolved, declaration_id)));
-                        self.names.insert(name_id, resolved_name);
-                    }
-                }
-                NameRef::Resolved(_) => {
-                    // TODO: consider if this is a valid scenario with the resolution phase design. Either collect
-                    // metrics here or panic if it's never supposed to occur
-                }
-            },
-            Entry::Vacant(_) => panic!("Trying to record resolved name for a name ID that does not exist"),
-        }
+        assert!(
+            self.names.contains_key(&name_id),
+            "Trying to record resolved name for a name ID that does not exist"
+        );
+
+        self.resolved_names.insert(name_id, declaration_id);
     }
 
     pub fn record_resolved_reference(&mut self, reference_id: ReferenceId, declaration_id: DeclarationId) {
@@ -519,13 +516,13 @@ impl Graph {
                 }
             }
         }
-        for (name_id, name_ref) in names {
+        for (name_id, name) in names {
             match self.names.entry(name_id) {
                 Entry::Occupied(mut entry) => {
-                    entry.get_mut().increment_ref_count(name_ref.ref_count());
+                    entry.get_mut().increment_ref_count(name.ref_count());
                 }
                 Entry::Vacant(entry) => {
-                    entry.insert(name_ref);
+                    entry.insert(name);
                 }
             }
         }
@@ -560,8 +557,8 @@ impl Graph {
 
         for ref_id in document.constant_references() {
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
-                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
-                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
+                if let Some(declaration_id) = self.resolved_names.get(constant_ref.name_id())
+                    && let Some(declaration) = self.declarations.get_mut(declaration_id)
                 {
                     declaration.remove_reference(ref_id);
                 }

@@ -285,12 +285,7 @@ macro_rules! assert_constant_reference_to {
                     .constant_references()
                     .get(r)
                     .expect("Reference should exist");
-                if let $crate::model::name::NameRef::Resolved(_) = $context
-                    .graph()
-                    .names()
-                    .get(reference.name_id())
-                    .expect("Name should exist")
-                {
+                if $context.graph().resolved_names().contains_key(reference.name_id()) {
                     Some(reference)
                 } else {
                     None

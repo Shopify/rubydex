@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::model::ids::{DeclarationId, NameId, StringId};
+use crate::model::ids::{NameId, StringId};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ParentScope {
@@ -116,101 +116,20 @@ impl Name {
             self.nesting.map_or(String::from("None"), |id| id.to_string())
         ))
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedName {
-    name: Name,
-    declaration_id: DeclarationId,
-}
-
-impl ResolvedName {
-    #[must_use]
-    pub fn new(name: Name, declaration_id: DeclarationId) -> Self {
-        Self { name, declaration_id }
-    }
-
-    #[must_use]
-    pub fn name(&self) -> &Name {
-        &self.name
-    }
-
-    #[must_use]
-    pub fn declaration_id(&self) -> &DeclarationId {
-        &self.declaration_id
-    }
-}
-
-/// A usage of a constant name. This could be a constant reference or a definition like a class or module
-#[derive(Debug, Clone)]
-pub enum NameRef {
-    /// This name has not yet been resolved. We don't yet know what this name refers to or if it refers to an existing
-    /// declaration
-    Unresolved(Box<Name>),
-    /// This name has been resolved to an existing declaration
-    Resolved(Box<ResolvedName>),
-}
-
-impl NameRef {
-    #[must_use]
-    pub fn str(&self) -> &StringId {
-        match self {
-            NameRef::Unresolved(name) => name.str(),
-            NameRef::Resolved(resolved_name) => resolved_name.name.str(),
-        }
-    }
-
-    #[must_use]
-    pub fn parent_scope(&self) -> &ParentScope {
-        match self {
-            NameRef::Unresolved(name) => name.parent_scope(),
-            NameRef::Resolved(resolved_name) => resolved_name.name.parent_scope(),
-        }
-    }
-
-    #[must_use]
-    pub fn into_unresolved(self) -> Option<Name> {
-        match self {
-            NameRef::Unresolved(name) => Some(*name),
-            NameRef::Resolved(_) => None,
-        }
-    }
-
-    #[must_use]
-    pub fn nesting(&self) -> &Option<NameId> {
-        match self {
-            NameRef::Unresolved(name) => name.nesting(),
-            NameRef::Resolved(resolved_name) => resolved_name.name.nesting(),
-        }
-    }
 
     #[must_use]
     pub fn ref_count(&self) -> usize {
-        match self {
-            NameRef::Unresolved(name) => name.ref_count,
-            NameRef::Resolved(resolved_name) => resolved_name.name.ref_count,
-        }
+        self.ref_count
     }
 
     pub fn increment_ref_count(&mut self, count: usize) {
-        match self {
-            NameRef::Unresolved(name) => name.ref_count += count,
-            NameRef::Resolved(resolved_name) => resolved_name.name.ref_count += count,
-        }
+        self.ref_count += count;
     }
 
     #[must_use]
     pub fn decrement_ref_count(&mut self) -> bool {
-        match self {
-            NameRef::Unresolved(name) => {
-                name.ref_count -= 1;
-                name.ref_count > 0
-            }
-            NameRef::Resolved(resolved_name) => {
-                resolved_name.name.ref_count -= 1;
-                resolved_name.name.ref_count > 0
-            }
-        }
+        self.ref_count -= 1;
+        self.ref_count > 0
     }
 }
 

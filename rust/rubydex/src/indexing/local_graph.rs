@@ -5,7 +5,7 @@ use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
-use crate::model::name::{Name, NameRef};
+use crate::model::name::Name;
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::offset::Offset;
@@ -15,7 +15,7 @@ type LocalGraphParts = (
     Document,
     IdentityHashMap<DefinitionId, Definition>,
     IdentityHashMap<StringId, StringRef>,
-    IdentityHashMap<NameId, NameRef>,
+    IdentityHashMap<NameId, Name>,
     IdentityHashMap<ReferenceId, ConstantReference>,
     IdentityHashMap<ReferenceId, MethodRef>,
 );
@@ -26,7 +26,7 @@ pub struct LocalGraph {
     document: Document,
     definitions: IdentityHashMap<DefinitionId, Definition>,
     strings: IdentityHashMap<StringId, StringRef>,
-    names: IdentityHashMap<NameId, NameRef>,
+    names: IdentityHashMap<NameId, Name>,
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
 }
@@ -98,7 +98,7 @@ impl LocalGraph {
     // Names
 
     #[must_use]
-    pub fn names(&self) -> &IdentityHashMap<NameId, NameRef> {
+    pub fn names(&self) -> &IdentityHashMap<NameId, Name> {
         &self.names
     }
 
@@ -109,7 +109,7 @@ impl LocalGraph {
                 entry.get_mut().increment_ref_count(1);
             }
             Entry::Vacant(entry) => {
-                entry.insert(NameRef::Unresolved(Box::new(name)));
+                entry.insert(name);
             }
         }
         name_id
