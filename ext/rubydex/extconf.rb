@@ -56,7 +56,7 @@ end
 create_makefile("rubydex/rubydex")
 
 cargo_command = if ENV["SANITIZER"]
-  ENV["RUSTFLAGS"] = "-Zsanitizer=#{ENV["SANITIZER"]}"
+  ENV["RUSTFLAGS"] = "-Zsanitizer=#{ENV["SANITIZER"]} -C target-cpu=x86-64-v3"
   "cargo +nightly build -Zbuild-std #{cargo_args.join(" ")}".strip
 else
   "cargo build #{cargo_args.join(" ")}".strip
