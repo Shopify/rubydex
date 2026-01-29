@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-use crate::model::ids::{DeclarationId, NameId, StringId};
+use crate::{
+    assert_mem_size,
+    model::ids::{DeclarationId, NameId, StringId},
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ParentScope {
@@ -11,6 +14,7 @@ pub enum ParentScope {
     /// There's a parent scope in this reference (e.g.: `Foo::Bar`)
     Some(NameId),
 }
+assert_mem_size!(ParentScope, 16);
 
 impl ParentScope {
     pub fn map_or<F, T>(&self, default: T, f: F) -> T
@@ -80,6 +84,7 @@ pub struct Name {
     nesting: Option<NameId>,
     ref_count: usize,
 }
+assert_mem_size!(Name, 48);
 
 impl Name {
     #[must_use]

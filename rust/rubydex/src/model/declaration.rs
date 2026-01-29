@@ -1,3 +1,4 @@
+use crate::assert_mem_size;
 use crate::diagnostic::Diagnostic;
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
@@ -23,6 +24,7 @@ pub enum Ancestors {
     /// A partial linearization of ancestors with some parts unresolved. This chain state always triggers retries
     Partial(Vec<Ancestor>),
 }
+assert_mem_size!(Ancestors, 32);
 
 impl Ancestors {
     pub fn iter(&self) -> std::slice::Iter<'_, Ancestor> {
@@ -248,6 +250,7 @@ pub enum Declaration {
     InstanceVariable(Box<InstanceVariableDeclaration>),
     ClassVariable(Box<ClassVariableDeclaration>),
 }
+assert_mem_size!(Declaration, 16);
 
 impl Declaration {
     #[must_use]
@@ -373,6 +376,7 @@ pub enum Namespace {
     SingletonClass(Box<SingletonClassDeclaration>),
     Module(Box<ModuleDeclaration>),
 }
+assert_mem_size!(Namespace, 16);
 
 impl Namespace {
     #[must_use]
@@ -471,14 +475,24 @@ impl Namespace {
 }
 
 namespace_declaration!(Class, ClassDeclaration);
+assert_mem_size!(ClassDeclaration, 224);
 namespace_declaration!(Module, ModuleDeclaration);
+assert_mem_size!(ModuleDeclaration, 224);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
+assert_mem_size!(SingletonClassDeclaration, 224);
+
 simple_declaration!(ConstantDeclaration);
+assert_mem_size!(ConstantDeclaration, 112);
 simple_declaration!(MethodDeclaration);
+assert_mem_size!(MethodDeclaration, 112);
 simple_declaration!(GlobalVariableDeclaration);
+assert_mem_size!(GlobalVariableDeclaration, 112);
 simple_declaration!(InstanceVariableDeclaration);
+assert_mem_size!(InstanceVariableDeclaration, 112);
 simple_declaration!(ClassVariableDeclaration);
+assert_mem_size!(ClassVariableDeclaration, 112);
 simple_declaration!(ConstantAliasDeclaration);
+assert_mem_size!(ConstantAliasDeclaration, 112);
 
 #[cfg(test)]
 mod tests {
