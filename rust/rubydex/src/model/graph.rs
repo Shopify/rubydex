@@ -667,7 +667,7 @@ impl Graph {
             }
         }
 
-        self.invalidate_ancestor_chains(declarations_to_invalidate_ancestor_chains);
+        self.invalidate_ancestor_chains(declarations_to_invalidate_ancestor_chains, &declarations_to_delete);
 
         for declaration_id in declarations_to_delete {
             self.declarations.remove(&declaration_id);
@@ -701,7 +701,7 @@ impl Graph {
         }
     }
 
-    fn invalidate_ancestor_chains(&mut self, initial_ids: Vec<DeclarationId>) {
+    fn invalidate_ancestor_chains(&mut self, initial_ids: Vec<DeclarationId>, exclude_ids: &[DeclarationId]) {
         let mut queue = initial_ids;
         let mut visited = IdentityHashSet::<DeclarationId>::default();
 
@@ -741,6 +741,12 @@ impl Graph {
 
             namespace.clear_ancestors();
             namespace.clear_descendants();
+        }
+
+        if let Some(changeset) = &mut self.changeset {
+            // Filter out declarations that will be deleted
+            let to_record = visited.into_iter().filter(|id| !exclude_ids.contains(id));
+            changeset.record_invalidated_ancestors(to_record);
         }
     }
 
