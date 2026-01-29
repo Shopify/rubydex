@@ -90,7 +90,7 @@ impl<'a> Resolver<'a> {
         self.graph.clear_searches();
         // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
 
-        {
+        if !self.graph.declarations().contains_key(&*OBJECT_ID) {
             self.graph.declarations_mut().insert(
                 *OBJECT_ID,
                 Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
