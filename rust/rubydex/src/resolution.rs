@@ -83,36 +83,28 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     pub fn resolve_all(&mut self) {
-        // TODO: temporary code while we don't have synchronization. We clear all declarations instead of doing the minimal
-        // amount of work
-        self.graph.clear_declarations();
-        // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
+        self.ensure_builtins();
 
-        {
-            self.graph.declarations_mut().insert(
-                *OBJECT_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Object".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
-            self.graph.declarations_mut().insert(
-                *MODULE_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Module".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
-            self.graph.declarations_mut().insert(
-                *CLASS_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Class".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
+        let changeset = self.graph.take_changeset();
+        if changeset.is_empty() {
+            return;
         }
 
-        let (mut unit_queue, other_ids) = self.sorted_units();
+        // Detect if this is initial resolution (only builtins exist) or incremental
+        let is_initial = self.graph.declarations().len() <= 3;
+
+        let (mut unit_queue, other_ids) = if is_initial {
+            // Initial resolution: iterate directly over all definitions/references
+            self.sorted_units_all()
+        } else {
+            // Incremental resolution: only process items from the changeset
+            self.sorted_units_from_changeset(&changeset)
+        };
+
+        // Add ancestors that were invalidated and need re-linearization
+        for declaration_id in changeset.ancestors_invalidated.keys() {
+            unit_queue.push_back(Unit::Ancestors(*declaration_id));
+        }
 
         loop {
             // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
@@ -146,6 +138,84 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+
+        // For incremental resolution, re-resolve references affected by member/ancestor changes
+        if !is_initial {
+            let resolution_changeset = self.graph.take_changeset();
+
+            // Compute NET changes - members that were both added and removed cancel out
+            let removed_set: std::collections::HashSet<_> = changeset.members_removed.iter().collect();
+            let added_set: std::collections::HashSet<_> = resolution_changeset.members_added.iter().collect();
+
+            // New members: added but not removed
+            let net_added: Vec<_> = resolution_changeset
+                .members_added
+                .iter()
+                .filter(|m| !removed_set.contains(m))
+                .cloned()
+                .collect();
+
+            // Deleted members: removed but not added back
+            let net_removed: Vec<_> = changeset
+                .members_removed
+                .iter()
+                .filter(|m| !added_set.contains(m))
+                .cloned()
+                .collect();
+
+            // Compare old vs new ancestors - only include if actually changed
+            let ancestors_changed: Vec<_> = changeset
+                .ancestors_invalidated
+                .iter()
+                .filter(|(decl_id, old_ancestor_ids)| {
+                    let Some(decl) = self.graph.declarations().get(decl_id) else {
+                        return false;
+                    };
+                    let Some(namespace) = decl.as_namespace() else {
+                        return false;
+                    };
+                    let new_ancestor_ids: Vec<DeclarationId> = namespace
+                        .ancestors()
+                        .iter()
+                        .filter_map(|a| match a {
+                            Ancestor::Complete(id) => Some(*id),
+                            _ => None,
+                        })
+                        .collect();
+                    old_ancestor_ids.as_slice() != new_ancestor_ids.as_slice()
+                })
+                .map(|(decl_id, _)| *decl_id)
+                .collect();
+
+            let affected = self.graph.find_affected_references(&net_added, &net_removed, &ancestors_changed);
+            let reference_ids: Vec<_> = affected.into_iter().collect();
+            self.resolve_references(&reference_ids);
+        } else {
+            // Clear any accumulated changeset from initial resolution
+            self.graph.clear_changeset();
+        }
+    }
+
+    /// Ensures Object, Module, and Class declarations exist. This is idempotent.
+    fn ensure_builtins(&mut self) {
+        self.graph.declarations_mut().entry(*OBJECT_ID).or_insert_with(|| {
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Object".to_string(),
+                *OBJECT_ID,
+            ))))
+        });
+        self.graph.declarations_mut().entry(*MODULE_ID).or_insert_with(|| {
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Module".to_string(),
+                *OBJECT_ID,
+            ))))
+        });
+        self.graph.declarations_mut().entry(*CLASS_ID).or_insert_with(|| {
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Class".to_string(),
+                *OBJECT_ID,
+            ))))
+        });
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -154,6 +224,66 @@ impl<'a> Resolver<'a> {
         match self.resolve_constant_internal(name_id, None) {
             Outcome::Resolved(id, _) => Some(id),
             Outcome::Unresolved(_) | Outcome::Retry => None,
+        }
+    }
+
+    /// Re-resolves a set of references. This is used for incremental updates when declarations change.
+    /// For each reference:
+    /// 1. Clear its dependencies from all namespaces
+    /// 2. Remove it from the declaration it was previously resolved to
+    /// 3. Unresolve the Name to force fresh resolution
+    /// 4. Re-resolve and record the new resolution
+    pub fn resolve_references(&mut self, reference_ids: &[ReferenceId]) {
+        // Collect unique name_ids that need to be unresolved
+        let name_ids_to_unresolve: IdentityHashSet<NameId> = reference_ids
+            .iter()
+            .filter_map(|ref_id| {
+                self.graph
+                    .constant_references()
+                    .get(ref_id)
+                    .map(|cr| *cr.name_id())
+            })
+            .collect();
+
+        // Unresolve these names to force fresh resolution
+        for name_id in &name_ids_to_unresolve {
+            self.graph.unresolve_name(*name_id);
+        }
+
+        for reference_id in reference_ids {
+            let Some(constant_ref) = self.graph.constant_references().get(reference_id) else {
+                continue;
+            };
+            let name_id = *constant_ref.name_id();
+
+            // Clear old resolution state if this reference was previously resolved
+            if let Some(NameRef::Resolved(resolved)) = self.graph.names().get(&name_id) {
+                let old_declaration_id = *resolved.declaration_id();
+                if let Some(declaration) = self.graph.declarations_mut().get_mut(&old_declaration_id) {
+                    declaration.remove_reference(reference_id);
+                }
+            }
+
+            // Remove old dependencies using the reverse index (O(deps_per_ref) instead of O(declarations))
+            if let Some(old_decl_ids) = self.graph.clear_reference_dependencies(reference_id) {
+                for decl_id in old_decl_ids {
+                    if let Some(namespace) = self
+                        .graph
+                        .declarations_mut()
+                        .get_mut(&decl_id)
+                        .and_then(|d| d.as_namespace_mut())
+                    {
+                        namespace.remove_dependent(reference_id);
+                    }
+                }
+            }
+
+            match self.resolve_constant_internal(name_id, Some(*reference_id)) {
+                Outcome::Resolved(declaration_id, _) => {
+                    self.graph.record_resolved_reference(*reference_id, declaration_id);
+                }
+                Outcome::Unresolved(_) | Outcome::Retry => {}
+            }
         }
     }
 
@@ -255,6 +385,11 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for linearizing ancestors of a declaration
     fn handle_ancestor_unit(&mut self, unit_queue: &mut VecDeque<Unit>, made_progress: &mut bool, id: DeclarationId) {
+        // Skip if the declaration no longer exists (may have been deleted)
+        if self.graph.declarations().get(&id).is_none() {
+            return;
+        }
+
         match self.ancestors_of(id) {
             Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
                 // We succeeded in some capacity this time
@@ -1104,7 +1239,46 @@ impl<'a> Resolver<'a> {
 
                 result
             }
-            NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
+            NameRef::Resolved(resolved) => {
+                // Even for already-resolved names, we need to record dependencies for this specific reference
+                // so that incremental updates can find affected references
+                if let Some(ref_id) = reference_id {
+                    let resolved_decl_id = *resolved.declaration_id();
+                    let str_id = *resolved.name().str();
+
+                    // Record Negative dependencies on all nesting scopes where the constant wasn't found
+                    let mut current_nesting = *resolved.name().nesting();
+                    while let Some(nesting_id) = current_nesting {
+                        if let NameRef::Resolved(nesting_ref) = self.graph.names().get(&nesting_id).unwrap() {
+                            let nesting_decl_id = *nesting_ref.declaration_id();
+                            current_nesting = *nesting_ref.name().nesting();
+
+                            if let Some(decl) = self.graph.declarations().get(&nesting_decl_id)
+                                && !matches!(decl, Declaration::Constant(_) | Declaration::ConstantAlias(_))
+                            {
+                                // Check if the constant was found at this level
+                                if decl.as_namespace().unwrap().member(&str_id).is_some() {
+                                    // Found here - record Positive and stop
+                                    self.add_dependent(nesting_decl_id, ref_id, DependencyKind::Positive(str_id));
+                                    break;
+                                } else {
+                                    // Not found here - record Negative and continue up
+                                    self.add_dependent(nesting_decl_id, ref_id, DependencyKind::Negative(str_id));
+                                }
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Record Positive on the resolved declaration's owner (where it was actually found)
+                    if let Some(decl) = self.graph.declarations().get(&resolved_decl_id) {
+                        let owner_id = *decl.owner_id();
+                        self.add_dependent(owner_id, ref_id, DependencyKind::Positive(str_id));
+                    }
+                }
+                Outcome::Resolved(*resolved.declaration_id(), None)
+            }
         }
     }
 
@@ -1203,6 +1377,7 @@ impl<'a> Resolver<'a> {
         {
             namespace.add_dependent(ref_id, kind);
         }
+        self.graph.add_reference_dependency(ref_id, decl_id);
     }
 
     fn lookup_member(
@@ -1356,14 +1531,93 @@ impl<'a> Resolver<'a> {
         parent_depth + nesting_depth + 1
     }
 
-    /// Returns a tuple of 2 vectors:
-    /// - The first one contains all constants, sorted in order for resolution (less complex constant names first)
-    /// - The second one contains all other definitions, in no particular order
+    /// Returns sorted units from the changeset for incremental resolution.
     #[must_use]
-    fn sorted_units(&self) -> (VecDeque<Unit>, Vec<DefinitionId>) {
-        let estimated_length = self.graph.definitions().len() / 2;
-        let mut definitions = Vec::with_capacity(estimated_length);
-        let mut others = Vec::with_capacity(estimated_length);
+    fn sorted_units_from_changeset(
+        &self,
+        changeset: &crate::model::graph::ChangeSet,
+    ) -> (VecDeque<Unit>, Vec<DefinitionId>) {
+        let mut definitions = Vec::new();
+        let mut others = Vec::new();
+        let names = self.graph.names();
+
+        for id in &changeset.definitions_added {
+            let Some(definition) = self.graph.definitions().get(id) else {
+                continue;
+            };
+            let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+
+            match definition {
+                Definition::Class(def) => {
+                    definitions.push((
+                        Unit::Definition(*id),
+                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                    ));
+                }
+                Definition::Module(def) => {
+                    definitions.push((
+                        Unit::Definition(*id),
+                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                    ));
+                }
+                Definition::Constant(def) => {
+                    definitions.push((
+                        Unit::Definition(*id),
+                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                    ));
+                }
+                Definition::ConstantAlias(def) => {
+                    definitions.push((
+                        Unit::Definition(*id),
+                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                    ));
+                }
+                Definition::SingletonClass(def) => {
+                    definitions.push((
+                        Unit::Definition(*id),
+                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
+                    ));
+                }
+                _ => {
+                    others.push(*id);
+                }
+            }
+        }
+
+        definitions.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        });
+
+        let mut references: Vec<_> = changeset
+            .references_added
+            .iter()
+            .filter_map(|id| {
+                let constant_ref = self.graph.constant_references().get(id)?;
+                let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
+                Some((
+                    Unit::Reference(*id),
+                    (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
+                ))
+            })
+            .collect();
+
+        references.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        });
+
+        let mut units = definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>();
+        units.extend(references.into_iter().map(|(id, _)| id));
+
+        others.shrink_to_fit();
+
+        (units, others)
+    }
+
+    /// Returns sorted units for initial resolution by iterating directly over all definitions/references.
+    #[must_use]
+    fn sorted_units_all(&self) -> (VecDeque<Unit>, Vec<DefinitionId>) {
+        let mut definitions = Vec::new();
+        let mut others = Vec::new();
         let names = self.graph.names();
 
         for (id, definition) in self.graph.definitions() {
@@ -1432,7 +1686,7 @@ impl<'a> Resolver<'a> {
         });
 
         let mut units = definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>();
-        units.extend(references.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+        units.extend(references.into_iter().map(|(id, _)| id));
 
         others.shrink_to_fit();
 

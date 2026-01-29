@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration, Namespace};
+use crate::model::declaration::{Ancestor, Declaration, DependencyKind, Namespace};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
@@ -17,6 +17,41 @@ use crate::stats;
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
 pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
+
+/// Tracks cumulative changes to declarations since the last resolution.
+/// Used for incremental updates to re-resolve only affected references.
+#[derive(Default, Debug)]
+pub struct ChangeSet {
+    /// Definitions added that need to be processed into declarations
+    pub definitions_added: IdentityHashSet<DefinitionId>,
+    /// References added that need to be resolved
+    pub references_added: IdentityHashSet<ReferenceId>,
+    /// Members that were added to namespaces: (owner_declaration_id, member_string_id)
+    pub members_added: Vec<(DeclarationId, StringId)>,
+    /// Members that were removed from namespaces: (owner_declaration_id, member_string_id)
+    pub members_removed: Vec<(DeclarationId, StringId)>,
+    /// Declarations whose ancestors were invalidated and need re-linearization.
+    /// Maps declaration_id -> old ancestor IDs (before invalidation) for comparison.
+    pub ancestors_invalidated: std::collections::HashMap<DeclarationId, Vec<DeclarationId>>,
+}
+
+impl ChangeSet {
+    pub fn is_empty(&self) -> bool {
+        self.definitions_added.is_empty()
+            && self.references_added.is_empty()
+            && self.members_added.is_empty()
+            && self.members_removed.is_empty()
+            && self.ancestors_invalidated.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.definitions_added.clear();
+        self.references_added.clear();
+        self.members_added.clear();
+        self.members_removed.clear();
+        self.ancestors_invalidated.clear();
+    }
+}
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
@@ -40,6 +75,13 @@ pub struct Graph {
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
+
+    /// Cumulative changes since last resolution, used for incremental updates
+    changeset: ChangeSet,
+
+    /// Reverse index: which declarations does each reference depend on.
+    /// Used for efficient cleanup during re-resolution.
+    reference_dependencies: IdentityHashMap<ReferenceId, IdentityHashSet<DeclarationId>>,
 }
 
 impl Graph {
@@ -54,6 +96,8 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
+            changeset: ChangeSet::default(),
+            reference_dependencies: IdentityHashMap::default(),
         }
     }
 
@@ -453,6 +497,10 @@ impl Graph {
         member_str_id: StringId,
     ) {
         if let Some(declaration) = self.declarations.get_mut(owner_id) {
+            let is_new_member = declaration
+                .as_namespace()
+                .map_or(false, |ns| ns.member(&member_str_id).is_none());
+
             match declaration {
                 Declaration::Namespace(Namespace::Class(it)) => it.add_member(member_str_id, member_declaration_id),
                 Declaration::Namespace(Namespace::Module(it)) => it.add_member(member_str_id, member_declaration_id),
@@ -463,6 +511,10 @@ impl Graph {
                     // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
                 }
                 _ => panic!("Tried to add member to a declaration that isn't a namespace"),
+            }
+
+            if is_new_member {
+                self.changeset.members_added.push((*owner_id, member_str_id));
             }
         }
     }
@@ -488,6 +540,28 @@ impl Graph {
         }
     }
 
+    /// Reverts a resolved name back to unresolved state to allow re-resolution.
+    /// Used during incremental updates when a constant's resolution may have changed.
+    pub fn unresolve_name(&mut self, name_id: NameId) {
+        if let Some(name_ref) = self.names.get(&name_id) {
+            if let NameRef::Resolved(resolved) = name_ref {
+                let name = resolved.name().clone();
+                self.names.insert(name_id, NameRef::Unresolved(Box::new(name)));
+            }
+        }
+    }
+
+    pub fn add_reference_dependency(&mut self, reference_id: ReferenceId, declaration_id: DeclarationId) {
+        self.reference_dependencies
+            .entry(reference_id)
+            .or_default()
+            .insert(declaration_id);
+    }
+
+    pub fn clear_reference_dependencies(&mut self, reference_id: &ReferenceId) -> Option<IdentityHashSet<DeclarationId>> {
+        self.reference_dependencies.remove(reference_id)
+    }
+
     pub fn record_resolved_reference(&mut self, reference_id: ReferenceId, declaration_id: DeclarationId) {
         if let Some(declaration) = self.declarations.get_mut(&declaration_id) {
             declaration.add_reference(reference_id);
@@ -508,7 +582,12 @@ impl Graph {
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
+
+        for def_id in definitions.keys() {
+            self.changeset.definitions_added.insert(*def_id);
+        }
         self.definitions.extend(definitions);
+
         for (string_id, string_ref) in strings {
             match self.strings.entry(string_id) {
                 Entry::Occupied(mut entry) => {
@@ -528,6 +607,10 @@ impl Graph {
                     entry.insert(name_ref);
                 }
             }
+        }
+
+        for ref_id in constant_references.keys() {
+            self.changeset.references_added.insert(*ref_id);
         }
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
@@ -559,6 +642,7 @@ impl Graph {
         }
 
         for ref_id in document.constant_references() {
+            self.changeset.references_added.remove(ref_id);
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
                 if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
                     && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
@@ -577,6 +661,7 @@ impl Graph {
 
         for def_id in document.definitions() {
             definitions_to_delete.push(*def_id);
+            self.changeset.definitions_added.remove(def_id);
 
             if let Some(declaration_id) = self.definition_id_to_declaration_id(*def_id).copied()
                 && let Some(declaration) = self.declarations.get_mut(&declaration_id)
@@ -615,17 +700,16 @@ impl Graph {
         for (owner_id, member_str_id) in members_to_delete {
             // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
             if let Some(owner) = self.declarations.get_mut(&owner_id) {
-                match owner {
-                    Declaration::Namespace(Namespace::Class(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
+                let removed = match owner {
+                    Declaration::Namespace(Namespace::Class(owner)) => owner.remove_member(&member_str_id).is_some(),
                     Declaration::Namespace(Namespace::SingletonClass(owner)) => {
-                        owner.remove_member(&member_str_id);
+                        owner.remove_member(&member_str_id).is_some()
                     }
-                    Declaration::Namespace(Namespace::Module(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    _ => {} // Nothing happens
+                    Declaration::Namespace(Namespace::Module(owner)) => owner.remove_member(&member_str_id).is_some(),
+                    _ => false,
+                };
+                if removed {
+                    self.changeset.members_removed.push((owner_id, member_str_id));
                 }
             }
         }
@@ -652,6 +736,16 @@ impl Graph {
                 .as_namespace_mut()
                 .expect("expected namespace declaration");
 
+            // Store old ancestor IDs before clearing for later comparison
+            let old_ancestor_ids: Vec<DeclarationId> = namespace
+                .ancestors()
+                .iter()
+                .filter_map(|a| match a {
+                    Ancestor::Complete(id) => Some(*id),
+                    _ => None,
+                })
+                .collect();
+
             for ancestor in &namespace.ancestors() {
                 if let Ancestor::Complete(ancestor_id) = ancestor {
                     self.declarations_mut()
@@ -676,7 +770,43 @@ impl Graph {
 
             namespace.clear_ancestors();
             namespace.clear_descendants();
+
+            self.changeset
+                .ancestors_invalidated
+                .insert(declaration_id, old_ancestor_ids);
         }
+    }
+
+    pub fn find_affected_references(
+        &self,
+        members_added: &[(DeclarationId, StringId)],
+        members_removed: &[(DeclarationId, StringId)],
+        ancestors_changed: &[DeclarationId],
+    ) -> IdentityHashSet<ReferenceId> {
+        let mut affected = IdentityHashSet::default();
+
+        for (declaration_id, string_id) in members_added {
+            if let Some(namespace) = self.declarations.get(declaration_id).and_then(Declaration::as_namespace) {
+                let refs = namespace.references_with_dependency(&DependencyKind::Negative(*string_id));
+                affected.extend(refs);
+            }
+        }
+
+        for (declaration_id, string_id) in members_removed {
+            if let Some(namespace) = self.declarations.get(declaration_id).and_then(Declaration::as_namespace) {
+                let refs = namespace.references_with_dependency(&DependencyKind::Positive(*string_id));
+                affected.extend(refs);
+            }
+        }
+
+        for declaration_id in ancestors_changed {
+            if let Some(namespace) = self.declarations.get(declaration_id).and_then(Declaration::as_namespace) {
+                let refs = namespace.references_with_dependency(&DependencyKind::Ancestor);
+                affected.extend(refs);
+            }
+        }
+
+        affected
     }
 
     /// Sets the encoding that should be used for transforming byte offsets into LSP code unit line/column positions
@@ -687,6 +817,22 @@ impl Graph {
     #[must_use]
     pub fn encoding(&self) -> &Encoding {
         &self.position_encoding
+    }
+
+    #[must_use]
+    pub fn changeset(&self) -> &ChangeSet {
+        &self.changeset
+    }
+
+    /// Takes ownership of the current changeset and replaces it with an empty one.
+    /// Used after processing changes during resolution.
+    pub fn take_changeset(&mut self) -> ChangeSet {
+        std::mem::take(&mut self.changeset)
+    }
+
+    /// Clears the changeset without returning it.
+    pub fn clear_changeset(&mut self) {
+        self.changeset.clear();
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -1430,5 +1576,74 @@ mod tests {
         assert!(context.graph().get("Foo").is_none());
         assert!(context.graph().get("Foo::<Foo>").is_none());
         assert!(context.graph().get("Foo::<Foo>::<<Foo>>").is_none());
+    }
+
+    #[test]
+    fn changeset_tracks_removed_members() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; class Bar; end; end");
+        context.index_uri("file:///foo2.rb", "class Foo; end");
+        context.resolve();
+
+        assert!(context.graph().changeset().is_empty());
+
+        let foo_id = *context
+            .graph()
+            .declarations()
+            .iter()
+            .find(|(_, d)| d.name() == "Foo")
+            .unwrap()
+            .0;
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+
+        let changeset = context.graph().changeset();
+        assert_eq!(changeset.members_removed.len(), 1);
+        assert_eq!(changeset.members_removed[0].0, foo_id);
+        assert_eq!(changeset.members_removed[0].1, StringId::from("Bar"));
+
+        assert!(
+            context.graph().declarations().get(&foo_id).is_some(),
+            "Foo declaration should still exist because it has a definition in foo2.rb"
+        );
+    }
+
+    #[test]
+    fn changeset_tracks_ancestors_changed() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo < Bar; end");
+        context.index_uri("file:///bar.rb", "class Bar; end");
+        context.resolve();
+
+        assert!(context.graph().changeset().is_empty());
+
+        let foo_id = *context
+            .graph()
+            .declarations()
+            .iter()
+            .find(|(_, d)| d.name() == "Foo")
+            .unwrap()
+            .0;
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+
+        let changeset = context.graph().changeset();
+        assert!(changeset.ancestors_invalidated.contains_key(&foo_id));
+    }
+
+    #[test]
+    fn changeset_cleared_after_resolve_all() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; class Bar; end; end");
+        context.resolve();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        assert!(!context.graph().changeset().is_empty());
+
+        context.resolve();
+        assert!(context.graph().changeset().is_empty());
     }
 }

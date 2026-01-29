@@ -229,6 +229,10 @@ macro_rules! namespace_declaration {
                 self.dependents.entry(reference_id).or_default().insert(kind);
             }
 
+            pub fn remove_dependent(&mut self, reference_id: &ReferenceId) {
+                self.dependents.remove(reference_id);
+            }
+
             pub fn dependents(&self) -> &IdentityHashMap<ReferenceId, IdentityHashSet<DependencyKind>> {
                 &self.dependents
             }
@@ -512,8 +516,19 @@ impl Namespace {
         all_namespaces!(self, it => it.add_dependent(reference_id, kind));
     }
 
+    pub fn remove_dependent(&mut self, reference_id: &ReferenceId) {
+        all_namespaces!(self, it => it.remove_dependent(reference_id));
+    }
+
     pub fn dependents(&self) -> &IdentityHashMap<ReferenceId, IdentityHashSet<DependencyKind>> {
         all_namespaces!(self, it => it.dependents())
+    }
+
+    pub fn references_with_dependency(&self, kind: &DependencyKind) -> Vec<ReferenceId> {
+        self.dependents()
+            .iter()
+            .filter_map(|(ref_id, kinds)| if kinds.contains(kind) { Some(*ref_id) } else { None })
+            .collect()
     }
 }
 
