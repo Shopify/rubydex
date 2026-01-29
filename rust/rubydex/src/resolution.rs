@@ -958,23 +958,26 @@ impl<'a> Resolver<'a> {
     // the name's owner. For aliases, resolves through to get the actual namespace.
     fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
         let name = self.graph.names().get(&name_id).unwrap();
+        let parent_scope = *name.parent_scope();
+        let nesting = *name.nesting();
 
-        if let ParentScope::Some(parent_scope) = name.parent_scope() {
+        if let ParentScope::Some(parent_scope) = parent_scope {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
-            match self.resolve_constant_internal(*parent_scope) {
+            match self.resolve_constant_internal(parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
                 other => other,
             }
-        } else if let Some(nesting_id) = name.nesting()
-            && !name.parent_scope().is_top_level()
+        } else if let Some(nesting_id) = nesting
+            && !parent_scope.is_top_level()
         {
             // Lexical nesting from block structure, e.g.:
             //   class ALIAS::Target
             //     CONST = 1  # CONST's nesting is the class, which may resolve to an alias target
             //   end
             // If `ALIAS` points to `Outer`, `CONST` should be owned by `Outer::Target`, not `ALIAS::Target`.
-            if let Some(declaration_id) = self.graph.resolved_names().get(nesting_id) {
+            self.graph.add_search(nesting_id, name_id);
+            if let Some(declaration_id) = self.graph.resolved_names().get(&nesting_id) {
                 self.resolve_to_primary_namespace(*declaration_id, None)
             } else {
                 // The only case where we wouldn't have the nesting resolved at this point is if it's available through
