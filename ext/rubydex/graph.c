@@ -63,9 +63,9 @@ static VALUE graph_declarations_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    int64_t id = 0;
+    uint32_t id = 0;
     while (rdx_graph_declarations_iter_next(iter, &id)) {
-        VALUE argv[] = {self, LL2NUM(id)};
+        VALUE argv[] = {self, UINT2NUM(id)};
         VALUE handle = rb_class_new_instance(2, argv, cDeclaration);
         rb_yield(handle);
     }
@@ -141,9 +141,9 @@ static VALUE graph_documents_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    int64_t id = 0;
+    uint32_t id = 0;
     while (rdx_graph_documents_iter_next(iter, &id)) {
-        VALUE argv[] = {self, LL2NUM(id)};
+        VALUE argv[] = {self, UINT2NUM(id)};
         VALUE handle = rb_class_new_instance(2, argv, cDocument);
         rb_yield(handle);
     }
@@ -198,14 +198,14 @@ static VALUE rdxr_graph_aref(VALUE self, VALUE key) {
         rb_raise(rb_eTypeError, "expected String");
     }
 
-    const int64_t *id_ptr = rdx_graph_get_declaration(graph, StringValueCStr(key));
+    const uint32_t *id_ptr = rdx_graph_get_declaration(graph, StringValueCStr(key));
     if (id_ptr == NULL) {
         return Qnil;
     }
 
-    int64_t id = *id_ptr;
-    free_i64(id_ptr);
-    VALUE argv[] = {self, LL2NUM(id)};
+    uint32_t id = *id_ptr;
+    free_u32(id_ptr);
+    VALUE argv[] = {self, UINT2NUM(id)};
 
     return rb_class_new_instance(2, argv, cDeclaration);
 }
@@ -215,11 +215,11 @@ static VALUE graph_references_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    int64_t id = 0;
+    uint32_t id = 0;
     ReferenceKind kind;
     while (rdx_references_iter_next(iter, &id, &kind)) {
         VALUE ref_class = rdxi_reference_class_for_kind(kind);
-        VALUE argv[] = {self, LL2NUM(id)};
+        VALUE argv[] = {self, UINT2NUM(id)};
         VALUE obj = rb_class_new_instance(2, argv, ref_class);
         rb_yield(obj);
     }
@@ -333,7 +333,7 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    const int64_t *id_ptr =
+    const uint32_t *id_ptr =
         rdx_graph_resolve_constant(graph, StringValueCStr(const_name), (const char **)converted_file_paths, length);
 
     for (size_t i = 0; i < length; i++) {
@@ -345,9 +345,9 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
         return Qnil;
     }
 
-    int64_t id = *id_ptr;
-    free_i64(id_ptr);
-    VALUE argv[] = {self, LL2NUM(id)};
+    uint32_t id = *id_ptr;
+    free_u32(id_ptr);
+    VALUE argv[] = {self, UINT2NUM(id)};
 
     return rb_class_new_instance(2, argv, cDeclaration);
 }

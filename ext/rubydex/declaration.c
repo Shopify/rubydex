@@ -52,10 +52,10 @@ static VALUE declaration_definitions_yield(VALUE args) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
-    int64_t id = 0;
+    uint32_t id = 0;
     DefinitionKind kind;
     while (rdx_definitions_iter_next(iter, &id, &kind)) {
-        VALUE argv[] = {data->graph_obj, LL2NUM(id)};
+        VALUE argv[] = {data->graph_obj, UINT2NUM(id)};
         VALUE defn_class = rdxi_definition_class_for_kind(kind);
         VALUE handle = rb_class_new_instance(2, argv, defn_class);
         rb_yield(handle);
@@ -120,14 +120,14 @@ static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
         rb_raise(rb_eTypeError, "expected String");
     }
 
-    const int64_t *id_ptr = rdx_declaration_member(graph, data->id, StringValueCStr(name));
+    const uint32_t *id_ptr = rdx_declaration_member(graph, data->id, StringValueCStr(name));
     if (id_ptr == NULL) {
         return Qnil;
     }
 
-    int64_t id = *id_ptr;
-    free_i64(id_ptr);
-    VALUE argv[] = {data->graph_obj, LL2NUM(id)};
+    uint32_t id = *id_ptr;
+    free_u32(id_ptr);
+    VALUE argv[] = {data->graph_obj, UINT2NUM(id)};
 
     return rb_class_new_instance(2, argv, cDeclaration);
 }
