@@ -1,3 +1,4 @@
+pub mod change_set;
 pub mod comment;
 pub mod declaration;
 pub mod definitions;

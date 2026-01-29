@@ -3,8 +3,9 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
+use crate::model::change_set::ChangeSet;
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
-use crate::model::definitions::Definition;
+use crate::model::definitions::{Definition, Mixin};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
@@ -17,6 +18,76 @@ use crate::stats;
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
 pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefinitionShape {
+    Class {
+        name_id: NameId,
+        superclass_ref: Option<ReferenceId>,
+        mixin_refs: Vec<ReferenceId>,
+    },
+    Module {
+        name_id: NameId,
+        mixin_refs: Vec<ReferenceId>,
+    },
+    SingletonClass {
+        name_id: NameId,
+        mixin_refs: Vec<ReferenceId>,
+    },
+    Constant {
+        name_id: NameId,
+    },
+    ConstantAlias {
+        name_id: NameId,
+        target_name_id: NameId,
+    },
+}
+
+fn mixin_refs_from_mixins(mixins: &[Mixin]) -> Vec<ReferenceId> {
+    mixins.iter().map(|m| *m.constant_reference_id()).collect()
+}
+
+fn definition_shape(definition: &Definition) -> Option<DefinitionShape> {
+    match definition {
+        Definition::Class(class) => Some(DefinitionShape::Class {
+            name_id: *class.name_id(),
+            superclass_ref: class.superclass_ref().copied(),
+            mixin_refs: mixin_refs_from_mixins(class.mixins()),
+        }),
+        Definition::Module(module) => Some(DefinitionShape::Module {
+            name_id: *module.name_id(),
+            mixin_refs: mixin_refs_from_mixins(module.mixins()),
+        }),
+        Definition::SingletonClass(singleton) => Some(DefinitionShape::SingletonClass {
+            name_id: *singleton.name_id(),
+            mixin_refs: mixin_refs_from_mixins(singleton.mixins()),
+        }),
+        Definition::Constant(constant) => Some(DefinitionShape::Constant {
+            name_id: *constant.name_id(),
+        }),
+        Definition::ConstantAlias(alias) => Some(DefinitionShape::ConstantAlias {
+            name_id: *alias.name_id(),
+            target_name_id: *alias.target_name_id(),
+        }),
+        Definition::Method(_)
+        | Definition::AttrAccessor(_)
+        | Definition::AttrReader(_)
+        | Definition::AttrWriter(_)
+        | Definition::GlobalVariable(_)
+        | Definition::InstanceVariable(_)
+        | Definition::ClassVariable(_)
+        | Definition::MethodAlias(_)
+        | Definition::GlobalVariableAlias(_) => None,
+    }
+}
+
+fn definition_shapes_from_local_graph(local_graph: &LocalGraph) -> Vec<DefinitionShape> {
+    local_graph
+        .definitions()
+        .values()
+        .filter_map(definition_shape)
+        .collect()
+}
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
@@ -40,6 +111,9 @@ pub struct Graph {
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
+
+    /// Tracks changes since last resolution for incremental updates
+    change_set: ChangeSet,
 }
 
 impl Graph {
@@ -54,6 +128,7 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
+            change_set: ChangeSet::new(),
         }
     }
 
@@ -534,14 +609,50 @@ impl Graph {
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
-    /// updates to existing entries
-    pub fn update(&mut self, other: LocalGraph) {
-        // For each URI that was indexed through `other`, check what was discovered and update our current global
-        // representation
+    /// updates to existing entries. Returns a reference to the `ChangeSet` that tracks what changed.
+    pub fn update(&mut self, other: LocalGraph) -> &ChangeSet {
         let uri_id = other.uri_id();
-        self.remove_definitions_for_uri(uri_id);
 
+        let has_semantic_changes = self.has_semantic_changes(uri_id, &other);
+
+        let new_reference_ids: Vec<ReferenceId> = other.constant_references().keys().copied().collect();
+
+        self.remove_definitions_for_uri(uri_id);
         self.extend(other);
+
+        self.change_set
+            .record_update(uri_id, new_reference_ids, has_semantic_changes);
+
+        &self.change_set
+    }
+
+    fn has_semantic_changes(&self, uri_id: UriId, new_graph: &LocalGraph) -> bool {
+        let Some(old_doc) = self.documents.get(&uri_id) else {
+            return true;
+        };
+
+        let old_shapes = self.definition_shapes_for_document(old_doc);
+        let new_shapes = definition_shapes_from_local_graph(new_graph);
+
+        old_shapes != new_shapes
+    }
+
+    fn definition_shapes_for_document(&self, document: &Document) -> Vec<DefinitionShape> {
+        document
+            .definitions()
+            .iter()
+            .filter_map(|def_id| self.definitions.get(def_id))
+            .filter_map(definition_shape)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn change_set(&self) -> &ChangeSet {
+        &self.change_set
+    }
+
+    pub fn change_set_mut(&mut self) -> &mut ChangeSet {
+        &mut self.change_set
     }
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
@@ -1430,5 +1541,134 @@ mod tests {
         assert!(context.graph().get("Foo").is_none());
         assert!(context.graph().get("Foo::<Foo>").is_none());
         assert!(context.graph().get("Foo::<Foo>::<<Foo>>").is_none());
+    }
+
+    #[test]
+    fn change_set_detects_semantic_changes_for_new_document() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+
+        assert!(context.graph().change_set().requires_full_resolution());
+    }
+
+    #[test]
+    fn change_set_detects_offset_only_changes() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.resolve();
+        context.graph_mut().change_set_mut().clear();
+
+        context.index_uri("file:///foo.rb", "\n\n\nmodule Foo; end");
+
+        assert!(!context.graph().change_set().requires_full_resolution());
+    }
+
+    #[test]
+    fn change_set_detects_new_definition() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.resolve();
+        context.graph_mut().change_set_mut().clear();
+
+        context.index_uri("file:///foo.rb", "module Foo; end; module Bar; end");
+
+        assert!(context.graph().change_set().requires_full_resolution());
+    }
+
+    #[test]
+    fn change_set_detects_removed_definition() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end; module Bar; end");
+        context.resolve();
+        context.graph_mut().change_set_mut().clear();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+
+        assert!(context.graph().change_set().requires_full_resolution());
+    }
+
+    #[test]
+    fn change_set_detects_superclass_change() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+        context.graph_mut().change_set_mut().clear();
+
+        context.index_uri("file:///foo.rb", "class Foo < Bar; end");
+
+        assert!(context.graph().change_set().requires_full_resolution());
+    }
+
+    #[test]
+    fn change_set_detects_mixin_change() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+        context.graph_mut().change_set_mut().clear();
+
+        context.index_uri("file:///foo.rb", "class Foo; include Bar; end");
+
+        assert!(context.graph().change_set().requires_full_resolution());
+    }
+
+    #[test]
+    fn change_set_tracks_new_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.resolve();
+        context.graph_mut().change_set_mut().clear();
+
+        context.index_uri("file:///bar.rb", "Foo");
+
+        assert_eq!(context.graph().change_set().references_to_resolve().count(), 1);
+    }
+
+    #[test]
+    fn change_set_replaces_references_on_same_uri_update() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.resolve();
+
+        context.index_uri("file:///bar.rb", "Foo; Bar");
+        assert_eq!(context.graph().change_set().references_to_resolve().count(), 2);
+
+        context.index_uri("file:///bar.rb", "Foo");
+        assert_eq!(context.graph().change_set().references_to_resolve().count(), 1);
+    }
+
+    #[test]
+    fn incremental_resolution_resolves_new_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.resolve();
+
+        context.index_uri("file:///bar.rb", "Foo");
+        context.resolve_incremental();
+
+        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_eq!(foo_declaration.references().len(), 1);
+    }
+
+    #[test]
+    fn incremental_resolution_falls_back_to_full_on_semantic_changes() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.resolve();
+
+        context.index_uri("file:///foo.rb", "module Bar; end");
+        context.resolve_incremental();
+
+        assert!(context.graph().get("Bar").is_some());
+        assert!(context.graph().get("Foo").is_none());
     }
 }

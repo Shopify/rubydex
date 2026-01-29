@@ -28,6 +28,11 @@ impl GraphTest {
     }
 
     #[must_use]
+    pub fn graph_mut(&mut self) -> &mut Graph {
+        &mut self.graph
+    }
+
+    #[must_use]
     fn index_source(uri: &str, source: &str) -> LocalGraph {
         let mut indexer = RubyIndexer::new(uri.to_string(), source);
         indexer.index();
@@ -47,6 +52,22 @@ impl GraphTest {
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
         resolver.resolve_all();
+        self.graph.change_set_mut().clear();
+    }
+
+    pub fn resolve_incremental(&mut self) {
+        let requires_full = self.graph.change_set().requires_full_resolution();
+        let refs: Vec<_> = self.graph.change_set().references_to_resolve().copied().collect();
+
+        let mut resolver = Resolver::new(&mut self.graph);
+
+        if requires_full {
+            resolver.resolve_all();
+        } else {
+            resolver.resolve_incremental(refs.into_iter());
+        }
+
+        self.graph.change_set_mut().clear();
     }
 
     /// Parses a location string like `<file:///foo.rb:3:0-3:5>` into `(uri, start_offset, end_offset)`

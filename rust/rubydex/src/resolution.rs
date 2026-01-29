@@ -148,6 +148,43 @@ impl<'a> Resolver<'a> {
         self.handle_remaining_definitions(other_ids);
     }
 
+    /// Resolves only the specified references incrementally. This is the fast path for incremental updates
+    /// when the semantic shape of definitions hasn't changed.
+    ///
+    /// Unlike `resolve_all`, this method:
+    /// - Does NOT clear declarations (they're still valid from previous resolution)
+    /// - Does NOT process definitions (declarations already exist)
+    /// - Only resolves the specified references against existing declarations
+    pub fn resolve_incremental(&mut self, reference_ids: impl Iterator<Item = ReferenceId>) {
+        let mut unit_queue: VecDeque<Unit> = reference_ids.map(Unit::Reference).collect();
+
+        loop {
+            let mut made_progress = false;
+
+            for _ in 0..unit_queue.len() {
+                let Some(unit_id) = unit_queue.pop_front() else {
+                    break;
+                };
+
+                match unit_id {
+                    Unit::Reference(id) => {
+                        self.handle_reference_unit(&mut unit_queue, &mut made_progress, Unit::Reference(id), id);
+                    }
+                    Unit::Ancestors(id) => {
+                        self.handle_ancestor_unit(&mut unit_queue, &mut made_progress, id);
+                    }
+                    Unit::Definition(_) => {
+                        // Definitions should not appear in incremental resolution
+                    }
+                }
+            }
+
+            if !made_progress || unit_queue.is_empty() {
+                break;
+            }
+        }
+    }
+
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
     /// the Ruby API
     pub fn resolve_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
