@@ -1,3 +1,4 @@
+pub mod changeset;
 pub mod comment;
 pub mod declaration;
 pub mod definitions;

@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
+use crate::model::changeset::Changeset;
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
@@ -42,6 +43,9 @@ pub struct Graph {
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
+
+    /// Tracks changes since last resolution.
+    changeset: Option<Changeset>,
 }
 
 impl Graph {
@@ -57,6 +61,7 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
+            changeset: None,
         }
     }
 
@@ -86,6 +91,18 @@ impl Graph {
 
     pub fn clear_resolved_names(&mut self) {
         self.resolved_names.clear();
+    }
+
+    /// Returns the current changeset, if any.
+    #[must_use]
+    pub fn changeset(&self) -> Option<&Changeset> {
+        self.changeset.as_ref()
+    }
+
+    /// Initializes an empty changeset. Call this after resolution to start tracking
+    /// incremental changes. Subsequent calls to `update()` will populate the changeset.
+    pub fn init_changeset(&mut self) {
+        self.changeset = Some(Changeset::default());
     }
 
     // Returns an immutable reference to the definitions map
@@ -505,6 +522,12 @@ impl Graph {
             local_graph.into_parts();
 
         self.documents.insert(uri_id, document);
+
+        if let Some(changeset) = &mut self.changeset {
+            for definition_id in definitions.keys() {
+                changeset.record_added_definition(*definition_id);
+            }
+        }
         self.definitions.extend(definitions);
         for (string_id, string_ref) in strings {
             match self.strings.entry(string_id) {
@@ -524,6 +547,14 @@ impl Graph {
                 Entry::Vacant(entry) => {
                     entry.insert(name);
                 }
+            }
+        }
+        if let Some(changeset) = &mut self.changeset {
+            for reference_id in constant_references.keys() {
+                changeset.record_added_constant_reference(*reference_id);
+            }
+            for reference_id in method_references.keys() {
+                changeset.record_added_method_reference(*reference_id);
             }
         }
         self.constant_references.extend(constant_references);
@@ -551,12 +582,18 @@ impl Graph {
         // TODO: Remove method references from method declarations once method inference is implemented
         for ref_id in document.method_references() {
             if let Some(method_ref) = self.method_references.remove(ref_id) {
+                if let Some(changeset) = &mut self.changeset {
+                    changeset.record_removed_method_reference(*ref_id);
+                }
                 self.untrack_string(*method_ref.str());
             }
         }
 
         for ref_id in document.constant_references() {
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
+                if let Some(changeset) = &mut self.changeset {
+                    changeset.record_removed_constant_reference(*ref_id);
+                }
                 if let Some(declaration_id) = self.resolved_names.get(constant_ref.name_id())
                     && let Some(declaration) = self.declarations.get_mut(declaration_id)
                 {
@@ -628,6 +665,9 @@ impl Graph {
         }
 
         for def_id in definitions_to_delete {
+            if let Some(changeset) = &mut self.changeset {
+                changeset.record_removed_definition(def_id);
+            }
             let definition = self.definitions.remove(&def_id).unwrap();
             self.untrack_definition_strings(&definition);
         }
