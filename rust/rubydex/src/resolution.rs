@@ -113,8 +113,12 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let (mut unit_queue, other_ids) = self.sorted_units();
+        let (unit_queue, other_ids) = self.sorted_units();
+        self.process_units(unit_queue);
+        self.handle_remaining_definitions(other_ids);
+    }
 
+    fn process_units(&mut self, mut unit_queue: VecDeque<Unit>) {
         loop {
             // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
             // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
@@ -145,8 +149,6 @@ impl<'a> Resolver<'a> {
                 break;
             }
         }
-
-        self.handle_remaining_definitions(other_ids);
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
