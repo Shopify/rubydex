@@ -146,6 +146,234 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+
+        let orphaned: Vec<DefinitionId> = self
+            .graph
+            .definitions()
+            .iter()
+            .filter(|(_, definition)| {
+                let name_id = match definition {
+                    Definition::Class(def) => Some(*def.name_id()),
+                    Definition::Module(def) => Some(*def.name_id()),
+                    Definition::Constant(def) => Some(*def.name_id()),
+                    Definition::ConstantAlias(def) => Some(*def.name_id()),
+                    Definition::SingletonClass(def) => Some(*def.name_id()),
+                    _ => None,
+                };
+                let Some(name_id) = name_id else {
+                    return false;
+                };
+                matches!(self.graph.names().get(&name_id), Some(NameRef::Unresolved(_)))
+            })
+            .map(|(&def_id, _)| def_id)
+            .collect();
+        self.graph.pending_changes_mut().orphaned_definitions = orphaned;
+        self.graph.clear_pending_changes();
+    }
+
+    pub fn ensure_builtins(&mut self) {
+        if self.graph.declarations().contains_key(&*OBJECT_ID) {
+            return;
+        }
+
+        self.graph.declarations_mut().insert(
+            *OBJECT_ID,
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Object".to_string(),
+                *OBJECT_ID,
+            )))),
+        );
+        self.graph.declarations_mut().insert(
+            *MODULE_ID,
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Module".to_string(),
+                *OBJECT_ID,
+            )))),
+        );
+        self.graph.declarations_mut().insert(
+            *CLASS_ID,
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Class".to_string(),
+                *OBJECT_ID,
+            )))),
+        );
+    }
+
+    pub fn resolve_definitions(&mut self, definition_ids: &[DefinitionId]) -> Vec<DefinitionId> {
+        if definition_ids.is_empty() {
+            return Vec::new();
+        }
+
+        self.ensure_builtins();
+
+        let (constant_defs, other_defs) = self.partition_definitions(definition_ids);
+
+        let mut unit_queue: VecDeque<Unit> = constant_defs.into_iter().map(Unit::Definition).collect();
+
+        loop {
+            let mut made_progress = false;
+
+            for _ in 0..unit_queue.len() {
+                let Some(unit_id) = unit_queue.pop_front() else {
+                    break;
+                };
+
+                match unit_id {
+                    Unit::Definition(id) => {
+                        self.handle_definition_unit(&mut unit_queue, &mut made_progress, unit_id, id);
+                    }
+                    Unit::Ancestors(id) => {
+                        self.handle_ancestor_unit(&mut unit_queue, &mut made_progress, id);
+                    }
+                    Unit::Reference(_) => {}
+                }
+            }
+
+            if !made_progress || unit_queue.is_empty() {
+                break;
+            }
+        }
+
+        let orphaned: Vec<DefinitionId> = definition_ids
+            .iter()
+            .filter(|&def_id| {
+                let Some(definition) = self.graph.definitions().get(def_id) else {
+                    return false;
+                };
+                let name_id = match definition {
+                    Definition::Class(def) => Some(*def.name_id()),
+                    Definition::Module(def) => Some(*def.name_id()),
+                    Definition::Constant(def) => Some(*def.name_id()),
+                    Definition::ConstantAlias(def) => Some(*def.name_id()),
+                    Definition::SingletonClass(def) => Some(*def.name_id()),
+                    _ => None,
+                };
+                let Some(name_id) = name_id else {
+                    return false;
+                };
+                matches!(self.graph.names().get(&name_id), Some(NameRef::Unresolved(_)))
+            })
+            .copied()
+            .collect();
+
+        self.handle_remaining_definitions(other_defs);
+
+        orphaned
+    }
+
+    fn partition_definitions(&self, definition_ids: &[DefinitionId]) -> (Vec<DefinitionId>, Vec<DefinitionId>) {
+        let names = self.graph.names();
+        let mut constant_defs: Vec<_> = Vec::new();
+        let mut other_defs: Vec<_> = Vec::new();
+
+        for &id in definition_ids {
+            let Some(definition) = self.graph.definitions().get(&id) else {
+                continue;
+            };
+
+            match definition {
+                Definition::Class(def) => {
+                    let name_ref = names.get(def.name_id()).unwrap();
+                    let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+                    constant_defs.push((id, (Self::name_depth(name_ref, names), uri, definition.offset())));
+                }
+                Definition::Module(def) => {
+                    let name_ref = names.get(def.name_id()).unwrap();
+                    let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+                    constant_defs.push((id, (Self::name_depth(name_ref, names), uri, definition.offset())));
+                }
+                Definition::Constant(def) => {
+                    let name_ref = names.get(def.name_id()).unwrap();
+                    let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+                    constant_defs.push((id, (Self::name_depth(name_ref, names), uri, definition.offset())));
+                }
+                Definition::ConstantAlias(def) => {
+                    let name_ref = names.get(def.name_id()).unwrap();
+                    let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+                    constant_defs.push((id, (Self::name_depth(name_ref, names), uri, definition.offset())));
+                }
+                Definition::SingletonClass(def) => {
+                    let name_ref = names.get(def.name_id()).unwrap();
+                    let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+                    constant_defs.push((id, (Self::name_depth(name_ref, names), uri, definition.offset())));
+                }
+                _ => {
+                    other_defs.push(id);
+                }
+            }
+        }
+
+        constant_defs.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+        (constant_defs.into_iter().map(|(id, _)| id).collect(), other_defs)
+    }
+
+    pub fn resolve_references(&mut self, reference_ids: &IdentityHashSet<ReferenceId>) {
+        if reference_ids.is_empty() {
+            return;
+        }
+
+        for &ref_id in reference_ids {
+            self.clear_reference_resolution(ref_id);
+        }
+
+        let names = self.graph.names();
+        let mut references: Vec<_> = reference_ids
+            .iter()
+            .filter_map(|&id| {
+                let constant_ref = self.graph.constant_references().get(&id)?;
+                let uri = self.graph.documents().get(&constant_ref.uri_id())?.uri();
+                let name_ref = names.get(constant_ref.name_id())?;
+                Some((Unit::Reference(id), (name_ref, uri, constant_ref.offset())))
+            })
+            .collect();
+
+        references.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        });
+
+        let mut unit_queue: VecDeque<Unit> = references.into_iter().map(|(id, _)| id).collect();
+
+        loop {
+            let mut made_progress = false;
+
+            for _ in 0..unit_queue.len() {
+                let Some(unit_id) = unit_queue.pop_front() else {
+                    break;
+                };
+
+                match unit_id {
+                    Unit::Reference(id) => {
+                        self.handle_reference_unit(&mut unit_queue, &mut made_progress, unit_id, id);
+                    }
+                    Unit::Ancestors(id) => {
+                        self.handle_ancestor_unit(&mut unit_queue, &mut made_progress, id);
+                    }
+                    Unit::Definition(_) => {}
+                }
+            }
+
+            if !made_progress || unit_queue.is_empty() {
+                break;
+            }
+        }
+    }
+
+    fn clear_reference_resolution(&mut self, ref_id: ReferenceId) {
+        let Some(constant_ref) = self.graph.constant_references().get(&ref_id) else {
+            return;
+        };
+        let name_id = *constant_ref.name_id();
+
+        if let Some(NameRef::Resolved(resolved)) = self.graph.names().get(&name_id) {
+            let decl_id = *resolved.declaration_id();
+            if let Some(declaration) = self.graph.declarations_mut().get_mut(&decl_id) {
+                declaration.remove_reference(&ref_id);
+            }
+        }
+
+        // Unresolve the name so it can be re-resolved
+        self.graph.unresolve_name(name_id);
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -201,9 +429,7 @@ impl<'a> Resolver<'a> {
                 // There might be dependencies we haven't figured out yet, so we need to retry
                 unit_queue.push_back(unit_id);
             }
-            Outcome::Unresolved(None) => {
-                // We couldn't resolve this name. Emit a diagnostic
-            }
+            Outcome::Unresolved(None) => {}
             Outcome::Unresolved(Some(id_needing_linearization)) => {
                 unit_queue.push_back(unit_id);
                 unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
@@ -228,14 +454,15 @@ impl<'a> Resolver<'a> {
         id: ReferenceId,
     ) {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
+        let name_id = *constant_ref.name_id();
 
-        match self.resolve_constant_internal(*constant_ref.name_id()) {
+        match self.resolve_constant_internal(name_id) {
             Outcome::Retry => {
                 // There might be dependencies we haven't figured out yet, so we need to retry
                 unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
-                // We couldn't resolve this name. Emit a diagnostic
+                self.graph.add_reference_to_nesting_index(id, &name_id);
             }
             Outcome::Unresolved(Some(id_needing_linearization)) => {
                 unit_queue.push_back(unit_id);
@@ -243,10 +470,12 @@ impl<'a> Resolver<'a> {
             }
             Outcome::Resolved(declaration_id, None) => {
                 self.graph.record_resolved_reference(id, declaration_id);
+                self.graph.add_reference_to_nesting_index(id, &name_id);
                 *made_progress = true;
             }
             Outcome::Resolved(resolved_id, Some(id_needing_linearization)) => {
                 self.graph.record_resolved_reference(id, resolved_id);
+                self.graph.add_reference_to_nesting_index(id, &name_id);
                 *made_progress = true;
                 unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             }
@@ -4112,5 +4341,58 @@ mod tests {
 
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", ["FOO"]);
+    }
+
+    #[test]
+    fn resolve_references_re_resolves_specific_refs() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.index_uri("file:///bar.rb", "Foo");
+        context.resolve();
+
+        let decl = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_eq!(decl.references().len(), 1);
+
+        let ref_id = *decl.references().iter().next().unwrap();
+        let mut refs_to_resolve = IdentityHashSet::default();
+        refs_to_resolve.insert(ref_id);
+
+        let mut resolver = Resolver::new(context.graph_mut());
+        resolver.resolve_references(&refs_to_resolve);
+
+        let decl = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert_eq!(decl.references().len(), 1);
+    }
+
+    #[test]
+    fn resolve_definitions_creates_declarations_incrementally() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "module Foo; end");
+
+        let def_ids: Vec<_> = context.graph().definitions().keys().copied().collect();
+
+        let mut resolver = Resolver::new(context.graph_mut());
+        resolver.resolve_definitions(&def_ids);
+
+        assert!(context.graph().declarations().contains_key(&DeclarationId::from("Foo")));
+    }
+
+    #[test]
+    fn resolve_definitions_handles_nested_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "module Foo; class Bar; end; end");
+
+        let def_ids: Vec<_> = context.graph().definitions().keys().copied().collect();
+
+        let mut resolver = Resolver::new(context.graph_mut());
+        resolver.resolve_definitions(&def_ids);
+
+        assert!(context.graph().declarations().contains_key(&DeclarationId::from("Foo")));
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Foo::Bar"))
+        );
     }
 }
