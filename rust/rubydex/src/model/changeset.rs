@@ -1,5 +1,6 @@
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DefinitionId, NameId, ReferenceId};
+use crate::model::name::Name;
 
 /// Tracks changes to the index since the last resolution. Used to determine what
 /// work needs to be done during incremental resolution.
@@ -57,5 +58,56 @@ impl Changeset {
         if !self.added_method_references.remove(&id) {
             self.removed_method_references.insert(id);
         }
+    }
+
+    /// Returns references that may be affected by changes in this changeset.
+    #[must_use]
+    pub fn affected_references(
+        &self,
+        names: &IdentityHashMap<NameId, Name>,
+        searches: &IdentityHashMap<NameId, IdentityHashSet<NameId>>,
+    ) -> IdentityHashSet<ReferenceId> {
+        let mut affected = IdentityHashSet::default();
+        affected.extend(self.added_constant_references.iter().copied());
+
+        for definition_id in self.added_definitions.iter().chain(self.removed_definitions.iter()) {
+            let Some(name_id) = self.definition_name_ids.get(definition_id) else {
+                continue;
+            };
+
+            let name = names.get(name_id);
+
+            // Direct matches: references with the same name_id
+            if let Some(name) = name {
+                for reference_id in name.references() {
+                    affected.insert(*reference_id);
+                }
+            }
+
+            // Indirect matches: references that searched these namespaces during resolution
+            let mut namespace_ids = vec![*name_id];
+            if let Some(name) = name {
+                if let Some(ps_id) = name.parent_scope().as_ref() {
+                    namespace_ids.push(*ps_id);
+                }
+                if let Some(n_id) = name.nesting() {
+                    namespace_ids.push(*n_id);
+                }
+            }
+
+            for ns_id in namespace_ids {
+                if let Some(dependent_name_ids) = searches.get(&ns_id) {
+                    for dependent_name_id in dependent_name_ids {
+                        if let Some(dep_name) = names.get(dependent_name_id) {
+                            for reference_id in dep_name.references() {
+                                affected.insert(*reference_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        affected
     }
 }
