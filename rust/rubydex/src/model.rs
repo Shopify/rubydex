@@ -9,5 +9,6 @@ pub mod identity_maps;
 pub mod ids;
 pub mod name;
 pub mod references;
+pub mod snapshot;
 pub mod string_ref;
 pub mod visibility;
