@@ -163,7 +163,7 @@ impl Definition {
 
 /// Represents a mixin: include, prepend, or extend.
 /// During resolution, `Extend` mixins are attached to the singleton class.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Mixin {
     Include(IncludeDefinition),
     Prepend(PrependDefinition),
@@ -183,7 +183,7 @@ impl Mixin {
 
 macro_rules! mixin_definition {
     ($variant:ident, $name:ident) => {
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, PartialEq)]
         pub struct $name {
             constant_reference_id: ReferenceId,
         }
