@@ -544,8 +544,8 @@ impl Graph {
         self.documents.insert(uri_id, document);
 
         if let Some(changeset) = &mut self.changeset {
-            for definition_id in definitions.keys() {
-                changeset.record_added_definition(*definition_id);
+            for (definition_id, definition) in &definitions {
+                changeset.record_added_definition(*definition_id, definition.name_id().copied());
             }
         }
         self.definitions.extend(definitions);
@@ -693,10 +693,10 @@ impl Graph {
         }
 
         for def_id in definitions_to_delete {
-            if let Some(changeset) = &mut self.changeset {
-                changeset.record_removed_definition(def_id);
-            }
             let definition = self.definitions.remove(&def_id).unwrap();
+            if let Some(changeset) = &mut self.changeset {
+                changeset.record_removed_definition(def_id, definition.name_id().copied());
+            }
             self.untrack_definition_strings(&definition);
         }
     }

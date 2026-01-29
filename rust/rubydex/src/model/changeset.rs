@@ -1,5 +1,5 @@
-use crate::model::identity_maps::IdentityHashSet;
-use crate::model::ids::{DefinitionId, ReferenceId};
+use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
+use crate::model::ids::{DefinitionId, NameId, ReferenceId};
 
 /// Tracks changes to the index since the last resolution. Used to determine what
 /// work needs to be done during incremental resolution.
@@ -7,6 +7,9 @@ use crate::model::ids::{DefinitionId, ReferenceId};
 pub struct Changeset {
     pub added_definitions: IdentityHashSet<DefinitionId>,
     pub removed_definitions: IdentityHashSet<DefinitionId>,
+    /// Maps definition_id to name_id for definitions that have one.
+    /// Used to find affected references after removal (when the definition is gone).
+    pub definition_name_ids: IdentityHashMap<DefinitionId, NameId>,
     pub added_constant_references: IdentityHashSet<ReferenceId>,
     pub removed_constant_references: IdentityHashSet<ReferenceId>,
     pub added_method_references: IdentityHashSet<ReferenceId>,
@@ -14,15 +17,21 @@ pub struct Changeset {
 }
 
 impl Changeset {
-    pub(crate) fn record_added_definition(&mut self, id: DefinitionId) {
+    pub(crate) fn record_added_definition(&mut self, id: DefinitionId, name_id: Option<NameId>) {
         if !self.removed_definitions.remove(&id) {
             self.added_definitions.insert(id);
         }
+        if let Some(name_id) = name_id {
+            self.definition_name_ids.insert(id, name_id);
+        }
     }
 
-    pub(crate) fn record_removed_definition(&mut self, id: DefinitionId) {
+    pub(crate) fn record_removed_definition(&mut self, id: DefinitionId, name_id: Option<NameId>) {
         if !self.added_definitions.remove(&id) {
             self.removed_definitions.insert(id);
+        }
+        if let Some(name_id) = name_id {
+            self.definition_name_ids.insert(id, name_id);
         }
     }
 
