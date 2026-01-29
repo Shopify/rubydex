@@ -46,6 +46,9 @@ pub struct Graph {
 
     /// Tracks changes since last resolution.
     changeset: Option<Changeset>,
+
+    // Tracks which names were searched during resolution.
+    searches: IdentityHashMap<NameId, IdentityHashSet<NameId>>,
 }
 
 impl Graph {
@@ -58,6 +61,7 @@ impl Graph {
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
             resolved_names: IdentityHashMap::default(),
+            searches: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
@@ -91,6 +95,22 @@ impl Graph {
 
     pub fn clear_resolved_names(&mut self) {
         self.resolved_names.clear();
+    }
+
+    pub fn clear_searches(&mut self) {
+        self.searches.clear();
+    }
+
+    #[must_use]
+    pub fn searches(&self) -> &IdentityHashMap<NameId, IdentityHashSet<NameId>> {
+        &self.searches
+    }
+
+    pub fn add_search(&mut self, searched_name_id: NameId, reference_name_id: NameId) {
+        self.searches
+            .entry(searched_name_id)
+            .or_default()
+            .insert(reference_name_id);
     }
 
     /// Returns the current changeset, if any.

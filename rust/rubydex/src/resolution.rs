@@ -87,6 +87,7 @@ impl<'a> Resolver<'a> {
         // TODO: temporary code while we don't have synchronization. We clear all declarations instead of doing the minimal
         // amount of work
         self.graph.clear_declarations();
+        self.graph.clear_searches();
         // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
 
         {
@@ -1035,6 +1036,7 @@ impl<'a> Resolver<'a> {
             // outer most parent, so that we can then continue resolution from there, recording the results along the
             // way
             if let ParentScope::Some(parent_scope_id) = name.parent_scope() {
+                self.graph.add_search(*parent_scope_id, name_id);
                 if let Some(parent_decl_id) = self.graph.resolved_names().get(parent_scope_id) {
                     let parent_decl_id = *parent_decl_id;
                     let declaration = self.graph.declarations().get(&parent_decl_id).unwrap();
@@ -1092,7 +1094,7 @@ impl<'a> Resolver<'a> {
             }
 
             // Otherwise, it's a simple constant read and we can resolve it directly
-            let result = self.run_resolution(&name);
+            let result = self.run_resolution(&name, name_id);
 
             if let Outcome::Resolved(declaration_id, _) = result {
                 self.graph.record_resolved_name(name_id, declaration_id);
@@ -1143,12 +1145,12 @@ impl<'a> Resolver<'a> {
         results
     }
 
-    fn run_resolution(&mut self, name: &Name) -> Outcome {
+    fn run_resolution(&mut self, name: &Name, reference_name_id: NameId) -> Outcome {
         let str_id = *name.str();
         let mut missing_linearization_id = None;
 
         if let Some(nesting) = name.nesting() {
-            let scope_outcome = self.search_lexical_scopes(name, str_id);
+            let scope_outcome = self.search_lexical_scopes(name, str_id, reference_name_id);
 
             // If we already resolved or need to retry, return early
             if scope_outcome.is_resolved_or_retry() {
@@ -1156,6 +1158,7 @@ impl<'a> Resolver<'a> {
             }
 
             // Search inheritance chain
+            self.graph.add_search(*nesting, reference_name_id);
             let ancestor_outcome = if let Some(nesting_decl_id) = self.graph.resolved_names().get(nesting) {
                 self.search_ancestors(*nesting_decl_id, str_id)
             } else {
@@ -1238,10 +1241,11 @@ impl<'a> Resolver<'a> {
     }
 
     /// Look for the constant in the lexical scopes that are a part of its nesting
-    fn search_lexical_scopes(&self, name: &Name, str_id: StringId) -> Outcome {
+    fn search_lexical_scopes(&mut self, name: &Name, str_id: StringId, reference_name_id: NameId) -> Outcome {
         let mut current_nesting_id = *name.nesting();
 
         while let Some(nesting_id) = current_nesting_id {
+            self.graph.add_search(nesting_id, reference_name_id);
             if let Some(declaration_id) = self.graph.resolved_names().get(&nesting_id) {
                 if let Some(declaration) = self.graph.declarations().get(declaration_id)
                     && !matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
