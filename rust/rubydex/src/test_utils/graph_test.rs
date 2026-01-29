@@ -28,6 +28,11 @@ impl GraphTest {
     }
 
     #[must_use]
+    pub fn graph_mut(&mut self) -> &mut Graph {
+        &mut self.graph
+    }
+
+    #[must_use]
     fn index_source(uri: &str, source: &str) -> LocalGraph {
         let mut indexer = RubyIndexer::new(uri.to_string(), source);
         indexer.index();
@@ -47,6 +52,10 @@ impl GraphTest {
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
         resolver.resolve_all();
+    }
+
+    pub fn incremental_resolve(&mut self) {
+        self.graph.resolve_incremental();
     }
 
     /// Parses a location string like `<file:///foo.rb:3:0-3:5>` into `(uri, start_offset, end_offset)`
@@ -511,6 +520,32 @@ macro_rules! assert_no_diagnostics {
         let diagnostics = $context.format_diagnostics($ignore_rules);
         assert!(diagnostics.is_empty(), "expected no diagnostics, got {:?}", diagnostics);
     }};
+}
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_constant_reference_unresolved {
+    ($context:expr, $location:expr) => {
+        let (uri, start, end) = $context.parse_location($location);
+
+        let reference = $context
+            .graph()
+            .constant_references()
+            .values()
+            .find(|r| r.uri_id() == $crate::model::ids::UriId::from(&uri) && r.offset().start() == start)
+            .expect(&format!("No constant reference found at {}", $location));
+
+        assert!(
+            matches!(
+                $context.graph().names().get(reference.name_id()),
+                Some($crate::model::name::NameRef::Unresolved(_))
+            ),
+            "Expected reference at {} to be unresolved",
+            $location
+        );
+
+        $context.assert_offset_matches(&uri, reference.offset(), start, end, "unresolved reference", $location);
+    };
 }
 
 #[cfg(test)]
