@@ -66,11 +66,19 @@ impl LinearizationContext {
 
 pub struct Resolver<'a> {
     graph: &'a mut Graph,
+    /// Contains all units of work for resolution, sorted in order for resolution (less complex constant names first)
+    unit_queue: VecDeque<Unit>,
+    /// Whether we made any progress in the last pass of the resolution loop
+    made_progress: bool,
 }
 
 impl<'a> Resolver<'a> {
     pub fn new(graph: &'a mut Graph) -> Self {
-        Self { graph }
+        Self {
+            graph,
+            unit_queue: VecDeque::new(),
+            made_progress: false,
+        }
     }
 
     /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are computed:
@@ -113,35 +121,35 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let (mut unit_queue, other_ids) = self.sorted_units();
+        let other_ids = self.prepare_units();
 
         loop {
             // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
             // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
             // to be done
-            let mut made_progress = false;
+            self.made_progress = false;
 
             // Loop through the current length of the queue, which won't change during this pass. Retries pushed to the back
             // are only processed in the next pass, so that we can assess whether we made any progress
-            for _ in 0..unit_queue.len() {
-                let Some(unit_id) = unit_queue.pop_front() else {
+            for _ in 0..self.unit_queue.len() {
+                let Some(unit_id) = self.unit_queue.pop_front() else {
                     break;
                 };
 
                 match unit_id {
                     Unit::Definition(id) => {
-                        self.handle_definition_unit(&mut unit_queue, &mut made_progress, unit_id, id);
+                        self.handle_definition_unit(unit_id, id);
                     }
                     Unit::Reference(id) => {
-                        self.handle_reference_unit(&mut unit_queue, &mut made_progress, unit_id, id);
+                        self.handle_reference_unit(unit_id, id);
                     }
                     Unit::Ancestors(id) => {
-                        self.handle_ancestor_unit(&mut unit_queue, &mut made_progress, id);
+                        self.handle_ancestor_unit(id);
                     }
                 }
             }
 
-            if !made_progress || unit_queue.is_empty() {
+            if !self.made_progress || self.unit_queue.is_empty() {
                 break;
             }
         }
@@ -159,13 +167,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Handles a unit of work for resolving a constant definition
-    fn handle_definition_unit(
-        &mut self,
-        unit_queue: &mut VecDeque<Unit>,
-        made_progress: &mut bool,
-        unit_id: Unit,
-        id: DefinitionId,
-    ) {
+    fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
         let outcome = match self.graph.definitions().get(&id).unwrap() {
             Definition::Class(class) => {
                 self.handle_constant_declaration(*class.name_id(), id, false, |name, owner_id| {
@@ -200,81 +202,72 @@ impl<'a> Resolver<'a> {
         match outcome {
             Outcome::Retry(None) => {
                 // There might be dependencies we haven't figured out yet, so we need to retry
-                unit_queue.push_back(unit_id);
+                self.unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
-                unit_queue.push_back(unit_id);
-                unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                self.unit_queue.push_back(unit_id);
+                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             }
             Outcome::Resolved(id, None) => {
-                unit_queue.push_back(Unit::Ancestors(id));
-                *made_progress = true;
+                self.unit_queue.push_back(Unit::Ancestors(id));
+                self.made_progress = true;
             }
             Outcome::Resolved(_, Some(id_needing_linearization)) => {
-                unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
-                *made_progress = true;
+                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                self.made_progress = true;
             }
         }
     }
 
     /// Handles a unit of work for resolving a constant reference
-    fn handle_reference_unit(
-        &mut self,
-        unit_queue: &mut VecDeque<Unit>,
-        made_progress: &mut bool,
-        unit_id: Unit,
-        id: ReferenceId,
-    ) {
+    fn handle_reference_unit(&mut self, unit_id: Unit, id: ReferenceId) {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
         match self.resolve_constant_internal(*constant_ref.name_id()) {
             Outcome::Retry(None) => {
                 // There might be dependencies we haven't figured out yet, so we need to retry
-                unit_queue.push_back(unit_id);
+                self.unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
-                unit_queue.push_back(unit_id);
-                unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                self.unit_queue.push_back(unit_id);
+                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             }
             Outcome::Resolved(declaration_id, None) => {
                 self.graph.record_resolved_reference(id, declaration_id);
-                *made_progress = true;
+                self.made_progress = true;
             }
             Outcome::Resolved(resolved_id, Some(id_needing_linearization)) => {
                 self.graph.record_resolved_reference(id, resolved_id);
-                *made_progress = true;
-                unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                self.made_progress = true;
+                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             }
         }
     }
 
     /// Handles a unit of work for linearizing ancestors of a declaration
-    fn handle_ancestor_unit(&mut self, unit_queue: &mut VecDeque<Unit>, made_progress: &mut bool, id: DeclarationId) {
+    fn handle_ancestor_unit(&mut self, id: DeclarationId) {
         match self.ancestors_of(id) {
             Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
                 // We succeeded in some capacity this time
-                *made_progress = true;
+                self.made_progress = true;
             }
             Ancestors::Partial(_) => {
                 // We still couldn't linearize ancestors, but there's a chance that this will succeed next time. We
                 // re-enqueue for another try, but we don't consider it as making progress
-                unit_queue.push_back(Unit::Ancestors(id));
+                self.unit_queue.push_back(Unit::Ancestors(id));
             }
         }
     }
 
     /// Handle other definitions that don't require resolution, but need to have their declarations and membership created
     #[allow(clippy::too_many_lines)]
-    fn handle_remaining_definitions(
-        &mut self,
-        other_ids: Vec<crate::model::id::Id<crate::model::ids::DefinitionMarker>>,
-    ) {
+    fn handle_remaining_definitions(&mut self, other_ids: Vec<DefinitionId>) {
         for id in other_ids {
             match self.graph.definitions().get(&id).unwrap() {
                 Definition::Method(method_definition) => {
@@ -1335,11 +1328,7 @@ impl<'a> Resolver<'a> {
         parent_depth + nesting_depth + 1
     }
 
-    /// Returns a tuple of 2 vectors:
-    /// - The first one contains all constants, sorted in order for resolution (less complex constant names first)
-    /// - The second one contains all other definitions, in no particular order
-    #[must_use]
-    fn sorted_units(&self) -> (VecDeque<Unit>, Vec<DefinitionId>) {
+    fn prepare_units(&mut self) -> Vec<DefinitionId> {
         let estimated_length = self.graph.definitions().len() / 2;
         let mut definitions = Vec::with_capacity(estimated_length);
         let mut others = Vec::with_capacity(estimated_length);
@@ -1410,12 +1399,13 @@ impl<'a> Resolver<'a> {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
-        let mut units = definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>();
-        units.extend(references.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+        self.unit_queue
+            .extend(definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+        self.unit_queue
+            .extend(references.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
 
         others.shrink_to_fit();
-
-        (units, others)
+        others
     }
 
     /// Returns the singleton parent ID for an attached object ID. A singleton class' parent depends on what the attached
