@@ -49,6 +49,53 @@ impl DefinitionFlags {
     }
 }
 
+#[repr(u8)]
+#[derive(PartialEq, Debug)]
+pub enum DefinitionKind {
+    Class = 0,
+    SingletonClass = 1,
+    Module = 2,
+    Constant = 3,
+    ConstantAlias = 4,
+    Method = 5,
+    AttrAccessor = 6,
+    AttrReader = 7,
+    AttrWriter = 8,
+    GlobalVariable = 9,
+    InstanceVariable = 10,
+    ClassVariable = 11,
+    MethodAlias = 12,
+    GlobalVariableAlias = 13,
+}
+
+impl From<u8> for DefinitionKind {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => DefinitionKind::Class,
+            1 => DefinitionKind::SingletonClass,
+            2 => DefinitionKind::Module,
+            3 => DefinitionKind::Constant,
+            4 => DefinitionKind::ConstantAlias,
+            5 => DefinitionKind::Method,
+            6 => DefinitionKind::AttrAccessor,
+            7 => DefinitionKind::AttrReader,
+            8 => DefinitionKind::AttrWriter,
+            9 => DefinitionKind::GlobalVariable,
+            10 => DefinitionKind::InstanceVariable,
+            11 => DefinitionKind::ClassVariable,
+            12 => DefinitionKind::MethodAlias,
+            13 => DefinitionKind::GlobalVariableAlias,
+            _ => panic!("Invalid DefinitionKind value: {value}"),
+        }
+    }
+}
+
+impl From<DefinitionKind> for u8 {
+    fn from(kind: DefinitionKind) -> Self {
+        kind as u8
+    }
+}
+
 #[derive(Debug)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
@@ -260,7 +307,9 @@ impl ClassDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id));
+        id.tag_kind(DefinitionKind::Class);
+        id
     }
 
     #[must_use]
@@ -382,7 +431,9 @@ impl SingletonClassDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id));
+        id.tag_kind(DefinitionKind::SingletonClass);
+        id
     }
 
     #[must_use]
@@ -486,7 +537,9 @@ impl ModuleDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id));
+        id.tag_kind(DefinitionKind::Module);
+        id
     }
 
     #[must_use]
@@ -582,7 +635,9 @@ impl ConstantDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id));
+        id.tag_kind(DefinitionKind::Constant);
+        id
     }
 
     #[must_use]
@@ -641,13 +696,15 @@ impl ConstantAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!(
+        let mut id = DefinitionId::from(&format!(
             "{}{}{}{}",
             *self.alias_constant.uri_id(),
             self.alias_constant.offset().start(),
             *self.alias_constant.name_id(),
             *self.target_name_id,
-        ))
+        ));
+        id.tag_kind(DefinitionKind::ConstantAlias);
+        id
     }
 
     #[must_use]
@@ -742,7 +799,9 @@ impl MethodDefinition {
             formatted_id.push_str(&receiver.to_string());
         }
 
-        DefinitionId::from(&formatted_id)
+        let mut id = DefinitionId::from(&formatted_id);
+        id.tag_kind(DefinitionKind::Method);
+        id
     }
 
     #[must_use]
@@ -871,7 +930,9 @@ impl AttrAccessorDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id));
+        id.tag_kind(DefinitionKind::AttrAccessor);
+        id
     }
 
     #[must_use]
@@ -952,7 +1013,9 @@ impl AttrReaderDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id));
+        id.tag_kind(DefinitionKind::AttrReader);
+        id
     }
 
     #[must_use]
@@ -1033,7 +1096,9 @@ impl AttrWriterDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id));
+        id.tag_kind(DefinitionKind::AttrWriter);
+        id
     }
 
     #[must_use]
@@ -1111,7 +1176,9 @@ impl GlobalVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id));
+        id.tag_kind(DefinitionKind::GlobalVariable);
+        id
     }
 
     #[must_use]
@@ -1184,7 +1251,9 @@ impl InstanceVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id));
+        id.tag_kind(DefinitionKind::InstanceVariable);
+        id
     }
 
     #[must_use]
@@ -1257,7 +1326,9 @@ impl ClassVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        let mut id = DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id));
+        id.tag_kind(DefinitionKind::ClassVariable);
+        id
     }
 
     #[must_use]
@@ -1327,13 +1398,15 @@ impl MethodAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!(
+        let mut id = DefinitionId::from(&format!(
             "{}{}{}{}",
             *self.uri_id,
             self.offset.start(),
             *self.new_name_str_id,
             *self.old_name_str_id,
-        ))
+        ));
+        id.tag_kind(DefinitionKind::MethodAlias);
+        id
     }
 
     #[must_use]
@@ -1408,13 +1481,15 @@ impl GlobalVariableAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!(
+        let mut id = DefinitionId::from(&format!(
             "{}{}{}{}",
             *self.uri_id,
             self.offset.start(),
             *self.new_name_str_id,
             *self.old_name_str_id,
-        ))
+        ));
+        id.tag_kind(DefinitionKind::GlobalVariableAlias);
+        id
     }
 
     #[must_use]

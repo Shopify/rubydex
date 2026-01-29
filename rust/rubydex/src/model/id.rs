@@ -5,6 +5,24 @@ use std::{
 };
 use xxhash_rust::xxh32;
 
+const TAG_BITS: u32 = 4;
+const TAG_MASK: u32 = (1 << TAG_BITS) - 1;
+
+pub trait Taggable {
+    type Kind: Into<u8> + From<u8>;
+}
+
+impl<T: Taggable> Id<T> {
+    pub fn tag_kind(&mut self, kind: T::Kind) {
+        self.value = (self.value & !TAG_MASK) | u32::from(kind.into());
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> T::Kind {
+        ((self.value & TAG_MASK) as u8).into()
+    }
+}
+
 /// A deterministic type-safe ID representation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Id<T> {
@@ -62,6 +80,9 @@ mod tests {
 
     #[derive(PartialEq, Eq, Debug, Clone, Copy)]
     pub struct Marker;
+    impl Taggable for Marker {
+        type Kind = u8;
+    }
     pub type TestId = Id<Marker>;
 
     #[test]
@@ -80,5 +101,13 @@ mod tests {
     fn deref_unwraps_value() {
         let id = TestId::new(123);
         assert_eq!(*id, 123);
+    }
+
+    #[test]
+    fn tagging_preserves_higher_bits() {
+        let mut id = TestId::new(0x1234_1234);
+        id.tag_kind(0b0000_1111);
+        assert_eq!(*id, 0x1234_123F);
+        assert_eq!(id.kind(), 0b0000_1111);
     }
 }

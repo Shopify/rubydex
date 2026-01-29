@@ -4,6 +4,29 @@ use crate::{
     offset::Offset,
 };
 
+#[repr(u8)]
+#[derive(PartialEq, Debug)]
+pub enum ReferenceKind {
+    Constant = 0,
+    Method = 1,
+}
+
+impl From<u8> for ReferenceKind {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => ReferenceKind::Constant,
+            1 => ReferenceKind::Method,
+            _ => panic!("Invalid ReferenceKind value: {value}"),
+        }
+    }
+}
+
+impl From<ReferenceKind> for u8 {
+    fn from(kind: ReferenceKind) -> Self {
+        kind as u8
+    }
+}
+
 /// A reference to a constant
 #[derive(Debug)]
 pub struct ConstantReference {
@@ -14,7 +37,7 @@ pub struct ConstantReference {
     /// The offsets inside of the document where we found the reference
     offset: Offset,
 }
-assert_mem_size!(ConstantReference, 24);
+assert_mem_size!(ConstantReference, 16);
 
 impl ConstantReference {
     #[must_use]
@@ -43,15 +66,15 @@ impl ConstantReference {
 
     #[must_use]
     pub fn id(&self) -> ReferenceId {
-        // C:<uri_id>:<start>-<end>
-        let key = format!(
-            "C:{}:{}:{}-{}",
+        let mut id = ReferenceId::from(&format!(
+            "{}:{}:{}-{}",
             self.name_id,
             self.uri_id,
             self.offset.start(),
             self.offset.end()
-        );
-        ReferenceId::from(&key)
+        ));
+        id.tag_kind(ReferenceKind::Constant);
+        id
     }
 }
 
@@ -67,7 +90,7 @@ pub struct MethodRef {
     /// The receiver of the method call if it's a constant
     receiver: Option<NameId>,
 }
-assert_mem_size!(MethodRef, 40);
+assert_mem_size!(MethodRef, 24);
 
 impl MethodRef {
     #[must_use]
@@ -102,14 +125,14 @@ impl MethodRef {
 
     #[must_use]
     pub fn id(&self) -> ReferenceId {
-        // M:<uri_id>:<start>-<end>
-        let key = format!(
-            "M:{}:{}:{}-{}",
+        let mut id = ReferenceId::from(&format!(
+            "{}:{}:{}-{}",
             self.str,
             self.uri_id,
             self.offset.start(),
             self.offset.end()
-        );
-        ReferenceId::from(&key)
+        ));
+        id.tag_kind(ReferenceKind::Method);
+        id
     }
 }

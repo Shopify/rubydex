@@ -1,4 +1,11 @@
-use crate::{assert_mem_size, model::id::Id};
+use crate::{
+    assert_mem_size,
+    model::{
+        definitions::DefinitionKind,
+        id::{Id, Taggable},
+        references::ReferenceKind,
+    },
+};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct DeclarationMarker;
@@ -7,6 +14,10 @@ pub type DeclarationId = Id<DeclarationMarker>;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct DefinitionMarker;
+impl Taggable for DefinitionMarker {
+    type Kind = DefinitionKind;
+}
+
 // DefinitionId represents the ID of a definition found in a specific file
 pub type DefinitionId = Id<DefinitionMarker>;
 assert_mem_size!(DefinitionId, 4);
@@ -25,6 +36,9 @@ assert_mem_size!(StringId, 4);
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct ReferenceMarker;
+impl Taggable for ReferenceMarker {
+    type Kind = ReferenceKind;
+}
 /// `ReferenceId` represents the ID of a reference occurrence in a file.
 /// It is built from the reference kind, `uri_id` and the reference `offset`.
 pub type ReferenceId = Id<ReferenceMarker>;
@@ -35,3 +49,22 @@ pub struct NameMarker;
 /// `NameId` represents an ID for any constant name that we find as part of a reference or definition
 pub type NameId = Id<NameMarker>;
 assert_mem_size!(NameId, 4);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn definition_ids_can_be_tagged() {
+        let mut id = DefinitionId::from("some_input");
+        id.tag_kind(DefinitionKind::Class);
+        assert_eq!(DefinitionKind::Class, id.kind());
+    }
+
+    #[test]
+    fn reference_ids_can_be_tagged() {
+        let mut id = ReferenceId::from("some_input");
+        id.tag_kind(ReferenceKind::Constant);
+        assert_eq!(ReferenceKind::Constant, id.kind());
+    }
+}
