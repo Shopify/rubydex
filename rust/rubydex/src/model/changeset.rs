@@ -1,5 +1,5 @@
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
-use crate::model::ids::{DefinitionId, NameId, ReferenceId};
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId};
 use crate::model::name::Name;
 
 /// Tracks changes to the index since the last resolution. Used to determine what
@@ -11,6 +11,9 @@ pub struct Changeset {
     /// Maps definition_id to name_id for definitions that have one.
     /// Used to find affected references after removal (when the definition is gone).
     pub definition_name_ids: IdentityHashMap<DefinitionId, NameId>,
+    /// Declaration IDs that had their ancestor chains invalidated.
+    /// These need to be re-linearized during resolution.
+    pub invalidated_ancestors: IdentityHashSet<DeclarationId>,
     pub added_constant_references: IdentityHashSet<ReferenceId>,
     pub removed_constant_references: IdentityHashSet<ReferenceId>,
     pub added_method_references: IdentityHashSet<ReferenceId>,
@@ -34,6 +37,10 @@ impl Changeset {
         if let Some(name_id) = name_id {
             self.definition_name_ids.insert(id, name_id);
         }
+    }
+
+    pub(crate) fn record_invalidated_ancestors(&mut self, ids: impl IntoIterator<Item = DeclarationId>) {
+        self.invalidated_ancestors.extend(ids);
     }
 
     pub(crate) fn record_added_constant_reference(&mut self, id: ReferenceId) {

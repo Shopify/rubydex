@@ -84,12 +84,7 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     pub fn resolve_all(&mut self) {
-        // TODO: temporary code while we don't have synchronization. We clear all declarations instead of doing the minimal
-        // amount of work
-        self.graph.clear_declarations();
-        self.graph.clear_searches();
         // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
-
         if !self.graph.declarations().contains_key(&*OBJECT_ID) {
             self.graph.declarations_mut().insert(
                 *OBJECT_ID,
@@ -114,11 +109,26 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let definition_ids = self.graph.definitions().keys().copied();
-        let reference_ids = self.graph.constant_references().keys().copied();
-        let (unit_queue, other_ids) = self.sorted_units(definition_ids, reference_ids);
+        let (definition_ids, reference_ids, ancestor_ids) = if let Some(cs) = self.graph.changeset() {
+            // Incremental resolution
+            let def_ids: Vec<_> = cs.added_definitions.iter().copied().collect();
+            let ref_ids: Vec<_> = cs
+                .affected_references(self.graph.names(), self.graph.searches())
+                .into_iter()
+                .collect();
+            let ancestor_ids: Vec<_> = cs.invalidated_ancestors.iter().copied().collect();
+            (def_ids, ref_ids, ancestor_ids)
+        } else {
+            // Initial resolution
+            let def_ids: Vec<_> = self.graph.definitions().keys().copied().collect();
+            let ref_ids: Vec<_> = self.graph.constant_references().keys().copied().collect();
+            (def_ids, ref_ids, Vec::new())
+        };
+
+        let (unit_queue, other_ids) = self.sorted_units(definition_ids, reference_ids, ancestor_ids);
         self.process_units(unit_queue);
         self.handle_remaining_definitions(other_ids);
+        self.graph.init_changeset();
     }
 
     fn process_units(&mut self, mut unit_queue: VecDeque<Unit>) {
@@ -1342,6 +1352,7 @@ impl<'a> Resolver<'a> {
         &self,
         definition_ids: impl IntoIterator<Item = DefinitionId>,
         reference_ids: impl IntoIterator<Item = ReferenceId>,
+        ancestor_ids: impl IntoIterator<Item = DeclarationId>,
     ) -> (VecDeque<Unit>, Vec<DefinitionId>) {
         let mut definitions = Vec::new();
         let mut others = Vec::new();
@@ -1414,6 +1425,7 @@ impl<'a> Resolver<'a> {
 
         let mut units = definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>();
         units.extend(references.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+        units.extend(ancestor_ids.into_iter().map(Unit::Ancestors));
 
         others.shrink_to_fit();
 
