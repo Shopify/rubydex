@@ -212,6 +212,12 @@ impl NameRef {
             }
         }
     }
+
+    pub fn reset_to_unresolved(&mut self) {
+        if let NameRef::Resolved(resolved) = self {
+            *self = NameRef::Unresolved(Box::new(resolved.name.clone()));
+        }
+    }
 }
 
 #[cfg(test)]
