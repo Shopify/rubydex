@@ -114,7 +114,9 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let (unit_queue, other_ids) = self.sorted_units();
+        let definition_ids = self.graph.definitions().keys().copied();
+        let reference_ids = self.graph.constant_references().keys().copied();
+        let (unit_queue, other_ids) = self.sorted_units(definition_ids, reference_ids);
         self.process_units(unit_queue);
         self.handle_remaining_definitions(other_ids);
     }
@@ -1336,48 +1338,52 @@ impl<'a> Resolver<'a> {
     /// - The first one contains all constants, sorted in order for resolution (less complex constant names first)
     /// - The second one contains all other definitions, in no particular order
     #[must_use]
-    fn sorted_units(&self) -> (VecDeque<Unit>, Vec<DefinitionId>) {
-        let estimated_length = self.graph.definitions().len() / 2;
-        let mut definitions = Vec::with_capacity(estimated_length);
-        let mut others = Vec::with_capacity(estimated_length);
+    fn sorted_units(
+        &self,
+        definition_ids: impl IntoIterator<Item = DefinitionId>,
+        reference_ids: impl IntoIterator<Item = ReferenceId>,
+    ) -> (VecDeque<Unit>, Vec<DefinitionId>) {
+        let mut definitions = Vec::new();
+        let mut others = Vec::new();
         let names = self.graph.names();
 
-        for (id, definition) in self.graph.definitions() {
+        for id in definition_ids {
+            let definition = self.graph.definitions().get(&id).unwrap();
             let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
 
             match definition {
                 Definition::Class(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::Module(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::Constant(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::ConstantAlias(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::SingletonClass(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 _ => {
-                    others.push(*id);
+                    others.push(id);
                 }
             }
         }
@@ -1388,15 +1394,14 @@ impl<'a> Resolver<'a> {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
-        let mut references = self
-            .graph
-            .constant_references()
-            .iter()
-            .map(|(id, constant_ref)| {
+        let mut references = reference_ids
+            .into_iter()
+            .map(|id| {
+                let constant_ref = self.graph.constant_references().get(&id).unwrap();
                 let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
 
                 (
-                    Unit::Reference(*id),
+                    Unit::Reference(id),
                     (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
                 )
             })
