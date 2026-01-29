@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use line_index::LineIndex;
+use url::Url;
 
 use crate::diagnostic::Diagnostic;
 use crate::model::identity_maps::IdentityHashMap;
@@ -108,11 +111,58 @@ impl Document {
             .chain(self.definition_diagnostics.values().flatten())
             .chain(self.reference_diagnostics.values().flatten())
     }
+
+    /// Computes the require path for this document given load paths.
+    ///
+    /// Returns `None` if:
+    /// - URI is not `file://` scheme
+    /// - URI doesn't end with `.rb`
+    /// - File path doesn't match any load path
+    /// - `Url::to_file_path()` fails
+    #[must_use]
+    pub fn require_path(&self, load_paths: &[PathBuf]) -> Option<String> {
+        let url = Url::parse(&self.uri).ok()?;
+        if url.scheme() != "file" {
+            return None;
+        }
+        let file_path = url.to_file_path().ok()?;
+
+        if file_path.extension().is_none_or(|ext| ext != "rb") {
+            return None;
+        }
+
+        for load_path in load_paths {
+            if let Ok(relative) = file_path.strip_prefix(load_path) {
+                let file_path = relative
+                    .components()
+                    .filter_map(|c| c.as_os_str().to_str())
+                    .collect::<Vec<_>>()
+                    .join("/");
+
+                let require_path = file_path.trim_end_matches(".rb").to_string();
+                return Some(require_path);
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
+
+    fn test_root() -> PathBuf {
+        let root = if cfg!(windows) {
+            PathBuf::from_str("C:\\")
+        } else {
+            PathBuf::from_str("/")
+        }
+        .unwrap();
+
+        root.join("test")
+    }
 
     #[test]
     #[should_panic(expected = "Cannot add the same exact definition to a document twice. Duplicate definition IDs")]
@@ -137,5 +187,62 @@ mod tests {
 
         assert_eq!(document.method_references(), &[method_ref]);
         assert_eq!(document.constant_references(), &[constant_ref]);
+    }
+
+    #[test]
+    fn require_path() {
+        let root = test_root();
+        let path = root.join("lib").join("foo").join("bar.rb");
+        let uri = Url::from_file_path(path).unwrap().to_string();
+        let load_paths = [root.join("lib")];
+
+        let document = Document::new(uri, "");
+        assert_eq!(Some("foo/bar".to_string()), document.require_path(&load_paths));
+    }
+
+    #[test]
+    fn require_path_first_load_path_wins() {
+        let root = test_root();
+        let path = root.join("a").join("b").join("foo.rb");
+        let uri = Url::from_file_path(path).unwrap().to_string();
+        let load_path_a = root.join("a");
+        let load_path_ab = root.join("a").join("b");
+        let load_paths = [load_path_a, load_path_ab];
+
+        let document = Document::new(uri, "");
+        assert_eq!(Some("b/foo".to_string()), document.require_path(&load_paths));
+    }
+
+    #[test]
+    fn require_path_returns_none() {
+        let root = test_root();
+        let load_paths = [root.join("lib")];
+
+        // non-file URI
+        let document = Document::new("untitled:Untitled-1".to_string(), "");
+        assert_eq!(None, document.require_path(&load_paths));
+
+        // non-.rb extension
+        let path = root.join("lib").join("foo.so");
+        let uri = Url::from_file_path(path).unwrap().to_string();
+        let document = Document::new(uri, "");
+        assert_eq!(None, document.require_path(&load_paths));
+
+        // /libfoo is not under /lib - should not match due to partial directory name
+        let path = root.join("libfoo").join("bar.rb");
+        let uri = Url::from_file_path(path).unwrap().to_string();
+        let document = Document::new(uri, "");
+        assert_eq!(None, document.require_path(&load_paths));
+    }
+
+    #[test]
+    fn require_path_with_spaces() {
+        let root = test_root();
+        let path = root.join("lib").join("space foo").join("bar.rb");
+        let uri = Url::from_file_path(path).unwrap().to_string();
+        let load_paths = [root.join("lib")];
+
+        let document = Document::new(uri, "");
+        assert_eq!(Some("space foo/bar".to_string()), document.require_path(&load_paths));
     }
 }
