@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::model::ids::{NameId, StringId};
+use crate::model::ids::{NameId, ReferenceId, StringId};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ParentScope {
@@ -79,6 +79,8 @@ pub struct Name {
     /// list of names to represent the nesting
     nesting: Option<NameId>,
     ref_count: usize,
+    /// References that use this name
+    references: Vec<ReferenceId>,
 }
 
 impl Name {
@@ -89,6 +91,7 @@ impl Name {
             parent_scope,
             nesting,
             ref_count: 1,
+            references: Vec::new(),
         }
     }
 
@@ -130,6 +133,19 @@ impl Name {
     pub fn decrement_ref_count(&mut self) -> bool {
         self.ref_count -= 1;
         self.ref_count > 0
+    }
+
+    #[must_use]
+    pub fn references(&self) -> &[ReferenceId] {
+        &self.references
+    }
+
+    pub fn add_reference(&mut self, reference_id: ReferenceId) {
+        self.references.push(reference_id);
+    }
+
+    pub fn remove_reference(&mut self, reference_id: &ReferenceId) {
+        self.references.retain(|id| id != reference_id);
     }
 }
 

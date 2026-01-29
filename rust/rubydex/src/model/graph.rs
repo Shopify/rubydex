@@ -577,6 +577,11 @@ impl Graph {
                 changeset.record_added_method_reference(*reference_id);
             }
         }
+        for (reference_id, constant_ref) in &constant_references {
+            if let Some(name) = self.names.get_mut(constant_ref.name_id()) {
+                name.add_reference(*reference_id);
+            }
+        }
         self.constant_references.extend(constant_references);
         self.method_references.extend(method_references);
     }
@@ -618,6 +623,9 @@ impl Graph {
                     && let Some(declaration) = self.declarations.get_mut(declaration_id)
                 {
                     declaration.remove_reference(ref_id);
+                }
+                if let Some(name) = self.names.get_mut(constant_ref.name_id()) {
+                    name.remove_reference(ref_id);
                 }
                 self.untrack_name(*constant_ref.name_id());
             }
