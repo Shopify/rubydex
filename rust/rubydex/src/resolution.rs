@@ -6,8 +6,8 @@ use std::{
 use crate::model::{
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
-        Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        Namespace, SingletonClassDeclaration,
+        Declaration, DependencyKind, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration,
+        ModuleDeclaration, Namespace, SingletonClassDeclaration,
     },
     definitions::{Definition, Mixin},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
@@ -151,7 +151,7 @@ impl<'a> Resolver<'a> {
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
     /// the Ruby API
     pub fn resolve_constant(&mut self, name_id: NameId) -> Option<DeclarationId> {
-        match self.resolve_constant_internal(name_id) {
+        match self.resolve_constant_internal(name_id, None) {
             Outcome::Resolved(id, _) => Some(id),
             Outcome::Unresolved(_) | Outcome::Retry => None,
         }
@@ -229,7 +229,7 @@ impl<'a> Resolver<'a> {
     ) {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
-        match self.resolve_constant_internal(*constant_ref.name_id()) {
+        match self.resolve_constant_internal(*constant_ref.name_id(), Some(id)) {
             Outcome::Retry => {
                 // There might be dependencies we haven't figured out yet, so we need to retry
                 unit_queue.push_back(unit_id);
@@ -967,7 +967,7 @@ impl<'a> Resolver<'a> {
         if let ParentScope::Some(parent_scope) = name_ref.parent_scope() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
-            match self.resolve_constant_internal(*parent_scope) {
+            match self.resolve_constant_internal(*parent_scope, None) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
                 other => other,
             }
@@ -1021,14 +1021,14 @@ impl<'a> Resolver<'a> {
     /// Attempts to resolve a constant reference against the graph. Returns the fully qualified declaration ID that the
     /// reference is related to or `None`. This method mutates the graph to remember which constants have already been
     /// resolved
-    fn resolve_constant_internal(&mut self, name_id: NameId) -> Outcome {
+    fn resolve_constant_internal(&mut self, name_id: NameId, reference_id: Option<ReferenceId>) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap().clone();
 
         match name_ref {
             NameRef::Unresolved(name) => {
                 // For top level constant references starting with `::`, we can search the top level directly
                 if name.parent_scope().is_top_level() {
-                    let result = self.search_top_level(*name.str());
+                    let result = self.search_top_level(*name.str(), reference_id);
 
                     if let Outcome::Resolved(declaration_id, _) = result {
                         self.graph.record_resolved_name(name_id, declaration_id);
@@ -1065,7 +1065,7 @@ impl<'a> Resolver<'a> {
                                 }
                                 Some(Declaration::Namespace(_)) => {
                                     found_namespace = true;
-                                    match self.search_ancestors(id, *name.str()) {
+                                    match self.search_ancestors(id, *name.str(), reference_id) {
                                         Outcome::Resolved(declaration_id, _) => {
                                             self.graph.record_resolved_name(name_id, declaration_id);
                                             return Outcome::Resolved(declaration_id, None);
@@ -1096,7 +1096,7 @@ impl<'a> Resolver<'a> {
                 }
 
                 // Otherwise, it's a simple constant read and we can resolve it directly
-                let result = self.run_resolution(&name);
+                let result = self.run_resolution(&name, reference_id);
 
                 if let Outcome::Resolved(declaration_id, _) = result {
                     self.graph.record_resolved_name(name_id, declaration_id);
@@ -1149,12 +1149,12 @@ impl<'a> Resolver<'a> {
         results
     }
 
-    fn run_resolution(&mut self, name: &Name) -> Outcome {
+    fn run_resolution(&mut self, name: &Name, reference_id: Option<ReferenceId>) -> Outcome {
         let str_id = *name.str();
         let mut missing_linearization_id = None;
 
         if let Some(nesting) = name.nesting() {
-            let scope_outcome = self.search_lexical_scopes(name, str_id);
+            let scope_outcome = self.search_lexical_scopes(name, str_id, reference_id);
 
             // If we already resolved or need to retry, return early
             if scope_outcome.is_resolved_or_retry() {
@@ -1164,7 +1164,7 @@ impl<'a> Resolver<'a> {
             // Search inheritance chain
             let ancestor_outcome = match self.graph.names().get(nesting).unwrap() {
                 NameRef::Resolved(nesting_name_ref) => {
-                    self.search_ancestors(*nesting_name_ref.declaration_id(), str_id)
+                    self.search_ancestors(*nesting_name_ref.declaration_id(), str_id, reference_id)
                 }
                 NameRef::Unresolved(_) => Outcome::Retry,
             };
@@ -1179,7 +1179,7 @@ impl<'a> Resolver<'a> {
 
         // If it's a top level reference starting with `::` or if we didn't find the constant anywhere else, the
         // fallback is the top level
-        let outcome = self.search_top_level(str_id);
+        let outcome = self.search_top_level(str_id, reference_id);
 
         if let Some(linearization_id) = missing_linearization_id {
             match outcome {
@@ -1194,21 +1194,60 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    fn add_dependent(&mut self, decl_id: DeclarationId, ref_id: ReferenceId, kind: DependencyKind) {
+        if let Some(namespace) = self
+            .graph
+            .declarations_mut()
+            .get_mut(&decl_id)
+            .and_then(|d| d.as_namespace_mut())
+        {
+            namespace.add_dependent(ref_id, kind);
+        }
+    }
+
+    fn lookup_member(
+        &mut self,
+        namespace_id: DeclarationId,
+        str_id: StringId,
+        reference_id: Option<ReferenceId>,
+    ) -> Option<DeclarationId> {
+        let member_id = self
+            .graph
+            .declarations()
+            .get(&namespace_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .member(&str_id)
+            .copied();
+        if let Some(ref_id) = reference_id {
+            let kind = if member_id.is_some() {
+                DependencyKind::Positive(str_id)
+            } else {
+                DependencyKind::Negative(str_id)
+            };
+            self.add_dependent(namespace_id, ref_id, kind);
+        }
+        member_id
+    }
+
     /// Search for a member in a declaration's ancestor chain.
-    fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+    fn search_ancestors(
+        &mut self,
+        declaration_id: DeclarationId,
+        str_id: StringId,
+        reference_id: Option<ReferenceId>,
+    ) -> Outcome {
+        if let Some(ref_id) = reference_id {
+            self.add_dependent(declaration_id, ref_id, DependencyKind::Ancestor);
+        }
         match self.ancestors_of(declaration_id) {
             Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
                 .iter()
                 .find_map(|ancestor_id| {
                     if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        self.graph
-                            .declarations()
-                            .get(ancestor_id)
-                            .unwrap()
-                            .as_namespace()
-                            .unwrap()
-                            .member(&str_id)
-                            .map(|id| Outcome::Resolved(*id, None))
+                        self.lookup_member(*ancestor_id, str_id, reference_id)
+                            .map(|id| Outcome::Resolved(id, None))
                     } else {
                         None
                     }
@@ -1218,14 +1257,8 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .find_map(|ancestor_id| {
                     if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        self.graph
-                            .declarations()
-                            .get(ancestor_id)
-                            .unwrap()
-                            .as_namespace()
-                            .unwrap()
-                            .member(&str_id)
-                            .map(|id| Outcome::Resolved(*id, Some(declaration_id)))
+                        self.lookup_member(*ancestor_id, str_id, reference_id)
+                            .map(|id| Outcome::Resolved(id, Some(declaration_id)))
                     } else {
                         None
                     }
@@ -1235,19 +1268,28 @@ impl<'a> Resolver<'a> {
     }
 
     /// Look for the constant in the lexical scopes that are a part of its nesting
-    fn search_lexical_scopes(&self, name: &Name, str_id: StringId) -> Outcome {
-        let mut current_name = name;
+    fn search_lexical_scopes(&mut self, name: &Name, str_id: StringId, reference_id: Option<ReferenceId>) -> Outcome {
+        let mut current_nesting = *name.nesting();
 
-        while let Some(nesting_id) = current_name.nesting() {
-            if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(nesting_id).unwrap() {
-                if let Some(declaration) = self.graph.declarations().get(nesting_name_ref.declaration_id())
-                    && !matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
-                    && let Some(member) = declaration.as_namespace().unwrap().member(&str_id)
+        while let Some(nesting_id) = current_nesting {
+            if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(&nesting_id).unwrap() {
+                let decl_id = *nesting_name_ref.declaration_id();
+                current_nesting = *nesting_name_ref.name().nesting();
+
+                if let Some(declaration) = self.graph.declarations().get(&decl_id)
+                    && !matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_))
+                // TODO: temporary hack to avoid crashing on `Struct.new`
                 {
-                    return Outcome::Resolved(*member, None);
+                    if let Some(&member_id) = declaration.as_namespace().unwrap().member(&str_id) {
+                        if let Some(ref_id) = reference_id {
+                            self.add_dependent(decl_id, ref_id, DependencyKind::Positive(str_id));
+                        }
+                        return Outcome::Resolved(member_id, None);
+                    }
+                    if let Some(ref_id) = reference_id {
+                        self.add_dependent(decl_id, ref_id, DependencyKind::Negative(str_id));
+                    }
                 }
-
-                current_name = nesting_name_ref.name();
             } else {
                 return Outcome::Retry;
             }
@@ -1257,17 +1299,9 @@ impl<'a> Resolver<'a> {
     }
 
     /// Look for the constant at the top level (member of Object)
-    fn search_top_level(&self, str_id: StringId) -> Outcome {
-        match self
-            .graph
-            .declarations()
-            .get(&OBJECT_ID)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
-            .member(&str_id)
-        {
-            Some(member_id) => Outcome::Resolved(*member_id, None),
+    fn search_top_level(&mut self, str_id: StringId, reference_id: Option<ReferenceId>) -> Outcome {
+        match self.lookup_member(*OBJECT_ID, str_id, reference_id) {
+            Some(member_id) => Outcome::Resolved(member_id, None),
             None => Outcome::Unresolved(None),
         }
     }
@@ -4112,5 +4146,57 @@ mod tests {
 
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", ["FOO"]);
+    }
+
+    #[test]
+    fn dependents_are_recorded_during_resolution() {
+        use crate::model::declaration::DependencyKind;
+
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Parent
+              CONST = 1
+            end
+
+            class Child < Parent
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_constant_reference_to!(context, "Parent::CONST", "file:///foo.rb:5:2-5:7");
+
+        let graph = context.graph();
+        let parent_id = DeclarationId::from("Parent");
+        let child_id = DeclarationId::from("Child");
+        let const_str_id = StringId::from("CONST");
+
+        let parent_ns = graph.declarations().get(&parent_id).unwrap().as_namespace().unwrap();
+        let child_ns = graph.declarations().get(&child_id).unwrap().as_namespace().unwrap();
+
+        let parent_dependents = parent_ns.dependents();
+        let child_dependents = child_ns.dependents();
+
+        assert_eq!(parent_dependents.len(), 1, "Parent should have 1 dependent reference");
+        assert_eq!(child_dependents.len(), 1, "Child should have 1 dependent reference");
+
+        let parent_ref_kinds: Vec<_> = parent_dependents.values().next().unwrap().iter().collect();
+        assert!(
+            parent_ref_kinds.contains(&&DependencyKind::Positive(const_str_id)),
+            "Parent should have Positive dependency (member found)"
+        );
+
+        let child_ref_kinds: Vec<_> = child_dependents.values().next().unwrap().iter().collect();
+        assert!(
+            child_ref_kinds.contains(&&DependencyKind::Ancestor),
+            "Child should have Ancestor dependency (traversed ancestors)"
+        );
+        assert!(
+            child_ref_kinds.contains(&&DependencyKind::Negative(const_str_id)),
+            "Child should have Negative dependency (member not found locally)"
+        );
     }
 }

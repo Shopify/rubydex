@@ -1,8 +1,35 @@
+use std::hash::{Hash, Hasher};
+
 use crate::diagnostic::Diagnostic;
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DependencyKind {
+    Negative(StringId),
+    Ancestor,
+    Positive(StringId),
+}
+
+impl Hash for DependencyKind {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            DependencyKind::Negative(str_id) => {
+                let str_id_bits = **str_id as u64;
+                state.write_u64(str_id_bits.wrapping_shl(2) | 0b00);
+            }
+            DependencyKind::Ancestor => {
+                state.write_u64(0b01);
+            }
+            DependencyKind::Positive(str_id) => {
+                let str_id_bits = **str_id as u64;
+                state.write_u64(str_id_bits.wrapping_shl(2) | 0b10);
+            }
+        }
+    }
+}
 
 /// A single ancestor in the linearized ancestor chain
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +132,9 @@ macro_rules! namespace_declaration {
             singleton_class_id: Option<DeclarationId>,
             /// Diagnostics associated with this declaration
             diagnostics: Vec<Diagnostic>,
+            // TODO: Stale dependents can accumulate from re-resolution and Retry attempts.
+            // Implement cleanup to avoid unbounded growth.
+            dependents: IdentityHashMap<ReferenceId, IdentityHashSet<DependencyKind>>,
         }
 
         impl $name {
@@ -120,6 +150,7 @@ macro_rules! namespace_declaration {
                     descendants: IdentityHashSet::default(),
                     singleton_class_id: None,
                     diagnostics: Vec::new(),
+                    dependents: IdentityHashMap::default(),
                 }
             }
 
@@ -192,6 +223,14 @@ macro_rules! namespace_declaration {
 
             pub fn descendants(&self) -> &IdentityHashSet<DeclarationId> {
                 &self.descendants
+            }
+
+            pub fn add_dependent(&mut self, reference_id: ReferenceId, kind: DependencyKind) {
+                self.dependents.entry(reference_id).or_default().insert(kind);
+            }
+
+            pub fn dependents(&self) -> &IdentityHashMap<ReferenceId, IdentityHashSet<DependencyKind>> {
+                &self.dependents
             }
         }
     };
@@ -467,6 +506,14 @@ impl Namespace {
 
     pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
         all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
+    }
+
+    pub fn add_dependent(&mut self, reference_id: ReferenceId, kind: DependencyKind) {
+        all_namespaces!(self, it => it.add_dependent(reference_id, kind));
+    }
+
+    pub fn dependents(&self) -> &IdentityHashMap<ReferenceId, IdentityHashSet<DependencyKind>> {
+        all_namespaces!(self, it => it.dependents())
     }
 }
 
