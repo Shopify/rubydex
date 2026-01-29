@@ -544,8 +544,8 @@ impl Graph {
         self.documents.insert(uri_id, document);
 
         if let Some(changeset) = &mut self.changeset {
-            for (definition_id, definition) in &definitions {
-                changeset.record_added_definition(*definition_id, definition.name_id().copied());
+            for definition_id in definitions.keys() {
+                changeset.record_added_definition(*definition_id);
             }
         }
         self.definitions.extend(definitions);
@@ -573,9 +573,6 @@ impl Graph {
             for reference_id in constant_references.keys() {
                 changeset.record_added_constant_reference(*reference_id);
             }
-            for reference_id in method_references.keys() {
-                changeset.record_added_method_reference(*reference_id);
-            }
         }
         for (reference_id, constant_ref) in &constant_references {
             if let Some(name) = self.names.get_mut(constant_ref.name_id()) {
@@ -589,12 +586,33 @@ impl Graph {
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
     /// updates to existing entries
     pub fn update(&mut self, other: LocalGraph) {
-        // For each URI that was indexed through `other`, check what was discovered and update our current global
-        // representation
         let uri_id = other.uri_id();
-        self.remove_definitions_for_uri(uri_id);
 
+        // Capture old names before removing definitions
+        let old_names = self.get_document_names(uri_id);
+
+        self.remove_definitions_for_uri(uri_id);
         self.extend(other);
+
+        // Record document change if tracking
+        if self.changeset.is_some() {
+            let new_names = self.get_document_names(uri_id);
+            if let Some(changeset) = &mut self.changeset {
+                changeset.record_document_change(uri_id, old_names, new_names);
+            }
+        }
+    }
+
+    fn get_document_names(&self, uri_id: UriId) -> IdentityHashSet<NameId> {
+        self.documents
+            .get(&uri_id)
+            .map(|doc| {
+                doc.definitions()
+                    .iter()
+                    .filter_map(|def_id| self.definitions.get(def_id)?.name_id().copied())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
@@ -607,18 +625,12 @@ impl Graph {
         // TODO: Remove method references from method declarations once method inference is implemented
         for ref_id in document.method_references() {
             if let Some(method_ref) = self.method_references.remove(ref_id) {
-                if let Some(changeset) = &mut self.changeset {
-                    changeset.record_removed_method_reference(*ref_id);
-                }
                 self.untrack_string(*method_ref.str());
             }
         }
 
         for ref_id in document.constant_references() {
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
-                if let Some(changeset) = &mut self.changeset {
-                    changeset.record_removed_constant_reference(*ref_id);
-                }
                 if let Some(declaration_id) = self.resolved_names.get(constant_ref.name_id())
                     && let Some(declaration) = self.declarations.get_mut(declaration_id)
                 {
@@ -645,7 +657,9 @@ impl Graph {
                 && declaration.remove_definition(def_id)
             {
                 declaration.clear_diagnostics();
-                if declaration.as_namespace().is_some() {
+                if declaration.as_namespace().is_some()
+                    && self.definitions.get(def_id).is_some_and(Definition::affects_ancestors)
+                {
                     declarations_to_invalidate_ancestor_chains.push(declaration_id);
                 }
 
@@ -694,9 +708,6 @@ impl Graph {
 
         for def_id in definitions_to_delete {
             let definition = self.definitions.remove(&def_id).unwrap();
-            if let Some(changeset) = &mut self.changeset {
-                changeset.record_removed_definition(def_id, definition.name_id().copied());
-            }
             self.untrack_definition_strings(&definition);
         }
     }

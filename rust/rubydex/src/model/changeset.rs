@@ -1,42 +1,54 @@
+use crate::model::graph::Graph;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
-use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId};
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::Name;
+
+/// Tracks name changes for a single document across updates.
+#[derive(Debug, Clone)]
+pub struct DocumentChange {
+    /// Names the document defined at the time of first update (set once)
+    pub old_names: IdentityHashSet<NameId>,
+    /// Names the document defines now (updated on each subsequent update)
+    pub new_names: IdentityHashSet<NameId>,
+}
 
 /// Tracks changes to the index since the last resolution. Used to determine what
 /// work needs to be done during incremental resolution.
 #[derive(Default, Debug)]
 pub struct Changeset {
     pub added_definitions: IdentityHashSet<DefinitionId>,
-    pub removed_definitions: IdentityHashSet<DefinitionId>,
-    /// Maps definition_id to name_id for definitions that have one.
-    /// Used to find affected references after removal (when the definition is gone).
-    pub definition_name_ids: IdentityHashMap<DefinitionId, NameId>,
+    /// Tracks per-document name changes since last resolution.
+    /// For each document updated, stores the names it had before first update
+    /// and the names it has after the latest update.
+    pub document_changes: IdentityHashMap<UriId, DocumentChange>,
     /// Declaration IDs that had their ancestor chains invalidated.
     /// These need to be re-linearized during resolution.
     pub invalidated_ancestors: IdentityHashSet<DeclarationId>,
     pub added_constant_references: IdentityHashSet<ReferenceId>,
-    pub removed_constant_references: IdentityHashSet<ReferenceId>,
-    pub added_method_references: IdentityHashSet<ReferenceId>,
-    pub removed_method_references: IdentityHashSet<ReferenceId>,
 }
 
 impl Changeset {
-    pub(crate) fn record_added_definition(&mut self, id: DefinitionId, name_id: Option<NameId>) {
-        if !self.removed_definitions.remove(&id) {
-            self.added_definitions.insert(id);
-        }
-        if let Some(name_id) = name_id {
-            self.definition_name_ids.insert(id, name_id);
-        }
+    pub(crate) fn record_added_definition(&mut self, id: DefinitionId) {
+        self.added_definitions.insert(id);
     }
 
-    pub(crate) fn record_removed_definition(&mut self, id: DefinitionId, name_id: Option<NameId>) {
-        if !self.added_definitions.remove(&id) {
-            self.removed_definitions.insert(id);
-        }
-        if let Some(name_id) = name_id {
-            self.definition_name_ids.insert(id, name_id);
-        }
+    pub(crate) fn record_document_change(
+        &mut self,
+        uri_id: UriId,
+        old_names: IdentityHashSet<NameId>,
+        new_names: IdentityHashSet<NameId>,
+    ) {
+        self.document_changes
+            .entry(uri_id)
+            .and_modify(|change| {
+                // Subsequent update: only update new_names
+                change.new_names.clone_from(&new_names);
+            })
+            .or_insert_with(|| DocumentChange {
+                // First update: store both old and new
+                old_names,
+                new_names,
+            });
     }
 
     pub(crate) fn record_invalidated_ancestors(&mut self, ids: impl IntoIterator<Item = DeclarationId>) {
@@ -44,77 +56,85 @@ impl Changeset {
     }
 
     pub(crate) fn record_added_constant_reference(&mut self, id: ReferenceId) {
-        if !self.removed_constant_references.remove(&id) {
-            self.added_constant_references.insert(id);
-        }
+        self.added_constant_references.insert(id);
     }
 
-    pub(crate) fn record_removed_constant_reference(&mut self, id: ReferenceId) {
-        if !self.added_constant_references.remove(&id) {
-            self.removed_constant_references.insert(id);
+    /// Computes names that changed across all document updates.
+    /// A name is "changed" if it was added or removed from any document.
+    #[must_use]
+    pub fn changed_names(&self) -> IdentityHashSet<NameId> {
+        let mut changed = IdentityHashSet::default();
+        for doc_change in self.document_changes.values() {
+            for name_id in doc_change.old_names.symmetric_difference(&doc_change.new_names) {
+                changed.insert(*name_id);
+            }
         }
-    }
-
-    pub(crate) fn record_added_method_reference(&mut self, id: ReferenceId) {
-        if !self.removed_method_references.remove(&id) {
-            self.added_method_references.insert(id);
-        }
-    }
-
-    pub(crate) fn record_removed_method_reference(&mut self, id: ReferenceId) {
-        if !self.added_method_references.remove(&id) {
-            self.removed_method_references.insert(id);
-        }
+        changed
     }
 
     /// Returns references that may be affected by changes in this changeset.
     #[must_use]
-    pub fn affected_references(
-        &self,
-        names: &IdentityHashMap<NameId, Name>,
-        searches: &IdentityHashMap<NameId, IdentityHashSet<NameId>>,
-    ) -> IdentityHashSet<ReferenceId> {
+    pub fn affected_references(&self, graph: &Graph) -> IdentityHashSet<ReferenceId> {
         let mut affected = IdentityHashSet::default();
         affected.extend(self.added_constant_references.iter().copied());
 
-        for definition_id in self.added_definitions.iter().chain(self.removed_definitions.iter()) {
-            let Some(name_id) = self.definition_name_ids.get(definition_id) else {
-                continue;
-            };
+        let names = graph.names();
+        let searches = graph.searches();
 
-            let name = names.get(name_id);
+        // Handle changed names (definitions added/removed)
+        for name_id in &self.changed_names() {
+            let Some(name) = names.get(name_id) else { continue };
 
             // Direct matches: references with the same name_id
-            if let Some(name) = name {
-                for reference_id in name.references() {
-                    affected.insert(*reference_id);
-                }
-            }
+            affected.extend(name.references().iter().copied());
 
             // Indirect matches: references that searched these namespaces during resolution
-            let mut namespace_ids = vec![*name_id];
-            if let Some(name) = name {
-                if let Some(ps_id) = name.parent_scope().as_ref() {
-                    namespace_ids.push(*ps_id);
-                }
-                if let Some(n_id) = name.nesting() {
-                    namespace_ids.push(*n_id);
-                }
+            // Only include references whose identifier matches the changed name's identifier
+            let identifier = name.str();
+            add_references_from_searches(&mut affected, names, searches, *name_id, Some(identifier));
+            if let Some(ps_id) = name.parent_scope().as_ref() {
+                add_references_from_searches(&mut affected, names, searches, *ps_id, Some(identifier));
             }
+            if let Some(n_id) = name.nesting() {
+                add_references_from_searches(&mut affected, names, searches, *n_id, Some(identifier));
+            }
+        }
 
-            for ns_id in namespace_ids {
-                if let Some(dependent_name_ids) = searches.get(&ns_id) {
-                    for dependent_name_id in dependent_name_ids {
-                        if let Some(dep_name) = names.get(dependent_name_id) {
-                            for reference_id in dep_name.references() {
-                                affected.insert(*reference_id);
-                            }
-                        }
-                    }
-                }
+        // Handle invalidated ancestors - include ALL references that searched those namespaces
+        // (can't filter by identifier because ancestor order affects all lookups)
+        for decl_id in &self.invalidated_ancestors {
+            let Some(decl) = graph.declarations().get(decl_id) else {
+                continue;
+            };
+            for def_id in decl.definitions() {
+                let Some(def) = graph.definitions().get(def_id) else {
+                    continue;
+                };
+                let Some(name_id) = def.name_id() else { continue };
+                add_references_from_searches(&mut affected, names, searches, *name_id, None);
             }
         }
 
         affected
+    }
+}
+
+fn add_references_from_searches(
+    affected: &mut IdentityHashSet<ReferenceId>,
+    names: &IdentityHashMap<NameId, Name>,
+    searches: &IdentityHashMap<NameId, IdentityHashSet<NameId>>,
+    namespace_id: NameId,
+    identifier: Option<&StringId>,
+) {
+    let Some(dependent_name_ids) = searches.get(&namespace_id) else {
+        return;
+    };
+    for dependent_name_id in dependent_name_ids {
+        let Some(dep_name) = names.get(dependent_name_id) else {
+            continue;
+        };
+        if identifier.is_none_or(|id| dep_name.str() == id) {
+            affected.extend(dep_name.references().iter().copied());
+        }
     }
 }

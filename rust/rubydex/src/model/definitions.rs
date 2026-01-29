@@ -159,6 +159,17 @@ impl Definition {
     pub fn is_deprecated(&self) -> bool {
         all_definitions!(self, it => it.flags().is_deprecated())
     }
+
+    /// Returns true if this definition affects ancestor chains (has superclass or mixins).
+    #[must_use]
+    pub fn affects_ancestors(&self) -> bool {
+        match self {
+            Definition::Class(d) => d.superclass_ref().is_some() || !d.mixins().is_empty(),
+            Definition::Module(d) => !d.mixins().is_empty(),
+            Definition::SingletonClass(d) => !d.mixins().is_empty(),
+            _ => false,
+        }
+    }
 }
 
 /// Represents a mixin: include, prepend, or extend.

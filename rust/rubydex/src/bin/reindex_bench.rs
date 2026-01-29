@@ -3,7 +3,11 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 
-use rubydex::{indexing::ruby_indexer::RubyIndexer, model::graph::Graph, resolution::Resolver};
+use rubydex::{
+    indexing::ruby_indexer::RubyIndexer,
+    model::graph::Graph,
+    resolution::{ResolutionStats, Resolver},
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -11,13 +15,6 @@ use rubydex::{indexing::ruby_indexer::RubyIndexer, model::graph::Graph, resoluti
     about = "Benchmark re-indexing and incremental resolution performance"
 )]
 struct Args {
-    #[arg(
-        long = "iterations",
-        default_value = "100",
-        help = "Number of iterations per change type"
-    )]
-    iterations: usize,
-
     #[arg(long = "verify", help = "Verify incremental resolution matches full resolution")]
     verify: bool,
 }
@@ -48,6 +45,7 @@ const CHANGE_TYPES: [ChangeType; 3] = [
 struct Timing {
     update: Duration,
     resolution: Duration,
+    stats: ResolutionStats,
 }
 
 impl Timing {
@@ -283,10 +281,7 @@ fn main() {
 
     let mut graph = Graph::new();
     let all_test_files = test_files.all_files();
-    print!(
-        "Indexing {} files...",
-        synthetic_files.len() + all_test_files.len()
-    );
+    print!("Indexing {} files...", synthetic_files.len() + all_test_files.len());
     let start = Instant::now();
 
     for file in &synthetic_files {
@@ -318,32 +313,25 @@ fn main() {
         return;
     }
 
-    // Warm-up
+    println!();
+    println!("Results (incremental resolution)");
+    println!("=================================");
+
     for change_type in CHANGE_TYPES {
-        run_iteration(&mut graph, &test_files, change_type);
+        let timing = run_iteration(&mut graph, &test_files, change_type);
+        println!();
+        println!("{change_type}:");
+        println!(
+            "  definitions: {}, references: {}, ancestors: {}",
+            timing.stats.definitions_processed, timing.stats.references_processed, timing.stats.ancestors_processed,
+        );
+        println!(
+            "  update: {}, resolution: {}, total: {}",
+            format_duration(timing.update),
+            format_duration(timing.resolution),
+            format_duration(timing.total()),
+        );
     }
-
-    // Actual benchmark
-    let mut results = Vec::new();
-    for change_type in CHANGE_TYPES {
-        let timings = run_iterations(&mut graph, &test_files, args.iterations, change_type);
-        results.push((change_type, timings));
-    }
-
-    print_statistics(&results);
-}
-
-fn run_iterations(
-    graph: &mut Graph,
-    test_files: &TestFiles,
-    iterations: usize,
-    change_type: ChangeType,
-) -> Vec<Timing> {
-    let mut timings = Vec::with_capacity(iterations);
-    for _ in 0..iterations {
-        timings.push(run_iteration(graph, test_files, change_type));
-    }
-    timings
 }
 
 fn run_iteration(graph: &mut Graph, test_files: &TestFiles, change_type: ChangeType) -> Timing {
@@ -359,7 +347,7 @@ fn run_iteration(graph: &mut Graph, test_files: &TestFiles, change_type: ChangeT
 
     let resolution_start = Instant::now();
     let mut resolver = Resolver::new(graph);
-    resolver.resolve_all();
+    let stats = resolver.resolve_all();
     let resolution_duration = resolution_start.elapsed();
 
     // Restore original file
@@ -368,6 +356,7 @@ fn run_iteration(graph: &mut Graph, test_files: &TestFiles, change_type: ChangeT
     Timing {
         update: update_duration,
         resolution: resolution_duration,
+        stats,
     }
 }
 
@@ -377,65 +366,6 @@ fn update_file(graph: &mut Graph, uri: &str, source: &str) {
     graph.update(indexer.local_graph());
     let mut resolver = Resolver::new(graph);
     resolver.resolve_all();
-}
-
-fn print_statistics(results: &[(ChangeType, Vec<Timing>)]) {
-    println!();
-    println!("Results (incremental resolution with dependency tracking)");
-    println!("=========================================================");
-
-    for (change_type, timings) in results {
-        println!();
-        println!("{change_type}");
-        println!("{}", "-".repeat(format!("{change_type}").len()));
-
-        let mut update_times: Vec<Duration> = timings.iter().map(|t| t.update).collect();
-        let mut resolution_times: Vec<Duration> = timings.iter().map(|t| t.resolution).collect();
-        let mut total_times: Vec<Duration> = timings.iter().map(Timing::total).collect();
-
-        update_times.sort_unstable();
-        resolution_times.sort_unstable();
-        total_times.sort_unstable();
-
-        println!();
-        println!("Update time:");
-        print_time_stats(&update_times);
-
-        println!();
-        println!("Resolution time:");
-        print_time_stats(&resolution_times);
-
-        println!();
-        println!("Total time per iteration:");
-        print_time_stats(&total_times);
-    }
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn print_time_stats(times: &[Duration]) {
-    let sum: Duration = times.iter().sum();
-    let avg = Duration::from_secs_f64(sum.as_secs_f64() / times.len() as f64);
-    let min = times[0];
-    let max = times[times.len() - 1];
-    let p50 = percentile(times, 50);
-    let p95 = percentile(times, 95);
-
-    println!(
-        "  avg: {}  min: {}  max: {}",
-        format_duration(avg),
-        format_duration(min),
-        format_duration(max)
-    );
-    println!(
-        "  p50: {}  p95: {}",
-        format_duration(p50),
-        format_duration(p95)
-    );
-}
-
-fn percentile(sorted_times: &[Duration], p: usize) -> Duration {
-    let idx = (p * sorted_times.len() / 100).min(sorted_times.len() - 1);
-    sorted_times[idx]
 }
 
 fn format_duration(d: Duration) -> String {
@@ -452,8 +382,6 @@ fn format_duration(d: Duration) -> String {
 }
 
 fn verify_incremental_resolution(test_files: &TestFiles) {
-    use rubydex::model::name::NameRef;
-
     let mut all_passed = true;
 
     for change_type in CHANGE_TYPES {
@@ -470,15 +398,12 @@ fn verify_incremental_resolution(test_files: &TestFiles) {
         resolver.resolve_all();
 
         // Count resolutions per declaration name in incremental graph
-        let mut incremental_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for (_, name_ref) in graph.names().iter() {
-            if let NameRef::Resolved(resolved) = name_ref {
-                if let Some(decl) = graph.declarations().get(resolved.declaration_id()) {
-                    *incremental_counts
-                        .entry(decl.name().to_string())
-                        .or_default() += name_ref.ref_count();
-                }
+        let mut incremental_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (name_id, name) in graph.names() {
+            if let Some(decl_id) = graph.resolved_names().get(name_id)
+                && let Some(decl) = graph.declarations().get(decl_id)
+            {
+                *incremental_counts.entry(decl.name().to_string()).or_default() += name.ref_count();
             }
         }
 
@@ -486,30 +411,25 @@ fn verify_incremental_resolution(test_files: &TestFiles) {
         let fresh_graph = build_fresh_graph(test_files, &change_info);
 
         // Count resolutions per declaration name in fresh graph
-        let mut full_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for (_, name_ref) in fresh_graph.names().iter() {
-            if let NameRef::Resolved(resolved) = name_ref {
-                if let Some(decl) = fresh_graph.declarations().get(resolved.declaration_id()) {
-                    *full_counts.entry(decl.name().to_string()).or_default() +=
-                        name_ref.ref_count();
-                }
+        let mut full_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (name_id, name) in fresh_graph.names() {
+            if let Some(decl_id) = fresh_graph.resolved_names().get(name_id)
+                && let Some(decl) = fresh_graph.declarations().get(decl_id)
+            {
+                *full_counts.entry(decl.name().to_string()).or_default() += name.ref_count();
             }
         }
 
         // Compare counts
         let mut mismatches = 0;
-        let all_decls: std::collections::HashSet<_> =
-            incremental_counts.keys().chain(full_counts.keys()).collect();
+        let all_decls: std::collections::HashSet<_> = incremental_counts.keys().chain(full_counts.keys()).collect();
         for decl_name in all_decls {
             let incr = incremental_counts.get(decl_name).copied().unwrap_or(0);
             let full = full_counts.get(decl_name).copied().unwrap_or(0);
             if incr != full {
                 mismatches += 1;
                 if mismatches <= 5 {
-                    eprintln!(
-                        "    Mismatch: {decl_name} has {incr} refs (incremental) vs {full} refs (full)"
-                    );
+                    eprintln!("    Mismatch: {decl_name} has {incr} refs (incremental) vs {full} refs (full)");
                 }
             }
         }
@@ -563,7 +483,7 @@ fn build_fresh_graph(test_files: &TestFiles, change_info: &ChangeInfo) -> Graph 
     }
 
     for (uri, source) in test_files.all_files() {
-        let actual_source = if uri == &change_info.uri {
+        let actual_source = if uri == change_info.uri {
             &change_info.modified_source
         } else {
             source

@@ -64,6 +64,12 @@ impl LinearizationContext {
     }
 }
 
+pub struct ResolutionStats {
+    pub definitions_processed: usize,
+    pub references_processed: usize,
+    pub ancestors_processed: usize,
+}
+
 pub struct Resolver<'a> {
     graph: &'a mut Graph,
 }
@@ -83,7 +89,7 @@ impl<'a> Resolver<'a> {
     /// # Panics
     ///
     /// Can panic if there's inconsistent data in the graph
-    pub fn resolve_all(&mut self) {
+    pub fn resolve_all(&mut self) -> ResolutionStats {
         // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
         if !self.graph.declarations().contains_key(&*OBJECT_ID) {
             self.graph.declarations_mut().insert(
@@ -112,10 +118,7 @@ impl<'a> Resolver<'a> {
         let (definition_ids, reference_ids, ancestor_ids) = if let Some(cs) = self.graph.changeset() {
             // Incremental resolution
             let def_ids: Vec<_> = cs.added_definitions.iter().copied().collect();
-            let ref_ids: Vec<_> = cs
-                .affected_references(self.graph.names(), self.graph.searches())
-                .into_iter()
-                .collect();
+            let ref_ids: Vec<_> = cs.affected_references(self.graph).into_iter().collect();
             let ancestor_ids: Vec<_> = cs.invalidated_ancestors.iter().copied().collect();
             (def_ids, ref_ids, ancestor_ids)
         } else {
@@ -125,10 +128,18 @@ impl<'a> Resolver<'a> {
             (def_ids, ref_ids, Vec::new())
         };
 
+        let stats = ResolutionStats {
+            definitions_processed: definition_ids.len(),
+            references_processed: reference_ids.len(),
+            ancestors_processed: ancestor_ids.len(),
+        };
+
         let (unit_queue, other_ids) = self.sorted_units(definition_ids, reference_ids, ancestor_ids);
         self.process_units(unit_queue);
         self.handle_remaining_definitions(other_ids);
         self.graph.init_changeset();
+
+        stats
     }
 
     fn process_units(&mut self, mut unit_queue: VecDeque<Unit>) {
