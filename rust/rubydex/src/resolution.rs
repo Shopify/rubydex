@@ -3436,6 +3436,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context);
 
         assert_constant_alias_target_eq!(context, "Bar::MyFoo", "Foo");
@@ -3459,6 +3460,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:8:7-8:12");
@@ -3479,6 +3481,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_alias_target_eq!(context, "ALIAS1", "Foo");
@@ -3496,6 +3499,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context);
 
         assert_constant_alias_target_eq!(context, "ALIAS_2", "ALIAS_1");
@@ -3513,6 +3517,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
@@ -3539,6 +3544,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_alias_target_eq!(context, "ALIAS", "Foo");
@@ -3560,6 +3566,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context);
 
         assert_constant_alias_target_eq!(context, "BAZ", "Bar::CONST");
@@ -3577,6 +3584,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context);
 
         assert_constant_alias_target_eq!(context, "A", "B");
@@ -3600,6 +3608,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context);
 
         assert!(
@@ -3649,6 +3658,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_alias_target_eq!(context, "Left::RIGHT_REF", "Right");
@@ -3681,6 +3691,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_alias_target_eq!(context, "M::SELF_REF", "M");
@@ -3732,6 +3743,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
@@ -3779,6 +3791,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
@@ -3821,6 +3834,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context);
 
         // FOO should have 2 definitions pointing to different targets
@@ -3864,6 +3878,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         // FOO::CONST_A should resolve to A::CONST_A
@@ -3886,6 +3901,7 @@ mod tests {
         context.index_uri("file:///b.rb", "ALIAS = ALIAS");
         context.index_uri("file:///usage.rb", "ALIAS::CONST");
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         // ALIAS should have two targets: A and ALIAS (self-reference)
@@ -3909,6 +3925,7 @@ mod tests {
         });
         context.index_uri("file:///usage.rb", "ALIAS2::CONST");
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_alias_target_eq!(context, "ALIAS1", "Foo");
@@ -3930,6 +3947,7 @@ mod tests {
         });
         context.index_uri("file:///usage.rb", "ALIAS::CONST");
         context.resolve();
+
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:0:7-0:12");
@@ -4060,6 +4078,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         let declarations = context.graph().declarations();
 
         // In the same order of appearence
@@ -4144,6 +4164,8 @@ mod tests {
         });
         context.resolve();
 
+        assert_no_diagnostics!(&context);
+
         assert_ancestors_eq!(context, "C", ["C", "A", "B", "Object"]);
         assert_constant_reference_to!(context, "A::X", "file:///1.rb:7:2-7:3");
     }
@@ -4175,6 +4197,8 @@ mod tests {
             "
         });
         context.resolve();
+
+        assert_no_diagnostics!(&context);
 
         assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
         assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:6:2-6:3");
