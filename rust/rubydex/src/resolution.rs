@@ -167,6 +167,7 @@ impl<'a> Resolver<'a> {
         self.process_units(unit_queue);
         self.handle_remaining_definitions(other_ids);
         self.graph.init_changeset();
+        self.graph.gc_names();
 
         stats
     }
