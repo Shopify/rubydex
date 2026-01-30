@@ -232,6 +232,29 @@ static VALUE rdxr_declaration_ancestors(VALUE self) {
     return self;
 }
 
+// Declaration#descendants: () -> Enumerator[Declaration]
+static VALUE rdxr_declaration_descendants(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize(self, rb_str_new2("descendants"), 0, NULL);
+    }
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    void *iter = rdx_declaration_descendants(graph, data->id);
+    if (iter == NULL) {
+        rb_raise(rb_eRuntimeError, "failed to create iterator");
+    }
+
+    VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
+    rb_ensure(rdxi_declarations_yield, args, rdxi_declarations_ensure, args);
+
+    return self;
+}
+
 void rdxi_initialize_declaration(VALUE mRubydex) {
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
     cNamespace = rb_define_class_under(mRubydex, "Namespace", cDeclaration);
@@ -256,6 +279,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     rb_define_method(cNamespace, "member", rdxr_declaration_member, 1);
     rb_define_method(cNamespace, "singleton_class", rdxr_declaration_singleton_class, 0);
     rb_define_method(cNamespace, "ancestors", rdxr_declaration_ancestors, 0);
+    rb_define_method(cNamespace, "descendants", rdxr_declaration_descendants, 0);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }

@@ -311,3 +311,31 @@ pub unsafe extern "C" fn rdx_declaration_ancestors(pointer: GraphPointer, decl_i
 
     Box::into_raw(Box::new(DeclarationsIter::new(declarations.into_boxed_slice())))
 }
+
+/// Returns an iterator over the descendant declarations of a given declaration
+///
+/// # Safety
+///
+/// Assumes that the graph and member pointers are valid
+///
+/// # Panics
+///
+/// Will panic if there's inconsistent graph data
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_declaration_descendants(pointer: GraphPointer, decl_id: u32) -> *mut DeclarationsIter {
+    let declarations = with_graph(pointer, |graph| {
+        let declaration_id = DeclarationId::new(decl_id);
+
+        let Some(Declaration::Namespace(declaration)) = graph.declarations().get(&declaration_id) else {
+            return Vec::new();
+        };
+
+        declaration
+            .descendants()
+            .iter()
+            .map(|id| CDeclaration::from_declaration(*id, graph.declarations().get(id).unwrap()))
+            .collect::<Vec<_>>()
+    });
+
+    Box::into_raw(Box::new(DeclarationsIter::new(declarations.into_boxed_slice())))
+}
