@@ -14,7 +14,7 @@ pub enum ParentScope {
     /// There's a parent scope in this reference (e.g.: `Foo::Bar`)
     Some(NameId),
 }
-assert_mem_size!(ParentScope, 16);
+assert_mem_size!(ParentScope, 8);
 
 impl ParentScope {
     pub fn map_or<F, T>(&self, default: T, f: F) -> T
@@ -84,7 +84,7 @@ pub struct Name {
     nesting: Option<NameId>,
     ref_count: u32,
 }
-assert_mem_size!(Name, 48);
+assert_mem_size!(Name, 24);
 
 impl Name {
     #[must_use]

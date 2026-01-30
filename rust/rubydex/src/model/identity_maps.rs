@@ -16,6 +16,10 @@ impl Hasher for IdentityHasher {
         unreachable!("IdentityHasher only supports write_u64");
     }
 
+    fn write_u32(&mut self, i: u32) {
+        self.hash = u64::from(i);
+    }
+
     fn write_u64(&mut self, i: u64) {
         self.hash = i;
     }

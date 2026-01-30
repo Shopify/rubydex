@@ -1800,7 +1800,7 @@ mod tests {
 
         assert_eq!(
             [
-                "Top", "Foo", "Qux", "Bar", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
+                "Top", "Foo", "Bar", "AfterTop", "Qux", "Baz", "Zip", "Zap", "Zop", "Boop"
             ],
             names
                 .iter()

@@ -21,7 +21,7 @@ use rubydex::model::ids::{DeclarationId, StringId};
 ///
 /// This function will panic if the name pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
+pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: u32) -> *const c_char {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
         if let Some(decl) = graph.declarations().get(&name_id) {
@@ -40,9 +40,9 @@ pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: i6
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_member(
     pointer: GraphPointer,
-    name_id: i64,
+    name_id: u32,
     member: *const c_char,
-) -> *const i64 {
+) -> *const u32 {
     let Ok(member_str) = (unsafe { utils::convert_char_ptr_to_string(member) }) else {
         return ptr::null();
     };
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn rdx_declaration_member(
 ///
 /// This function will panic if the name pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer, name_id: i64) -> *const c_char {
+pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer, name_id: u32) -> *const c_char {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
         if let Some(decl) = graph.declarations().get(&name_id) {
@@ -96,7 +96,7 @@ pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer,
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
     pointer: GraphPointer,
-    decl_id: i64,
+    decl_id: u32,
 ) -> *mut DefinitionsIter {
     // Snapshot the IDs and kinds at iterator creation to avoid borrowing across FFI calls
     with_graph(pointer, |graph| {
@@ -104,7 +104,7 @@ pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
         if let Some(decl) = graph.declarations().get(&decl_id) {
             rdx_definitions_iter_new_from_ids(graph, decl.definitions())
         } else {
-            DefinitionsIter::new(Vec::<(i64, DefinitionKind)>::new().into_boxed_slice())
+            DefinitionsIter::new(Vec::<(u32, DefinitionKind)>::new().into_boxed_slice())
         }
     })
 }
