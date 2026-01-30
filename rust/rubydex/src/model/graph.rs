@@ -581,8 +581,14 @@ impl Graph {
     //// Handles the deletion of a document identified by `uri`
     pub fn delete_uri(&mut self, uri: &str) {
         let uri_id = UriId::from(uri);
+        let old_names = self.get_document_names(uri_id);
+
         self.remove_definitions_for_uri(uri_id);
         self.documents.remove(&uri_id);
+
+        if let Some(changeset) = &mut self.changeset {
+            changeset.record_document_change(uri_id, old_names, IdentityHashSet::default());
+        }
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
