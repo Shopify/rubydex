@@ -9,7 +9,7 @@ use std::ops::Deref;
 #[derive(Debug)]
 pub struct StringRef {
     value: String,
-    ref_count: usize,
+    ref_count: u32,
 }
 
 impl StringRef {
@@ -19,12 +19,18 @@ impl StringRef {
     }
 
     #[must_use]
-    pub fn ref_count(&self) -> usize {
+    pub fn ref_count(&self) -> u32 {
         self.ref_count
     }
 
-    pub fn increment_ref_count(&mut self, count: usize) {
-        self.ref_count += count;
+    /// # Panics
+    ///
+    /// This function will panic if the reference count would exceed `u32::MAX`
+    pub fn increment_ref_count(&mut self, count: u32) {
+        self.ref_count = self
+            .ref_count
+            .checked_add(count)
+            .expect("Should not exceed maximum string ref count");
     }
 
     #[must_use]
