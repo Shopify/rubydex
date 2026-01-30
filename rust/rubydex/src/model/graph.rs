@@ -567,13 +567,46 @@ impl Graph {
             }
         }
 
-        // Invalidate ancestor chains for declarations that had ancestor-affecting definitions removed
+        // Process added definitions: collect those needing ancestor invalidation
+        let added_definitions: Vec<_> = self
+            .changeset
+            .as_ref()
+            .map_or_else(Vec::new, |cs| cs.added_definitions.iter().copied().collect());
+
+        for definition_id in added_definitions {
+            if let Some(definition) = self.definitions.get(&definition_id)
+                && definition.affects_ancestors()
+                && let Some(declaration_id) = self.definition_id_to_declaration_id(definition_id).copied()
+            {
+                declarations_to_invalidate.push(declaration_id);
+            }
+        }
+
+        // Invalidate ancestor chains for declarations that had ancestor-affecting definitions added or removed
         if !declarations_to_invalidate.is_empty() {
             self.invalidate_ancestor_chains(declarations_to_invalidate);
         }
 
         // GC declarations (also invalidates ancestors for descendants of deleted declarations)
         let orphaned_refs = self.gc_declarations();
+
+        // Invalidate declarations with partial ancestors so they get re-linearized
+        let partial_ancestor_ids: Vec<_> = self
+            .declarations
+            .iter()
+            .filter_map(|(id, decl)| {
+                if let Some(ns) = decl.as_namespace()
+                    && !ns.has_complete_ancestors()
+                {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !partial_ancestor_ids.is_empty() {
+            self.invalidate_ancestor_chains(partial_ancestor_ids);
+        }
 
         let mut affected = self
             .changeset
