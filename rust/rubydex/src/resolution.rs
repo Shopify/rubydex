@@ -1571,9 +1571,9 @@ mod tests {
     use crate::test_utils::GraphTest;
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_alias_target_eq,
-        assert_constant_reference_to, assert_descendants, assert_diagnostics_eq, assert_instance_variables_eq,
-        assert_members_eq, assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members, assert_owner_eq,
-        assert_singleton_class_eq,
+        assert_constant_reference_to, assert_constant_reference_unresolved, assert_descendants, assert_diagnostics_eq,
+        assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target, assert_no_diagnostics,
+        assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     };
 
     #[test]
@@ -4197,6 +4197,8 @@ mod tests {
             end
             "
         });
+        context.resolve();
+
         context.index_uri("file:///2.rb", {
             r"
             class B
@@ -4227,6 +4229,8 @@ mod tests {
             end
             "
         });
+        context.resolve();
+
         context.index_uri("file:///2.rb", {
             r"
             module O
@@ -4236,9 +4240,612 @@ mod tests {
             end
             "
         });
+
+        // Debug before resolve
+        if let Some(cs) = context.graph().changeset() {
+            eprintln!("Changed names: {:?}", cs.changed_names());
+            eprintln!("Added definitions: {:?}", cs.added_definitions);
+        }
+
         context.resolve();
+
+        let c_decl = context.graph().declarations().get(&DeclarationId::from("C")).unwrap();
+        eprintln!("C ancestors: {:?}", c_decl.as_namespace().unwrap().ancestors());
+        eprintln!(
+            "O::A exists: {:?}",
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("O::A"))
+        );
+
+        // Check searches
+        eprintln!("Searches: {:?}", context.graph().searches());
 
         assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
         assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:6:2-6:3");
+    }
+
+    #[test]
+    fn resolves_constant_with_ancestor_partial2() {
+        // Same as resolves_constant_with_ancestor_partial but wrapped in module Foo
+        // to test if top-level namespace addition is handled differently
+        let mut context = GraphTest::new();
+        context.index_uri("file:///1.rb", {
+            r"
+            module Foo
+              class B
+                X = 2
+              end
+              class C
+                include B
+                include O::A
+                X
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Print searches before adding file2
+        eprintln!("Searches before: {:?}", context.graph().searches());
+
+        context.index_uri("file:///2.rb", {
+            r"
+            module Foo
+              module O
+                module A
+                  X = 1
+                end
+              end
+            end
+            "
+        });
+
+        if let Some(cs) = context.graph().changeset() {
+            eprintln!("Changed names: {:?}", cs.changed_names());
+            for name_id in cs.changed_names() {
+                if let Some(name) = context.graph().names().get(&name_id) {
+                    eprintln!(
+                        "  {:?} -> str={:?}, parent_scope={:?}, nesting={:?}",
+                        name_id,
+                        name.str(),
+                        name.parent_scope(),
+                        name.nesting()
+                    );
+                }
+            }
+        }
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo::C", ["Foo::C", "Foo::O::A", "Foo::B", "Object"]);
+        assert_constant_reference_to!(context, "Foo::O::A::X", "file:///1.rb:7:4-7:5");
+    }
+
+    #[test]
+    fn adding_closer_constant_shadows_outer() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Foo
+              BAR = 1
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            module Foo
+              module Qux
+                class Baz
+                  BAR
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::BAR", "file:///file2.rb:3:6-3:9");
+
+        context.index_uri("file:///file3.rb", {
+            r"
+            module Foo
+              module Qux
+                BAR = 2
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::Qux::BAR", "file:///file2.rb:3:6-3:9");
+    }
+
+    #[test]
+    fn removing_shadowing_constant_reveals_outer() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Foo
+              BAR = 1
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            module Foo
+              module Qux
+                BAR = 2
+              end
+            end
+            "
+        });
+        context.index_uri("file:///file3.rb", {
+            r"
+            module Foo
+              module Qux
+                class Baz
+                  BAR
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::Qux::BAR", "file:///file3.rb:3:6-3:9");
+
+        context.index_uri("file:///file2.rb", {
+            r"
+            module Foo
+              module Qux
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::BAR", "file:///file3.rb:3:6-3:9");
+    }
+
+    #[test]
+    fn adding_mixin_provides_constant() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Bar
+              CONST = 42
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Foo
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///file2.rb:1:2-1:7");
+
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Foo
+              include Bar
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///file2.rb:2:2-2:7");
+    }
+
+    #[test]
+    fn removing_mixin_removes_constant() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Bar
+              CONST = 42
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Foo
+              include Bar
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///file2.rb:2:2-2:7");
+
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Foo
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///file2.rb:1:2-1:7");
+    }
+
+    #[test]
+    fn changing_superclass_changes_constant_resolution() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            class Parent1
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Parent2
+              CONST = 2
+            end
+            "
+        });
+        context.index_uri("file:///file3.rb", {
+            r"
+            class Child < Parent1
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Parent1::CONST", "file:///file3.rb:1:2-1:7");
+
+        context.index_uri("file:///file3.rb", {
+            r"
+            class Child < Parent2
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Parent2::CONST", "file:///file3.rb:1:2-1:7");
+    }
+
+    #[test]
+    fn adding_constant_to_mixin_affects_includers() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Mixin
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class User
+              include Mixin
+              VALUE
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///file2.rb:2:2-2:7");
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Mixin
+              VALUE = 99
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Mixin::VALUE", "file:///file2.rb:2:2-2:7");
+    }
+
+    #[test]
+    fn removing_constant_from_mixin_affects_includers() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Mixin
+              VALUE = 99
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class User
+              include Mixin
+              VALUE
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Mixin::VALUE", "file:///file2.rb:2:2-2:7");
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Mixin
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///file2.rb:2:2-2:7");
+    }
+
+    #[test]
+    fn extend_provides_singleton_class_constant() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Ext
+              CONST = 123
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Foo
+              class << self
+                CONST
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///file2.rb:2:4-2:9");
+
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Foo
+              extend Ext
+              class << self
+                CONST
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Ext::CONST", "file:///file2.rb:3:4-3:9");
+    }
+
+    #[test]
+    fn deeply_nested_mixin_chain() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module A
+              CONST = 'A'
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            module B
+              include A
+            end
+            "
+        });
+        context.index_uri("file:///file3.rb", {
+            r"
+            module C
+              include B
+            end
+            "
+        });
+        context.index_uri("file:///file4.rb", {
+            r"
+            class D
+              include C
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "A::CONST", "file:///file4.rb:2:2-2:7");
+
+        context.index_uri("file:///file2.rb", {
+            r"
+            module B
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///file4.rb:2:2-2:7");
+    }
+
+    #[test]
+    fn constant_alias_resolution_changes() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            class Foo
+              CONST = 1
+            end
+
+            class Qux
+              CONST = 2
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            Bar = Foo
+            Bar::CONST
+            "
+        });
+        context.resolve();
+
+        assert_constant_alias_target_eq!(context, "Bar", "Foo");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///file2.rb:1:5-1:10");
+
+        context.index_uri("file:///file2.rb", {
+            r"
+            Bar = Qux
+            Bar::CONST
+            "
+        });
+        context.resolve();
+
+        assert_constant_alias_target_eq!(context, "Bar", "Qux");
+        assert_constant_reference_to!(context, "Qux::CONST", "file:///file2.rb:1:5-1:10");
+    }
+
+    #[test]
+    fn file_deletion_unresolves_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Bar
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Foo
+              include Bar
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///file2.rb:2:2-2:7");
+
+        context.delete_uri("file:///file1.rb");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///file2.rb:2:2-2:7");
+    }
+
+    #[test]
+    fn middle_of_hierarchy_shadow() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            class Baz
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Bar < Baz
+            end
+            "
+        });
+        context.index_uri("file:///file3.rb", {
+            r"
+            class Foo < Bar
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Baz::CONST", "file:///file3.rb:1:2-1:7");
+
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Bar < Baz
+              CONST = 2
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///file3.rb:1:2-1:7");
+    }
+
+    #[test]
+    fn namespace_change_invalidates_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            class Foo
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", "Foo::CONST");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///file2.rb:0:5-0:10");
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Bar
+              class Foo
+                CONST = 2
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///file2.rb:0:5-0:10");
+    }
+
+    #[test]
+    fn new_file_with_shadow() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Bar
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            class Foo
+              include Bar
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///file2.rb:2:2-2:7");
+
+        context.index_uri("file:///file3.rb", {
+            r"
+            class Foo
+              CONST = 2
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///file2.rb:2:2-2:7");
     }
 }

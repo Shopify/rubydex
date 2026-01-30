@@ -513,6 +513,34 @@ macro_rules! assert_no_diagnostics {
 }
 
 #[cfg(test)]
+#[macro_export]
+macro_rules! assert_constant_reference_unresolved {
+    ($context:expr, $location:expr) => {
+        let (uri, start, end) = $context.parse_location($location);
+
+        let reference = $context
+            .graph()
+            .constant_references()
+            .values()
+            .find(|r| {
+                r.uri_id() == $crate::model::ids::UriId::from(&uri) && r.offset().start() == start
+            })
+            .expect(&format!("No constant reference found at {}", $location));
+
+        assert!(
+            !$context
+                .graph()
+                .resolved_names()
+                .contains_key(reference.name_id()),
+            "Expected reference at {} to be unresolved",
+            $location
+        );
+
+        $context.assert_offset_matches(&uri, reference.offset(), start, end, "unresolved reference", $location);
+    };
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
