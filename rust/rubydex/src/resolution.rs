@@ -138,6 +138,17 @@ impl<'a> Resolver<'a> {
             (def_ids, ref_ids, Vec::new())
         };
 
+        let orphaned_refs = self.graph.gc_declarations();
+        let orphaned_name_ids: Vec<_> = orphaned_refs
+            .iter()
+            .filter_map(|ref_id| self.graph.constant_references().get(ref_id).map(|r| *r.name_id()))
+            .collect();
+        for name_id in orphaned_name_ids {
+            self.graph.unresolve_name(&name_id);
+        }
+        let mut reference_ids = reference_ids;
+        reference_ids.extend(orphaned_refs);
+
         let stats = ResolutionStats {
             definitions_processed: definition_ids.len(),
             references_processed: reference_ids.len(),

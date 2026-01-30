@@ -414,9 +414,10 @@ impl Graph {
     }
 
     /// Garbage collects unused declarations and their member entries.
-    pub fn gc_declarations(&mut self) {
+    pub fn gc_declarations(&mut self) -> Vec<ReferenceId> {
         let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
         let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
+        let mut orphaned_references: Vec<ReferenceId> = Vec::new();
 
         for (declaration_id, declaration) in &self.declarations {
             // Builtins do not have definitions
@@ -434,6 +435,7 @@ impl Graph {
                 let unqualified_str_id = StringId::from(&declaration.unqualified_name());
                 members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
                 declarations_to_delete.push(*declaration_id);
+                orphaned_references.extend(declaration.references().iter().copied());
             }
         }
 
@@ -469,6 +471,8 @@ impl Graph {
                 }
             }
         }
+
+        orphaned_references
     }
 
     /// Garbage collects unused names.
@@ -488,7 +492,7 @@ impl Graph {
 
     /// Garbage collects both declarations and names.
     pub fn gc(&mut self) {
-        self.gc_declarations();
+        let _ = self.gc_declarations();
         self.gc_names();
     }
 
