@@ -413,20 +413,8 @@ impl Graph {
         }
     }
 
-    /// Garbage collects unused names and declarations.
-    pub fn gc(&mut self) {
-        let dead_name_ids: Vec<_> = self
-            .names
-            .iter()
-            .filter(|(_, name)| name.ref_count() == 0)
-            .map(|(id, _)| *id)
-            .collect();
-
-        for name_id in dead_name_ids {
-            self.names.remove(&name_id);
-            self.resolved_names.remove(&name_id);
-        }
-
+    /// Garbage collects unused declarations and their member entries.
+    pub fn gc_declarations(&mut self) {
         let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
         let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
 
@@ -481,6 +469,27 @@ impl Graph {
                 }
             }
         }
+    }
+
+    /// Garbage collects unused names.
+    pub fn gc_names(&mut self) {
+        let dead_name_ids: Vec<_> = self
+            .names
+            .iter()
+            .filter(|(_, name)| name.ref_count() == 0)
+            .map(|(id, _)| *id)
+            .collect();
+
+        for name_id in dead_name_ids {
+            self.names.remove(&name_id);
+            self.resolved_names.remove(&name_id);
+        }
+    }
+
+    /// Garbage collects both declarations and names.
+    pub fn gc(&mut self) {
+        self.gc_declarations();
+        self.gc_names();
     }
 
     fn untrack_string(&mut self, string_id: StringId) {
