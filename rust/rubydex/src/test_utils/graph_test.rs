@@ -106,6 +106,27 @@ macro_rules! assert_declaration_does_not_exist {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_declaration_definitions_count_eq {
+    ($context:expr, $declaration_name:expr, $expected_definitions:expr) => {
+        let declaration = $context
+            .graph()
+            .declarations()
+            .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+            .unwrap();
+
+        assert_eq!(
+            declaration.definitions().len(),
+            $expected_definitions,
+            "Expected exactly {} definitions for `{}`, but got {}",
+            $expected_definitions,
+            $declaration_name,
+            declaration.definitions().len()
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_constant_alias_target_eq {
     ($context:expr, $alias_name:expr, $target_name:expr) => {{
         let decl_id = $crate::model::ids::DeclarationId::from($alias_name);

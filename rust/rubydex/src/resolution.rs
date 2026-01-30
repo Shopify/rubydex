@@ -1508,8 +1508,8 @@ mod tests {
     use crate::test_utils::GraphTest;
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_alias_target_eq,
-        assert_constant_reference_to, assert_declaration_does_not_exist, assert_declaration_exists,
-        assert_declaration_references_count_eq, assert_descendants, assert_diagnostics_eq,
+        assert_constant_reference_to, assert_declaration_definitions_count_eq, assert_declaration_does_not_exist,
+        assert_declaration_exists, assert_declaration_references_count_eq, assert_descendants, assert_diagnostics_eq,
         assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target, assert_no_diagnostics,
         assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     };
@@ -3748,16 +3748,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // FOO should have 2 definitions pointing to different targets
-        assert_eq!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("FOO"))
-                .unwrap()
-                .definitions()
-                .len(),
-            2
-        );
+        assert_declaration_definitions_count_eq!(context, "FOO", 2);
 
         assert_alias_targets_contain!(context, "FOO", "A", "B");
     }
