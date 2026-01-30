@@ -1,14 +1,9 @@
-use line_index::LineIndex;
-
 use super::normalize_indentation;
 #[cfg(test)]
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
-use crate::model::ids::UriId;
-use crate::offset::Offset;
-use crate::position::Position;
 use crate::resolution::Resolver;
 
 #[derive(Default)]
@@ -47,130 +42,6 @@ impl GraphTest {
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
         resolver.resolve_all();
-    }
-
-    /// Parses a location string like `<file:///foo.rb:3:0-3:5>` into `(uri, start_offset, end_offset)`
-    ///
-    /// Format: uri:start_line:start_column-end_line:end_column
-    /// Line and column numbers are 0-indexed
-    ///
-    /// # Panics
-    ///
-    /// Panics if the location format is invalid, the URI has no source, or the positions are invalid.
-    #[must_use]
-    pub fn parse_location(&self, location: &str) -> (String, u32, u32) {
-        let (uri, start_position, end_position) = Self::parse_location_positions(location);
-        let line_index = self.line_index_for(uri.as_str());
-
-        (
-            uri,
-            line_index
-                .offset(start_position)
-                .unwrap_or_else(|| panic!("Invalid start position {}:{}", start_position.line, start_position.col))
-                .into(),
-            line_index
-                .offset(end_position)
-                .unwrap_or_else(|| panic!("Invalid end position {}:{}", end_position.line, end_position.col))
-                .into(),
-        )
-    }
-
-    /// Asserts that the given offset matches the expected offset, providing clear error messages
-    /// with line:column positions when they don't match
-    ///
-    /// # Panics
-    ///
-    /// Panics if the source is not found for the URI, byte offsets are invalid, or if the actual
-    /// offset doesn't match the expected offset.
-    pub fn assert_offset_matches(
-        &self,
-        uri: &str,
-        actual_offset: &Offset,
-        expected_start: u32,
-        expected_end: u32,
-        context_message: &str,
-        location: &str,
-    ) {
-        let line_index = self.line_index_for(uri);
-
-        if actual_offset.start() == expected_start && actual_offset.end() == expected_end {
-            return;
-        }
-
-        let actual_start_pos = line_index.line_col(actual_offset.start().into());
-        let actual_end_pos = line_index.line_col(actual_offset.end().into());
-        let expected_start_pos = line_index.line_col(expected_start.into());
-        let expected_end_pos = line_index.line_col(expected_end.into());
-
-        assert!(
-            actual_offset.start() == expected_start,
-            "Start position mismatch for {} at {}\n  actual:   {}\n  expected: {}",
-            context_message,
-            location,
-            Self::format_position(actual_start_pos),
-            Self::format_position(expected_start_pos)
-        );
-
-        assert!(
-            actual_offset.end() == expected_end,
-            "End position mismatch for {} at {}\n  actual:   {}\n  expected: {}",
-            context_message,
-            location,
-            Self::format_position(actual_end_pos),
-            Self::format_position(expected_end_pos)
-        );
-    }
-
-    fn line_index_for(&self, uri: &str) -> &LineIndex {
-        let uri_id = UriId::from(uri);
-        let document = self.graph.documents().get(&uri_id).unwrap();
-        document.line_index()
-    }
-
-    fn parse_location_positions(location: &str) -> (String, Position, Position) {
-        let trimmed = location.trim().trim_start_matches('<').trim_end_matches('>');
-
-        let (start_part, end_part) = trimmed.rsplit_once('-').unwrap_or_else(|| {
-            panic!("Invalid location format: {location} (expected uri:start_line:start_column-end_line:end_column)")
-        });
-
-        let (start_prefix, start_column_str) = start_part
-            .rsplit_once(':')
-            .unwrap_or_else(|| panic!("Invalid location format: missing start column in {location}"));
-        let (uri, start_line_str) = start_prefix
-            .rsplit_once(':')
-            .unwrap_or_else(|| panic!("Invalid location format: missing start line in {location}"));
-
-        let (end_line_str, end_column_str) = end_part
-            .split_once(':')
-            .unwrap_or_else(|| panic!("Invalid location format: missing end line or column in {location}"));
-
-        let start_line = Self::parse_number(start_line_str, "start line", location);
-        let start_column = Self::parse_number(start_column_str, "start column", location);
-        let end_line = Self::parse_number(end_line_str, "end line", location);
-        let end_column = Self::parse_number(end_column_str, "end column", location);
-
-        (
-            uri.to_string(),
-            Position {
-                line: start_line,
-                col: start_column,
-            },
-            Position {
-                line: end_line,
-                col: end_column,
-            },
-        )
-    }
-
-    fn parse_number(value: &str, field: &str, location: &str) -> u32 {
-        value
-            .parse()
-            .unwrap_or_else(|_| panic!("Invalid {field} '{value}' in location {location}"))
-    }
-
-    fn format_position(position: Position) -> String {
-        format!("line {}, column {}", position.line, position.col)
     }
 
     /// # Panics
@@ -268,47 +139,54 @@ macro_rules! assert_alias_targets_contain {
 #[macro_export]
 macro_rules! assert_constant_reference_to {
     ($context:expr, $declaration_name:expr, $location:expr) => {
-        let (uri, start, end) = $context.parse_location($location);
-
-        let declaration = $context
+        let mut all_references = $context
             .graph()
-            .declarations()
-            .get(&$crate::model::ids::DeclarationId::from($declaration_name))
-            .expect(&format!("Declaration '{}' not found in graph", $declaration_name));
-
-        let constant = declaration
-            .references()
-            .iter()
-            .filter_map(|r| {
-                let reference = $context
-                    .graph()
-                    .constant_references()
-                    .get(r)
-                    .expect("Reference should exist");
-                if let $crate::model::name::NameRef::Resolved(_) = $context
-                    .graph()
-                    .names()
-                    .get(reference.name_id())
-                    .expect("Name should exist")
-                {
-                    Some(reference)
-                } else {
-                    None
-                }
+            .constant_references()
+            .values()
+            .map(|reference| {
+                (
+                    reference,
+                    format!(
+                        "{}:{}",
+                        $context.graph().documents().get(&reference.uri_id()).unwrap().uri(),
+                        reference
+                            .offset()
+                            .to_display_range($context.graph().documents().get(&reference.uri_id()).unwrap())
+                    ),
+                )
             })
-            .find(|c| c.uri_id() == $crate::model::ids::UriId::from(&uri) && c.offset().start() == start)
+            .collect::<Vec<_>>();
+
+        all_references.sort_by_key(|(_, reference_location)| reference_location.clone());
+
+        let reference_at_location = all_references
+            .iter()
+            .find(|(_, reference_location)| reference_location == $location)
+            .map(|(reference, _)| reference)
             .expect(&format!(
-                "Declaration '{}' does not have a reference at {} starting at offset {}",
-                $declaration_name, $location, start
+                "No constant reference at `{}`, found references at {:?}",
+                $location,
+                all_references
+                    .iter()
+                    .map(|(_reference, reference_location)| reference_location)
+                    .collect::<Vec<_>>()
             ));
 
-        $context.assert_offset_matches(
-            &uri,
-            constant.offset(),
-            start,
-            end,
-            &format!("reference to '{}'", $declaration_name),
-            $location,
+        let reference_name = $context.graph().names().get(reference_at_location.name_id()).unwrap();
+        let NameRef::Resolved(resolved_name) = reference_name else {
+            panic!("Reference to found at `{}` is unresolved", $location);
+        };
+
+        let resolved_name_name = $context
+            .graph()
+            .declarations()
+            .get(resolved_name.declaration_id())
+            .unwrap()
+            .name();
+        assert_eq!(
+            resolved_name_name, $declaration_name,
+            "Expected reference at `{}` to be resolved to `{}`, but got `{}`",
+            $location, $declaration_name, resolved_name_name
         );
     };
 }
