@@ -427,17 +427,34 @@ impl Graph {
         let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
 
         for (declaration_id, declaration) in &self.declarations {
+            // Builtins do not have definitions
+            if *declaration_id == *OBJECT_ID || *declaration_id == *MODULE_ID || *declaration_id == *CLASS_ID {
+                continue;
+            }
+
+            // Singleton classes may not have definitions, they can be created lazily
+            // TODO: We should also find and remove lazily created singleton classes that are no longer needed
+            if matches!(declaration, Declaration::Namespace(Namespace::SingletonClass(_))) {
+                continue;
+            }
+
             if declaration.has_no_definitions() {
                 let unqualified_str_id = StringId::from(&declaration.unqualified_name());
                 members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
                 declarations_to_delete.push(*declaration_id);
-
-                if let Some(namespace) = declaration.as_namespace()
-                    && let Some(singleton_id) = namespace.singleton_class()
-                {
-                    declarations_to_delete.push(*singleton_id);
-                }
             }
+        }
+
+        // Recursively delete singleton classes of deleted declarations
+        let mut i = 0;
+        while i < declarations_to_delete.len() {
+            let decl_id = declarations_to_delete[i];
+            if let Some(namespace) = self.declarations.get(&decl_id).and_then(|d| d.as_namespace())
+                && let Some(singleton_id) = namespace.singleton_class()
+            {
+                declarations_to_delete.push(*singleton_id);
+            }
+            i += 1;
         }
 
         for declaration_id in declarations_to_delete {
