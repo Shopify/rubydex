@@ -17,6 +17,10 @@ pub struct DocumentChange {
 #[derive(Default, Debug)]
 pub struct Changeset {
     pub added_definitions: IdentityHashSet<DefinitionId>,
+    /// Definitions removed from declarations during indexing.
+    /// Tuple: (declaration_id, definition_id, affects_ancestors)
+    /// These are processed during resolution to update declarations.
+    pub removed_definitions: Vec<(DeclarationId, DefinitionId, bool)>,
     /// Tracks per-document name changes since last resolution.
     /// For each document updated, stores the names it had before first update
     /// and the names it has after the latest update.
@@ -30,6 +34,16 @@ pub struct Changeset {
 impl Changeset {
     pub(crate) fn record_added_definition(&mut self, id: DefinitionId) {
         self.added_definitions.insert(id);
+    }
+
+    pub(crate) fn record_removed_definition(
+        &mut self,
+        declaration_id: DeclarationId,
+        definition_id: DefinitionId,
+        affects_ancestors: bool,
+    ) {
+        self.removed_definitions
+            .push((declaration_id, definition_id, affects_ancestors));
     }
 
     pub(crate) fn record_document_change(

@@ -115,11 +115,30 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let (definition_ids, reference_ids, ancestor_ids) = if let Some(cs) = self.graph.changeset() {
+        let (definition_ids, reference_ids, ancestor_ids) = if self.graph.changeset().is_some() {
             // Incremental resolution
-            let def_ids: Vec<_> = cs.added_definitions.iter().copied().collect();
-            let ref_ids: Vec<_> = cs.affected_references(self.graph).into_iter().collect();
-            let ancestor_ids: Vec<_> = cs.invalidated_ancestors.iter().copied().collect();
+            // Collect definition_ids before gc (which may delete declarations)
+            let def_ids: Vec<_> = self
+                .graph
+                .changeset()
+                .unwrap()
+                .added_definitions
+                .iter()
+                .copied()
+                .collect();
+
+            // Generate affected references (does gc + invalidate_ancestors + compute refs)
+            let ref_ids: Vec<_> = self.graph.generate_affected_references().into_iter().collect();
+
+            // Get ancestor_ids after generate_affected_references (which may add more via invalidate)
+            let ancestor_ids: Vec<_> = self
+                .graph
+                .changeset()
+                .unwrap()
+                .invalidated_ancestors
+                .iter()
+                .copied()
+                .collect();
 
             // Unresolve affected references so they can be re-resolved
             let name_ids_to_unresolve: Vec<_> = ref_ids
@@ -137,17 +156,6 @@ impl<'a> Resolver<'a> {
             let ref_ids: Vec<_> = self.graph.constant_references().keys().copied().collect();
             (def_ids, ref_ids, Vec::new())
         };
-
-        let orphaned_refs = self.graph.gc_declarations();
-        let orphaned_name_ids: Vec<_> = orphaned_refs
-            .iter()
-            .filter_map(|ref_id| self.graph.constant_references().get(ref_id).map(|r| *r.name_id()))
-            .collect();
-        for name_id in orphaned_name_ids {
-            self.graph.unresolve_name(&name_id);
-        }
-        let mut reference_ids = reference_ids;
-        reference_ids.extend(orphaned_refs);
 
         let stats = ResolutionStats {
             definitions_processed: definition_ids.len(),
