@@ -398,6 +398,10 @@ impl Graph {
         &self.resolved_names
     }
 
+    pub fn unresolve_name(&mut self, name_id: &NameId) {
+        self.resolved_names.remove(name_id);
+    }
+
     /// Decrements the ref count for a name.
     ///
     /// This does not recursively untrack `parent_scope` or `nesting` names.

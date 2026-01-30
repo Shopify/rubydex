@@ -120,6 +120,16 @@ impl<'a> Resolver<'a> {
             let def_ids: Vec<_> = cs.added_definitions.iter().copied().collect();
             let ref_ids: Vec<_> = cs.affected_references(self.graph).into_iter().collect();
             let ancestor_ids: Vec<_> = cs.invalidated_ancestors.iter().copied().collect();
+
+            // Unresolve affected references so they can be re-resolved
+            let name_ids_to_unresolve: Vec<_> = ref_ids
+                .iter()
+                .filter_map(|ref_id| self.graph.constant_references().get(ref_id).map(|r| *r.name_id()))
+                .collect();
+            for name_id in name_ids_to_unresolve {
+                self.graph.unresolve_name(&name_id);
+            }
+
             (def_ids, ref_ids, ancestor_ids)
         } else {
             // Initial resolution
