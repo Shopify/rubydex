@@ -1145,6 +1145,11 @@ impl<'a> Resolver<'a> {
                     return missing_linearization_id.map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)));
                 }
 
+                // Record search so this reference is re-resolved when the nesting scope changes
+                if let Some(nesting_id) = name.nesting() {
+                    self.graph.add_search(*nesting_id, name_id);
+                }
+
                 return Outcome::Retry(None);
             }
 
