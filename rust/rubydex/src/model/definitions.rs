@@ -141,6 +141,7 @@ impl Definition {
             Definition::SingletonClass(d) => Some(d.name_id()),
             Definition::Module(d) => Some(d.name_id()),
             Definition::Constant(d) => Some(d.name_id()),
+            Definition::ConstantAlias(d) => Some(d.name_id()),
             _ => None,
         }
     }
