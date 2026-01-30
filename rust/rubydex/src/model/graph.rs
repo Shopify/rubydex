@@ -415,26 +415,43 @@ impl Graph {
 
     /// Garbage collects unused declarations and their member entries.
     pub fn gc_declarations(&mut self) -> Vec<ReferenceId> {
+        let affected_declarations: IdentityHashSet<DeclarationId> = self
+            .changeset
+            .as_ref()
+            .map_or_else(IdentityHashSet::default, |cs| {
+                cs.removed_definitions
+                    .iter()
+                    .map(|(decl_id, _, _)| *decl_id)
+                    .collect()
+            });
+
         let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
         let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
         let mut orphaned_references: Vec<ReferenceId> = Vec::new();
 
-        for (declaration_id, declaration) in &self.declarations {
-            // Builtins do not have definitions
-            if *declaration_id == *OBJECT_ID || *declaration_id == *MODULE_ID || *declaration_id == *CLASS_ID {
+        for declaration_id in affected_declarations {
+            if declaration_id == *OBJECT_ID
+                || declaration_id == *MODULE_ID
+                || declaration_id == *CLASS_ID
+            {
                 continue;
             }
 
-            // Singleton classes may not have definitions, they can be created lazily
-            // TODO: We should also find and remove lazily created singleton classes that are no longer needed
-            if matches!(declaration, Declaration::Namespace(Namespace::SingletonClass(_))) {
+            let Some(declaration) = self.declarations.get(&declaration_id) else {
+                continue;
+            };
+
+            if matches!(
+                declaration,
+                Declaration::Namespace(Namespace::SingletonClass(_))
+            ) {
                 continue;
             }
 
             if declaration.has_no_definitions() {
                 let unqualified_str_id = StringId::from(&declaration.unqualified_name());
                 members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                declarations_to_delete.push(*declaration_id);
+                declarations_to_delete.push(declaration_id);
                 orphaned_references.extend(declaration.references().iter().copied());
             }
         }
