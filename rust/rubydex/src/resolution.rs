@@ -1508,9 +1508,9 @@ mod tests {
     use crate::test_utils::GraphTest;
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_alias_target_eq,
-        assert_constant_reference_to, assert_descendants, assert_diagnostics_eq, assert_instance_variables_eq,
-        assert_members_eq, assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members, assert_owner_eq,
-        assert_singleton_class_eq,
+        assert_constant_reference_to, assert_declaration_does_not_exist, assert_declaration_exists, assert_descendants,
+        assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target,
+        assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     };
 
     #[test]
@@ -1742,29 +1742,12 @@ mod tests {
             "
         });
         context.resolve();
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo"))
-                .is_none()
-        );
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo::Bar"))
-                .is_none()
-        );
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo::Bar::Baz"))
-                .is_none()
-        );
 
         assert_no_diagnostics!(&context);
+
+        assert_declaration_does_not_exist!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz");
     }
 
     #[test]
@@ -1976,13 +1959,7 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // TODO: this should push an error diagnostic
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Object::@@var"))
-                .is_none()
-        );
+        assert_declaration_does_not_exist!(context, "Object::@@var");
     }
 
     #[test]
@@ -2001,14 +1978,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo::<Foo>"))
-                .is_some()
-        );
-
+        assert_declaration_exists!(context, "Foo::<Foo>");
         assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
     }
 
@@ -2302,8 +2272,7 @@ mod tests {
 
         // Top-level instance variables belong to `<main>`, not `Object`.
         // We can't represent `<main>` yet, so no declaration is created.
-        let foo_decl = context.graph().declarations().get(&DeclarationId::from("Object::@foo"));
-        assert!(foo_decl.is_none(), "Object::@foo declaration should not exist");
+        assert_declaration_does_not_exist!(context, "Object::@foo");
     }
 
     #[test]
@@ -2326,11 +2295,8 @@ mod tests {
         );
 
         // Instance variable in method with unresolved receiver should not create a declaration
-        let baz_decl = context.graph().declarations().get(&DeclarationId::from("Object::@baz"));
-        assert!(baz_decl.is_none(), "@baz declaration should not exist");
-
-        let foo_baz_decl = context.graph().declarations().get(&DeclarationId::from("Foo::@baz"));
-        assert!(foo_baz_decl.is_none(), "Foo::@baz declaration should not exist");
+        assert_declaration_does_not_exist!(context, "Object::@baz");
+        assert_declaration_does_not_exist!(context, "Foo::@baz");
     }
 
     #[test]
@@ -3523,12 +3489,7 @@ mod tests {
         assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
 
         // NOPE can't be created because ALIAS points to a value constant, not a namespace
-        assert!(
-            !context
-                .graph()
-                .declarations()
-                .contains_key(&DeclarationId::from("VALUE::NOPE"))
-        );
+        assert_declaration_does_not_exist!(context, "VALUE::NOPE");
     }
 
     #[test]
@@ -3611,26 +3572,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .contains_key(&DeclarationId::from("A::X"))
-        );
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .contains_key(&DeclarationId::from("B::Y"))
-        );
+        assert_declaration_exists!(context, "A::X");
+        assert_declaration_exists!(context, "B::Y");
 
         // SOMETHING can't be created because the circular alias can't resolve to a namespace
-        assert!(
-            !context
-                .graph()
-                .declarations()
-                .contains_key(&DeclarationId::from("A::X::SOMETHING"))
-        );
+        assert_declaration_does_not_exist!(context, "A::X::SOMETHING");
     }
 
     #[test]
@@ -3750,18 +3696,7 @@ mod tests {
         assert_constant_alias_target_eq!(context, "Outer::NESTED", "Outer::Inner");
 
         // ADDED_CONST should be in Outer::Inner (the resolved target)
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .contains_key(&DeclarationId::from("Outer::Inner::ADDED_CONST"))
-        );
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .contains_key(&DeclarationId::from("Outer::Inner::ADDED_CONST"))
-        );
+        assert_declaration_exists!(context, "Outer::Inner::ADDED_CONST");
 
         let added_const = context
             .graph()
@@ -3797,18 +3732,8 @@ mod tests {
         assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
 
         // NewClass should be declared under Outer, not ALIAS
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .contains_key(&DeclarationId::from("Outer::NewClass"))
-        );
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .contains_key(&DeclarationId::from("Outer::NewClass::CLASS_CONST"))
-        );
+        assert_declaration_exists!(context, "Outer::NewClass");
+        assert_declaration_exists!(context, "Outer::NewClass::CLASS_CONST");
 
         // Outer::NewClass::CLASS_CONST
         assert_constant_reference_to!(context, "Outer::NewClass", "file:///foo.rb:11:8-11:16");
@@ -3963,6 +3888,7 @@ mod tests {
             "
         });
         context.resolve();
+
         assert_no_diagnostics!(&context);
     }
 
@@ -4017,20 +3943,8 @@ mod tests {
         assert_members_eq!(context, "Foo", ["Array", "Array()"]);
 
         // Both declarations exist with unique IDs
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo::Array"))
-                .is_some()
-        );
-        assert!(
-            context
-                .graph()
-                .declarations()
-                .get(&DeclarationId::from("Foo#Array()"))
-                .is_some()
-        );
+        assert_declaration_exists!(context, "Foo::Array");
+        assert_declaration_exists!(context, "Foo#Array()");
     }
 
     #[test]
@@ -4078,31 +3992,29 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let declarations = context.graph().declarations();
-
         // In the same order of appearence
-        assert!(declarations.contains_key(&DeclarationId::from("Foo")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::CONST")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#@class_ivar")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#baz()")));
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::Bar");
+        assert_declaration_exists!(context, "Foo::Bar::CONST");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>#@class_ivar");
+        assert_declaration_exists!(context, "Foo::Bar#baz()");
         // TODO: needs the fix for attributes
-        // assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#qux=()")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#zip()")));
+        // assert_declaration_exists!(context, "Foo::Bar#qux=()");
+        assert_declaration_exists!(context, "Foo::Bar#zip()");
         // TODO: needs the fix for attributes
-        // assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#zip=()")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#instance_m()")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#@@class_var")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#singleton_m()")));
-        assert!(declarations.contains_key(&DeclarationId::from("$global_var")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::<Foo>#another_singleton_m()")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>::OTHER_CONST")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>::<<Bar>>#@other_class_ivar")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar#@@other_class_var")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#other_instance_m()")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>#@my_class_var")));
-        assert!(declarations.contains_key(&DeclarationId::from("Foo::Bar::<Bar>::<<Bar>>#other_singleton_m()")));
-        assert!(declarations.contains_key(&DeclarationId::from("$other_global_var")));
+        // assert_declaration_exists!(context, "Foo::Bar#zip=()");
+        assert_declaration_exists!(context, "Foo::Bar#instance_m()");
+        assert_declaration_exists!(context, "Foo::Bar#@@class_var");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>#singleton_m()");
+        assert_declaration_exists!(context, "$global_var");
+        assert_declaration_exists!(context, "Foo::<Foo>#another_singleton_m()");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>::OTHER_CONST");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>::<<Bar>>#@other_class_ivar");
+        assert_declaration_exists!(context, "Foo::Bar#@@other_class_var");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>#other_instance_m()");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>#@my_class_var");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>::<<Bar>>#other_singleton_m()");
+        assert_declaration_exists!(context, "$other_global_var");
     }
 
     #[test]

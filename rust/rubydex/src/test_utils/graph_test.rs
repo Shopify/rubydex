@@ -74,6 +74,38 @@ impl GraphTest {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_declaration_exists {
+    ($context:expr, $declaration_name:expr) => {
+        assert!(
+            $context
+                .graph()
+                .declarations()
+                .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+                .is_some(),
+            "Expected declaration `{}` to exist",
+            $declaration_name
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_declaration_does_not_exist {
+    ($context:expr, $declaration_name:expr) => {
+        assert!(
+            $context
+                .graph()
+                .declarations()
+                .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+                .is_none(),
+            "Expected declaration `{}` to not exist",
+            $declaration_name
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_constant_alias_target_eq {
     ($context:expr, $alias_name:expr, $target_name:expr) => {{
         let decl_id = $crate::model::ids::DeclarationId::from($alias_name);
