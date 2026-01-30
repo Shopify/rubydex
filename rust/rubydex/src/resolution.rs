@@ -1508,9 +1508,10 @@ mod tests {
     use crate::test_utils::GraphTest;
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_alias_target_eq,
-        assert_constant_reference_to, assert_declaration_does_not_exist, assert_declaration_exists, assert_descendants,
-        assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target,
-        assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
+        assert_constant_reference_to, assert_declaration_does_not_exist, assert_declaration_exists,
+        assert_declaration_references_count_eq, assert_descendants, assert_diagnostics_eq,
+        assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target, assert_no_diagnostics,
+        assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     };
 
     #[test]
@@ -3642,20 +3643,9 @@ mod tests {
 
         assert_constant_alias_target_eq!(context, "M::SELF_REF", "M");
 
-        let m_thing_const = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("M::Thing::CONST"))
-            .unwrap();
-        let m_thing = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("M::Thing"))
-            .unwrap();
-
         // All 3 paths resolve to M::Thing::CONST
-        assert_eq!(m_thing_const.references().len(), 3);
-        assert_eq!(m_thing.references().len(), 3);
+        assert_declaration_references_count_eq!(context, "M::Thing::CONST", 3);
+        assert_declaration_references_count_eq!(context, "M::Thing", 3);
 
         // M::SELF_REF::Thing::CONST
         assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:9:14-9:19");
@@ -3698,12 +3688,7 @@ mod tests {
         // ADDED_CONST should be in Outer::Inner (the resolved target)
         assert_declaration_exists!(context, "Outer::Inner::ADDED_CONST");
 
-        let added_const = context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Outer::Inner::ADDED_CONST"))
-            .unwrap();
-        assert_eq!(added_const.references().len(), 1);
+        assert_declaration_references_count_eq!(context, "Outer::Inner::ADDED_CONST", 1);
     }
 
     #[test]

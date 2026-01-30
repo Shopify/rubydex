@@ -225,6 +225,27 @@ macro_rules! assert_constant_reference_to {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_declaration_references_count_eq {
+    ($context:expr, $declaration_name:expr, $expected_references:expr) => {
+        let declaration = $context
+            .graph()
+            .declarations()
+            .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+            .unwrap();
+
+        assert_eq!(
+            declaration.references().len(),
+            $expected_references,
+            "Expected exactly {} references for `{}`, but got {}",
+            $expected_references,
+            $declaration_name,
+            declaration.references().len()
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_ancestors_eq {
     ($context:expr, $name:expr, $expected:expr) => {
         let declaration = $context
