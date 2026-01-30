@@ -129,10 +129,8 @@ impl Name {
         self.ref_count += count;
     }
 
-    #[must_use]
-    pub fn decrement_ref_count(&mut self) -> bool {
+    pub fn decrement_ref_count(&mut self) {
         self.ref_count -= 1;
-        self.ref_count > 0
     }
 
     #[must_use]

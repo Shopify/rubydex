@@ -27,6 +27,10 @@ impl GraphTest {
         &self.graph
     }
 
+    pub fn graph_mut(&mut self) -> &mut Graph {
+        &mut self.graph
+    }
+
     #[must_use]
     fn index_source(uri: &str, source: &str) -> LocalGraph {
         let mut indexer = RubyIndexer::new(uri.to_string(), source);

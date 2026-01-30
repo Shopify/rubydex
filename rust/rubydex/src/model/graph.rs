@@ -398,17 +398,67 @@ impl Graph {
         &self.resolved_names
     }
 
-    /// Decrements the ref count for a name and removes it if the count reaches zero.
+    /// Decrements the ref count for a name.
     ///
     /// This does not recursively untrack `parent_scope` or `nesting` names.
     pub fn untrack_name(&mut self, name_id: NameId) {
         if let Some(name) = self.names.get_mut(&name_id) {
             let string_id = *name.str();
-            if !name.decrement_ref_count() {
-                self.names.remove(&name_id);
-                self.resolved_names.remove(&name_id);
-            }
+            name.decrement_ref_count();
             self.untrack_string(string_id);
+        }
+    }
+
+    /// Garbage collects unused names and declarations.
+    pub fn gc(&mut self) {
+        let dead_name_ids: Vec<_> = self
+            .names
+            .iter()
+            .filter(|(_, name)| name.ref_count() == 0)
+            .map(|(id, _)| *id)
+            .collect();
+
+        for name_id in dead_name_ids {
+            self.names.remove(&name_id);
+            self.resolved_names.remove(&name_id);
+        }
+
+        let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
+        let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
+
+        for (declaration_id, declaration) in &self.declarations {
+            if declaration.has_no_definitions() {
+                let unqualified_str_id = StringId::from(&declaration.unqualified_name());
+                members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
+                declarations_to_delete.push(*declaration_id);
+
+                if let Some(namespace) = declaration.as_namespace()
+                    && let Some(singleton_id) = namespace.singleton_class()
+                {
+                    declarations_to_delete.push(*singleton_id);
+                }
+            }
+        }
+
+        for declaration_id in declarations_to_delete {
+            self.declarations.remove(&declaration_id);
+        }
+
+        for (owner_id, member_str_id) in members_to_delete {
+            if let Some(owner) = self.declarations.get_mut(&owner_id) {
+                match owner {
+                    Declaration::Namespace(Namespace::Class(owner)) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    Declaration::Namespace(Namespace::SingletonClass(owner)) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    Declaration::Namespace(Namespace::Module(owner)) => {
+                        owner.remove_member(&member_str_id);
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -643,10 +693,7 @@ impl Graph {
             }
         }
 
-        // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
-        let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
         let mut definitions_to_delete: Vec<DefinitionId> = Vec::new();
-        let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
         let mut declarations_to_invalidate_ancestor_chains: Vec<DeclarationId> = Vec::new();
 
         for def_id in document.definitions() {
@@ -662,18 +709,6 @@ impl Graph {
                 {
                     declarations_to_invalidate_ancestor_chains.push(declaration_id);
                 }
-
-                if declaration.has_no_definitions() {
-                    let unqualified_str_id = StringId::from(&declaration.unqualified_name());
-                    members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                    declarations_to_delete.push(declaration_id);
-
-                    if let Some(namespace) = declaration.as_namespace()
-                        && let Some(singleton_id) = namespace.singleton_class()
-                    {
-                        declarations_to_delete.push(*singleton_id);
-                    }
-                }
             }
 
             if let Some(name_id) = self.definitions.get(def_id).unwrap().name_id() {
@@ -681,30 +716,7 @@ impl Graph {
             }
         }
 
-        self.invalidate_ancestor_chains(declarations_to_invalidate_ancestor_chains, &declarations_to_delete);
-
-        for declaration_id in declarations_to_delete {
-            self.declarations.remove(&declaration_id);
-        }
-
-        // Clean up any members that pointed to declarations that were removed
-        for (owner_id, member_str_id) in members_to_delete {
-            // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
-            if let Some(owner) = self.declarations.get_mut(&owner_id) {
-                match owner {
-                    Declaration::Namespace(Namespace::Class(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    Declaration::Namespace(Namespace::SingletonClass(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    Declaration::Namespace(Namespace::Module(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    _ => {} // Nothing happens
-                }
-            }
-        }
+        self.invalidate_ancestor_chains(declarations_to_invalidate_ancestor_chains);
 
         for def_id in definitions_to_delete {
             let definition = self.definitions.remove(&def_id).unwrap();
@@ -712,7 +724,7 @@ impl Graph {
         }
     }
 
-    fn invalidate_ancestor_chains(&mut self, initial_ids: Vec<DeclarationId>, exclude_ids: &[DeclarationId]) {
+    fn invalidate_ancestor_chains(&mut self, initial_ids: Vec<DeclarationId>) {
         let mut queue = initial_ids;
         let mut visited = IdentityHashSet::<DeclarationId>::default();
 
@@ -755,9 +767,7 @@ impl Graph {
         }
 
         if let Some(changeset) = &mut self.changeset {
-            // Filter out declarations that will be deleted
-            let to_record = visited.into_iter().filter(|id| !exclude_ids.contains(id));
-            changeset.record_invalidated_ancestors(to_record);
+            changeset.record_invalidated_ancestors(visited);
         }
     }
 
@@ -914,6 +924,7 @@ mod tests {
 
         // Update with empty content to remove definitions but keep the URI
         context.index_uri("file:///foo.rb", "");
+        context.graph_mut().gc();
 
         assert!(context.graph().definitions.is_empty());
         // URI remains if the file was not deleted, but definitions and declarations got erased
@@ -1107,6 +1118,7 @@ mod tests {
         assert_eq!(context.graph().names().values().next().unwrap().ref_count(), 1);
 
         context.delete_uri("file:///bar.rb");
+        context.graph_mut().gc();
         assert!(context.graph().names().is_empty());
     }
 
@@ -1130,6 +1142,7 @@ mod tests {
         assert!(strings.get(&StringId::from("method_name()")).is_some());
 
         context.delete_uri("file:///foo.rb");
+        context.graph_mut().gc();
         let strings = context.graph().strings();
         assert!(strings.get(&StringId::from("Foo")).is_none());
         assert!(strings.get(&StringId::from("method_call")).is_none());
@@ -1291,6 +1304,7 @@ mod tests {
             "
         });
         context.resolve();
+        context.graph_mut().gc();
 
         assert_no_members!(context, "Foo");
     }
@@ -1370,6 +1384,7 @@ mod tests {
         context.resolve();
         // Removing the method should not remove the constant
         context.index_uri("file:///foo2.rb", "");
+        context.graph_mut().gc();
 
         let foo = context
             .graph()
@@ -1402,8 +1417,9 @@ mod tests {
         });
 
         context.resolve();
-        // Removing the method should not remove the constant
+        // Removing the constant should not remove the method
         context.index_uri("file:///foo.rb", "");
+        context.graph_mut().gc();
 
         let foo = context
             .graph()
@@ -1433,6 +1449,7 @@ mod tests {
         assert!(context.graph().get("Foo::<Foo>").is_some());
 
         context.delete_uri("file:///foo.rb");
+        context.graph_mut().gc();
 
         assert!(context.graph().get("Foo").is_none());
         assert!(context.graph().get("Foo::<Foo>").is_none());
@@ -1455,6 +1472,7 @@ mod tests {
         assert!(context.graph().get("Bar::<Bar>").is_some());
 
         context.delete_uri("file:///bar.rb");
+        context.graph_mut().gc();
 
         assert!(context.graph().get("Bar").is_none());
         assert!(context.graph().get("Bar::<Bar>").is_none());
@@ -1481,6 +1499,7 @@ mod tests {
         assert!(context.graph().get("Outer::Inner::<Inner>").is_some());
 
         context.delete_uri("file:///nested.rb");
+        context.graph_mut().gc();
 
         assert!(context.graph().get("Outer").is_none());
         assert!(context.graph().get("Outer::Inner").is_none());
@@ -1508,6 +1527,7 @@ mod tests {
         assert!(context.graph().get("Foo::<Foo>::<<Foo>>").is_some());
 
         context.delete_uri("file:///foo.rb");
+        context.graph_mut().gc();
 
         assert!(context.graph().get("Foo").is_none());
         assert!(context.graph().get("Foo::<Foo>").is_none());
