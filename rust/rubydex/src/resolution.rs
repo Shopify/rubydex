@@ -4189,4 +4189,32 @@ mod tests {
         assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
         assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:6:2-6:3");
     }
+
+    #[test]
+    fn nested_class_inherits_constant_from_outer_parent() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///test.rb", {
+            r"
+            class Parent
+              CONST = 'parent'
+            end
+
+            class Child < Parent
+              class GrandChild
+                CONST
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        for (ref_id, cref) in context.graph().constant_references() {
+            let resolved = context.graph().declarations().iter()
+                .find(|(_, decl)| decl.references().contains(ref_id))
+                .map(|(_, decl)| decl.name());
+            eprintln!("ref at offset {:?}: resolved to {:?}", cref.offset(), resolved);
+        }
+
+        assert_constant_reference_to!(context, "Parent::CONST", "file:///test.rb:6:4-6:9");
+    }
 }
