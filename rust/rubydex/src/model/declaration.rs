@@ -479,6 +479,11 @@ impl Namespace {
     pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
         all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
     }
+
+    #[must_use]
+    pub fn owner_id(&self) -> &DeclarationId {
+        all_namespaces!(self, it => &it.owner_id)
+    }
 }
 
 namespace_declaration!(Class, ClassDeclaration);

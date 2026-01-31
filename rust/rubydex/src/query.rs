@@ -1,11 +1,15 @@
 use std::collections::HashSet;
+use std::error::Error;
 use std::path::PathBuf;
 use std::thread;
 
 use url::Url;
 
-use crate::model::graph::Graph;
-use crate::model::ids::{DeclarationId, UriId};
+use crate::model::declaration::{Ancestor, Declaration};
+use crate::model::graph::{Graph, OBJECT_ID};
+use crate::model::identity_maps::IdentityHashSet;
+use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
+use crate::model::name::NameRef;
 
 /// # Panics
 ///
@@ -133,13 +137,180 @@ pub fn require_paths(graph: &Graph, load_paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// The context in which completion is being requested
+pub enum CompletionReceiver {
+    /// Completion requested for an expression with no previous token (e.g.: at the start of a line with nothing before)
+    /// Includes: all keywords, all global variables and reacheable instance variables, class variables, constants and methods
+    Expression(NameId),
+}
+
+pub struct CompletionContext<'a> {
+    seen_members: IdentityHashSet<&'a StringId>,
+    completion_receiver: CompletionReceiver,
+}
+
+impl<'a> CompletionContext<'a> {
+    #[must_use]
+    pub fn new(completion_receiver: CompletionReceiver) -> Self {
+        Self {
+            seen_members: IdentityHashSet::default(),
+            completion_receiver,
+        }
+    }
+
+    pub fn dedup(&mut self, member_str_id: &'a StringId) -> bool {
+        self.seen_members.insert(member_str_id)
+    }
+}
+
+/// Collects completion candidate members
+macro_rules! collect_candidates {
+    // Collect all members with no filtering
+    ($declaration:expr, $context:expr, $candidates:expr) => {
+        for (member_str_id, member_declaration_id) in $declaration.members() {
+            if $context.dedup(member_str_id) {
+                $candidates.push(*member_declaration_id);
+            }
+        }
+    };
+    // Collect only members matching certain kinds
+    ($graph:expr, $declaration:expr, $context:expr, $candidates:expr, $kinds:pat) => {
+        for (member_str_id, member_declaration_id) in $declaration.members() {
+            let member = $graph.declarations().get(member_declaration_id).unwrap();
+
+            if matches!(member, $kinds) && $context.dedup(member_str_id) {
+                $candidates.push(*member_declaration_id);
+            }
+        }
+    };
+}
+
+/// Determines all possible completion candidates based on the current context of the cursor. There are multiple cases
+/// that change what has to be collected for completion:
+///
+/// - Expressions collect all keywords, constants, methods, instance variables, class variables, local variables and
+///   global variables that are reacheable from the current lexical scope and self type
+/// - Expression in method arguments collects everything that expressions do and all keyword parameter names that are
+///   applicable to the method being called
+///   everything else
+/// - Namespace access (e.g.: `Foo::`) collects all constants and singleton methods for the namespace that `Foo`
+///   resolves to
+/// - Method calls on anything (e.g.: `foo.`, `@bar.`, `@@baz.`, `Qux.`) collects all methods that exist on the type
+///   returned by the receiver
+/// - Require path completion collects all require paths accessible from the `$LOAD_PATH`
+/// - Relative require path completion collects all require paths accessible from the directory of the current file
+///
+/// # Panics
+///
+/// Will panic if we incorrectly inserted non namespace declarations as ancestors
+///
+/// # Errors
+///
+/// Will error if the given `self_name_id` does not point to a namespace declaration
+pub fn completion_candidates<'a>(
+    graph: &'a Graph,
+    context: CompletionContext<'a>,
+) -> Result<Vec<DeclarationId>, Box<dyn Error>> {
+    match context.completion_receiver {
+        CompletionReceiver::Expression(self_name_id) => expression_completion(graph, self_name_id, context),
+    }
+}
+
+/// Collect completion for an expression
+fn expression_completion<'a>(
+    graph: &'a Graph,
+    self_name_id: NameId,
+    mut context: CompletionContext<'a>,
+) -> Result<Vec<DeclarationId>, Box<dyn Error>> {
+    let Some(name_ref) = graph.names().get(&self_name_id) else {
+        return Err(format!("Name {self_name_id} not found in graph").into());
+    };
+    let NameRef::Resolved(name_ref) = name_ref else {
+        return Err(format!("Expected name {self_name_id} to be resolved").into());
+    };
+    let Some(self_decl) = graph
+        .declarations()
+        .get(name_ref.declaration_id())
+        .and_then(|d| d.as_namespace())
+    else {
+        return Err("Expected associated declaration to be a namespace".into());
+    };
+    let mut candidates = Vec::new();
+
+    // Walk the name's lexical scopes, collecting all constant completion members
+    let mut current_name_id = Some(self_name_id);
+
+    while let Some(id) = current_name_id {
+        let NameRef::Resolved(name_ref) = graph.names().get(&id).unwrap() else {
+            break;
+        };
+
+        let nesting_decl = graph
+            .declarations()
+            .get(name_ref.declaration_id())
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+
+        collect_candidates!(
+            graph,
+            &nesting_decl,
+            context,
+            candidates,
+            Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
+        );
+
+        current_name_id = *name_ref.nesting();
+    }
+
+    // Include all top level constants and globals, which are accessible everywhere
+    let object = graph.declarations().get(&OBJECT_ID).unwrap().as_namespace().unwrap();
+    collect_candidates!(
+        graph,
+        &object,
+        context,
+        candidates,
+        Declaration::Namespace(_)
+            | Declaration::Constant(_)
+            | Declaration::ConstantAlias(_)
+            | Declaration::GlobalVariable(_)
+    );
+
+    // Walk ancestors collecting all applicable completion members
+    for ancestor in self_decl.ancestors() {
+        if let Ancestor::Complete(ancestor_id) = ancestor {
+            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
+            collect_candidates!(&ancestor_decl, context, candidates);
+
+            // Collect class variables from the attached object, which are available at any singleton class level
+            // within self
+            let attached_object = graph.attached_object(ancestor_decl);
+            collect_candidates!(
+                graph,
+                &attached_object,
+                context,
+                candidates,
+                Declaration::ClassVariable(_)
+            );
+        }
+    }
+
+    Ok(candidates)
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
     use url::Url;
 
     use super::*;
-    use crate::test_utils::GraphTest;
+    use crate::{
+        model::{
+            ids::StringId,
+            name::{Name, ParentScope},
+        },
+        test_utils::GraphTest,
+    };
 
     macro_rules! assert_results_eq {
         ($context:expr, $query:expr, $expected:expr) => {
@@ -287,5 +458,333 @@ mod tests {
 
         let foo_count = results.iter().filter(|p| *p == "foo").count();
         assert_eq!(1, foo_count);
+    }
+
+    #[test]
+    fn completion_candidates_on_self() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              CONST = 1
+              def bar; end
+            end
+
+            class Parent
+              def initialize
+                @var = 1
+              end
+            end
+
+            class Child < Parent
+              include Foo
+
+              def baz
+                # Completion in this `self` context
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Child"), ParentScope::None, None).id();
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec![
+                "Child",
+                "Foo",
+                "Parent",
+                "Child#baz()",
+                "Foo::CONST",
+                "Foo#bar()",
+                "Parent#initialize()",
+                "Parent#@var"
+            ],
+            candidates
+        );
+    }
+
+    #[test]
+    fn completion_candidates_shows_first_option_in_the_ancestor_chain() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              def bar; end
+            end
+
+            class Parent
+              def bar; end
+            end
+
+            class Child < Parent
+              def bar
+                # Completion in this `self` context
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Child"), ParentScope::None, None).id();
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Child", "Foo", "Parent", "Child#bar()"], candidates);
+    }
+
+    #[test]
+    fn completion_candidates_in_a_cyclic_ancestor_chain() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              include Baz
+
+              def foo_m; end
+            end
+
+            module Bar
+              include Foo
+
+              def bar_m; end
+            end
+
+            module Baz
+              include Bar
+
+              def baz_m; end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec!["Baz", "Foo", "Bar", "Foo#foo_m()", "Baz#baz_m()", "Bar#bar_m()"],
+            candidates
+        );
+    }
+
+    #[test]
+    fn completion_candidates_for_class_variables() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              @@foo_var = 1
+
+              class << self
+                def do_something
+                  # Completion in this `self` context
+                end
+              end
+            end
+
+            class Bar < Foo
+              def baz
+                # Other completion in this `self` context
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), None).id();
+
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec!["Foo", "Bar", "Foo::<Foo>#do_something()", "Foo#@@foo_var"],
+            candidates
+        );
+
+        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Foo", "Bar", "Bar#baz()", "Foo#@@foo_var"], candidates);
+    }
+
+    #[test]
+    fn completion_candidates_includes_constants_accessible_within_lexical_scope() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              CONST_A = 1
+
+              class ::Bar
+                def bar_m
+                  # Completion in this `self` context
+                end
+              end
+            end
+
+            class Bar
+              def bar_m2
+                # Completion in this `self` context
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(
+            StringId::from("Bar"),
+            ParentScope::TopLevel,
+            Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
+        )
+        .id();
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec!["Foo::CONST_A", "Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"],
+            candidates
+        );
+
+        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"], candidates);
+    }
+
+    #[test]
+    fn completion_candidates_finds_unqualified_constant_reachable_from_namespace() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              CONST = 1
+
+              class Bar
+                def baz
+                  # Typing CONST here should find Foo::CONST
+                end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, Some(foo_id)).id();
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        // Foo::CONST is reachable from Foo::Bar through lexical scoping, so it must
+        // appear as a completion candidate when the user types the unqualified name CONST
+        assert!(
+            candidates.contains(&"Foo::CONST".to_string()),
+            "Expected Foo::CONST in candidates, got: {candidates:?}",
+        );
+    }
+
+    #[test]
+    fn completion_candidates_includes_globals() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            $var = 1
+            module Foo
+              $var2 = 2
+
+              class Bar < BasicObject
+                def bar_m
+                  # Completion in this `self` context
+                end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(
+            StringId::from("Bar"),
+            ParentScope::None,
+            Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
+        )
+        .id();
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"], candidates);
     }
 }
