@@ -129,4 +129,27 @@ class DeclarationTest < Minitest::Test
       assert_equal("Foo::Bar::<Bar>", bar.singleton_class.name)
     end
   end
+
+  def test_declaration_owner
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          class Bar
+            class << self
+              def something; end
+            end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal("Object", graph["Foo"].owner.name)
+      assert_equal("Foo", graph["Foo::Bar"].owner.name)
+      assert_equal("Foo::Bar", graph["Foo::Bar::<Bar>"].owner.name)
+      assert_equal("Foo::Bar::<Bar>", graph["Foo::Bar::<Bar>#something()"].owner.name)
+    end
+  end
 end
