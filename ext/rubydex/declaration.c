@@ -152,6 +152,26 @@ static VALUE rdxr_declaration_singleton_class(VALUE self) {
     return rb_class_new_instance(2, argv, cDeclaration);
 }
 
+// Declaration#owner -> Declaration
+static VALUE rdxr_declaration_owner(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    const uint32_t *owner_id = rdx_declaration_owner(graph, data->id);
+
+    if (owner_id == NULL) {
+        rb_raise(rb_eRuntimeError, "owner can never be nil for any declarations");
+    }
+
+    uint32_t id = *owner_id;
+    free_u32(owner_id);
+    VALUE argv[] = {data->graph_obj, UINT2NUM(id)};
+
+    return rb_class_new_instance(2, argv, cDeclaration);
+}
+
 void rdxi_initialize_declaration(VALUE mRubydex) {
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
 
@@ -162,6 +182,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     rb_define_method(cDeclaration, "definitions", rdxr_declaration_definitions, 0);
     rb_define_method(cDeclaration, "member", rdxr_declaration_member, 1);
     rb_define_method(cDeclaration, "singleton_class", rdxr_declaration_singleton_class, 0);
+    rb_define_method(cDeclaration, "owner", rdxr_declaration_owner, 0);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }
