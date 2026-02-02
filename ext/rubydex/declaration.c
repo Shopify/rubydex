@@ -5,6 +5,42 @@
 #include "rustbindings.h"
 
 VALUE cDeclaration;
+VALUE cNamespace;
+VALUE cClass;
+VALUE cModule;
+VALUE cSingletonClass;
+VALUE cConstant;
+VALUE cConstantAlias;
+VALUE cMethod;
+VALUE cGlobalVariable;
+VALUE cInstanceVariable;
+VALUE cClassVariable;
+
+// Keep this in sync with declaration_api.rs
+VALUE rdxi_declaration_class_for_kind(CDeclarationKind kind) {
+    switch (kind) {
+    case CDeclarationKind_Class:
+        return cClass;
+    case CDeclarationKind_Module:
+        return cModule;
+    case CDeclarationKind_SingletonClass:
+        return cSingletonClass;
+    case CDeclarationKind_Constant:
+        return cConstant;
+    case CDeclarationKind_ConstantAlias:
+        return cConstantAlias;
+    case CDeclarationKind_Method:
+        return cMethod;
+    case CDeclarationKind_GlobalVariable:
+        return cGlobalVariable;
+    case CDeclarationKind_InstanceVariable:
+        return cInstanceVariable;
+    case CDeclarationKind_ClassVariable:
+        return cClassVariable;
+    default:
+        rb_raise(rb_eRuntimeError, "Unknown CDeclarationKind: %d", kind);
+    }
+}
 
 // Declaration#name -> String
 static VALUE rdxr_declaration_name(VALUE self) {
@@ -120,36 +156,36 @@ static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
         rb_raise(rb_eTypeError, "expected String");
     }
 
-    const uint32_t *id_ptr = rdx_declaration_member(graph, data->id, StringValueCStr(name));
-    if (id_ptr == NULL) {
+    const CDeclaration *decl = rdx_declaration_member(graph, data->id, StringValueCStr(name));
+    if (decl == NULL) {
         return Qnil;
     }
 
-    uint32_t id = *id_ptr;
-    free_u32(id_ptr);
-    VALUE argv[] = {data->graph_obj, UINT2NUM(id)};
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {data->graph_obj, UINT2NUM(decl->id)};
+    free_c_declaration(decl);
 
-    return rb_class_new_instance(2, argv, cDeclaration);
+    return rb_class_new_instance(2, argv, decl_class);
 }
 
-// Declaration#singleton_class -> Declaration
+// Declaration#singleton_class -> SingletonClass
 static VALUE rdxr_declaration_singleton_class(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
-    const uint32_t *singleton_id = rdx_declaration_singleton_class(graph, data->id);
+    const CDeclaration *decl = rdx_declaration_singleton_class(graph, data->id);
 
-    if (singleton_id == NULL) {
+    if (decl == NULL) {
         return Qnil;
     }
 
-    uint32_t id = *singleton_id;
-    free_u32(singleton_id);
-    VALUE argv[] = {data->graph_obj, UINT2NUM(id)};
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {data->graph_obj, UINT2NUM(decl->id)};
+    free_c_declaration(decl);
 
-    return rb_class_new_instance(2, argv, cDeclaration);
+    return rb_class_new_instance(2, argv, decl_class);
 }
 
 // Declaration#owner -> Declaration
@@ -159,30 +195,42 @@ static VALUE rdxr_declaration_owner(VALUE self) {
 
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
-    const uint32_t *owner_id = rdx_declaration_owner(graph, data->id);
+    const CDeclaration *decl = rdx_declaration_owner(graph, data->id);
 
-    if (owner_id == NULL) {
+    if (decl == NULL) {
         rb_raise(rb_eRuntimeError, "owner can never be nil for any declarations");
     }
 
-    uint32_t id = *owner_id;
-    free_u32(owner_id);
-    VALUE argv[] = {data->graph_obj, UINT2NUM(id)};
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {data->graph_obj, UINT2NUM(decl->id)};
+    free_c_declaration(decl);
 
-    return rb_class_new_instance(2, argv, cDeclaration);
+    return rb_class_new_instance(2, argv, decl_class);
 }
 
 void rdxi_initialize_declaration(VALUE mRubydex) {
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
+    cNamespace = rb_define_class_under(mRubydex, "Namespace", cDeclaration);
+    cClass = rb_define_class_under(mRubydex, "Class", cNamespace);
+    cModule = rb_define_class_under(mRubydex, "Module", cNamespace);
+    cSingletonClass = rb_define_class_under(mRubydex, "SingletonClass", cNamespace);
+    cConstant = rb_define_class_under(mRubydex, "Constant", cDeclaration);
+    cConstantAlias = rb_define_class_under(mRubydex, "ConstantAlias", cDeclaration);
+    cMethod = rb_define_class_under(mRubydex, "Method", cDeclaration);
+    cGlobalVariable = rb_define_class_under(mRubydex, "GlobalVariable", cDeclaration);
+    cInstanceVariable = rb_define_class_under(mRubydex, "InstanceVariable", cDeclaration);
+    cClassVariable = rb_define_class_under(mRubydex, "ClassVariable", cDeclaration);
 
     rb_define_alloc_func(cDeclaration, rdxr_handle_alloc);
     rb_define_method(cDeclaration, "initialize", rdxr_handle_initialize, 2);
     rb_define_method(cDeclaration, "name", rdxr_declaration_name, 0);
     rb_define_method(cDeclaration, "unqualified_name", rdxr_declaration_unqualified_name, 0);
     rb_define_method(cDeclaration, "definitions", rdxr_declaration_definitions, 0);
-    rb_define_method(cDeclaration, "member", rdxr_declaration_member, 1);
-    rb_define_method(cDeclaration, "singleton_class", rdxr_declaration_singleton_class, 0);
     rb_define_method(cDeclaration, "owner", rdxr_declaration_owner, 0);
+
+    // Namespace only methods
+    rb_define_method(cNamespace, "member", rdxr_declaration_member, 1);
+    rb_define_method(cNamespace, "singleton_class", rdxr_declaration_singleton_class, 0);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }
