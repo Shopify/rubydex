@@ -284,6 +284,90 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_resolve_instance_variable
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Bar; end
+
+        module Foo
+          class Bar::Baz
+            def initialize
+              @instance_var = 1
+            end
+
+            def Bar.something
+              @singleton_var = 2
+            end
+
+            def self.other_thing
+              @other_singleton_var = 3
+            end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      baz = graph.resolve_constant("Bar::Baz", ["Foo"])
+      assert_equal("Bar::Baz", baz.name)
+      assert_equal("Bar::Baz\#@instance_var", baz.member("@instance_var").name)
+
+      bar = graph.resolve_constant("Bar", ["Foo", "Bar::Baz"])
+      assert_equal("Bar", bar.name)
+      assert_equal("Bar::<Bar>\#@singleton_var", bar.singleton_class.member("@singleton_var").name)
+
+      baz_singleton = graph.resolve_constant("Bar::Baz", ["Foo", "Bar::Baz"])
+      assert_equal("Bar::Baz", baz_singleton.name)
+      assert_equal(
+        "Bar::Baz::<Baz>\#@other_singleton_var",
+        baz_singleton.singleton_class.member("@other_singleton_var").name,
+      )
+    end
+  end
+
+  def test_graph_resolve_class_variable
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Bar; end
+
+        module Foo
+          class Bar::Baz
+            def initialize
+              @@class_var_1 = 1
+            end
+
+            def Bar.something
+              @@class_var_2 = 2
+            end
+
+            def self.other_thing
+              @@class_var_3 = 3
+            end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      baz = graph.resolve_constant("Bar::Baz", ["Foo"])
+      assert_equal("Bar::Baz", baz.name)
+      assert_equal("Bar::Baz\#@@class_var_1", baz.member("@@class_var_1").name)
+
+      assert_equal("Bar::Baz\#@@class_var_2", baz.member("@@class_var_2").name)
+
+      baz_singleton = graph.resolve_constant("Bar::Baz", ["Foo", "Bar::Baz"])
+      assert_equal("Bar::Baz", baz_singleton.name)
+      assert_equal(
+        "Bar::Baz\#@@class_var_3",
+        baz_singleton.member("@@class_var_3").name,
+      )
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)
