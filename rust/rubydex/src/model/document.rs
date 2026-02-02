@@ -119,8 +119,12 @@ impl Document {
     /// - URI doesn't end with `.rb`
     /// - File path doesn't match any load path
     /// - `Url::to_file_path()` fails
+    ///
+    /// # Panics
+    ///
+    /// Panics if load path entries exceed u16.
     #[must_use]
-    pub fn require_path(&self, load_paths: &[PathBuf]) -> Option<String> {
+    pub fn require_path(&self, load_paths: &[PathBuf]) -> Option<(String, u16)> {
         let url = Url::parse(&self.uri).ok()?;
         if url.scheme() != "file" {
             return None;
@@ -131,7 +135,7 @@ impl Document {
             return None;
         }
 
-        for load_path in load_paths {
+        for (load_path_index, load_path) in load_paths.iter().enumerate() {
             if let Ok(relative) = file_path.strip_prefix(load_path) {
                 let file_path = relative
                     .components()
@@ -140,7 +144,10 @@ impl Document {
                     .join("/");
 
                 let require_path = file_path.trim_end_matches(".rb").to_string();
-                return Some(require_path);
+                return Some((
+                    require_path,
+                    load_path_index.try_into().expect("Load path entries exceed u16"),
+                ));
             }
         }
         None
@@ -197,7 +204,7 @@ mod tests {
         let load_paths = [root.join("lib")];
 
         let document = Document::new(uri, "");
-        assert_eq!(Some("foo/bar".to_string()), document.require_path(&load_paths));
+        assert_eq!(Some(("foo/bar".to_string(), 0)), document.require_path(&load_paths));
     }
 
     #[test]
@@ -210,7 +217,7 @@ mod tests {
         let load_paths = [load_path_a, load_path_ab];
 
         let document = Document::new(uri, "");
-        assert_eq!(Some("b/foo".to_string()), document.require_path(&load_paths));
+        assert_eq!(Some(("b/foo".to_string(), 0)), document.require_path(&load_paths));
     }
 
     #[test]
@@ -243,6 +250,9 @@ mod tests {
         let load_paths = [root.join("lib")];
 
         let document = Document::new(uri, "");
-        assert_eq!(Some("space foo/bar".to_string()), document.require_path(&load_paths));
+        assert_eq!(
+            Some(("space foo/bar".to_string(), 0)),
+            document.require_path(&load_paths)
+        );
     }
 }

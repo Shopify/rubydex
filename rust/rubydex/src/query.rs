@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -89,7 +90,7 @@ pub fn resolve_require_path(graph: &Graph, require_path: &str, load_paths: &[Pat
                         if found_ref.load(Ordering::Relaxed) {
                             return None;
                         }
-                        if let Some(computed) = document.require_path(load_paths)
+                        if let Some((computed, _)) = document.require_path(load_paths)
                             && computed == normalized
                         {
                             found_ref.store(true, Ordering::Relaxed);
@@ -103,6 +104,54 @@ pub fn resolve_require_path(graph: &Graph, require_path: &str, load_paths: &[Pat
 
         handles.into_iter().find_map(|handle| handle.join().unwrap())
     })
+}
+
+/// Returns all require paths. Used for completion.
+///
+/// When multiple files resolve to the same require path (e.g., `foo.rb` exists in multiple
+/// load paths), the one from the earliest load path wins. This matches Ruby's `require` behavior.
+///
+/// # Panics
+///
+/// Panics if one of the search threads panics
+#[must_use]
+pub fn require_paths(graph: &Graph, load_paths: &[PathBuf]) -> Vec<String> {
+    let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
+    let documents = graph.documents().iter().collect::<Vec<_>>();
+    let chunk_size = documents.len().div_ceil(num_threads);
+
+    if chunk_size == 0 {
+        return Vec::new();
+    }
+
+    let mut all_results = thread::scope(|scope| {
+        let handles: Vec<_> = documents
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .filter_map(|(_, document)| document.require_path(load_paths))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+
+    // Sort by load path index so earlier load paths win during deduplication
+    all_results.sort_by_key(|(_, index)| *index);
+
+    let mut seen = HashSet::new();
+    all_results
+        .into_iter()
+        .filter(|(require_path, _)| seen.insert(require_path.clone()))
+        .map(|(require_path, _)| require_path)
+        .collect()
 }
 
 #[cfg(test)]
@@ -150,8 +199,7 @@ mod tests {
         assert_results_eq!(context, "Fo", ["Foo"]);
     }
 
-    #[test]
-    fn test_resolve_require_path() {
+    fn test_root() -> PathBuf {
         let root = if cfg!(windows) {
             PathBuf::from_str("C:\\")
         } else {
@@ -159,6 +207,12 @@ mod tests {
         }
         .unwrap();
 
+        root.join("test")
+    }
+
+    #[test]
+    fn test_resolve_require_path() {
+        let root = test_root();
         let path = root
             .join("lib")
             .join("foo")
@@ -184,5 +238,48 @@ mod tests {
 
         // returns None for nonexistent
         assert!(resolve_require_path(context.graph(), "nonexistent", &load_paths).is_none());
+    }
+
+    #[test]
+    fn test_require_paths() {
+        let root = test_root();
+        let path_bar = root.join("lib").join("foo").join("bar.rb");
+        let path_qux = root.join("lib").join("foo").join("qux.rb");
+        let path_foobar = root.join("lib").join("foobar.rb");
+        let uri_bar = Url::from_file_path(&path_bar).unwrap().to_string();
+        let uri_qux = Url::from_file_path(&path_qux).unwrap().to_string();
+        let uri_foobar = Url::from_file_path(&path_foobar).unwrap().to_string();
+        let load_paths = vec![root.join("lib")];
+
+        let mut context = GraphTest::new();
+        context.index_uri(&uri_bar, "class Bar; end");
+        context.index_uri(&uri_qux, "class Qux; end");
+        context.index_uri(&uri_foobar, "class Foobar; end");
+
+        let results = require_paths(context.graph(), &load_paths);
+
+        assert_eq!(3, results.len());
+        assert!(results.contains(&"foo/bar".to_string()));
+        assert!(results.contains(&"foo/qux".to_string()));
+        assert!(results.contains(&"foobar".to_string()));
+    }
+
+    #[test]
+    fn test_require_paths_deduplicates_by_load_path_order() {
+        let root = test_root();
+        let path1 = root.join("lib1").join("foo.rb");
+        let path2 = root.join("lib2").join("foo.rb");
+        let uri1 = Url::from_file_path(&path1).unwrap().to_string();
+        let uri2 = Url::from_file_path(&path2).unwrap().to_string();
+        let load_paths = [root.join("lib1"), root.join("lib2")];
+
+        let mut context = GraphTest::new();
+        context.index_uri(&uri1, "class Foo; end");
+        context.index_uri(&uri2, "class Foo; end");
+
+        let results = require_paths(context.graph(), &load_paths);
+
+        let foo_count = results.iter().filter(|p| *p == "foo").count();
+        assert_eq!(1, foo_count);
     }
 }
