@@ -13,6 +13,7 @@ VALUE cSingletonClassDefinition;
 VALUE cModuleDefinition;
 VALUE cConstantDefinition;
 VALUE cConstantAliasDefinition;
+VALUE cConstantVisibilityDefinition;
 VALUE cMethodDefinition;
 VALUE cAttrAccessorDefinition;
 VALUE cAttrReaderDefinition;
@@ -36,6 +37,8 @@ VALUE rdxi_definition_class_for_kind(DefinitionKind kind) {
         return cConstantDefinition;
     case DefinitionKind_ConstantAlias:
         return cConstantAliasDefinition;
+    case DefinitionKind_ConstantVisibility:
+        return cConstantVisibilityDefinition;
     case DefinitionKind_Method:
         return cMethodDefinition;
     case DefinitionKind_AttrAccessor:
@@ -195,6 +198,10 @@ void rdxi_initialize_definition(VALUE mod) {
     cConstantAliasDefinition = rb_define_class_under(mRubydex, "ConstantAliasDefinition", cDefinition);
     rb_define_alloc_func(cConstantAliasDefinition, rdxr_handle_alloc);
     rb_define_method(cConstantAliasDefinition, "initialize", rdxr_handle_initialize, 2);
+
+    cConstantVisibilityDefinition = rb_define_class_under(mRubydex, "ConstantVisibilityDefinition", cDefinition);
+    rb_define_alloc_func(cConstantVisibilityDefinition, rdxr_handle_alloc);
+    rb_define_method(cConstantVisibilityDefinition, "initialize", rdxr_handle_initialize, 2);
 
     cMethodDefinition = rb_define_class_under(mRubydex, "MethodDefinition", cDefinition);
     rb_define_alloc_func(cMethodDefinition, rdxr_handle_alloc);

@@ -470,6 +470,9 @@ impl<'a> Resolver<'a> {
                         Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, *OBJECT_ID)))
                     });
                 }
+                Definition::ConstantVisibility(_constant_visibility) => {
+                    // TODO
+                }
                 Definition::Class(_)
                 | Definition::SingletonClass(_)
                 | Definition::Module(_)
