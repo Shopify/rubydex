@@ -106,4 +106,27 @@ class DeclarationTest < Minitest::Test
       assert_equal("B", decl_b.unqualified_name)
     end
   end
+
+  def test_singleton_class
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          class Bar
+            class << self
+              def something; end
+            end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_nil(graph["Foo"].singleton_class)
+
+      bar = graph["Foo::Bar"]
+      assert_equal("Foo::Bar::<Bar>", bar.singleton_class.name)
+    end
+  end
 end
