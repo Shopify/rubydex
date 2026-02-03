@@ -63,10 +63,11 @@ static VALUE graph_declarations_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    uint32_t id = 0;
-    while (rdx_graph_declarations_iter_next(iter, &id)) {
-        VALUE argv[] = {self, UINT2NUM(id)};
-        VALUE handle = rb_class_new_instance(2, argv, cDeclaration);
+    CDeclaration decl;
+    while (rdx_graph_declarations_iter_next(iter, &decl)) {
+        VALUE decl_class = rdxi_declaration_class_for_kind(decl.kind);
+        VALUE argv[] = {self, UINT2NUM(decl.id)};
+        VALUE handle = rb_class_new_instance(2, argv, decl_class);
         rb_yield(handle);
     }
 
@@ -198,16 +199,16 @@ static VALUE rdxr_graph_aref(VALUE self, VALUE key) {
         rb_raise(rb_eTypeError, "expected String");
     }
 
-    const uint32_t *id_ptr = rdx_graph_get_declaration(graph, StringValueCStr(key));
-    if (id_ptr == NULL) {
+    const CDeclaration *decl = rdx_graph_get_declaration(graph, StringValueCStr(key));
+    if (decl == NULL) {
         return Qnil;
     }
 
-    uint32_t id = *id_ptr;
-    free_u32(id_ptr);
-    VALUE argv[] = {self, UINT2NUM(id)};
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {self, UINT2NUM(decl->id)};
+    free_c_declaration(decl);
 
-    return rb_class_new_instance(2, argv, cDeclaration);
+    return rb_class_new_instance(2, argv, decl_class);
 }
 
 // Body function for rb_ensure for the reference enumerators
@@ -333,7 +334,7 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    const uint32_t *id_ptr =
+    const CDeclaration *decl =
         rdx_graph_resolve_constant(graph, StringValueCStr(const_name), (const char **)converted_file_paths, length);
 
     for (size_t i = 0; i < length; i++) {
@@ -341,15 +342,15 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
     }
     free(converted_file_paths);
 
-    if (id_ptr == NULL) {
+    if (decl == NULL) {
         return Qnil;
     }
 
-    uint32_t id = *id_ptr;
-    free_u32(id_ptr);
-    VALUE argv[] = {self, UINT2NUM(id)};
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {self, UINT2NUM(decl->id)};
+    free_c_declaration(decl);
 
-    return rb_class_new_instance(2, argv, cDeclaration);
+    return rb_class_new_instance(2, argv, decl_class);
 }
 
 // Graph#diagnostics -> Array[Rubydex::Diagnostic]

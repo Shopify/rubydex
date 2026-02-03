@@ -1,5 +1,6 @@
 //! This file provides the C API for the Graph object
 
+use crate::declaration_api::CDeclaration;
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
@@ -61,15 +62,18 @@ pub unsafe extern "C" fn rdx_graph_declarations_search(
         return ptr::null_mut();
     };
 
-    let ids = with_graph(pointer, |graph| {
+    let entries = with_graph(pointer, |graph| {
         query::declaration_search(graph, &query)
             .into_iter()
-            .map(|id| *id)
-            .collect::<Vec<u32>>()
+            .filter_map(|id| {
+                let decl = graph.declarations().get(&id)?;
+                Some(CDeclaration::from_declaration(id, decl))
+            })
+            .collect::<Vec<CDeclaration>>()
             .into_boxed_slice()
     });
 
-    Box::into_raw(Box::new(DeclarationsIter { ids, index: 0 }))
+    Box::into_raw(Box::new(DeclarationsIter { entries, index: 0 }))
 }
 
 /// # Panics
@@ -85,7 +89,7 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
     const_name: *const c_char,
     nesting: *const *const c_char,
     count: usize,
-) -> *const u32 {
+) -> *const CDeclaration {
     with_mut_graph(pointer, |graph| {
         let nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, count).unwrap() };
         let const_name: String = unsafe { utils::convert_char_ptr_to_string(const_name).unwrap() };
@@ -93,15 +97,19 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
 
         let mut resolver = Resolver::new(graph);
 
-        let resolved_id = match resolver.resolve_constant(name_id) {
-            Some(id) => Box::into_raw(Box::new(*id)).cast_const(),
+        let declaration = match resolver.resolve_constant(name_id) {
+            Some(id) => {
+                let decl = graph.declarations().get(&id).unwrap();
+                Box::into_raw(Box::new(CDeclaration::from_declaration(id, decl))).cast_const()
+            }
             None => ptr::null(),
         };
 
         for name_id in names_to_untrack {
             graph.untrack_name(name_id);
         }
-        resolved_id
+
+        declaration
     })
 }
 
@@ -185,18 +193,18 @@ pub unsafe extern "C" fn rdx_graph_set_encoding(pointer: GraphPointer, encoding_
     true
 }
 
-/// An iterator over declaration IDs
+/// An iterator over declarations
 ///
-/// We snapshot the IDs at iterator creation so if the graph is modified, the iterator will not see the changes
+/// We snapshot the declarations at iterator creation so if the graph is modified, the iterator will not see the changes
 #[derive(Debug)]
 pub struct DeclarationsIter {
-    /// The snapshot of declaration IDs
-    ids: Box<[u32]>,
+    /// The snapshot of declarations
+    entries: Box<[CDeclaration]>,
     /// The current index of the iterator
     index: usize,
 }
 
-/// Creates a new iterator over declaration IDs by snapshotting the current set of IDs.
+/// Creates a new iterator over declarations by snapshotting the current set of declarations.
 ///
 /// # Safety
 ///
@@ -204,17 +212,17 @@ pub struct DeclarationsIter {
 /// - The returned pointer must be freed with `rdx_graph_declarations_iter_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) -> *mut DeclarationsIter {
-    // Snapshot the IDs at iterator creation to avoid borrowing across FFI calls
-    let ids = with_graph(pointer, |graph| {
+    // Snapshot the declarations at iterator creation to avoid borrowing across FFI calls
+    let entries = with_graph(pointer, |graph| {
         graph
             .declarations()
-            .keys()
-            .map(|name_id| **name_id)
-            .collect::<Vec<u32>>()
+            .iter()
+            .map(|(id, decl)| CDeclaration::from_declaration(*id, decl))
+            .collect::<Vec<CDeclaration>>()
             .into_boxed_slice()
     });
 
-    Box::into_raw(Box::new(DeclarationsIter { ids, index: 0 }))
+    Box::into_raw(Box::new(DeclarationsIter { entries, index: 0 }))
 }
 
 /// Returns the total number of IDs in the iterator snapshot.
@@ -228,30 +236,33 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_len(iter: *const Declaratio
         return 0;
     }
 
-    unsafe { (&*iter).ids.len() }
+    unsafe { (&*iter).entries.len() }
 }
 
-/// Advances the iterator and writes the next ID into `out_id`.
-/// Returns `true` if an ID was written, or `false` if the iterator is exhausted or inputs are invalid.
+/// Advances the iterator and writes the next declaration into `out_decl`.
+/// Returns `true` if a declaration was written, or `false` if the iterator is exhausted or inputs are invalid.
 ///
 /// # Safety
 ///
 /// - `iter` must be a valid pointer previously returned by `rdx_graph_declarations_iter_new`.
-/// - `out_id` must be a valid, writable pointer.
+/// - `out_decl` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_declarations_iter_next(iter: *mut DeclarationsIter, out_id: *mut u32) -> bool {
-    if iter.is_null() || out_id.is_null() {
+pub unsafe extern "C" fn rdx_graph_declarations_iter_next(
+    iter: *mut DeclarationsIter,
+    out_decl: *mut CDeclaration,
+) -> bool {
+    if iter.is_null() || out_decl.is_null() {
         return false;
     }
 
     let it = unsafe { &mut *iter };
-    if it.index >= it.ids.len() {
+    if it.index >= it.entries.len() {
         return false;
     }
 
-    let id = it.ids[it.index];
+    let decl = it.entries[it.index];
     it.index += 1;
-    unsafe { *out_id = id };
+    unsafe { *out_decl = decl };
 
     true
 }
@@ -362,23 +373,22 @@ pub unsafe extern "C" fn rdx_graph_documents_iter_free(iter: *mut DocumentsIter)
 }
 
 /// Attempts to resolve a declaration from a fully-qualified name string.
-/// Returns a pointer to the internal ID if it exists, or NULL if it does not.
+/// Returns a `CDeclaration` pointer if it exists, or NULL if it does not.
 ///
 /// # Safety
 /// - `pointer` must be a valid `GraphPointer`
 /// - `name` must be a valid, null-terminated UTF-8 string
-/// - `out_id` must be a valid, writable pointer
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const u32 {
+pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: *const c_char) -> *const CDeclaration {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
         return ptr::null();
     };
 
     with_graph(pointer, |graph| {
-        // TODO: We should perform name resolution instead of accessing the graph with the canonical ID
         let decl_id = DeclarationId::from(name_str.as_str());
-        if graph.declarations().contains_key(&decl_id) {
-            Box::into_raw(Box::new(*decl_id)).cast_const()
+
+        if let Some(decl) = graph.declarations().get(&decl_id) {
+            Box::into_raw(Box::new(CDeclaration::from_declaration(decl_id, decl))).cast_const()
         } else {
             ptr::null()
         }
@@ -465,13 +475,13 @@ mod tests {
         let nesting_ptrs: Vec<*const c_char> = nesting_strings.iter().map(|s| s.as_ptr()).collect();
 
         unsafe {
-            let id = rdx_graph_resolve_constant(
+            let decl = rdx_graph_resolve_constant(
                 graph_ptr,
                 CString::new("BAR").unwrap().as_ptr(),
                 nesting_ptrs.as_ptr(),
                 nesting_ptrs.len(),
             );
-            assert_eq!(*id, *DeclarationId::from("Foo::BAR"));
+            assert_eq!((*decl).id(), *DeclarationId::from("Foo::BAR"));
         };
 
         let graph = unsafe { Box::from_raw(graph_ptr.cast::<Graph>()) };
