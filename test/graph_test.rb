@@ -368,6 +368,21 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_resolve_require_path
+    with_context do |context|
+      context.write!("lib/foo/bar.rb", "class Bar; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      load_paths = [context.absolute_path_to("lib")]
+      document = graph.resolve_require_path("foo/bar", load_paths)
+
+      assert_instance_of(Rubydex::Document, document)
+      assert(document.uri.end_with?("lib/foo/bar.rb"))
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)
