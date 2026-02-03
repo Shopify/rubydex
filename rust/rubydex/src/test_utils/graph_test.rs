@@ -74,6 +74,59 @@ impl GraphTest {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_declaration_exists {
+    ($context:expr, $declaration_name:expr) => {
+        assert!(
+            $context
+                .graph()
+                .declarations()
+                .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+                .is_some(),
+            "Expected declaration `{}` to exist",
+            $declaration_name
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_declaration_does_not_exist {
+    ($context:expr, $declaration_name:expr) => {
+        assert!(
+            $context
+                .graph()
+                .declarations()
+                .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+                .is_none(),
+            "Expected declaration `{}` to not exist",
+            $declaration_name
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_declaration_definitions_count_eq {
+    ($context:expr, $declaration_name:expr, $expected_definitions:expr) => {
+        let declaration = $context
+            .graph()
+            .declarations()
+            .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+            .unwrap();
+
+        assert_eq!(
+            declaration.definitions().len(),
+            $expected_definitions,
+            "Expected exactly {} definitions for `{}`, but got {}",
+            $expected_definitions,
+            $declaration_name,
+            declaration.definitions().len()
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_constant_alias_target_eq {
     ($context:expr, $alias_name:expr, $target_name:expr) => {{
         let decl_id = $crate::model::ids::DeclarationId::from($alias_name);
@@ -187,6 +240,27 @@ macro_rules! assert_constant_reference_to {
             resolved_name_name, $declaration_name,
             "Expected reference at `{}` to be resolved to `{}`, but got `{}`",
             $location, $declaration_name, resolved_name_name
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_declaration_references_count_eq {
+    ($context:expr, $declaration_name:expr, $expected_references:expr) => {
+        let declaration = $context
+            .graph()
+            .declarations()
+            .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+            .unwrap();
+
+        assert_eq!(
+            declaration.references().len(),
+            $expected_references,
+            "Expected exactly {} references for `{}`, but got {}",
+            $expected_references,
+            $declaration_name,
+            declaration.references().len()
         );
     };
 }
