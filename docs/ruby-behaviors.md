@@ -16,6 +16,7 @@ This document describes various Ruby language behaviors, compiled from observati
 10. [Constant References](#constant-references)
 11. [Constant Aliases](#constant-aliases)
 12. [Singleton Classes](#singleton-classes)
+13. [Anonymous Classes And Modules](#anonymous-classes-and-modules)
 
 ## Namespace Qualification
 
@@ -1214,3 +1215,172 @@ Foo.singleton_class.on_singleton_singleton
 ```
 
 The ownership chain is: `Foo` → `Foo.singleton_class` → `Foo.singleton_class.singleton_class`.
+
+## Anonymous Classes And Modules
+
+`Class.new` and `Module.new` create anonymous class/module objects. When assigned to a constant, that constant names the new namespace.
+
+### Method receivers and `self`
+
+Inside the block, `self` is the newly created class/module.
+
+```ruby
+Foo = Class.new do
+  def self.foo; end   # class method on Foo
+  def bar; end        # instance method on Foo instances
+  alias_method :baz, :bar
+end
+```
+
+You can still access those methods even when the anonymous class isn't assigned to a constant:
+
+```ruby
+c = Class.new do
+  def self.foo; end
+  def bar; end
+end
+
+c.foo
+c.new.bar
+```
+
+### Instance variables
+
+Instance variables behave the same as in regular class definitions:
+
+```ruby
+Foo = Class.new do
+  @class_ivar = 1     # instance variable of the Foo class
+  def initialize
+    @ivar = 2         # instance varriable of Foo instances
+  end
+end
+```
+
+### Class variables and constants
+
+Class variables and constants follow lexical scope (`Module.nesting`). `Class.new`/`Module.new` blocks do **not** change lexical scope, so unqualified constants and class variables are defined in the outer scope, not on the new class/module.
+
+```ruby
+class Outer
+  Foo = Class.new do
+    @@cvar = 1 # this belongs to Outer, not Foo
+  end
+end
+```
+
+Defining class variables in a top-level anonymous class/module results in an error:
+
+```ruby
+Foo = Class.new do
+  @@cvar = 1   # RuntimeError: class variable access from toplevel
+end
+```
+
+Similar to class variables, constants are attached to the closest lexical scope, not the anonymous class/module:
+
+```ruby
+Foo = Class.new do
+  CONST = 2
+end
+
+defined?(Foo::CONST)  # => nil
+defined?(::CONST)     # => "constant"
+```
+
+If you want constants under the new class/module, use `self::CONST` or define them after the assignment.
+
+```ruby
+Foo = Class.new do
+  self::CONST = 2
+end
+
+Foo::CONST
+```
+
+### Namespaces and lexical nesting
+
+The block does **not** introduce lexical nesting for `class`/`module` definitions:
+
+```ruby
+class Foo
+  Bar = Class.new do
+    class Baz; end
+  end
+end
+
+# Baz is Foo::Baz, not Foo::Bar::Baz
+```
+
+You cannot reliably reference the assigned constant inside the block because the assignment happens after the block runs. `Bar::Baz` inside the block refers to an outer `Bar` (if any) or raises `NameError`.
+
+```ruby
+class Foo
+  Bar = Class.new do
+    class Baz < Bar; end # causes uninitialized constant Foo::Bar (NameError)
+  end
+end
+```
+
+To define under the new class, use `self::Baz` (or `const_set`) inside the block, or define it after the assignment:
+
+```ruby
+class Foo
+  Bar = Class.new do
+    self::Baz = Class.new
+  end
+end
+
+# or
+class Foo
+  Bar = Class.new
+  Bar::Baz = Class.new
+end
+```
+
+### Nested anonymous Class.new/Module.new
+
+The rules above apply to nested anonymous class/module definitions as well.
+
+For example, constants defined in nested anonymous classes are still attached to the closest lexical scope:
+
+```ruby
+Foo = Class.new do
+  Class.new do
+    CONST = 1
+  end
+end
+
+# CONST is defined on top-level, the closest lexical scope, instead of Foo
+defined?(CONST) #=> "constant"
+defined?(Foo::CONST) #=> nil
+```
+
+### Singleton class blocks inside anonymous classes
+
+Although `Class.new`/`Module.new` blocks do not create lexical scopes, `class << self` blocks inside them still do. Constants and class variables defined inside such a singleton class block are attached to the singleton class:
+
+```ruby
+Foo = Class.new do
+  class << self
+    CONST = 1
+  end
+end
+
+Foo.singleton_class.constants  # => [:CONST]
+Foo.constants                  # => []
+```
+
+This also applies to nested anonymous classes within the singleton class block:
+
+```ruby
+Foo = Class.new do
+  class << self
+    Class.new do
+      CONST = 1
+    end
+  end
+end
+
+Foo.singleton_class.constants  # => [:CONST]
+```
