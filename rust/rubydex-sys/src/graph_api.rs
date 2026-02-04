@@ -11,6 +11,7 @@ use rubydex::model::ids::DeclarationId;
 use rubydex::resolution::Resolver;
 use rubydex::{indexing, listing, query};
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::{mem, ptr};
 
 pub type GraphPointer = *mut c_void;
@@ -410,6 +411,35 @@ pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPoin
             .collect();
 
         ReferencesIter::new(refs.into_boxed_slice())
+    })
+}
+
+/// Resolves a require path to its document URI ID.
+/// Returns a pointer to the URI ID if found, or NULL if not found.
+/// Caller must free with `free_u32`.
+///
+/// # Safety
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `require_path` must be a valid, null-terminated UTF-8 string.
+/// - `load_paths` must be an array of `load_paths_count` valid, null-terminated UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_resolve_require_path(
+    pointer: GraphPointer,
+    require_path: *const c_char,
+    load_paths: *const *const c_char,
+    load_paths_count: usize,
+) -> *const u32 {
+    let Ok(path_str) = (unsafe { utils::convert_char_ptr_to_string(require_path) }) else {
+        return ptr::null();
+    };
+
+    let Ok(paths_vec) = (unsafe { utils::convert_double_pointer_to_vec(load_paths, load_paths_count) }) else {
+        return ptr::null();
+    };
+    let paths_vec = paths_vec.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+
+    with_graph(pointer, |graph| {
+        query::resolve_require_path(graph, &path_str, &paths_vec).map_or(ptr::null(), |id| Box::into_raw(Box::new(*id)))
     })
 }
 

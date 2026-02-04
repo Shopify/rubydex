@@ -329,6 +329,35 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
     return rb_class_new_instance(2, argv, decl_class);
 }
 
+// Graph#resolve_require_path: (String require_path, Array[String] load_paths) -> Document?
+// Resolves a require path to its Document.
+static VALUE rdxr_graph_resolve_require_path(VALUE self, VALUE require_path, VALUE load_paths) {
+    Check_Type(require_path, T_STRING);
+    rdxi_check_array_of_strings(load_paths);
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+    const char *path_str = StringValueCStr(require_path);
+
+    size_t paths_len = RARRAY_LEN(load_paths);
+    char **converted_paths = rdxi_str_array_to_char(load_paths, paths_len);
+
+    const uint32_t *uri_id = rdx_resolve_require_path(graph, path_str, (const char **)converted_paths, paths_len);
+
+    for (size_t i = 0; i < paths_len; i++) {
+        free(converted_paths[i]);
+    }
+    free(converted_paths);
+
+    if (uri_id == NULL) {
+        return Qnil;
+    }
+
+    VALUE argv[] = {self, UINT2NUM(*uri_id)};
+    free_u32(uri_id);
+    return rb_class_new_instance(2, argv, cDocument);
+}
+
 // Graph#diagnostics -> Array[Rubydex::Diagnostic]
 static VALUE rdxr_graph_diagnostics(VALUE self) {
     void *graph;
@@ -379,4 +408,5 @@ void rdxi_initialize_graph(VALUE mRubydex) {
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
     rb_define_method(cGraph, "search", rdxr_graph_search, 1);
     rb_define_method(cGraph, "set_encoding", rdxr_graph_set_encoding, 1);
+    rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
 }
