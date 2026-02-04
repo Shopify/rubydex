@@ -51,7 +51,12 @@ task index_top_gems: :compile_release do
 
             # Index the gem's files and yield errors back to the main Ractor
             graph = Rubydex::Graph.new
-            error = graph.index_all(Dir.glob("#{gem_dir}/**/*.rb"))
+            error = nil
+            begin
+              graph.index_all(Dir.glob("#{gem_dir}/**/*.rb"))
+            rescue Rubydex::IndexingError => e
+              error = e
+            end
             next unless error
 
             @mutex.synchronize { @errors << "#{gem} => #{error}" }
