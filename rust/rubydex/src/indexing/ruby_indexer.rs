@@ -801,16 +801,28 @@ impl<'a> RubyIndexer<'a> {
                 self.index_constant_reference(value, true)
             }
             ruby_prism::Node::ConstantWriteNode { .. } => {
-                self.index_constant_alias_target(&value.as_constant_write_node().unwrap().value())
+                let node = value.as_constant_write_node().unwrap();
+                let target_name_id = self.index_constant_alias_target(&node.value())?;
+                self.add_constant_alias_definition(value, target_name_id, false);
+                Some(target_name_id)
             }
             ruby_prism::Node::ConstantOrWriteNode { .. } => {
-                self.index_constant_alias_target(&value.as_constant_or_write_node().unwrap().value())
+                let node = value.as_constant_or_write_node().unwrap();
+                let target_name_id = self.index_constant_alias_target(&node.value())?;
+                self.add_constant_alias_definition(value, target_name_id, false);
+                Some(target_name_id)
             }
             ruby_prism::Node::ConstantPathWriteNode { .. } => {
-                self.index_constant_alias_target(&value.as_constant_path_write_node().unwrap().value())
+                let node = value.as_constant_path_write_node().unwrap();
+                let target_name_id = self.index_constant_alias_target(&node.value())?;
+                self.add_constant_alias_definition(&node.target().as_node(), target_name_id, false);
+                Some(target_name_id)
             }
             ruby_prism::Node::ConstantPathOrWriteNode { .. } => {
-                self.index_constant_alias_target(&value.as_constant_path_or_write_node().unwrap().value())
+                let node = value.as_constant_path_or_write_node().unwrap();
+                let target_name_id = self.index_constant_alias_target(&node.value())?;
+                self.add_constant_alias_definition(&node.target().as_node(), target_name_id, true);
+                Some(target_name_id)
             }
             _ => None,
         }
@@ -913,16 +925,10 @@ impl<'a> RubyIndexer<'a> {
                         return None;
                     }
 
-                    // FIXME: Ideally we would want to save the mixin as `self` but we can only save mixins with a name.
-                    // We'll just use the current owner name id for now (what `self` resolves to).
-                    self.current_lexical_scope_name_id().map(|name_id| {
-                        self.local_graph.add_constant_reference(ConstantReference::new(
-                            name_id,
-                            self.uri_id,
-                            Offset::from_prism_location(&arg.location()),
-                        ));
-                        (name_id, Offset::from_prism_location(&arg.location()))
-                    })
+                    Some((
+                        self.current_lexical_scope_name_id().unwrap(),
+                        Offset::from_prism_location(&arg.location()),
+                    ))
                 } else if let Some(name_id) = self.index_constant_reference(&arg, false) {
                     Some((name_id, Offset::from_prism_location(&arg.location())))
                 } else {
@@ -1284,8 +1290,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.add_constant_alias_definition(&node.as_node(), target_name_id, true);
         } else {
             self.add_constant_definition(&node.as_node(), true);
+            self.visit(&node.value());
         }
-        self.visit(&node.value());
     }
 
     fn visit_constant_write_node(&mut self, node: &ruby_prism::ConstantWriteNode) {
@@ -1298,8 +1304,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.add_constant_alias_definition(&node.as_node(), target_name_id, false);
         } else {
             self.add_constant_definition(&node.as_node(), false);
+            self.visit(&value);
         }
-        self.visit(&value);
     }
 
     fn visit_constant_path_and_write_node(&mut self, node: &ruby_prism::ConstantPathAndWriteNode) {
@@ -1317,8 +1323,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.add_constant_alias_definition(&node.target().as_node(), target_name_id, true);
         } else {
             self.add_constant_definition(&node.target().as_node(), true);
+            self.visit(&node.value());
         }
-        self.visit(&node.value());
     }
 
     fn visit_constant_path_write_node(&mut self, node: &ruby_prism::ConstantPathWriteNode) {
@@ -1331,8 +1337,8 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.add_constant_alias_definition(&node.target().as_node(), target_name_id, false);
         } else {
             self.add_constant_definition(&node.target().as_node(), false);
+            self.visit(&value);
         }
-        self.visit(&value);
     }
 
     fn visit_constant_read_node(&mut self, node: &ruby_prism::ConstantReadNode<'_>) {
@@ -4484,8 +4490,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let method_ref = context.graph().method_references().values().next().unwrap();
-        assert_eq!(StringId::from("&&"), *method_ref.str());
+        let method_ref = context
+            .graph()
+            .method_references()
+            .values()
+            .find(|r| *r.str() == StringId::from("&&"))
+            .unwrap();
 
         let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
         assert_eq!(StringId::from("<Foo>"), *receiver.str());
@@ -4511,8 +4521,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        let method_ref = context.graph().method_references().values().next().unwrap();
-        assert_eq!(StringId::from("||"), *method_ref.str());
+        let method_ref = context
+            .graph()
+            .method_references()
+            .values()
+            .find(|r| *r.str() == StringId::from("||"))
+            .unwrap();
 
         let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
         assert_eq!(StringId::from("<Foo>"), *receiver.str());
