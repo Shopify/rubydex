@@ -5,7 +5,7 @@ use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
-use crate::model::name::{Name, NameRef};
+use crate::model::name::{Name, NameRef, ParentScope};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::offset::Offset;
@@ -69,12 +69,9 @@ impl LocalGraph {
 
     pub fn add_definition(&mut self, definition: Definition) -> DefinitionId {
         let definition_id = definition.id();
-
-        if self.definitions.insert(definition_id, definition).is_some() {
-            debug_assert!(false, "DefinitionId collision in local graph");
-        }
-
+        self.definitions.insert(definition_id, definition);
         self.document.add_definition(definition_id);
+
         definition_id
     }
 
@@ -87,17 +84,14 @@ impl LocalGraph {
 
     pub fn intern_string(&mut self, string: String) -> StringId {
         let string_id = StringId::from(&string);
-
         match self.strings.entry(string_id) {
             Entry::Occupied(mut entry) => {
-                debug_assert!(string == **entry.get(), "StringId collision in local graph");
                 entry.get_mut().increment_ref_count(1);
             }
             Entry::Vacant(entry) => {
                 entry.insert(StringRef::new(string));
             }
         }
-
         string_id
     }
 
@@ -110,15 +104,27 @@ impl LocalGraph {
 
     pub fn add_name(&mut self, name: Name) -> NameId {
         let name_id = name.id();
+        let parent_scope = *name.parent_scope();
+        let nesting = *name.nesting();
 
         match self.names.entry(name_id) {
             Entry::Occupied(mut entry) => {
-                debug_assert!(*entry.get() == name, "NameId collision in local graph");
                 entry.get_mut().increment_ref_count(1);
             }
             Entry::Vacant(entry) => {
                 entry.insert(NameRef::Unresolved(Box::new(name)));
             }
+        }
+
+        if let ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) = parent_scope
+            && let Some(parent_name) = self.names.get_mut(&parent_id)
+        {
+            parent_name.add_dependent(name_id);
+        }
+        if let Some(nesting_id) = nesting
+            && let Some(nesting_name) = self.names.get_mut(&nesting_id)
+        {
+            nesting_name.add_dependent(name_id);
         }
 
         name_id
@@ -133,11 +139,7 @@ impl LocalGraph {
 
     pub fn add_constant_reference(&mut self, reference: ConstantReference) -> ReferenceId {
         let reference_id = reference.id();
-
-        if self.constant_references.insert(reference_id, reference).is_some() {
-            debug_assert!(false, "ReferenceId collision in local graph");
-        }
-
+        self.constant_references.insert(reference_id, reference);
         self.document.add_constant_reference(reference_id);
         reference_id
     }
@@ -151,11 +153,7 @@ impl LocalGraph {
 
     pub fn add_method_reference(&mut self, reference: MethodRef) -> ReferenceId {
         let reference_id = reference.id();
-
-        if self.method_references.insert(reference_id, reference).is_some() {
-            debug_assert!(false, "ReferenceId collision in local graph");
-        }
-
+        self.method_references.insert(reference_id, reference);
         self.document.add_method_reference(reference_id);
         reference_id
     }

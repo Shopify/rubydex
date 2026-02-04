@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use crate::{
     assert_mem_size,
+    model::identity_maps::IdentityHashSet,
     model::ids::{DeclarationId, NameId, StringId},
 };
 
@@ -89,6 +90,8 @@ pub struct Name {
     /// The ID of the name for the nesting where we found this name. This effectively turns the structure into a linked
     /// list of names to represent the nesting
     nesting: Option<NameId>,
+    /// The IDs of names that have this name as their `parent_scope` or `nesting`
+    dependents: IdentityHashSet<NameId>,
     ref_count: u32,
 }
 
@@ -97,7 +100,7 @@ impl PartialEq for Name {
         self.str == other.str && self.parent_scope == other.parent_scope && self.nesting == other.nesting
     }
 }
-assert_mem_size!(Name, 48);
+assert_mem_size!(Name, 80);
 
 impl Name {
     #[must_use]
@@ -106,6 +109,7 @@ impl Name {
             str,
             parent_scope,
             nesting,
+            dependents: IdentityHashSet::default(),
             ref_count: 1,
         }
     }
@@ -123,6 +127,19 @@ impl Name {
     #[must_use]
     pub fn nesting(&self) -> &Option<NameId> {
         &self.nesting
+    }
+
+    #[must_use]
+    pub fn dependents(&self) -> &IdentityHashSet<NameId> {
+        &self.dependents
+    }
+
+    pub fn add_dependent(&mut self, name_id: NameId) {
+        self.dependents.insert(name_id);
+    }
+
+    pub fn remove_dependent(&mut self, name_id: &NameId) {
+        self.dependents.remove(name_id);
     }
 
     #[must_use]
@@ -199,6 +216,28 @@ impl NameRef {
         match self {
             NameRef::Unresolved(name) => name.nesting(),
             NameRef::Resolved(resolved_name) => resolved_name.name.nesting(),
+        }
+    }
+
+    #[must_use]
+    pub fn dependents(&self) -> &IdentityHashSet<NameId> {
+        match self {
+            NameRef::Unresolved(name) => name.dependents(),
+            NameRef::Resolved(resolved_name) => resolved_name.name.dependents(),
+        }
+    }
+
+    pub fn add_dependent(&mut self, name_id: NameId) {
+        match self {
+            NameRef::Unresolved(name) => name.add_dependent(name_id),
+            NameRef::Resolved(resolved_name) => resolved_name.name.add_dependent(name_id),
+        }
+    }
+
+    pub fn remove_dependent(&mut self, name_id: &NameId) {
+        match self {
+            NameRef::Unresolved(name) => name.remove_dependent(name_id),
+            NameRef::Resolved(resolved_name) => resolved_name.name.remove_dependent(name_id),
         }
     }
 

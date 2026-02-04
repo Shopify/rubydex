@@ -310,6 +310,8 @@ impl Graph {
     /// registered in the graph to properly resolve
     pub fn add_name(&mut self, name: Name) -> NameId {
         let name_id = name.id();
+        let parent_scope = *name.parent_scope();
+        let nesting = *name.nesting();
 
         match self.names.entry(name_id) {
             Entry::Occupied(mut entry) => {
@@ -318,6 +320,17 @@ impl Graph {
             Entry::Vacant(entry) => {
                 entry.insert(NameRef::Unresolved(Box::new(name)));
             }
+        }
+
+        if let ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) = parent_scope
+            && let Some(parent_name) = self.names.get_mut(&parent_id)
+        {
+            parent_name.add_dependent(name_id);
+        }
+        if let Some(nesting_id) = nesting
+            && let Some(nesting_name) = self.names.get_mut(&nesting_id)
+        {
+            nesting_name.add_dependent(name_id);
         }
 
         name_id
@@ -386,7 +399,20 @@ impl Graph {
         if let Some(name_ref) = self.names.get_mut(&name_id) {
             let string_id = *name_ref.str();
             if !name_ref.decrement_ref_count() {
+                let parent_scope = *name_ref.parent_scope();
+                let nesting = *name_ref.nesting();
                 self.names.remove(&name_id);
+
+                if let ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) = parent_scope
+                    && let Some(parent_name) = self.names.get_mut(&parent_id)
+                {
+                    parent_name.remove_dependent(&name_id);
+                }
+                if let Some(nesting_id) = nesting
+                    && let Some(nesting_name) = self.names.get_mut(&nesting_id)
+                {
+                    nesting_name.remove_dependent(&name_id);
+                }
             }
             self.untrack_string(string_id);
         }
@@ -547,6 +573,9 @@ impl Graph {
         }
 
         for (name_id, name_ref) in names {
+            let parent_scope = *name_ref.parent_scope();
+            let nesting = *name_ref.nesting();
+
             match self.names.entry(name_id) {
                 Entry::Occupied(mut entry) => {
                     debug_assert!(*entry.get() == name_ref, "NameId collision in global graph");
@@ -555,6 +584,17 @@ impl Graph {
                 Entry::Vacant(entry) => {
                     entry.insert(name_ref);
                 }
+            }
+
+            if let ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) = parent_scope
+                && let Some(parent_name) = self.names.get_mut(&parent_id)
+            {
+                parent_name.add_dependent(name_id);
+            }
+            if let Some(nesting_id) = nesting
+                && let Some(nesting_name) = self.names.get_mut(&nesting_id)
+            {
+                nesting_name.add_dependent(name_id);
             }
         }
 
