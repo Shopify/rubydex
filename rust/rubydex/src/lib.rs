@@ -1,5 +1,6 @@
 pub mod compile_assertions;
 pub mod diagnostic;
+pub mod diff;
 pub mod errors;
 pub mod indexing;
 pub mod job_queue;
