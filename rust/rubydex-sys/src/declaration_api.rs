@@ -1,7 +1,7 @@
 //! This file provides the C API for the Graph object
 
 use libc::c_char;
-use rubydex::model::declaration::{Declaration, Namespace};
+use rubydex::model::declaration::{Ancestor, Declaration, Namespace};
 use std::ffi::CString;
 use std::ptr;
 
@@ -58,6 +58,49 @@ impl CDeclaration {
             Declaration::InstanceVariable(_) => CDeclarationKind::InstanceVariable,
             Declaration::ClassVariable(_) => CDeclarationKind::ClassVariable,
         }
+    }
+}
+
+/// An iterator over declaration IDs
+///
+/// We snapshot the IDs at iterator creation so if the graph is modified, the iterator will not see the changes
+#[derive(Debug)]
+pub struct DeclarationsIter {
+    /// The snapshot of declarations
+    declarations: Box<[CDeclaration]>,
+    /// The current index of the iterator
+    index: usize,
+}
+
+impl DeclarationsIter {
+    #[must_use]
+    pub fn new(declarations: Box<[CDeclaration]>) -> Self {
+        Self { declarations, index: 0 }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.declarations.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.declarations.is_empty()
+    }
+
+    /// # Safety
+    ///
+    /// Expects `out_id` to be a valid pointer
+    pub unsafe fn next(&mut self, out_decl: *mut CDeclaration) -> bool {
+        if self.index >= self.declarations.len() {
+            return false;
+        }
+
+        let next_decl = self.declarations[self.index];
+        self.index += 1;
+        unsafe { *out_decl = next_decl };
+
+        true
     }
 }
 
@@ -233,4 +276,38 @@ pub unsafe extern "C" fn free_c_declaration(ptr: *const CDeclaration) {
     unsafe {
         let _ = Box::from_raw(ptr.cast_mut());
     }
+}
+
+/// Returns an iterator over the ancestor declarations of a given declaration
+///
+/// # Safety
+///
+/// Assumes that the graph and member pointers are valid
+///
+/// # Panics
+///
+/// Will panic if there's inconsistent graph data
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_declaration_ancestors(pointer: GraphPointer, decl_id: u32) -> *mut DeclarationsIter {
+    let declarations = with_graph(pointer, |graph| {
+        let declaration_id = DeclarationId::new(decl_id);
+
+        let Some(Declaration::Namespace(declaration)) = graph.declarations().get(&declaration_id) else {
+            return Vec::new();
+        };
+
+        declaration
+            .ancestors()
+            .into_iter()
+            .filter_map(|ancestor| match ancestor {
+                Ancestor::Complete(id) => Some(CDeclaration::from_declaration(
+                    *id,
+                    graph.declarations().get(id).unwrap(),
+                )),
+                Ancestor::Partial(_) => None,
+            })
+            .collect::<Vec<_>>()
+    });
+
+    Box::into_raw(Box::new(DeclarationsIter::new(declarations.into_boxed_slice())))
 }

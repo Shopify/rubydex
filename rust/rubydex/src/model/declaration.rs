@@ -412,11 +412,13 @@ impl Namespace {
         all_namespaces!(self, it => std::mem::take(&mut it.diagnostics))
     }
 
-    /// # Panics
-    ///
-    /// Panics if the declaration is not a namespace or a constant
     #[must_use]
-    pub fn ancestors(&self) -> Ancestors {
+    pub fn ancestors(&self) -> &Ancestors {
+        all_namespaces!(self, it => it.ancestors())
+    }
+
+    #[must_use]
+    pub fn clone_ancestors(&self) -> Ancestors {
         all_namespaces!(self, it => it.clone_ancestors())
     }
 

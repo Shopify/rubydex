@@ -652,7 +652,7 @@ impl Graph {
                 .as_namespace_mut()
                 .expect("expected namespace declaration");
 
-            for ancestor in &namespace.ancestors() {
+            for ancestor in &namespace.clone_ancestors() {
                 if let Ancestor::Complete(ancestor_id) = ancestor {
                     self.declarations_mut()
                         .get_mut(ancestor_id)
@@ -924,7 +924,7 @@ mod tests {
             else {
                 panic!("Expected Foo to be a class");
             };
-            assert!(matches!(foo.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
+            assert!(matches!(foo.ancestors(), Ancestors::Partial(a) if a.is_empty()));
             assert!(foo.descendants().is_empty());
 
             let Declaration::Namespace(Namespace::Class(baz)) =
@@ -932,7 +932,7 @@ mod tests {
             else {
                 panic!("Expected Baz to be a class");
             };
-            assert!(matches!(baz.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
+            assert!(matches!(baz.ancestors(), Ancestors::Partial(a) if a.is_empty()));
             assert!(baz.descendants().is_empty());
 
             let Declaration::Namespace(Namespace::Module(bar)) =
@@ -947,7 +947,7 @@ mod tests {
 
         let baz_declaration = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap();
         assert!(matches!(
-            baz_declaration.as_namespace().unwrap().ancestors(),
+            baz_declaration.as_namespace().unwrap().clone_ancestors(),
             Ancestors::Complete(_)
         ));
 

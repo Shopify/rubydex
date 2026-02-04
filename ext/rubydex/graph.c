@@ -58,30 +58,6 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     return Qnil;
 }
 
-// Body function for rb_ensure in Graph#declarations
-static VALUE graph_declarations_yield(VALUE args) {
-    VALUE self = rb_ary_entry(args, 0);
-    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-
-    CDeclaration decl;
-    while (rdx_graph_declarations_iter_next(iter, &decl)) {
-        VALUE decl_class = rdxi_declaration_class_for_kind(decl.kind);
-        VALUE argv[] = {self, UINT2NUM(decl.id)};
-        VALUE handle = rb_class_new_instance(2, argv, decl_class);
-        rb_yield(handle);
-    }
-
-    return Qnil;
-}
-
-// Ensure function for rb_ensure in Graph#declarations to always free the iterator
-static VALUE graph_declarations_ensure(VALUE args) {
-    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    rdx_graph_declarations_iter_free(iter);
-
-    return Qnil;
-}
-
 // Size function for the declarations enumerator
 static VALUE graph_declarations_size(VALUE self, VALUE _args, VALUE _eobj) {
     void *graph;
@@ -106,7 +82,7 @@ static VALUE rdxr_graph_declarations(VALUE self) {
 
     void *iter = rdx_graph_declarations_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
-    rb_ensure(graph_declarations_yield, args, graph_declarations_ensure, args);
+    rb_ensure(rdxi_declarations_yield, args, rdxi_declarations_ensure, args);
 
     return self;
 }
@@ -132,7 +108,7 @@ static VALUE rdxr_graph_search(VALUE self, VALUE query) {
     }
 
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
-    rb_ensure(graph_declarations_yield, args, graph_declarations_ensure, args);
+    rb_ensure(rdxi_declarations_yield, args, rdxi_declarations_ensure, args);
 
     return self;
 }

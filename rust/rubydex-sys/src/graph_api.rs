@@ -1,6 +1,7 @@
 //! This file provides the C API for the Graph object
 
 use crate::declaration_api::CDeclaration;
+use crate::declaration_api::DeclarationsIter;
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
@@ -73,7 +74,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_search(
             .into_boxed_slice()
     });
 
-    Box::into_raw(Box::new(DeclarationsIter { entries, index: 0 }))
+    Box::into_raw(Box::new(DeclarationsIter::new(entries)))
 }
 
 /// # Panics
@@ -193,18 +194,7 @@ pub unsafe extern "C" fn rdx_graph_set_encoding(pointer: GraphPointer, encoding_
     true
 }
 
-/// An iterator over declarations
-///
-/// We snapshot the declarations at iterator creation so if the graph is modified, the iterator will not see the changes
-#[derive(Debug)]
-pub struct DeclarationsIter {
-    /// The snapshot of declarations
-    entries: Box<[CDeclaration]>,
-    /// The current index of the iterator
-    index: usize,
-}
-
-/// Creates a new iterator over declarations by snapshotting the current set of declarations.
+/// Creates a new iterator over declaration IDs by snapshotting the current set of IDs.
 ///
 /// # Safety
 ///
@@ -222,7 +212,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) 
             .into_boxed_slice()
     });
 
-    Box::into_raw(Box::new(DeclarationsIter { entries, index: 0 }))
+    Box::into_raw(Box::new(DeclarationsIter::new(entries)))
 }
 
 /// Returns the total number of IDs in the iterator snapshot.
@@ -236,7 +226,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_len(iter: *const Declaratio
         return 0;
     }
 
-    unsafe { (&*iter).entries.len() }
+    unsafe { (&*iter).len() }
 }
 
 /// Advances the iterator and writes the next declaration into `out_decl`.
@@ -255,16 +245,10 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_next(
         return false;
     }
 
-    let it = unsafe { &mut *iter };
-    if it.index >= it.entries.len() {
-        return false;
+    unsafe {
+        let it = &mut *iter;
+        it.next(out_decl)
     }
-
-    let decl = it.entries[it.index];
-    it.index += 1;
-    unsafe { *out_decl = decl };
-
-    true
 }
 
 /// Frees an iterator created by `rdx_graph_declarations_iter_new`.

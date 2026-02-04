@@ -227,4 +227,133 @@ class DeclarationTest < Minitest::Test
       end
     end
   end
+
+  def test_ancestors
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo; end
+        module Bar; end
+
+        class Parent; end
+        class Child < Parent
+          include Foo
+          prepend Bar
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      child = graph["Child"]
+      assert_equal(["Bar", "Child", "Foo", "Parent", "Object"], child.ancestors.map(&:name))
+    end
+  end
+
+  def test_cyclic_ancestors
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          include Foo
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      foo = graph["Foo"]
+      assert_equal(["Foo"], foo.ancestors.map(&:name))
+    end
+  end
+
+  def test_finding_an_inherited_method_definition
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent
+          def foo; end
+        end
+
+        class Child < Parent; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      child = graph["Child"]
+      foo = nil
+
+      child.ancestors.each do |decl|
+        member = decl.member("foo()")
+        foo = member if member
+      end
+
+      assert_equal("Parent#foo()", foo.name)
+    end
+  end
+
+  def test_finding_a_method_only_inherited
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent
+          def foo; end
+        end
+
+        class Child < Parent
+          def foo; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      # Demonstrating how to get only the inherited version of a method (useful for go to definition on `super` calls)
+      child = graph["Child"]
+      foo = nil
+      found_main_ancestor = false
+
+      child.ancestors.each do |decl|
+        if decl.name == child.name
+          found_main_ancestor = true
+        elsif !found_main_ancestor
+          next
+        end
+
+        member = decl.member("foo()")
+        foo = member if member
+      end
+
+      assert_equal("Parent#foo()", foo.name)
+    end
+  end
+
+  def test_finding_an_inherited_instance_variable
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent
+          def initialize
+            @name = "John"
+          end
+        end
+
+        class Child < Parent; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      child = graph["Child"]
+      name = nil
+
+      child.ancestors.each do |decl|
+        member = decl.member("@name")
+        name = member if member
+      end
+
+      assert_equal("Parent\#@name", name.name)
+    end
+  end
 end

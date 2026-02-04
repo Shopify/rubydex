@@ -3,6 +3,7 @@
 #include "graph.h"
 #include "handle.h"
 #include "rustbindings.h"
+#include "utils.h"
 
 VALUE cDeclaration;
 VALUE cNamespace;
@@ -208,6 +209,29 @@ static VALUE rdxr_declaration_owner(VALUE self) {
     return rb_class_new_instance(2, argv, decl_class);
 }
 
+// Declaration#ancestors: () -> Enumerator[Declaration]
+static VALUE rdxr_declaration_ancestors(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize(self, rb_str_new2("ancestors"), 0, NULL);
+    }
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    void *iter = rdx_declaration_ancestors(graph, data->id);
+    if (iter == NULL) {
+        rb_raise(rb_eRuntimeError, "failed to create iterator");
+    }
+
+    VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
+    rb_ensure(rdxi_declarations_yield, args, rdxi_declarations_ensure, args);
+
+    return self;
+}
+
 void rdxi_initialize_declaration(VALUE mRubydex) {
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
     cNamespace = rb_define_class_under(mRubydex, "Namespace", cDeclaration);
@@ -231,6 +255,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     // Namespace only methods
     rb_define_method(cNamespace, "member", rdxr_declaration_member, 1);
     rb_define_method(cNamespace, "singleton_class", rdxr_declaration_singleton_class, 0);
+    rb_define_method(cNamespace, "ancestors", rdxr_declaration_ancestors, 0);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }
