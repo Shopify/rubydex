@@ -383,6 +383,37 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_require_paths
+    with_context do |context|
+      context.write!("lib1/foo/bar.rb", "class Bar1; end")
+      context.write!("lib1/baz/qux.rb", "class Qux; end")
+      context.write!("lib2/foo/bar.rb", "class Bar2; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      # Returns all require paths, deduplicated by load path order
+      load_path = [context.absolute_path_to("lib1"), context.absolute_path_to("lib2")]
+      results = graph.require_paths(load_path)
+
+      assert_equal(["baz/qux", "foo/bar"], results.sort)
+
+      assert_empty(graph.require_paths([]))
+    end
+  end
+
+  def test_require_paths_with_invalid_arguments
+    graph = Rubydex::Graph.new
+
+    assert_raises(TypeError) do
+      graph.require_paths("not an array")
+    end
+
+    assert_raises(TypeError) do
+      graph.require_paths([1, 2, 3])
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)
