@@ -6,6 +6,7 @@
 #include "reference.h"
 #include "ruby/internal/globals.h"
 #include "rustbindings.h"
+#include "index_result.h"
 #include "utils.h"
 
 static VALUE cGraph;
@@ -27,7 +28,7 @@ static VALUE rdxr_graph_alloc(VALUE klass) {
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
 }
 
-// Graph#index_all: (Array[String] file_paths) -> nil
+// Graph#index_all: (Array[String] file_paths) -> IndexResult
 // Raises IndexingError if anything failed during indexing
 static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     rdxi_check_array_of_strings(file_paths);
@@ -39,7 +40,9 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     // Get the underying graph pointer and then invoke the Rust index all implementation
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
-    const char *error_messages = rdx_index_all(graph, (const char **)converted_file_paths, length);
+
+    IndexResultPointer index_result = NULL;
+    const char *error_messages = rdx_index_all(graph, (const char **)converted_file_paths, length, &index_result);
 
     // Free the converted file paths and allow the GC to collect them
     for (size_t i = 0; i < length; i++) {
@@ -55,7 +58,7 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
         rb_raise(eIndexingError, "%s", StringValueCStr(error_string));
     }
 
-    return Qnil;
+    return TypedData_Wrap_Struct(cIndexResult, &index_result_type, index_result);
 }
 
 // Size function for the declarations enumerator
@@ -272,12 +275,21 @@ static VALUE rdxr_graph_method_references(VALUE self) {
     return self;
 }
 
-// Graph#resolve: () -> self
+// Graph#resolve: (IndexResult?) -> self
 // Runs the resolver to compute declarations and ownership
-static VALUE rdxr_graph_resolve(VALUE self) {
+static VALUE rdxr_graph_resolve(int argc, VALUE *argv, VALUE self) {
+    VALUE units_obj;
+    rb_scan_args(argc, argv, "01", &units_obj);
+
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
-    rdx_graph_resolve(graph);
+
+    IndexResultPointer index_result = NULL;
+    if (!NIL_P(units_obj)) {
+        TypedData_Get_Struct(units_obj, void *, &index_result_type, index_result);
+    }
+
+    rdx_graph_resolve(graph, index_result);
     return self;
 }
 
@@ -398,7 +410,7 @@ void rdxi_initialize_graph(VALUE mRubydex) {
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
-    rb_define_method(cGraph, "resolve", rdxr_graph_resolve, 0);
+    rb_define_method(cGraph, "resolve", rdxr_graph_resolve, -1);
     rb_define_method(cGraph, "resolve_constant", rdxr_graph_resolve_constant, 2);
     rb_define_method(cGraph, "declarations", rdxr_graph_declarations, 0);
     rb_define_method(cGraph, "documents", rdxr_graph_documents, 0);
