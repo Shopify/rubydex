@@ -431,6 +431,11 @@ impl Namespace {
         all_namespaces!(self, it => it.has_complete_ancestors())
     }
 
+    #[must_use]
+    pub fn descendants(&self) -> &IdentityHashSet<DeclarationId> {
+        all_namespaces!(self, it => it.descendants())
+    }
+
     pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
         all_namespaces!(self, it => it.add_descendant(descendant_id));
     }

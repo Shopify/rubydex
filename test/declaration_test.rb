@@ -228,6 +228,29 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_descendants
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo; end
+        module Bar; end
+
+        class Parent; end
+        class Child < Parent
+          include Foo
+          prepend Bar
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(["Child", "Parent"], graph["Parent"].descendants.map(&:name))
+      assert_equal(["Child", "Foo"], graph["Foo"].descendants.map(&:name))
+      assert_equal(["Child", "Bar"], graph["Bar"].descendants.map(&:name))
+    end
+  end
+
   def test_ancestors
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
