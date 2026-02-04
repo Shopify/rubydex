@@ -1,10 +1,11 @@
 //! This file provides the C API for the Graph object
 
-use crate::declaration_api::CDeclaration;
-use crate::declaration_api::DeclarationsIter;
+use crate::declaration_api::{CDeclaration, DeclarationsIter};
+use crate::index_result_api::IndexResultPointer;
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
+use rubydex::indexing::IndexResult;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::DeclarationId;
@@ -130,6 +131,7 @@ pub unsafe extern "C" fn rdx_index_all(
     pointer: GraphPointer,
     file_paths: *const *const c_char,
     count: usize,
+    out_result: *mut IndexResultPointer,
 ) -> *const c_char {
     let file_paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(file_paths, count).unwrap() };
     let (file_paths, errors) = listing::collect_file_paths(file_paths);
@@ -145,7 +147,7 @@ pub unsafe extern "C" fn rdx_index_all(
     }
 
     with_mut_graph(pointer, |graph| {
-        let errors = indexing::index_files(graph, file_paths);
+        let (result, errors) = indexing::index_files(graph, file_paths);
 
         if !errors.is_empty() {
             let error_messages = errors
@@ -157,16 +159,28 @@ pub unsafe extern "C" fn rdx_index_all(
             return CString::new(error_messages).unwrap().into_raw().cast_const();
         }
 
+        if !out_result.is_null() {
+            unsafe {
+                *out_result = Box::into_raw(Box::new(result)) as IndexResultPointer;
+            }
+        }
+
         ptr::null()
     })
 }
 
 /// Runs the resolver to compute declarations, ownership and related structures
 #[unsafe(no_mangle)]
-pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
+pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer, index_result: IndexResultPointer) {
     with_mut_graph(pointer, |graph| {
         let mut resolver = Resolver::new(graph);
-        resolver.resolve_all();
+
+        if index_result.is_null() {
+            resolver.resolve_all();
+        } else {
+            let result = unsafe { &*index_result.cast::<IndexResult>() };
+            resolver.resolve(&result.definition_ids, &result.reference_ids);
+        }
     });
 }
 

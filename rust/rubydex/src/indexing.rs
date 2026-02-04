@@ -3,6 +3,8 @@ use crate::{
     indexing::{local_graph::LocalGraph, ruby_indexer::RubyIndexer},
     job_queue::{Job, JobQueue},
     model::graph::Graph,
+    model::identity_maps::IdentityHashSet,
+    model::ids::{DefinitionId, ReferenceId},
 };
 use crossbeam_channel::{Sender, unbounded};
 use std::{fs, path::PathBuf, sync::Arc};
@@ -10,6 +12,11 @@ use url::Url;
 
 pub mod local_graph;
 pub mod ruby_indexer;
+
+pub struct IndexResult {
+    pub definition_ids: IdentityHashSet<DefinitionId>,
+    pub reference_ids: IdentityHashSet<ReferenceId>,
+}
 
 /// Job that indexes a single Ruby file
 pub struct IndexingRubyFileJob {
@@ -69,7 +76,7 @@ impl Job for IndexingRubyFileJob {
 /// # Panics
 ///
 /// Will panic if the graph cannot be wrapped in an Arc<Mutex<>>
-pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
+pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> (IndexResult, Vec<Errors>) {
     let queue = Arc::new(JobQueue::new());
     let (local_graphs_tx, local_graphs_rx) = unbounded();
     let (errors_tx, errors_rx) = unbounded();
@@ -87,11 +94,21 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
 
     JobQueue::run(&queue);
 
+    let mut definition_ids: IdentityHashSet<DefinitionId> = IdentityHashSet::default();
+    let mut reference_ids: IdentityHashSet<ReferenceId> = IdentityHashSet::default();
+
     while let Ok(local_graph) = local_graphs_rx.recv() {
-        graph.update(local_graph);
+        let (new_definition_ids, new_reference_ids) = graph.update(local_graph);
+        definition_ids.extend(new_definition_ids);
+        reference_ids.extend(new_reference_ids);
     }
 
-    errors_rx.iter().collect()
+    let result = IndexResult {
+        definition_ids,
+        reference_ids,
+    };
+
+    (result, errors_rx.iter().collect())
 }
 
 #[cfg(test)]
@@ -120,7 +137,7 @@ mod tests {
         let relative_to_pwd = &dots.join(absolute_path);
 
         let mut graph = Graph::new();
-        let errors = index_files(&mut graph, vec![relative_to_pwd.clone()]);
+        let (_, errors) = index_files(&mut graph, vec![relative_to_pwd.clone()]);
 
         assert!(errors.is_empty());
         assert_eq!(graph.documents().len(), 1);
