@@ -726,6 +726,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruby-rbs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0a52a3610111ac0cb06281f0850de2415c1a120d52ec5a6f7da8c52365a56e8"
+dependencies = [
+ "ruby-rbs-sys",
+ "serde",
+ "serde_yaml",
+]
+
+[[package]]
+name = "ruby-rbs-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d657fad68a7679f97d9572ffcf2bc56f35238979950c7ff14915ea7a05b16ea"
+dependencies = [
+ "bindgen",
+ "cc",
+]
+
+[[package]]
 name = "rubydex"
 version = "0.1.0"
 dependencies = [
@@ -742,6 +763,7 @@ dependencies = [
  "predicates",
  "regex",
  "ruby-prism",
+ "ruby-rbs",
  "rubydex",
  "tempfile",
  "url",
@@ -823,6 +845,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
 ]
 
 [[package]]
@@ -952,6 +987,12 @@ name = "unicode-ident"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "url"
