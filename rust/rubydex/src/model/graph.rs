@@ -514,6 +514,40 @@ impl Graph {
         }
     }
 
+    /// Removes orphan DSL definitions from the graph.
+    ///
+    /// DSL definitions are intermediate structures used during resolution to process
+    /// patterns like `Class.new` and `Module.new`. After resolution completes,
+    /// orphan DSL definitions (those not linked to any declaration) are no longer
+    /// needed and can be removed to save memory.
+    pub fn remove_orphan_dsl_definitions(&mut self) {
+        // Collect all definition IDs that are linked to declarations
+        let linked_ids: IdentityHashSet<DefinitionId> = self
+            .declarations
+            .values()
+            .flat_map(|decl| decl.definitions().iter().copied())
+            .collect();
+
+        // Find DSL definitions that are not linked to any declaration
+        let orphan_dsl_ids: Vec<DefinitionId> = self
+            .definitions
+            .iter()
+            .filter_map(|(id, def)| {
+                if matches!(def, Definition::Dsl(_)) && !linked_ids.contains(id) {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for id in orphan_dsl_ids {
+            if let Some(definition) = self.definitions.remove(&id) {
+                self.untrack_definition_strings(&definition);
+            }
+        }
+    }
+
     /// Decrements the ref count for a name and removes it if the count reaches zero.
     ///
     /// This recursively untracks `parent_scope` and `nesting` names.

@@ -136,6 +136,7 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+        self.graph.remove_orphan_dsl_definitions();
     }
 
     fn initialize_builtin_declarations(&mut self) {
