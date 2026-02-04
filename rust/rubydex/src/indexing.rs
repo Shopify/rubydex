@@ -1,6 +1,6 @@
 use crate::{
     errors::Errors,
-    indexing::{local_graph::LocalGraph, ruby_indexer::RubyIndexer},
+    indexing::{local_graph::LocalGraph, rbs_indexer::RBSIndexer, ruby_indexer::RubyIndexer},
     job_queue::{Job, JobQueue},
     model::graph::Graph,
 };
@@ -9,16 +9,17 @@ use std::{fs, path::PathBuf, sync::Arc};
 use url::Url;
 
 pub mod local_graph;
+pub mod rbs_indexer;
 pub mod ruby_indexer;
 
-/// Job that indexes a single Ruby file
-pub struct IndexingRubyFileJob {
+/// Job that indexes a single file
+pub struct IndexingJob {
     path: PathBuf,
     local_graph_tx: Sender<LocalGraph>,
     errors_tx: Sender<Errors>,
 }
 
-impl IndexingRubyFileJob {
+impl IndexingJob {
     #[must_use]
     pub fn new(path: PathBuf, local_graph_tx: Sender<LocalGraph>, errors_tx: Sender<Errors>) -> Self {
         Self {
@@ -35,7 +36,7 @@ impl IndexingRubyFileJob {
     }
 }
 
-impl Job for IndexingRubyFileJob {
+impl Job for IndexingJob {
     fn run(&self) {
         let Ok(source) = fs::read_to_string(&self.path) else {
             self.send_error(Errors::FileError(format!(
@@ -55,11 +56,20 @@ impl Job for IndexingRubyFileJob {
             return;
         };
 
-        let mut ruby_indexer = RubyIndexer::new(url.to_string(), &source);
-        ruby_indexer.index();
+        let local_graph = if let Some(ext) = self.path.extension()
+            && ext == "rbs"
+        {
+            let mut indexer = RBSIndexer::new(url.to_string(), &source);
+            indexer.index();
+            indexer.local_graph()
+        } else {
+            let mut indexer = RubyIndexer::new(url.to_string(), &source);
+            indexer.index();
+            indexer.local_graph()
+        };
 
         self.local_graph_tx
-            .send(ruby_indexer.local_graph())
+            .send(local_graph)
             .expect("graph receiver dropped before merge");
     }
 }
@@ -75,7 +85,7 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
     let (errors_tx, errors_rx) = unbounded();
 
     for path in paths {
-        queue.push(Box::new(IndexingRubyFileJob::new(
+        queue.push(Box::new(IndexingJob::new(
             path,
             local_graphs_tx.clone(),
             errors_tx.clone(),
