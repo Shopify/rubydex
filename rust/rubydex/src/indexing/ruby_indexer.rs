@@ -1003,7 +1003,11 @@ impl<'a> RubyIndexer<'a> {
             .expect("visibility stack should not be empty")
     }
 
-    fn method_receiver(&mut self, receiver: Option<&ruby_prism::Node>) -> Option<NameId> {
+    fn method_receiver(
+        &mut self,
+        receiver: Option<&ruby_prism::Node>,
+        fallback_location: ruby_prism::Location,
+    ) -> Option<NameId> {
         let mut is_singleton_name = false;
 
         let name_id = match receiver {
@@ -1051,7 +1055,7 @@ impl<'a> RubyIndexer<'a> {
 
                 if call_node.name().as_slice() == b"singleton_class" {
                     is_singleton_name = true;
-                    self.method_receiver(call_node.receiver().as_ref())
+                    self.method_receiver(call_node.receiver().as_ref(), call_node.location())
                 } else {
                     None
                 }
@@ -1083,10 +1087,15 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let string_id = self.local_graph.intern_string(singleton_class_name);
-        Some(
-            self.local_graph
-                .add_name(Name::new(string_id, ParentScope::Some(name_id), None)),
-        )
+        let new_name_id = self
+            .local_graph
+            .add_name(Name::new(string_id, ParentScope::Attached(name_id), None));
+
+        let location = receiver.map_or(fallback_location, ruby_prism::Node::location);
+        let offset = Offset::from_prism_location(&location);
+        self.local_graph
+            .add_constant_reference(ConstantReference::new(new_name_id, self.uri_id, offset));
+        Some(new_name_id)
     }
 }
 
@@ -1234,7 +1243,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let string_id = self.local_graph.intern_string(singleton_class_name);
         let name_id = self
             .local_graph
-            .add_name(Name::new(string_id, ParentScope::Some(attached_target), None));
+            .add_name(Name::new(string_id, ParentScope::Attached(attached_target), None));
 
         let definition = Definition::SingletonClass(Box::new(SingletonClassDefinition::new(
             name_id,
@@ -1363,7 +1372,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
                 ruby_prism::Node::CallTargetNode { .. } => {
                     let call_target_node = left.as_call_target_node().unwrap();
-                    let method_receiver = self.method_receiver(Some(&call_target_node.receiver()));
+                    let method_receiver = self.method_receiver(Some(&call_target_node.receiver()), left.location());
 
                     if method_receiver.is_none() {
                         self.visit(&call_target_node.receiver());
@@ -1607,7 +1616,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let new_name_str_id = self.local_graph.intern_string(format!("{new_name}()"));
                 let old_name_str_id = self.local_graph.intern_string(format!("{old_name}()"));
 
-                let method_receiver = self.method_receiver(node.receiver().as_ref());
+                let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
                 let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone(), method_receiver);
                 self.local_graph.add_method_reference(reference);
 
@@ -1723,7 +1732,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.visit(&block);
                 }
 
-                let method_receiver = self.method_receiver(node.receiver().as_ref());
+                let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
 
                 if method_receiver.is_none()
                     && let Some(receiver) = node.receiver()
@@ -1748,7 +1757,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
-        let method_receiver = self.method_receiver(node.receiver().as_ref());
+        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
         self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
 
@@ -1763,7 +1772,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
-        let method_receiver = self.method_receiver(node.receiver().as_ref());
+        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
         self.index_method_reference(read_name, &node.call_operator_loc().unwrap(), method_receiver);
 
@@ -1778,7 +1787,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
-        let method_receiver = self.method_receiver(node.receiver().as_ref());
+        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
         self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
 
@@ -1953,10 +1962,11 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_and_node(&mut self, node: &ruby_prism::AndNode) {
-        let method_receiver = self.method_receiver(Some(&node.left()));
+        let left = node.left();
+        let method_receiver = self.method_receiver(Some(&left), left.location());
 
         if method_receiver.is_none() {
-            self.visit(&node.left());
+            self.visit(&left);
         }
 
         self.index_method_reference("&&".to_string(), &node.location(), method_receiver);
@@ -1964,10 +1974,11 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_or_node(&mut self, node: &ruby_prism::OrNode) {
-        let method_receiver = self.method_receiver(Some(&node.left()));
+        let left = node.left();
+        let method_receiver = self.method_receiver(Some(&left), left.location());
 
         if method_receiver.is_none() {
-            self.visit(&node.left());
+            self.visit(&left);
         }
 
         self.index_method_reference("||".to_string(), &node.location(), method_receiver);
@@ -1981,7 +1992,6 @@ mod tests {
         model::{
             definitions::{Definition, Mixin, Parameter},
             ids::{StringId, UriId},
-            name::ParentScope,
             visibility::Visibility,
         },
         test_utils::LocalGraphTest,
@@ -1997,12 +2007,12 @@ mod tests {
     macro_rules! assert_name_path_eq {
         ($context:expr, $expect_path:expr, $name_id:expr) => {{
             let mut name_parts = Vec::new();
-            let mut current_name_id = ParentScope::Some($name_id);
+            let mut current_name_id = Some($name_id);
 
-            while let ParentScope::Some(name_id) = current_name_id {
+            while let Some(name_id) = current_name_id {
                 let name = $context.graph().names().get(&name_id).unwrap();
                 name_parts.push($context.graph().strings().get(name.str()).unwrap().as_str());
-                current_name_id = *name.parent_scope();
+                current_name_id = name.parent_scope().as_ref().copied();
             }
 
             name_parts.reverse();
@@ -3927,8 +3937,8 @@ mod tests {
         assert_constant_references_eq!(
             &context,
             [
-                "C1", "C2", "C3", "C4", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17",
-                "C18", "C19", "C20", "C21", "C22", "C23"
+                "C1", "C2", "C3", "C4", "<C6>", "C6", "C7", "<C8>", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13",
+                "C14", "<C16>", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23"
             ]
         );
     }
@@ -3952,7 +3962,8 @@ mod tests {
         assert_constant_references_eq!(
             &context,
             [
-                "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14"
+                "C1", "C2", "C3", "<C4>", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13",
+                "C14"
             ]
         );
     }

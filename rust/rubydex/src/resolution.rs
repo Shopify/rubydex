@@ -20,7 +20,7 @@ pub enum Unit {
     /// A definition that defines a constant and might require resolution
     Definition(DefinitionId),
     /// A constant reference that needs to be resolved
-    Reference(ReferenceId),
+    ConstantRef(ReferenceId),
     /// A list of ancestors that have been partially linearized and need to be retried
     Ancestors(DeclarationId),
 }
@@ -140,7 +140,7 @@ impl<'a> Resolver<'a> {
                     Unit::Definition(id) => {
                         self.handle_definition_unit(unit_id, id);
                     }
-                    Unit::Reference(id) => {
+                    Unit::ConstantRef(id) => {
                         self.handle_reference_unit(unit_id, id);
                     }
                     Unit::Ancestors(id) => {
@@ -958,7 +958,7 @@ impl<'a> Resolver<'a> {
     fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap();
 
-        if let ParentScope::Some(parent_scope) = name_ref.parent_scope() {
+        if let Some(parent_scope) = name_ref.parent_scope().as_ref() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
             match self.resolve_constant_internal(*parent_scope) {
@@ -1020,23 +1020,43 @@ impl<'a> Resolver<'a> {
 
         match name_ref {
             NameRef::Unresolved(name) => {
-                // For top level constant references starting with `::`, we can search the top level directly
-                if name.parent_scope().is_top_level() {
-                    let result = self.search_top_level(*name.str());
+                match name.parent_scope() {
+                    ParentScope::TopLevel => {
+                        let result = self.search_top_level(*name.str());
 
-                    if let Outcome::Resolved(declaration_id, _) = result {
-                        self.graph.record_resolved_name(name_id, declaration_id);
+                        if let Outcome::Resolved(declaration_id, _) = result {
+                            self.graph.record_resolved_name(name_id, declaration_id);
+                        }
+
+                        result
                     }
+                    ParentScope::Attached(parent_scope_id) => {
+                        let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() else {
+                            return Outcome::Retry(None);
+                        };
 
-                    return result;
-                }
+                        // If we found a singleton reference with a resolved attached object parent scope, we
+                        // automatically create the singleton class
+                        let singleton_id = self.get_or_create_singleton_class(*parent_scope.declaration_id());
+                        self.graph.record_resolved_name(name_id, singleton_id);
+                        Outcome::Resolved(singleton_id, Some(singleton_id))
+                    }
+                    ParentScope::None => {
+                        // Otherwise, it's a simple constant read and we can resolve it directly
+                        let result = self.run_resolution(&name);
 
-                // If there's a parent scope for this constant, it means it's a constant path. We must first resolve the
-                // outer most parent, so that we can then continue resolution from there, recording the results along the
-                // way
-                if let ParentScope::Some(parent_scope_id) = name.parent_scope() {
-                    if let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() {
-                        let declaration = self.graph.declarations().get(parent_scope.declaration_id()).unwrap();
+                        if let Outcome::Resolved(declaration_id, _) = result {
+                            self.graph.record_resolved_name(name_id, declaration_id);
+                        }
+
+                        result
+                    }
+                    ParentScope::Some(parent_scope_id) => {
+                        let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() else {
+                            return Outcome::Retry(None);
+                        };
+                        let parent_declaration_id = parent_scope.declaration_id();
+                        let declaration = self.graph.declarations().get(parent_declaration_id).unwrap();
 
                         // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
                         // `Module.new`, which now seem like constants, but are actually namespaces
@@ -1084,21 +1104,9 @@ impl<'a> Resolver<'a> {
                         }
 
                         // Member not found in any namespace yet - retry in case it's added later
-                        return missing_linearization_id
-                            .map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)));
+                        missing_linearization_id.map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)))
                     }
-
-                    return Outcome::Retry(None);
                 }
-
-                // Otherwise, it's a simple constant read and we can resolve it directly
-                let result = self.run_resolution(&name);
-
-                if let Outcome::Resolved(declaration_id, _) = result {
-                    self.graph.record_resolved_name(name_id, declaration_id);
-                }
-
-                result
             }
             NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
         }
@@ -1380,7 +1388,7 @@ impl<'a> Resolver<'a> {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
-        let mut references = self
+        let mut const_refs = self
             .graph
             .constant_references()
             .iter()
@@ -1388,21 +1396,21 @@ impl<'a> Resolver<'a> {
                 let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
 
                 (
-                    Unit::Reference(*id),
+                    Unit::ConstantRef(*id),
                     (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
                 )
             })
             .collect::<Vec<_>>();
 
         // Sort constant references based on their name complexity so that simpler names are always first
-        references.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+        const_refs.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
         self.unit_queue
             .extend(definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
         self.unit_queue
-            .extend(references.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+            .extend(const_refs.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
 
         others.shrink_to_fit();
         others
@@ -4088,5 +4096,135 @@ mod tests {
 
         assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
         assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:7:3-7:4");
+    }
+
+    #[test]
+    fn incomplete_method_calls_automatically_trigger_singleton_creation() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+            end
+
+            Foo.
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseError]);
+
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            &["Foo::<Foo>", "Object::<Object>", "Class", "Object"]
+        );
+    }
+
+    #[test]
+    fn singleton_class_calls_create_nested_singletons() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+            end
+
+            Foo.singleton_class.singleton_class.to_s
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
+            &[
+                "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
+                "Object::<Object>::<<Object>>::<<<Object>>>",
+                "Class::<Class>::<<Class>>",
+                "Object::<Object>::<<Object>>",
+                "Class::<Class>",
+                "Object::<Object>",
+                "Class",
+                "Object"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_class_on_a_scoped_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            module Foo
+              class Bar
+              end
+            end
+
+            Foo::Bar.singleton_class.to_s
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_references_count_eq!(context, "Foo::Bar::<Bar>::<<Bar>>", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::Bar::<Bar>::<<Bar>>",
+            &[
+                "Foo::Bar::<Bar>::<<Bar>>",
+                "Object::<Object>::<<Object>>",
+                "Class::<Class>",
+                "Object::<Object>",
+                "Class",
+                "Object"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_class_on_a_self_call() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            class Foo
+              class << self
+                def bar
+                  singleton_class.baz
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>::<<Foo>>", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>::<<Foo>>",
+            &[
+                "Foo::<Foo>::<<Foo>>",
+                "Object::<Object>::<<Object>>",
+                "Class::<Class>",
+                "Object::<Object>",
+                "Class",
+                "Object"
+            ]
+        );
+    }
+
+    #[test]
+    fn method_call_on_undefined_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            Foo.bar
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
     }
 }
