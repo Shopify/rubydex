@@ -5,7 +5,7 @@
 
 typedef struct {
     VALUE graph_obj; // Ruby Graph object to keep it alive
-    uint32_t id;     // Canonical ID mapping to a DeclarationId, DefinitionId, UriId, etc. See `ids.rs`.
+    uint64_t id;     // Canonical ID mapping to a DeclarationId, DefinitionId, UriId, etc. See `ids.rs`.
 } HandleData;
 
 static void handle_mark(void *ptr) {
@@ -36,7 +36,7 @@ static VALUE rdxr_handle_initialize(VALUE self, VALUE graph_obj, VALUE id_val) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
     data->graph_obj = graph_obj;
-    data->id = NUM2UINT(id_val);
+    data->id = NUM2ULL(id_val);
 
     return self;
 }

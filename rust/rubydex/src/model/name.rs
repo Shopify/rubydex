@@ -20,7 +20,7 @@ pub enum ParentScope {
     ///        ^ Attached for <<Foo>>
     Attached(NameId),
 }
-assert_mem_size!(ParentScope, 8);
+assert_mem_size!(ParentScope, 16);
 
 impl ParentScope {
     pub fn map_or<F, T>(&self, default: T, f: F) -> T
@@ -91,7 +91,7 @@ pub struct Name {
     nesting: Option<NameId>,
     ref_count: u32,
 }
-assert_mem_size!(Name, 24);
+assert_mem_size!(Name, 48);
 
 impl Name {
     #[must_use]

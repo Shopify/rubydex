@@ -5,7 +5,7 @@ use rubydex::model::declaration::{Ancestor, Declaration, Namespace};
 use std::ffi::CString;
 use std::ptr;
 
-use crate::definition_api::{DefinitionKind, DefinitionsIter, rdx_definitions_iter_new_from_ids};
+use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::utils;
 use rubydex::model::ids::{DeclarationId, StringId};
@@ -27,13 +27,13 @@ pub enum CDeclarationKind {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CDeclaration {
-    id: u32,
+    id: u64,
     kind: CDeclarationKind,
 }
 
 impl CDeclaration {
     #[must_use]
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> u64 {
         self.id
     }
 
@@ -115,7 +115,7 @@ impl DeclarationsIter {
 ///
 /// This function will panic if the name pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: u32) -> *const c_char {
+pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: u64) -> *const c_char {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
         if let Some(decl) = graph.declarations().get(&name_id) {
@@ -138,7 +138,7 @@ pub unsafe extern "C" fn rdx_declaration_name(pointer: GraphPointer, name_id: u3
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_member(
     pointer: GraphPointer,
-    name_id: u32,
+    name_id: u64,
     member: *const c_char,
 ) -> *const CDeclaration {
     let Ok(member_str) = (unsafe { utils::convert_char_ptr_to_string(member) }) else {
@@ -172,7 +172,7 @@ pub unsafe extern "C" fn rdx_declaration_member(
 ///
 /// This function will panic if the name pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer, name_id: u32) -> *const c_char {
+pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer, name_id: u64) -> *const c_char {
     with_graph(pointer, |graph| {
         let name_id = DeclarationId::new(name_id);
         if let Some(decl) = graph.declarations().get(&name_id) {
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer,
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
     pointer: GraphPointer,
-    decl_id: u32,
+    decl_id: u64,
 ) -> *mut DefinitionsIter {
     // Snapshot the IDs and kinds at iterator creation to avoid borrowing across FFI calls
     with_graph(pointer, |graph| {
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
         if let Some(decl) = graph.declarations().get(&decl_id) {
             rdx_definitions_iter_new_from_ids(graph, decl.definitions())
         } else {
-            DefinitionsIter::new(Vec::<(u32, DefinitionKind)>::new().into_boxed_slice())
+            DefinitionsIter::new(Vec::<_>::new().into_boxed_slice())
         }
     })
 }
@@ -219,7 +219,7 @@ pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
 ///
 /// Will panic if invoked on a non-existing or non-namespace declaration
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_singleton_class(pointer: GraphPointer, decl_id: u32) -> *const CDeclaration {
+pub unsafe extern "C" fn rdx_declaration_singleton_class(pointer: GraphPointer, decl_id: u64) -> *const CDeclaration {
     with_graph(pointer, |graph| {
         let declaration = graph
             .declarations()
@@ -249,7 +249,7 @@ pub unsafe extern "C" fn rdx_declaration_singleton_class(pointer: GraphPointer, 
 ///
 /// Will panic if invoked on a non-existing or non-namespace declaration
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_owner(pointer: GraphPointer, decl_id: u32) -> *const CDeclaration {
+pub unsafe extern "C" fn rdx_declaration_owner(pointer: GraphPointer, decl_id: u64) -> *const CDeclaration {
     with_graph(pointer, |graph| {
         let declaration = graph.declarations().get(&DeclarationId::new(decl_id)).unwrap();
         let owner_id = *declaration.owner_id();
@@ -288,7 +288,7 @@ pub unsafe extern "C" fn free_c_declaration(ptr: *const CDeclaration) {
 ///
 /// Will panic if there's inconsistent graph data
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_ancestors(pointer: GraphPointer, decl_id: u32) -> *mut DeclarationsIter {
+pub unsafe extern "C" fn rdx_declaration_ancestors(pointer: GraphPointer, decl_id: u64) -> *mut DeclarationsIter {
     let declarations = with_graph(pointer, |graph| {
         let declaration_id = DeclarationId::new(decl_id);
 
@@ -322,7 +322,7 @@ pub unsafe extern "C" fn rdx_declaration_ancestors(pointer: GraphPointer, decl_i
 ///
 /// Will panic if there's inconsistent graph data
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_descendants(pointer: GraphPointer, decl_id: u32) -> *mut DeclarationsIter {
+pub unsafe extern "C" fn rdx_declaration_descendants(pointer: GraphPointer, decl_id: u64) -> *mut DeclarationsIter {
     let declarations = with_graph(pointer, |graph| {
         let declaration_id = DeclarationId::new(decl_id);
 

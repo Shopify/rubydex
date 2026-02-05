@@ -89,10 +89,10 @@ static VALUE declaration_definitions_yield(VALUE args) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
-    uint32_t id = 0;
+    uint64_t id = 0;
     DefinitionKind kind;
     while (rdx_definitions_iter_next(iter, &id, &kind)) {
-        VALUE argv[] = {data->graph_obj, UINT2NUM(id)};
+        VALUE argv[] = {data->graph_obj, ULL2NUM(id)};
         VALUE defn_class = rdxi_definition_class_for_kind(kind);
         VALUE handle = rb_class_new_instance(2, argv, defn_class);
         rb_yield(handle);
@@ -163,7 +163,7 @@ static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
     }
 
     VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
-    VALUE argv[] = {data->graph_obj, UINT2NUM(decl->id)};
+    VALUE argv[] = {data->graph_obj, ULL2NUM(decl->id)};
     free_c_declaration(decl);
 
     return rb_class_new_instance(2, argv, decl_class);
@@ -183,7 +183,7 @@ static VALUE rdxr_declaration_singleton_class(VALUE self) {
     }
 
     VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
-    VALUE argv[] = {data->graph_obj, UINT2NUM(decl->id)};
+    VALUE argv[] = {data->graph_obj, ULL2NUM(decl->id)};
     free_c_declaration(decl);
 
     return rb_class_new_instance(2, argv, decl_class);
@@ -203,7 +203,7 @@ static VALUE rdxr_declaration_owner(VALUE self) {
     }
 
     VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
-    VALUE argv[] = {data->graph_obj, UINT2NUM(decl->id)};
+    VALUE argv[] = {data->graph_obj, ULL2NUM(decl->id)};
     free_c_declaration(decl);
 
     return rb_class_new_instance(2, argv, decl_class);

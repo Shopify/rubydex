@@ -36,7 +36,7 @@ VALUE rdxi_declarations_yield(VALUE args) {
     CDeclaration decl;
     while (rdx_graph_declarations_iter_next(iter, &decl)) {
         VALUE decl_class = rdxi_declaration_class_for_kind(decl.kind);
-        VALUE argv[] = {self, UINT2NUM(decl.id)};
+        VALUE argv[] = {self, ULL2NUM(decl.id)};
         VALUE handle = rb_class_new_instance(2, argv, decl_class);
         rb_yield(handle);
     }

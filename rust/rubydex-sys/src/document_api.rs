@@ -4,7 +4,7 @@ use libc::c_char;
 use std::ffi::CString;
 use std::ptr;
 
-use crate::definition_api::{DefinitionKind, DefinitionsIter, rdx_definitions_iter_new_from_ids};
+use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use rubydex::model::ids::UriId;
 
@@ -19,7 +19,7 @@ use rubydex::model::ids::UriId;
 ///
 /// This function will panic if the URI pointer is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_document_uri(pointer: GraphPointer, uri_id: u32) -> *const c_char {
+pub unsafe extern "C" fn rdx_document_uri(pointer: GraphPointer, uri_id: u64) -> *const c_char {
     with_graph(pointer, |graph| {
         let uri_id = UriId::new(uri_id);
         if let Some(doc) = graph.documents().get(&uri_id) {
@@ -41,14 +41,14 @@ pub unsafe extern "C" fn rdx_document_uri(pointer: GraphPointer, uri_id: u32) ->
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - The returned pointer must be freed with `rdx_document_definitions_iter_free`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_document_definitions_iter_new(pointer: GraphPointer, uri_id: u32) -> *mut DefinitionsIter {
+pub unsafe extern "C" fn rdx_document_definitions_iter_new(pointer: GraphPointer, uri_id: u64) -> *mut DefinitionsIter {
     // Snapshot the IDs and kinds at iterator creation to avoid borrowing across FFI calls
     with_graph(pointer, |graph| {
         let uri_id = UriId::new(uri_id);
         if let Some(doc) = graph.documents().get(&uri_id) {
             rdx_definitions_iter_new_from_ids(graph, doc.definitions())
         } else {
-            DefinitionsIter::new(Vec::<(u32, DefinitionKind)>::new().into_boxed_slice())
+            DefinitionsIter::new(Vec::<_>::new().into_boxed_slice())
         }
     })
 }
