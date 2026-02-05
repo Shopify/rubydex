@@ -3155,15 +3155,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        // Foo should be a constant (fallback), not a dynamic class
-        // MyClass.new doesn't match any handler (not Class.new or Module.new)
         let foo_decl = context.graph().declarations().get(&DeclarationId::from("Foo"));
-        assert!(foo_decl.is_some(), "Foo declaration should exist");
-        assert_eq!(
-            foo_decl.unwrap().kind(),
-            "Constant",
-            "Foo should be a constant, not a namespace"
-        );
+        assert!(matches!(foo_decl, Some(Declaration::Constant(_))));
     }
 
     #[test]
@@ -3313,6 +3306,28 @@ mod tests {
 
         assert_no_diagnostics!(&context);
         assert_instance_variables_eq!(context, "MyClass::<MyClass>", vec!["@bar"]);
+    }
+
+    #[test]
+    fn dsl_without_receiver_does_not_capture_constant() {
+        // Simulates T::Enum pattern: `Value = new("value")` inside a class
+        // When `new` has no receiver, it shouldn't be treated as a namespace-creating DSL.
+        // The constant should be assigned to the enclosing class.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class MyEnum
+              Value1 = new('value1')
+              Value2 = new('value2')
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "MyEnum::Value1");
+        assert_declaration_exists!(context, "MyEnum::Value2");
+        assert_members_eq!(context, "MyEnum", vec!["Value1", "Value2"]);
     }
 
     #[test]
