@@ -1759,11 +1759,14 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_call_and_write_node(&mut self, node: &ruby_prism::CallAndWriteNode) {
-        if let Some(receiver) = node.receiver() {
+        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+
+        if method_receiver.is_none()
+            && let Some(receiver) = node.receiver()
+        {
             self.visit(&receiver);
         }
 
-        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
         self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
 
@@ -1774,11 +1777,14 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_call_operator_write_node(&mut self, node: &ruby_prism::CallOperatorWriteNode) {
-        if let Some(receiver) = node.receiver() {
+        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+
+        if method_receiver.is_none()
+            && let Some(receiver) = node.receiver()
+        {
             self.visit(&receiver);
         }
 
-        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
         self.index_method_reference(read_name, &node.call_operator_loc().unwrap(), method_receiver);
 
@@ -1789,11 +1795,14 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_call_or_write_node(&mut self, node: &ruby_prism::CallOrWriteNode) {
-        if let Some(receiver) = node.receiver() {
+        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+
+        if method_receiver.is_none()
+            && let Some(receiver) = node.receiver()
+        {
             self.visit(&receiver);
         }
 
-        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
         let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
         self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
 
@@ -6012,5 +6021,20 @@ mod tests {
         assert_definition_at!(&context, "12:24-12:27", AttrReader, |def| {
             assert_def_comments_eq!(&context, def, ["# Comment"]);
         });
+    }
+
+    #[test]
+    fn method_call_operators() {
+        let context = index_source({
+            "
+            Foo.bar ||= {}
+            Foo.bar += {}
+            Foo.bar &&= {}
+            "
+        });
+
+        assert_no_diagnostics!(&context);
+        // We expect two constant references for `Foo` and `<Foo>` on each singleton method call
+        assert_eq!(6, context.graph().constant_references().len());
     }
 }
