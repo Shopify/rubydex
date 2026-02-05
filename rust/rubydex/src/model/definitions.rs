@@ -142,7 +142,16 @@ impl Definition {
             Definition::SingletonClass(d) => Some(d.name_id()),
             Definition::Module(d) => Some(d.name_id()),
             Definition::Constant(d) => Some(d.name_id()),
-            _ => None,
+            Definition::ConstantAlias(d) => Some(d.name_id()),
+            Definition::GlobalVariable(_)
+            | Definition::InstanceVariable(_)
+            | Definition::ClassVariable(_)
+            | Definition::AttrAccessor(_)
+            | Definition::AttrReader(_)
+            | Definition::AttrWriter(_)
+            | Definition::Method(_)
+            | Definition::MethodAlias(_)
+            | Definition::GlobalVariableAlias(_) => None,
         }
     }
 

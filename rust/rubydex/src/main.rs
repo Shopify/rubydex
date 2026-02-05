@@ -27,6 +27,16 @@ struct Args {
 
     #[arg(long = "stats", help = "Show detailed performance statistics")]
     stats: bool,
+
+    #[arg(
+        long = "report-orphans",
+        value_name = "PATH",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "/tmp/rubydex-orphan-report.txt",
+        help = "Write orphan definitions report to specified file"
+    )]
+    report_orphans: Option<String>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -99,6 +109,20 @@ fn main() {
     if args.stats {
         Timer::print_breakdown();
         MemoryStats::print_memory_usage();
+    }
+
+    // Orphan report
+    if let Some(ref path) = args.report_orphans {
+        match std::fs::File::create(path) {
+            Ok(mut file) => {
+                if let Err(e) = graph.write_orphan_report(&mut file) {
+                    eprintln!("Failed to write orphan report: {e}");
+                } else {
+                    println!("Orphan report written to {path}");
+                }
+            }
+            Err(e) => eprintln!("Failed to create orphan report file: {e}"),
+        }
     }
 
     // Generate visualization or print statistics

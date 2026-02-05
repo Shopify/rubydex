@@ -1,4 +1,6 @@
 pub mod memory;
+// TODO: When the rubydex is stable enough, turn this into a debug-only feature or revisit if we still need it.
+pub mod orphan_report;
 pub mod timer;
 
 /// Helper function to compute percentage

@@ -4,7 +4,6 @@
 //! within a file. It can be used to track positions in source code and convert
 //! between byte offsets and line/column positions.
 
-#[cfg(any(test, feature = "test_utils"))]
 use crate::model::document::Document;
 
 /// Represents a byte offset range within a specific file.
@@ -59,7 +58,6 @@ impl Offset {
     }
 
     /// Converts an offset to a display range like `1:1-1:5`
-    #[cfg(any(test, feature = "test_utils"))]
     #[must_use]
     pub fn to_display_range(&self, document: &Document) -> String {
         let line_index = document.line_index();
