@@ -691,13 +691,14 @@ impl Graph {
 
     #[allow(clippy::cast_precision_loss)]
     pub fn print_query_statistics(&self) {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
 
         let mut declarations_with_docs = 0;
         let mut total_doc_size = 0;
-        let mut declarations_types: HashMap<&str, usize> = HashMap::new();
-        let mut definition_types: HashMap<&str, usize> = HashMap::new();
         let mut multi_definition_count = 0;
+        let mut declarations_types: HashMap<&str, usize> = HashMap::new();
+        let mut linked_definition_types: HashMap<&str, usize> = HashMap::new();
+        let mut linked_definition_ids: HashSet<&DefinitionId> = HashSet::new();
 
         for declaration in self.declarations.values() {
             // Check documentation
@@ -719,10 +720,17 @@ impl Graph {
             }
 
             for def_id in declaration.definitions() {
+                linked_definition_ids.insert(def_id);
                 if let Some(def) = self.definitions().get(def_id) {
-                    *definition_types.entry(def.kind()).or_insert(0) += 1;
+                    *linked_definition_types.entry(def.kind()).or_insert(0) += 1;
                 }
             }
+        }
+
+        // Count ALL definitions by type (including unlinked)
+        let mut all_definition_types: HashMap<&str, usize> = HashMap::new();
+        for def in self.definitions.values() {
+            *all_definition_types.entry(def.kind()).or_insert(0) += 1;
         }
 
         println!();
@@ -754,13 +762,34 @@ impl Graph {
             println!("  {kind:20} {count:6}");
         }
 
+        // Combined definition breakdown: total, linked, orphan
         println!();
         println!("Definition breakdown:");
-        let mut types: Vec<_> = definition_types.iter().collect();
-        types.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
-        for (kind, count) in types {
-            println!("  {kind:20} {count:6}");
+        println!("  {:20} {:>8} {:>8} {:>8}", "Type", "Total", "Linked", "Orphan");
+        println!("  {:20} {:>8} {:>8} {:>8}", "----", "-----", "------", "------");
+
+        let mut definition_types: Vec<_> = all_definition_types.iter().collect();
+        definition_types.sort_by_key(|(_, total)| std::cmp::Reverse(**total));
+
+        for (kind, total) in definition_types {
+            let linked = linked_definition_types.get(kind).unwrap_or(&0);
+            let orphan = total.saturating_sub(*linked);
+            println!("  {kind:20} {total:>8} {linked:>8} {orphan:>8}");
         }
+
+        // Definition linkage summary
+        let total_definitions = self.definitions.len();
+        let linked_count = linked_definition_ids.len();
+        let unlinked_count = total_definitions - linked_count;
+        println!("  {:20} {:>8} {:>8} {:>8}", "----", "-----", "------", "------");
+        println!(
+            "  {:20} {:>8} {:>8} {:>8}",
+            "TOTAL", total_definitions, linked_count, unlinked_count
+        );
+        println!(
+            "  Orphan rate: {:.1}%",
+            stats::percentage(unlinked_count, total_definitions)
+        );
     }
 }
 
