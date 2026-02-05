@@ -3,20 +3,42 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration, Namespace};
+use crate::model::declaration::{Declaration, Namespace};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
-use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
+use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::shape::{extract_shape_keys, shapes_match};
 use crate::model::string_ref::StringRef;
 use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
 pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
+
+/// Result of an incremental update operation.
+///
+/// Contains the definition and reference IDs that need to be resolved after an update.
+/// When `update` or `delete_uri` returns `Some(IndexResult)`, incremental resolution can be used.
+/// When they return `None`, a full re-resolution is required.
+#[derive(Debug)]
+pub struct IndexResult {
+    pub definition_ids: Vec<DefinitionId>,
+    pub reference_ids: Vec<ReferenceId>,
+}
+
+impl IndexResult {
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            definition_ids: Vec::new(),
+            reference_ids: Vec::new(),
+        }
+    }
+}
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
@@ -79,6 +101,10 @@ impl Graph {
 
     pub fn clear_declarations(&mut self) {
         self.declarations.clear();
+        // Reset all resolved names back to unresolved so they can be re-resolved
+        for name_ref in self.names.values_mut() {
+            name_ref.reset_to_unresolved();
+        }
     }
 
     // Returns an immutable reference to the definitions map
@@ -495,10 +521,9 @@ impl Graph {
     }
 
     //// Handles the deletion of a document identified by `uri`
-    pub fn delete_uri(&mut self, uri: &str) {
-        let uri_id = UriId::from(uri);
-        self.remove_definitions_for_uri(uri_id);
-        self.documents.remove(&uri_id);
+    pub fn delete_uri(&mut self, uri: &str) -> Option<IndexResult> {
+        let empty = LocalGraph::empty(uri);
+        self.process_update(&empty)
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
@@ -535,13 +560,46 @@ impl Graph {
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
     /// updates to existing entries
-    pub fn update(&mut self, other: LocalGraph) {
+    pub fn update(&mut self, other: LocalGraph) -> Option<IndexResult> {
         // For each URI that was indexed through `other`, check what was discovered and update our current global
         // representation
+        let result = self.process_update(&other);
+        self.extend(other);
+        result
+    }
+
+    fn process_update(&mut self, other: &LocalGraph) -> Option<IndexResult> {
         let uri_id = other.uri_id();
+
+        let old_shape_keys = if let Some(document) = self.documents.get(&uri_id) {
+            let old_defs = document
+                .definitions()
+                .iter()
+                .filter_map(|def_id| self.definitions.get(def_id).map(|def| (*def_id, def)));
+
+            extract_shape_keys(old_defs, |ref_id| {
+                self.constant_references.get(ref_id).map(|r| *r.name_id())
+            })
+        } else {
+            Vec::new()
+        };
+
+        let new_shape_keys = extract_shape_keys(other.definitions().iter().map(|(id, def)| (*id, def)), |ref_id| {
+            other.constant_references().get(ref_id).map(|r| *r.name_id())
+        });
+
+        let shape_unchanged = shapes_match(&old_shape_keys, &new_shape_keys);
+
         self.remove_definitions_for_uri(uri_id);
 
-        self.extend(other);
+        if shape_unchanged {
+            Some(IndexResult {
+                definition_ids: other.definitions().keys().copied().collect(),
+                reference_ids: other.constant_references().keys().copied().collect(),
+            })
+        } else {
+            None
+        }
     }
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
@@ -573,7 +631,6 @@ impl Graph {
         let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
         let mut definitions_to_delete: Vec<DefinitionId> = Vec::new();
         let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
-        let mut declarations_to_invalidate_ancestor_chains: Vec<DeclarationId> = Vec::new();
 
         for def_id in document.definitions() {
             definitions_to_delete.push(*def_id);
@@ -583,9 +640,6 @@ impl Graph {
                 && declaration.remove_definition(def_id)
             {
                 declaration.clear_diagnostics();
-                if declaration.as_namespace().is_some() {
-                    declarations_to_invalidate_ancestor_chains.push(declaration_id);
-                }
 
                 if declaration.has_no_definitions() {
                     let unqualified_str_id = StringId::from(&declaration.unqualified_name());
@@ -604,8 +658,6 @@ impl Graph {
                 self.untrack_name(*name_id);
             }
         }
-
-        self.invalidate_ancestor_chains(declarations_to_invalidate_ancestor_chains);
 
         for declaration_id in declarations_to_delete {
             self.declarations.remove(&declaration_id);
@@ -633,49 +685,6 @@ impl Graph {
         for def_id in definitions_to_delete {
             let definition = self.definitions.remove(&def_id).unwrap();
             self.untrack_definition_strings(&definition);
-        }
-    }
-
-    fn invalidate_ancestor_chains(&mut self, initial_ids: Vec<DeclarationId>) {
-        let mut queue = initial_ids;
-        let mut visited = IdentityHashSet::<DeclarationId>::default();
-
-        while let Some(declaration_id) = queue.pop() {
-            if !visited.insert(declaration_id) {
-                continue;
-            }
-
-            let namespace = self
-                .declarations_mut()
-                .get_mut(&declaration_id)
-                .unwrap()
-                .as_namespace_mut()
-                .expect("expected namespace declaration");
-
-            for ancestor in &namespace.ancestors() {
-                if let Ancestor::Complete(ancestor_id) = ancestor {
-                    self.declarations_mut()
-                        .get_mut(ancestor_id)
-                        .unwrap()
-                        .as_namespace_mut()
-                        .unwrap()
-                        .remove_descendant(&declaration_id);
-                }
-            }
-
-            let namespace = self
-                .declarations_mut()
-                .get_mut(&declaration_id)
-                .unwrap()
-                .as_namespace_mut()
-                .unwrap();
-
-            namespace.for_each_descendant(|descendant_id| {
-                queue.push(*descendant_id);
-            });
-
-            namespace.clear_ancestors();
-            namespace.clear_descendants();
         }
     }
 
@@ -768,9 +777,8 @@ impl Graph {
 mod tests {
     use super::*;
     use crate::model::comment::Comment;
-    use crate::model::declaration::Ancestors;
     use crate::test_utils::GraphTest;
-    use crate::{assert_descendants, assert_members_eq, assert_no_diagnostics, assert_no_members};
+    use crate::{assert_members_eq, assert_no_diagnostics, assert_no_members};
 
     #[test]
     fn deleting_a_uri() {
@@ -778,7 +786,6 @@ mod tests {
 
         context.index_uri("file:///foo.rb", "module Foo; end");
         context.delete_uri("file:///foo.rb");
-        context.resolve();
 
         assert!(context.graph().documents.is_empty());
         assert!(context.graph().definitions.is_empty());
@@ -882,76 +889,6 @@ mod tests {
             let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
             assert!(declaration.references().is_empty());
         }
-    }
-
-    #[test]
-    fn invalidating_ancestor_chains_when_document_changes() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///a.rb", "class Foo; include Bar; def method_name; end; end");
-        context.index_uri("file:///b.rb", "class Foo; end");
-        context.index_uri("file:///c.rb", "module Bar; end");
-        context.index_uri("file:///d.rb", "class Baz < Foo; end");
-        context.resolve();
-
-        let foo_declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-        assert!(matches!(
-            foo_declaration.as_namespace().unwrap().ancestors(),
-            Ancestors::Complete(_)
-        ));
-
-        let baz_declaration = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap();
-        assert!(matches!(
-            baz_declaration.as_namespace().unwrap().ancestors(),
-            Ancestors::Complete(_)
-        ));
-
-        {
-            let Declaration::Namespace(Namespace::Module(_bar)) =
-                context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
-            else {
-                panic!("Expected Bar to be a module");
-            };
-            assert_descendants!(context, "Bar", ["Foo"]);
-        }
-        assert_descendants!(context, "Foo", ["Baz"]);
-
-        context.index_uri("file:///a.rb", "");
-
-        {
-            let Declaration::Namespace(Namespace::Class(foo)) =
-                context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
-            else {
-                panic!("Expected Foo to be a class");
-            };
-            assert!(matches!(foo.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
-            assert!(foo.descendants().is_empty());
-
-            let Declaration::Namespace(Namespace::Class(baz)) =
-                context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap()
-            else {
-                panic!("Expected Baz to be a class");
-            };
-            assert!(matches!(baz.clone_ancestors(), Ancestors::Partial(a) if a.is_empty()));
-            assert!(baz.descendants().is_empty());
-
-            let Declaration::Namespace(Namespace::Module(bar)) =
-                context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
-            else {
-                panic!("Expected Bar to be a module");
-            };
-            assert!(!bar.descendants().contains(&DeclarationId::from("Foo")));
-        }
-
-        context.resolve();
-
-        let baz_declaration = context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap();
-        assert!(matches!(
-            baz_declaration.as_namespace().unwrap().ancestors(),
-            Ancestors::Complete(_)
-        ));
-
-        assert_descendants!(context, "Foo", ["Baz"]);
     }
 
     #[test]
@@ -1288,6 +1225,7 @@ mod tests {
         context.resolve();
         // Removing the method should not remove the constant
         context.index_uri("file:///foo2.rb", "");
+        context.resolve();
 
         let foo = context
             .graph()
@@ -1322,6 +1260,7 @@ mod tests {
         context.resolve();
         // Removing the method should not remove the constant
         context.index_uri("file:///foo.rb", "");
+        context.resolve();
 
         let foo = context
             .graph()
@@ -1430,5 +1369,191 @@ mod tests {
         assert!(context.graph().get("Foo").is_none());
         assert!(context.graph().get("Foo::<Foo>").is_none());
         assert!(context.graph().get("Foo::<Foo>::<<Foo>>").is_none());
+    }
+
+    #[test]
+    fn adding_method_does_not_change_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        let result = context.index_uri("file:///foo.rb", "class Foo; def bar; end; end");
+        assert!(result.is_some(), "Adding a method should not change shape");
+
+        let index_result = result.unwrap();
+        assert!(!index_result.definition_ids.is_empty());
+        context.resolve_incremental(&index_result);
+
+        let foo = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo"))
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+        assert!(foo.member(&StringId::from("bar()")).is_some());
+    }
+
+    #[test]
+    fn removing_method_does_not_change_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; def bar; end; end");
+        context.resolve();
+
+        let foo = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo"))
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+        assert!(foo.member(&StringId::from("bar()")).is_some());
+
+        let result = context.index_uri("file:///foo.rb", "class Foo; end");
+        assert!(result.is_some(), "Removing a method should not change shape");
+        context.resolve_incremental(&result.unwrap());
+
+        let foo = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo"))
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+        assert!(foo.member(&StringId::from("bar()")).is_none());
+    }
+
+    #[test]
+    fn adding_constant_does_not_change_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        let result = context.index_uri("file:///foo.rb", "class Foo; BAR = 1; end");
+        assert!(result.is_some(), "Adding a constant should not change shape");
+        context.resolve_incremental(&result.unwrap());
+
+        let foo = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo"))
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+        assert!(foo.member(&StringId::from("BAR")).is_some());
+    }
+
+    #[test]
+    fn adding_class_changes_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        let result = context.index_uri("file:///foo.rb", "class Foo; end; class Bar; end");
+        assert!(result.is_none(), "Adding a class should change shape");
+    }
+
+    #[test]
+    fn changing_superclass_changes_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Parent; end; class Foo < Parent; end");
+        context.resolve();
+
+        let result = context.index_uri(
+            "file:///foo.rb",
+            "class Parent; end; class Other; end; class Foo < Other; end",
+        );
+        assert!(result.is_none(), "Changing superclass should change shape");
+    }
+
+    #[test]
+    fn adding_include_changes_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Bar; end; class Foo; end");
+        context.resolve();
+
+        let result = context.index_uri("file:///foo.rb", "module Bar; end; class Foo; include Bar; end");
+        assert!(result.is_none(), "Adding include should change shape");
+    }
+
+    #[test]
+    fn adding_prepend_changes_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Bar; end; class Foo; end");
+        context.resolve();
+
+        let result = context.index_uri("file:///foo.rb", "module Bar; end; class Foo; prepend Bar; end");
+        assert!(result.is_none(), "Adding prepend should change shape");
+    }
+
+    #[test]
+    fn adding_extend_changes_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Bar; end; class Foo; end");
+        context.resolve();
+
+        let result = context.index_uri("file:///foo.rb", "module Bar; end; class Foo; extend Bar; end");
+        assert!(result.is_none(), "Adding extend should change shape");
+    }
+
+    #[test]
+    fn adding_constant_alias_changes_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        let result = context.index_uri("file:///foo.rb", "class Foo; end; Bar = Foo");
+        assert!(result.is_none(), "Adding constant alias should change shape");
+    }
+
+    #[test]
+    fn deleting_file_with_class_changes_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        let result = context.delete_uri("file:///foo.rb");
+        assert!(result.is_none(), "Deleting a file with a class should change shape");
+    }
+
+    #[test]
+    fn deleting_file_with_only_methods_does_not_change_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///methods.rb", "def top_level_method; end");
+        context.resolve();
+
+        let result = context.delete_uri("file:///methods.rb");
+        assert!(
+            result.is_some(),
+            "Deleting a file with only top-level methods should not change shape"
+        );
+    }
+
+    #[test]
+    fn deleting_file_that_reopens_class_changes_shape() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.index_uri("file:///methods.rb", "class Foo; def bar; end; end");
+        context.resolve();
+
+        // Even though methods.rb "reopens" Foo, it still contains a class definition
+        // which affects the shape
+        let result = context.delete_uri("file:///methods.rb");
+        assert!(
+            result.is_none(),
+            "Deleting a file with a class definition should change shape"
+        );
     }
 }

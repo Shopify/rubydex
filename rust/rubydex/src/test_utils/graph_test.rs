@@ -3,7 +3,7 @@ use super::normalize_indentation;
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
-use crate::model::graph::Graph;
+use crate::model::graph::{Graph, IndexResult};
 use crate::resolution::Resolver;
 
 #[derive(Default)]
@@ -29,19 +29,24 @@ impl GraphTest {
         indexer.local_graph()
     }
 
-    pub fn index_uri(&mut self, uri: &str, source: &str) {
+    pub fn index_uri(&mut self, uri: &str, source: &str) -> Option<IndexResult> {
         let source = normalize_indentation(source);
         let local_index = Self::index_source(uri, &source);
-        self.graph.update(local_index);
+        self.graph.update(local_index)
     }
 
-    pub fn delete_uri(&mut self, uri: &str) {
-        self.graph.delete_uri(uri);
+    pub fn delete_uri(&mut self, uri: &str) -> Option<IndexResult> {
+        self.graph.delete_uri(uri)
     }
 
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
         resolver.resolve_all();
+    }
+
+    pub fn resolve_incremental(&mut self, result: &IndexResult) {
+        let mut resolver = Resolver::new(&mut self.graph);
+        resolver.resolve_incremental(result);
     }
 
     /// # Panics

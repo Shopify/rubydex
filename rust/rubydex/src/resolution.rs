@@ -10,7 +10,7 @@ use crate::model::{
         Namespace, SingletonClassDeclaration,
     },
     definitions::{Definition, Mixin},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
+    graph::{CLASS_ID, Graph, IndexResult, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
     name::{Name, NameRef, ParentScope},
@@ -121,8 +121,28 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let other_ids = self.prepare_units();
+        let definition_ids: Vec<_> = self.graph.definitions().keys().copied().collect();
+        let reference_ids: Vec<_> = self.graph.constant_references().keys().copied().collect();
+        let other_ids = self.prepare_units(&definition_ids, &reference_ids);
+        self.resolve_loop();
+        self.handle_remaining_definitions(other_ids);
+    }
 
+    /// Runs incremental resolution for the given definitions and references.
+    ///
+    /// This is used when the shape of a document hasn't changed.
+    /// The declarations already exist, so we just need to link the new definitions and references.
+    ///
+    /// # Panics
+    ///
+    /// Can panic if there's inconsistent data in the graph
+    pub fn resolve_incremental(&mut self, result: &IndexResult) {
+        let other_ids = self.prepare_units(&result.definition_ids, &result.reference_ids);
+        self.resolve_loop();
+        self.handle_remaining_definitions(other_ids);
+    }
+
+    fn resolve_loop(&mut self) {
         loop {
             // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
             // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
@@ -153,8 +173,6 @@ impl<'a> Resolver<'a> {
                 break;
             }
         }
-
-        self.handle_remaining_definitions(other_ids);
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -1328,13 +1346,16 @@ impl<'a> Resolver<'a> {
         parent_depth + nesting_depth + 1
     }
 
-    fn prepare_units(&mut self) -> Vec<DefinitionId> {
-        let estimated_length = self.graph.definitions().len() / 2;
+    fn prepare_units(&mut self, definition_ids: &[DefinitionId], reference_ids: &[ReferenceId]) -> Vec<DefinitionId> {
+        let estimated_length = definition_ids.len() / 2;
         let mut definitions = Vec::with_capacity(estimated_length);
         let mut others = Vec::with_capacity(estimated_length);
         let names = self.graph.names();
 
-        for (id, definition) in self.graph.definitions() {
+        for id in definition_ids {
+            let Some(definition) = self.graph.definitions().get(id) else {
+                continue;
+            };
             let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
 
             match definition {
@@ -1380,10 +1401,14 @@ impl<'a> Resolver<'a> {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
-        let mut references = self
-            .graph
-            .constant_references()
+        let mut references: Vec<_> = reference_ids
             .iter()
+            .filter_map(|id| {
+                self.graph
+                    .constant_references()
+                    .get(id)
+                    .map(|constant_ref| (id, constant_ref))
+            })
             .map(|(id, constant_ref)| {
                 let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
 
@@ -4200,5 +4225,73 @@ mod tests {
 
         assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
         assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:7:3-7:4");
+    }
+
+    #[test]
+    fn resolving_class_defined_through_constant_alias_scope() {
+        // This is a case that Sorbet doesn't support, but Rubydex should.
+        // When B = A, defining class B::C should create A::C, not a separate B::C.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+            end
+
+            B = A
+
+            class B::C
+            end
+
+            A::C
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        // B should be an alias to A
+        assert_constant_alias_target_eq!(context, "B", "A");
+
+        // C should be a member of A, not B (because B is an alias to A)
+        assert_members_eq!(context, "A", ["C"]);
+
+        // The reference to C in A::C should resolve to A::C
+        // (A is at 9:1-9:2, C is at 9:4-9:5)
+        assert_constant_reference_to!(context, "A::C", "file:///foo.rb:9:4-9:5");
+    }
+
+    #[test]
+    fn resolving_class_defined_through_ancestor_scope() {
+        // This is a case that Sorbet doesn't support, but Rubydex should.
+        // When Foo includes Bar and Bar contains module A, defining class A::B
+        // inside Foo should create Bar::A::B.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Bar
+              module A
+              end
+            end
+
+            module Foo
+              include Bar
+
+              class A::B
+              end
+            end
+
+            Bar::A::B
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        // B should be a member of Bar::A
+        assert_members_eq!(context, "Bar::A", ["B"]);
+
+        // The reference to B in Bar::A::B should resolve to Bar::A::B
+        // (Bar is at 13:1-13:4, A is at 13:6-13:7, B is at 13:9-13:10)
+        assert_constant_reference_to!(context, "Bar::A::B", "file:///foo.rb:13:9-13:10");
     }
 }

@@ -97,6 +97,15 @@ impl Name {
         }
     }
 
+    fn placeholder() -> Self {
+        Self {
+            str: StringId::new(0),
+            parent_scope: ParentScope::None,
+            nesting: None,
+            ref_count: 0,
+        }
+    }
+
     #[must_use]
     pub fn str(&self) -> &StringId {
         &self.str
@@ -140,6 +149,21 @@ impl ResolvedName {
         &self.name
     }
 
+    /// Consumes self and returns the underlying Name.
+    #[must_use]
+    pub fn into_name(self) -> Name {
+        self.name
+    }
+
+    /// Creates a placeholder `ResolvedName` for use with `mem::replace`.
+    /// The placeholder has an empty name and zero declaration ID.
+    fn placeholder() -> Self {
+        Self {
+            name: Name::placeholder(),
+            declaration_id: DeclarationId::new(0),
+        }
+    }
+
     #[must_use]
     pub fn declaration_id(&self) -> &DeclarationId {
         &self.declaration_id
@@ -178,6 +202,14 @@ impl NameRef {
         match self {
             NameRef::Unresolved(name) => Some(*name),
             NameRef::Resolved(_) => None,
+        }
+    }
+
+    /// Resets a resolved name back to unresolved state.
+    pub fn reset_to_unresolved(&mut self) {
+        if let NameRef::Resolved(resolved) = self {
+            let resolved_name = std::mem::replace(resolved, Box::new(ResolvedName::placeholder()));
+            *self = NameRef::Unresolved(Box::new(resolved_name.into_name()));
         }
     }
 

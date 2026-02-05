@@ -46,6 +46,11 @@ impl LocalGraph {
     }
 
     #[must_use]
+    pub fn empty(uri: &str) -> Self {
+        Self::new(UriId::from(uri), Document::new(uri.to_string(), ""))
+    }
+
+    #[must_use]
     pub fn uri_id(&self) -> UriId {
         self.uri_id
     }
