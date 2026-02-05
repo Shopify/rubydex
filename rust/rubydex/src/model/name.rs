@@ -5,7 +5,7 @@ use crate::{
     model::ids::{DeclarationId, NameId, StringId},
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParentScope {
     /// There's no parent scope in this reference (e.g.: `Foo`)
     None,
@@ -74,7 +74,7 @@ impl Display for ParentScope {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct Name {
     /// The unqualified name of the constant
     str: StringId,
@@ -90,6 +90,12 @@ pub struct Name {
     /// list of names to represent the nesting
     nesting: Option<NameId>,
     ref_count: u32,
+}
+
+impl PartialEq for Name {
+    fn eq(&self, other: &Self) -> bool {
+        self.str == other.str && self.parent_scope == other.parent_scope && self.nesting == other.nesting
+    }
 }
 assert_mem_size!(Name, 48);
 
@@ -228,6 +234,26 @@ impl NameRef {
                 resolved_name.name.ref_count -= 1;
                 resolved_name.name.ref_count > 0
             }
+        }
+    }
+}
+
+impl PartialEq for NameRef {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (NameRef::Unresolved(a), NameRef::Unresolved(b)) => a == b,
+            (NameRef::Resolved(a), NameRef::Resolved(b)) => a.name == b.name,
+            (NameRef::Unresolved(name), NameRef::Resolved(resolved))
+            | (NameRef::Resolved(resolved), NameRef::Unresolved(name)) => **name == resolved.name,
+        }
+    }
+}
+
+impl PartialEq<Name> for NameRef {
+    fn eq(&self, other: &Name) -> bool {
+        match self {
+            NameRef::Unresolved(name) => **name == *other,
+            NameRef::Resolved(resolved_name) => &resolved_name.name == other,
         }
     }
 }

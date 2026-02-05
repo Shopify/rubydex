@@ -69,12 +69,33 @@ impl Graph {
         &mut self.declarations
     }
 
-    pub fn add_declaration<F>(&mut self, declaration_id: DeclarationId, definition_id: DefinitionId, constructor: F)
+    pub fn add_declaration<F>(
+        &mut self,
+        definition_id: DefinitionId,
+        fully_qualified_name: String,
+        constructor: F,
+    ) -> DeclarationId
     where
-        F: FnOnce() -> Declaration,
+        F: FnOnce(String) -> Declaration,
     {
-        let declaration = self.declarations.entry(declaration_id).or_insert_with(constructor);
-        declaration.add_definition(definition_id);
+        let declaration_id = DeclarationId::from(&fully_qualified_name);
+
+        match self.declarations.entry(declaration_id) {
+            Entry::Vacant(vacant_entry) => {
+                vacant_entry
+                    .insert(constructor(fully_qualified_name))
+                    .add_definition(definition_id);
+            }
+            Entry::Occupied(mut occupied_entry) => {
+                debug_assert!(
+                    occupied_entry.get().name() == fully_qualified_name,
+                    "DeclarationId collision in global graph"
+                );
+                occupied_entry.get_mut().add_definition(definition_id);
+            }
+        }
+
+        declaration_id
     }
 
     pub fn clear_declarations(&mut self) {
@@ -507,11 +528,14 @@ impl Graph {
         let (uri_id, document, definitions, strings, names, constant_references, method_references) =
             local_graph.into_parts();
 
-        self.documents.insert(uri_id, document);
-        self.definitions.extend(definitions);
+        if self.documents.insert(uri_id, document).is_some() {
+            debug_assert!(false, "UriId collision in global graph");
+        }
+
         for (string_id, string_ref) in strings {
             match self.strings.entry(string_id) {
                 Entry::Occupied(mut entry) => {
+                    debug_assert!(*string_ref == **entry.get(), "StringId collision in global graph");
                     entry.get_mut().increment_ref_count(string_ref.ref_count());
                 }
                 Entry::Vacant(entry) => {
@@ -519,9 +543,11 @@ impl Graph {
                 }
             }
         }
+
         for (name_id, name_ref) in names {
             match self.names.entry(name_id) {
                 Entry::Occupied(mut entry) => {
+                    debug_assert!(*entry.get() == name_ref, "NameId collision in global graph");
                     entry.get_mut().increment_ref_count(name_ref.ref_count());
                 }
                 Entry::Vacant(entry) => {
@@ -529,8 +555,24 @@ impl Graph {
                 }
             }
         }
-        self.constant_references.extend(constant_references);
-        self.method_references.extend(method_references);
+
+        for (definition_id, definition) in definitions {
+            if self.definitions.insert(definition_id, definition).is_some() {
+                debug_assert!(false, "DefinitionId collision in global graph");
+            }
+        }
+
+        for (constant_ref_id, constant_ref) in constant_references {
+            if self.constant_references.insert(constant_ref_id, constant_ref).is_some() {
+                debug_assert!(false, "Constant ReferenceId collision in global graph");
+            }
+        }
+
+        for (method_ref_id, method_ref) in method_references {
+            if self.method_references.insert(method_ref_id, method_ref).is_some() {
+                debug_assert!(false, "Method ReferenceId collision in global graph");
+            }
+        }
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and

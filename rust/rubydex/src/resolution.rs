@@ -320,10 +320,12 @@ impl<'a> Resolver<'a> {
                     let owner_id = *OBJECT_ID;
                     let str_id = *var.str_id();
                     let name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
-                    let declaration_id = DeclarationId::from(&name);
 
-                    self.graph.add_declaration(declaration_id, id, || {
-                        Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, owner_id)))
+                    let declaration_id = self.graph.add_declaration(id, name, |fully_qualified_name| {
+                        Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(
+                            fully_qualified_name,
+                            owner_id,
+                        )))
                     });
                     self.graph.add_member(&owner_id, declaration_id, str_id);
                 }
@@ -495,11 +497,10 @@ impl<'a> Resolver<'a> {
             let name_str = self.graph.strings().get(&str_id).unwrap();
             format!("{}#{}", owner.name(), name_str.as_str())
         };
-        let declaration_id = DeclarationId::from(&fully_qualified_name);
 
-        self.graph.add_declaration(declaration_id, definition_id, || {
-            declaration_builder(fully_qualified_name)
-        });
+        let declaration_id = self
+            .graph
+            .add_declaration(definition_id, fully_qualified_name, declaration_builder);
         self.graph.add_member(&owner_id, declaration_id, str_id);
     }
 
@@ -928,7 +929,11 @@ impl<'a> Resolver<'a> {
                     }
                 }
 
-                let declaration_id = DeclarationId::from(&fully_qualified_name);
+                let declaration_id =
+                    self.graph
+                        .add_declaration(definition_id, fully_qualified_name, |fully_qualified_name| {
+                            declaration_builder(fully_qualified_name, owner_id)
+                        });
 
                 if singleton {
                     self.graph
@@ -942,9 +947,6 @@ impl<'a> Resolver<'a> {
                     self.graph.add_member(&owner_id, declaration_id, str_id);
                 }
 
-                self.graph.add_declaration(declaration_id, definition_id, || {
-                    declaration_builder(fully_qualified_name, owner_id)
-                });
                 self.graph.record_resolved_name(name_id, declaration_id);
                 Outcome::Resolved(declaration_id, id_needing_linearization)
             }
