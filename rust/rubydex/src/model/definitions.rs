@@ -29,6 +29,7 @@ use crate::{
     assert_mem_size,
     model::{
         comment::Comment,
+        dsl::DslArgumentList,
         ids::{DefinitionId, NameId, ReferenceId, StringId, UriId},
         visibility::Visibility,
     },
@@ -112,6 +113,9 @@ pub enum Definition {
     ClassVariable(Box<ClassVariableDefinition>),
     MethodAlias(Box<MethodAliasDefinition>),
     GlobalVariableAlias(Box<GlobalVariableAliasDefinition>),
+    Dsl(Box<DslDefinition>),
+    DynamicClass(Box<DynamicClassDefinition>),
+    DynamicModule(Box<DynamicModuleDefinition>),
 }
 assert_mem_size!(Definition, 16);
 
@@ -132,6 +136,9 @@ macro_rules! all_definitions {
             Definition::Method($var) => $expr,
             Definition::MethodAlias($var) => $expr,
             Definition::GlobalVariableAlias($var) => $expr,
+            Definition::Dsl($var) => $expr,
+            Definition::DynamicClass($var) => $expr,
+            Definition::DynamicModule($var) => $expr,
         }
     };
 }
@@ -144,12 +151,12 @@ impl Definition {
 
     #[must_use]
     pub fn uri_id(&self) -> &UriId {
-        all_definitions!(self, it => &it.uri_id())
+        all_definitions!(self, it => it.uri_id())
     }
 
     #[must_use]
     pub fn offset(&self) -> &Offset {
-        all_definitions!(self, it => &it.offset())
+        all_definitions!(self, it => it.offset())
     }
 
     #[must_use]
@@ -159,7 +166,7 @@ impl Definition {
 
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
-        all_definitions!(self, it => &it.lexical_nesting_id())
+        all_definitions!(self, it => it.lexical_nesting_id())
     }
 
     #[must_use]
@@ -179,6 +186,9 @@ impl Definition {
             Definition::ClassVariable(_) => "ClassVariable",
             Definition::MethodAlias(_) => "AliasMethod",
             Definition::GlobalVariableAlias(_) => "GlobalVariableAlias",
+            Definition::Dsl(_) => "Dsl",
+            Definition::DynamicClass(_) => "DynamicClass",
+            Definition::DynamicModule(_) => "DynamicModule",
         }
     }
 
@@ -189,6 +199,8 @@ impl Definition {
             Definition::SingletonClass(d) => Some(d.name_id()),
             Definition::Module(d) => Some(d.name_id()),
             Definition::Constant(d) => Some(d.name_id()),
+            Definition::DynamicClass(d) => d.name_id(),
+            Definition::DynamicModule(d) => d.name_id(),
             _ => None,
         }
     }
@@ -743,6 +755,18 @@ impl ConstantAliasDefinition {
     }
 }
 
+/// Represents the receiver of a singleton method definition.
+///
+/// - `SelfReceiver`: `def self.foo` - the enclosing class/module/DSL definition
+/// - `ConstantReceiver`: `def Foo.bar` - an explicit constant reference
+#[derive(Debug, Clone, Copy)]
+pub enum Receiver {
+    /// `def self.foo` - receiver is the enclosing definition (class, module, or DSL)
+    SelfReceiver(DefinitionId),
+    /// `def Foo.bar` - receiver is an explicit constant that needs resolution
+    ConstantReceiver(NameId),
+}
+
 /// A method definition
 ///
 /// # Example
@@ -760,7 +784,7 @@ pub struct MethodDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
     visibility: Visibility,
-    receiver: Option<NameId>,
+    receiver: Option<Receiver>,
 }
 assert_mem_size!(MethodDefinition, 88);
 
@@ -776,7 +800,7 @@ impl MethodDefinition {
         lexical_nesting_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
         visibility: Visibility,
-        receiver: Option<NameId>,
+        receiver: Option<Receiver>,
     ) -> Self {
         Self {
             str_id,
@@ -795,8 +819,11 @@ impl MethodDefinition {
     pub fn id(&self) -> DefinitionId {
         let mut formatted_id = format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id);
 
-        if let Some(receiver) = self.receiver {
-            formatted_id.push_str(&receiver.to_string());
+        if let Some(receiver) = &self.receiver {
+            match receiver {
+                Receiver::SelfReceiver(def_id) => formatted_id.push_str(&def_id.to_string()),
+                Receiver::ConstantReceiver(name_id) => formatted_id.push_str(&name_id.to_string()),
+            }
         }
 
         let mut id = DefinitionId::from(&formatted_id);
@@ -835,8 +862,8 @@ impl MethodDefinition {
     }
 
     #[must_use]
-    pub fn receiver(&self) -> &Option<NameId> {
-        &self.receiver
+    pub fn receiver(&self) -> Option<Receiver> {
+        self.receiver
     }
 
     #[must_use]
@@ -1520,6 +1547,372 @@ impl GlobalVariableAliasDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
+}
+
+/// A DSL definition captures a DSL method call (e.g., `Class.new`, `Module.new`).
+///
+/// This is created during indexing when a DSL call is detected. The receiver is
+/// captured as a `NameId` which will be resolved during the resolution phase.
+///
+/// # Example
+/// ```ruby
+/// Foo = Class.new do
+///   def bar; end
+/// end
+/// ```
+///
+/// Creates a `DslDefinition` with:
+/// - `receiver_name`: `NameId(Class)` (to be resolved to `::Class`)
+/// - `method_name`: `StringId("new")`
+/// - `members`: `[MethodDefinition(bar)]`
+/// - `assigned_to`: points to `ConstantDefinition` for `Foo`
+#[derive(Debug)]
+pub struct DslDefinition {
+    /// The receiver of the DSL call (e.g., `Class` in `Class.new`).
+    /// `None` for DSLs called without a receiver (e.g., `attr_accessor`).
+    receiver_name: Option<NameId>,
+    /// The method name of the DSL call (e.g., `"new"`)
+    method_name: StringId,
+    /// The arguments passed to the DSL method
+    arguments: DslArgumentList,
+    uri_id: UriId,
+    offset: Offset,
+    /// The lexical parent of this DSL definition (enclosing Class/Module).
+    lexical_nesting_id: Option<DefinitionId>,
+    /// Definitions that are owned by this DSL block (e.g., methods defined inside)
+    members: Vec<DefinitionId>,
+    /// Mixins (include, prepend, extend) within this DSL block
+    mixins: Vec<Mixin>,
+    /// Reference to the `ConstantDefinition` if this DSL is assigned to a constant.
+    /// E.g., for `Foo = Class.new`, this points to the `ConstantDefinition` for `Foo`.
+    assigned_to: Option<DefinitionId>,
+}
+
+impl DslDefinition {
+    #[must_use]
+    pub const fn new(
+        receiver_name: Option<NameId>,
+        method_name: StringId,
+        arguments: DslArgumentList,
+        uri_id: UriId,
+        offset: Offset,
+        lexical_nesting_id: Option<DefinitionId>,
+        assigned_to: Option<DefinitionId>,
+    ) -> Self {
+        Self {
+            receiver_name,
+            method_name,
+            arguments,
+            uri_id,
+            offset,
+            lexical_nesting_id,
+            members: Vec::new(),
+            mixins: Vec::new(),
+            assigned_to,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        let receiver_str = self.receiver_name.map_or(String::from("None"), |id| id.to_string());
+        DefinitionId::from(&format!(
+            "{}{}{}{}",
+            *self.uri_id,
+            self.offset.start(),
+            receiver_str,
+            *self.method_name
+        ))
+    }
+
+    #[must_use]
+    pub fn receiver_name(&self) -> Option<NameId> {
+        self.receiver_name
+    }
+
+    #[must_use]
+    pub fn method_name(&self) -> &StringId {
+        &self.method_name
+    }
+
+    #[must_use]
+    pub fn arguments(&self) -> &DslArgumentList {
+        &self.arguments
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        // DSL definitions don't have their own comments; those are on the ConstantDefinition
+        &[]
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &[DefinitionId] {
+        &self.members
+    }
+
+    pub fn add_member(&mut self, member_id: DefinitionId) {
+        self.members.push(member_id);
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
+    }
+
+    pub fn add_mixin(&mut self, mixin: Mixin) {
+        self.mixins.push(mixin);
+    }
+
+    /// Returns the `DefinitionId` of the `ConstantDefinition` if this DSL is assigned to a constant.
+    #[must_use]
+    pub fn assigned_to(&self) -> Option<DefinitionId> {
+        self.assigned_to
+    }
+
+    /// Sets the constant this DSL is assigned to.
+    pub fn set_assigned_to(&mut self, id: DefinitionId) {
+        self.assigned_to = Some(id);
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        // DSL definitions don't have flags
+        static EMPTY_FLAGS: DefinitionFlags = DefinitionFlags::empty();
+        &EMPTY_FLAGS
+    }
+}
+
+/// A dynamically created class definition from `Class.new`.
+///
+/// This is created during DSL processing (Phase 3) when a `Class.new` call
+/// is recognized and processed by the handler.
+///
+/// # Example
+/// ```ruby
+/// Foo = Class.new do
+///   def bar; end
+/// end
+/// ```
+///
+/// After DSL processing, creates a `DynamicClassDefinition` that references
+/// the underlying `DslDefinition` by ID and adds resolution-specific data.
+#[derive(Debug)]
+pub struct DynamicClassDefinition {
+    /// Reference to the underlying DSL definition by ID
+    dsl_definition_id: DefinitionId,
+    /// The resolved name of the class (reparented if nested), or `None` for anonymous classes
+    name_id: Option<NameId>,
+    /// Reference to the superclass if specified
+    superclass_ref: Option<ReferenceId>,
+    /// Comments from the constant assignment (if any)
+    comments: Vec<Comment>,
+    /// Flags from the constant assignment (if any)
+    flags: DefinitionFlags,
+    // Copied from DSL for convenience (avoids needing graph access for common operations)
+    uri_id: UriId,
+    offset: Offset,
+    lexical_nesting_id: Option<DefinitionId>,
+    mixins: Vec<Mixin>,
+}
+
+impl DynamicClassDefinition {
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        dsl_definition_id: DefinitionId,
+        name_id: Option<NameId>,
+        superclass_ref: Option<ReferenceId>,
+        comments: Vec<Comment>,
+        flags: DefinitionFlags,
+        uri_id: UriId,
+        offset: Offset,
+        lexical_nesting_id: Option<DefinitionId>,
+        mixins: Vec<Mixin>,
+    ) -> Self {
+        Self {
+            dsl_definition_id,
+            name_id,
+            superclass_ref,
+            comments,
+            flags,
+            uri_id,
+            offset,
+            lexical_nesting_id,
+            mixins,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("{}DynamicClass", *self.dsl_definition_id))
+    }
+
+    /// Computes the `DynamicClass` ID that would be created from a given DSL definition ID.
+    /// This allows direct lookup without iteration.
+    #[must_use]
+    pub fn id_for_dsl(dsl_definition_id: DefinitionId) -> DefinitionId {
+        DefinitionId::from(&format!("{}DynamicClass", *dsl_definition_id))
+    }
+
+    #[must_use]
+    pub fn dsl_definition_id(&self) -> DefinitionId {
+        self.dsl_definition_id
+    }
+
+    #[must_use]
+    pub fn name_id(&self) -> Option<&NameId> {
+        self.name_id.as_ref()
+    }
+
+    #[must_use]
+    pub fn superclass_ref(&self) -> Option<&ReferenceId> {
+        self.superclass_ref.as_ref()
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
+}
+
+/// A dynamically created module definition from `Module.new`.
+///
+/// This is created during DSL processing (Phase 3) when a `Module.new` call
+/// is recognized and processed by the handler. It references the underlying
+/// `DslDefinition` by ID and adds resolution-specific data.
+#[derive(Debug)]
+pub struct DynamicModuleDefinition {
+    /// Reference to the underlying DSL definition by ID
+    dsl_definition_id: DefinitionId,
+    /// The resolved name of the module (reparented if nested), or `None` for anonymous modules
+    name_id: Option<NameId>,
+    /// Comments from the constant assignment (if any)
+    comments: Vec<Comment>,
+    /// Flags from the constant assignment (if any)
+    flags: DefinitionFlags,
+    // Copied from DSL for convenience (avoids needing graph access for common operations)
+    uri_id: UriId,
+    offset: Offset,
+    lexical_nesting_id: Option<DefinitionId>,
+    mixins: Vec<Mixin>,
+}
+
+impl DynamicModuleDefinition {
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        dsl_definition_id: DefinitionId,
+        name_id: Option<NameId>,
+        comments: Vec<Comment>,
+        flags: DefinitionFlags,
+        uri_id: UriId,
+        offset: Offset,
+        lexical_nesting_id: Option<DefinitionId>,
+        mixins: Vec<Mixin>,
+    ) -> Self {
+        Self {
+            dsl_definition_id,
+            name_id,
+            comments,
+            flags,
+            uri_id,
+            offset,
+            lexical_nesting_id,
+            mixins,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("{}DynamicModule", *self.dsl_definition_id))
+    }
+
+    /// Computes the `DynamicModule` ID that would be created from a given DSL definition ID.
+    /// This allows direct lookup without iteration.
+    #[must_use]
+    pub fn id_for_dsl(dsl_definition_id: DefinitionId) -> DefinitionId {
+        DefinitionId::from(&format!("{}DynamicModule", *dsl_definition_id))
+    }
+
+    #[must_use]
+    pub fn dsl_definition_id(&self) -> DefinitionId {
+        self.dsl_definition_id
+    }
+
+    #[must_use]
+    pub fn name_id(&self) -> Option<&NameId> {
+        self.name_id.as_ref()
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn mixins(&self) -> &[Mixin] {
+        &self.mixins
     }
 
     #[must_use]

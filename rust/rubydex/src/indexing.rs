@@ -16,15 +16,22 @@ pub struct IndexingRubyFileJob {
     path: PathBuf,
     local_graph_tx: Sender<LocalGraph>,
     errors_tx: Sender<Errors>,
+    dsl_method_names: Vec<&'static str>,
 }
 
 impl IndexingRubyFileJob {
     #[must_use]
-    pub fn new(path: PathBuf, local_graph_tx: Sender<LocalGraph>, errors_tx: Sender<Errors>) -> Self {
+    pub fn new(
+        path: PathBuf,
+        local_graph_tx: Sender<LocalGraph>,
+        errors_tx: Sender<Errors>,
+        dsl_method_names: Vec<&'static str>,
+    ) -> Self {
         Self {
             path,
             local_graph_tx,
             errors_tx,
+            dsl_method_names,
         }
     }
 
@@ -55,7 +62,7 @@ impl Job for IndexingRubyFileJob {
             return;
         };
 
-        let mut ruby_indexer = RubyIndexer::new(url.to_string(), &source);
+        let mut ruby_indexer = RubyIndexer::new(url.to_string(), &source, self.dsl_method_names.clone());
         ruby_indexer.index();
 
         self.local_graph_tx
@@ -73,12 +80,14 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
     let queue = Arc::new(JobQueue::new());
     let (local_graphs_tx, local_graphs_rx) = unbounded();
     let (errors_tx, errors_rx) = unbounded();
+    let dsl_method_names = graph.dsl_method_names();
 
     for path in paths {
         queue.push(Box::new(IndexingRubyFileJob::new(
             path,
             local_graphs_tx.clone(),
             errors_tx.clone(),
+            dsl_method_names.clone(),
         )));
     }
 

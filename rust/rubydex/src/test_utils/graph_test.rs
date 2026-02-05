@@ -23,15 +23,16 @@ impl GraphTest {
     }
 
     #[must_use]
-    fn index_source(uri: &str, source: &str) -> LocalGraph {
-        let mut indexer = RubyIndexer::new(uri.to_string(), source);
+    fn index_source(uri: &str, source: &str, dsl_method_names: Vec<&'static str>) -> LocalGraph {
+        let mut indexer = RubyIndexer::new(uri.to_string(), source, dsl_method_names);
         indexer.index();
         indexer.local_graph()
     }
 
     pub fn index_uri(&mut self, uri: &str, source: &str) {
         let source = normalize_indentation(source);
-        let local_index = Self::index_source(uri, &source);
+        let dsl_method_names = self.graph.dsl_method_names();
+        let local_index = Self::index_source(uri, &source, dsl_method_names);
         self.graph.update(local_index);
     }
 

@@ -458,6 +458,7 @@ mod tests {
               BAR = 1
             end
             ",
+            vec![],
         );
         indexer.index();
 

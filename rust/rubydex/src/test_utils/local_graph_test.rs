@@ -2,6 +2,7 @@ use super::normalize_indentation;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::definitions::Definition;
+use crate::model::graph::Graph;
 use crate::model::ids::UriId;
 use crate::offset::Offset;
 use crate::position::Position;
@@ -18,8 +19,10 @@ impl LocalGraphTest {
     pub fn new(uri: &str, source: &str) -> Self {
         let uri = uri.to_string();
         let source = normalize_indentation(source);
+        // Get DSL method names from a default Graph instance
+        let dsl_method_names = Graph::new().dsl_method_names();
 
-        let mut indexer = RubyIndexer::new(uri.clone(), &source);
+        let mut indexer = RubyIndexer::new(uri.clone(), &source, dsl_method_names);
         indexer.index();
         let graph = indexer.local_graph();
 
