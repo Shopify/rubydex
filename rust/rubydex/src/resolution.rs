@@ -9,7 +9,7 @@ use crate::model::{
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
         Namespace, SingletonClassDeclaration,
     },
-    definitions::{Definition, Mixin},
+    definitions::{Definition, Mixin, Receiver},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
@@ -272,23 +272,26 @@ impl<'a> Resolver<'a> {
             match self.graph.definitions().get(&id).unwrap() {
                 Definition::Method(method_definition) => {
                     let str_id = *method_definition.str_id();
-                    let owner_id = if let Some(receiver) = method_definition.receiver() {
-                        let receiver_decl_id = match self.graph.names().get(receiver).unwrap() {
-                            NameRef::Resolved(resolved) => *resolved.declaration_id(),
-                            NameRef::Unresolved(_) => {
-                                // Error diagnostic: if we couldn't resolve the constant being used, then we don't know
-                                // where this method is being defined. For example:
-                                //
-                                // def Foo.bar; end
-                                //
-                                // where Foo is undefined
+                    let owner_id = match method_definition.receiver() {
+                        Some(Receiver::SelfReceiver(def_id)) => {
+                            let Some(&owner_decl_id) = self.graph.definition_id_to_declaration_id(*def_id) else {
+                                // The enclosing class/module couldn't be resolved (e.g., `class Foo::Bar` where
+                                // `Foo` is undefined). The method is orphaned as a consequence.
                                 continue;
-                            }
-                        };
+                            };
+                            self.get_or_create_singleton_class(owner_decl_id)
+                        }
+                        Some(Receiver::ConstantReceiver(name_id)) => {
+                            let receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
+                                NameRef::Resolved(resolved) => *resolved.declaration_id(),
+                                NameRef::Unresolved(_) => {
+                                    continue;
+                                }
+                            };
 
-                        self.get_or_create_singleton_class(receiver_decl_id)
-                    } else {
-                        self.resolve_lexical_owner(*method_definition.lexical_nesting_id())
+                            self.get_or_create_singleton_class(receiver_decl_id)
+                        }
+                        None => self.resolve_lexical_owner(*method_definition.lexical_nesting_id()),
                     };
 
                     self.create_declaration(str_id, id, owner_id, |name| {
@@ -346,25 +349,28 @@ impl<'a> Resolver<'a> {
                     match nesting_def {
                         // When the instance variable is inside a method body, we determine the owner based on the method's receiver
                         Definition::Method(method) => {
-                            // Method has explicit receiver (def self.foo or def Foo.bar)
-                            if let Some(receiver_name_id) = method.receiver() {
-                                let Some(NameRef::Resolved(resolved)) = self.graph.names().get(receiver_name_id) else {
-                                    // TODO: add diagnostic for unresolved receiver
-                                    continue;
+                            if let Some(receiver) = method.receiver() {
+                                let receiver_decl_id = match receiver {
+                                    Receiver::SelfReceiver(def_id) => *self
+                                        .graph
+                                        .definition_id_to_declaration_id(*def_id)
+                                        .expect("SelfReceiver definition should have a declaration"),
+                                    Receiver::ConstantReceiver(name_id) => {
+                                        let Some(NameRef::Resolved(resolved)) = self.graph.names().get(name_id) else {
+                                            continue;
+                                        };
+                                        *resolved.declaration_id()
+                                    }
                                 };
-                                let receiver_decl_id = *resolved.declaration_id();
 
-                                // Instance variable in singleton method - owned by the receiver's singleton class
                                 let owner_id = self.get_or_create_singleton_class(receiver_decl_id);
-                                {
-                                    debug_assert!(
-                                        matches!(
-                                            self.graph.declarations().get(&owner_id),
-                                            Some(Declaration::Namespace(Namespace::SingletonClass(_)))
-                                        ),
-                                        "Instance variable in singleton method should be owned by a SingletonClass"
-                                    );
-                                }
+                                debug_assert!(
+                                    matches!(
+                                        self.graph.declarations().get(&owner_id),
+                                        Some(Declaration::Namespace(Namespace::SingletonClass(_)))
+                                    ),
+                                    "Instance variable in singleton method should be owned by a SingletonClass"
+                                );
                                 self.create_declaration(str_id, id, owner_id, |name| {
                                     Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
                                         name, owner_id,
