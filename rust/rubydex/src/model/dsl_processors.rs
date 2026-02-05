@@ -44,6 +44,76 @@ pub fn module_new_matches(receiver_decl_id: Option<DeclarationId>) -> bool {
     receiver_decl_id == Some(*MODULE_ID)
 }
 
+/// Result of attempting to match a DSL against processors.
+pub enum DslMatchResult {
+    /// A processor matched - use it to handle the DSL
+    Matched(DslProcessor),
+    /// No processor matched, but one might match after more resolution
+    /// (e.g., receiver exists but not resolved yet)
+    Retry,
+    /// No processor will ever match this DSL
+    /// (e.g., no receiver exists, or receiver resolved but doesn't match any processor)
+    WillNotMatch,
+}
+
+/// Finds a matching processor for the given DSL, with detailed match result.
+///
+/// Parameters:
+/// - `processors`: The available DSL processors
+/// - `method_name`: The method name being called
+/// - `receiver_name`: Whether a receiver exists in source (Some = exists, None = no receiver)
+/// - `receiver_decl_id`: The resolved receiver declaration (if resolved)
+///
+/// Returns:
+/// - `Matched(processor)` if a processor matches
+/// - `Retry` if receiver exists but not resolved, and method could match a processor
+/// - `WillNotMatch` if no processor will ever match
+#[must_use]
+pub fn find_matching_processor(
+    processors: &[DslProcessor],
+    method_name: &str,
+    receiver_name: Option<NameId>,
+    receiver_decl_id: Option<DeclarationId>,
+) -> DslMatchResult {
+    let mut could_match_later = false;
+
+    for processor in processors {
+        // Method name must match
+        if processor.method_name != method_name {
+            continue;
+        }
+
+        // Method matches - check receiver
+        match (receiver_name, receiver_decl_id) {
+            // Receiver resolved - check if it matches
+            (Some(_), Some(decl_id)) => {
+                if (processor.matches)(Some(decl_id)) {
+                    return DslMatchResult::Matched(*processor);
+                }
+                // Receiver resolved but doesn't match this processor - try next
+            }
+            // Receiver exists but not resolved yet - could match later
+            (Some(_), None) => {
+                could_match_later = true;
+            }
+            // No receiver in source - can never match processors that need a receiver
+            (None, _) => {
+                // Check if this processor matches with no receiver
+                if (processor.matches)(None) {
+                    return DslMatchResult::Matched(*processor);
+                }
+                // This processor requires a receiver - try next
+            }
+        }
+    }
+
+    if could_match_later {
+        DslMatchResult::Retry
+    } else {
+        DslMatchResult::WillNotMatch
+    }
+}
+
 /// Common data extracted from a DSL definition and its associated constant.
 struct DslContext {
     uri_id: UriId,

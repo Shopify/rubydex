@@ -10,7 +10,7 @@ use crate::model::{
         Namespace, SingletonClassDeclaration,
     },
     definitions::{Definition, DynamicClassDefinition, DynamicModuleDefinition, Mixin, Receiver},
-    dsl_processors::is_parent_dsl_processed,
+    dsl_processors::{find_matching_processor, is_parent_dsl_processed, DslMatchResult},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
@@ -1862,28 +1862,34 @@ impl<'a> Resolver<'a> {
             .map(|s| s.as_str().to_string())
             .unwrap_or_default();
 
-        let matching_processor = self
-            .graph
-            .dsl_processors()
-            .iter()
-            .find(|p| p.method_name == method_name && (p.matches)(receiver_decl_id))
-            .copied();
+        let match_result = find_matching_processor(
+            self.graph.dsl_processors(),
+            &method_name,
+            receiver_name,
+            receiver_decl_id,
+        );
 
-        match matching_processor {
-            Some(processor) => {
+        match match_result {
+            DslMatchResult::Matched(processor) => {
                 let result = (processor.handle)(self.graph, dsl_def_id);
                 if result.is_some() {
                     self.made_progress = true;
                 }
                 result
             }
-            None => {
-                if receiver_decl_id.is_some() {
-                    assigned_to
-                } else {
-                    self.unit_queue.push_back(Unit::Dsl(dsl_def_id));
-                    None
-                }
+            DslMatchResult::Retry => {
+                self.unit_queue.push_back(Unit::Dsl(dsl_def_id));
+                None
+            }
+            DslMatchResult::WillNotMatch => {
+                // Only return assigned_to if it points to a constant definition.
+                // If it points to something else (like a DSL), we can't process it here.
+                assigned_to.filter(|id| {
+                    matches!(
+                        self.graph.definitions().get(id),
+                        Some(Definition::Constant(_) | Definition::ConstantAlias(_))
+                    )
+                })
             }
         }
     }
