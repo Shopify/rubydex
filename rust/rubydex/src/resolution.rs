@@ -593,13 +593,12 @@ impl<'a> Resolver<'a> {
                 .set_singleton_class_id(decl_id);
         }
 
-        self.graph.declarations_mut().insert(
-            decl_id,
+        self.graph.declarations_mut().entry(decl_id).or_insert_with(|| {
             Declaration::Namespace(Namespace::SingletonClass(Box::new(SingletonClassDeclaration::new(
                 name,
                 attached_id,
-            )))),
-        );
+            ))))
+        });
 
         decl_id
     }
@@ -4244,5 +4243,24 @@ mod tests {
 
         assert_no_diagnostics!(&context);
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn multiple_method_calls_on_constants() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            "
+            module Outer
+              FOO = 1
+              FOO.bar
+            end
+
+            Outer::FOO.baz
+            "
+        });
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer::FOO::<FOO>");
+        assert_declaration_references_count_eq!(context, "Outer::FOO::<FOO>", 2);
     }
 }
