@@ -102,6 +102,10 @@ impl LocalGraph {
         &self.names
     }
 
+    pub fn names_mut(&mut self) -> &mut IdentityHashMap<NameId, NameRef> {
+        &mut self.names
+    }
+
     pub fn add_name(&mut self, name: Name) -> NameId {
         let name_id = name.id();
         let parent_scope = *name.parent_scope();

@@ -836,6 +836,13 @@ impl<'a> RubyIndexer<'a> {
     ) -> Option<DefinitionId> {
         let name_id = self.index_constant_reference(name_node, also_add_reference)?;
 
+        if let Some(target_name) = self.local_graph.names_mut().get_mut(&target_name_id) {
+            target_name.add_dependent(name_id);
+        }
+        if let Some(alias_name) = self.local_graph.names_mut().get_mut(&name_id) {
+            alias_name.add_dependent(target_name_id);
+        }
+
         // Get the location for just the constant name (not including the namespace or value).
         let location = match name_node {
             ruby_prism::Node::ConstantWriteNode { .. } => name_node.as_constant_write_node().unwrap().name_loc(),

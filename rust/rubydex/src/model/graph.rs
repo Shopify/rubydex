@@ -584,7 +584,11 @@ impl Graph {
             match self.names.entry(name_id) {
                 Entry::Occupied(mut entry) => {
                     debug_assert!(*entry.get() == name_ref, "NameId collision in global graph");
-                    entry.get_mut().increment_ref_count(name_ref.ref_count());
+                    let existing = entry.get_mut();
+                    existing.increment_ref_count(name_ref.ref_count());
+                    for dep in name_ref.dependents() {
+                        existing.add_dependent(*dep);
+                    }
                 }
                 Entry::Vacant(entry) => {
                     entry.insert(name_ref);
@@ -951,9 +955,9 @@ mod tests {
     use crate::model::name::NameRef;
     use crate::test_utils::GraphTest;
     use crate::{
-        assert_constant_reference_to, assert_constant_reference_unresolved, assert_declaration_does_not_exist,
-        assert_declaration_exists, assert_descendants, assert_incremental_update_integrity, assert_members_eq,
-        assert_no_diagnostics, assert_no_members,
+        assert_constant_alias_target_eq, assert_constant_reference_to, assert_constant_reference_unresolved,
+        assert_declaration_does_not_exist, assert_declaration_exists, assert_descendants,
+        assert_incremental_update_integrity, assert_members_eq, assert_no_diagnostics, assert_no_members,
     };
 
     #[test]
@@ -1806,6 +1810,51 @@ mod tests {
 
         assert_constant_reference_to!(context, "Foo", "file:///d.rb:1:1-1:4");
         assert_constant_reference_to!(context, "Bar", "file:///d.rb:2:1-2:4");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_constant_alias_target_changes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", "A = Foo\nA");
+        context.resolve();
+
+        assert_constant_alias_target_eq!(context, "A", "Foo");
+        assert_constant_reference_to!(context, "A", "file:///b.rb:2:1-2:2");
+
+        let result = context.index_uri("file:///a.rb", "class Foo < Bar; end");
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:2:1-2:2");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_constant_alias_reopened() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Foo; end
+            A = Foo
+            "
+        });
+        context.index_uri("file:///c.rb", "Foo");
+        context.resolve();
+
+        assert_constant_alias_target_eq!(context, "A", "Foo");
+        assert_constant_reference_to!(context, "Foo", "file:///c.rb:1:1-1:4");
+
+        let result = context.index_uri("file:///b.rb", {
+            "
+            module A
+              def foo; end
+            end
+            "
+        });
+
+        assert_constant_reference_unresolved!(context, "file:///c.rb:1:1-1:4");
 
         assert_incremental_update_integrity!(context, result);
     }
