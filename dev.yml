@@ -1,3 +1,4 @@
+nix: true
 up:
   - ruby
   - bundler
