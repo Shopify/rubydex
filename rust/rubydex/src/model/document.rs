@@ -129,8 +129,8 @@ impl Document {
         if url.scheme() != "file" {
             return None;
         }
-        let file_path = url.to_file_path().ok()?;
 
+        let file_path = url.to_file_path().ok()?;
         if file_path.extension().is_none_or(|ext| ext != "rb") {
             return None;
         }
@@ -161,14 +161,8 @@ mod tests {
     use super::*;
 
     fn test_root() -> PathBuf {
-        let root = if cfg!(windows) {
-            PathBuf::from_str("C:\\")
-        } else {
-            PathBuf::from_str("/")
-        }
-        .unwrap();
-
-        root.join("test")
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        PathBuf::from_str(root).unwrap()
     }
 
     #[test]
@@ -227,19 +221,19 @@ mod tests {
 
         // non-file URI
         let document = Document::new("untitled:Untitled-1".to_string(), "");
-        assert_eq!(None, document.require_path(&load_paths));
+        assert!(document.require_path(&load_paths).is_none());
 
         // non-.rb extension
         let path = root.join("lib").join("foo.so");
         let uri = Url::from_file_path(path).unwrap().to_string();
         let document = Document::new(uri, "");
-        assert_eq!(None, document.require_path(&load_paths));
+        assert!(document.require_path(&load_paths).is_none());
 
         // /libfoo is not under /lib - should not match due to partial directory name
         let path = root.join("libfoo").join("bar.rb");
         let uri = Url::from_file_path(path).unwrap().to_string();
         let document = Document::new(uri, "");
-        assert_eq!(None, document.require_path(&load_paths));
+        assert!(document.require_path(&load_paths).is_none());
     }
 
     #[test]
