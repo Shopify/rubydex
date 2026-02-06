@@ -1,20 +1,35 @@
 use super::normalize_indentation;
 #[cfg(test)]
 use crate::diagnostic::Rule;
+use crate::indexing::IndexResult;
 use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
 use crate::resolution::Resolver;
 
-#[derive(Default)]
+enum Operation {
+    IndexUri { uri: String, source: String },
+    DeleteUri { uri: String },
+}
+
 pub struct GraphTest {
     graph: Graph,
+    operations: Vec<Operation>,
+}
+
+impl Default for GraphTest {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GraphTest {
     #[must_use]
     pub fn new() -> Self {
-        Self { graph: Graph::new() }
+        Self {
+            graph: Graph::new(),
+            operations: Vec::new(),
+        }
     }
 
     #[must_use]
@@ -29,19 +44,56 @@ impl GraphTest {
         indexer.local_graph()
     }
 
-    pub fn index_uri(&mut self, uri: &str, source: &str) {
+    pub fn index_uri(&mut self, uri: &str, source: &str) -> IndexResult {
         let source = normalize_indentation(source);
+        self.operations.push(Operation::IndexUri {
+            uri: uri.to_string(),
+            source: source.clone(),
+        });
         let local_index = Self::index_source(uri, &source);
-        self.graph.update(local_index);
+        let (definition_ids, reference_ids) = self.graph.update(local_index);
+        IndexResult {
+            definition_ids,
+            reference_ids,
+        }
     }
 
-    pub fn delete_uri(&mut self, uri: &str) {
-        self.graph.delete_uri(uri);
+    pub fn delete_uri(&mut self, uri: &str) -> IndexResult {
+        self.operations.push(Operation::DeleteUri { uri: uri.to_string() });
+        let (definition_ids, reference_ids) = self.graph.delete_uri(uri);
+        IndexResult {
+            definition_ids,
+            reference_ids,
+        }
     }
 
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
         resolver.resolve_all();
+    }
+
+    pub fn resolve_incremental(&mut self, result: &IndexResult) {
+        let mut resolver = Resolver::new(&mut self.graph);
+        resolver.resolve(&result.definition_ids, &result.reference_ids);
+    }
+
+    #[must_use]
+    pub fn build_reference_graph(&self) -> Graph {
+        let mut graph = Graph::new();
+        for op in &self.operations {
+            match op {
+                Operation::IndexUri { uri, source } => {
+                    let local_index = Self::index_source(uri, source);
+                    graph.update(local_index);
+                }
+                Operation::DeleteUri { uri } => {
+                    graph.delete_uri(uri);
+                }
+            }
+        }
+        let mut resolver = Resolver::new(&mut graph);
+        resolver.resolve_all();
+        graph
     }
 
     /// # Panics
@@ -462,6 +514,20 @@ macro_rules! assert_no_diagnostics {
     ($context:expr, $ignore_rules:expr) => {{
         let diagnostics = $context.format_diagnostics($ignore_rules);
         assert!(diagnostics.is_empty(), "expected no diagnostics, got {:?}", diagnostics);
+    }};
+}
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_incremental_update_integrity {
+    ($context:expr, $result:expr) => {{
+        $context.resolve_incremental(&$result);
+        let reference = $context.build_reference_graph();
+        let diff = $crate::diff::diff($context.graph(), &reference);
+        assert!(
+            diff.is_none(),
+            "Incremental resolution diverged from full resolution:\n{diff:#?}"
+        );
     }};
 }
 

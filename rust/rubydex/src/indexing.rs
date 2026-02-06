@@ -18,6 +18,13 @@ pub struct IndexResult {
     pub reference_ids: IdentityHashSet<ReferenceId>,
 }
 
+impl IndexResult {
+    pub fn extend(&mut self, other: IndexResult) {
+        self.definition_ids.extend(other.definition_ids);
+        self.reference_ids.extend(other.reference_ids);
+    }
+}
+
 /// Job that indexes a single Ruby file
 pub struct IndexingRubyFileJob {
     path: PathBuf,
