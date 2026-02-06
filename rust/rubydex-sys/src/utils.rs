@@ -48,3 +48,23 @@ pub extern "C" fn free_u64(ptr: *const u64) {
         let _ = Box::from_raw(ptr.cast_mut());
     }
 }
+
+/// Frees an array of C strings allocated by Rust.
+///
+/// # Safety
+/// - `ptr` must be a pointer to a boxed slice of C strings previously allocated by this crate.
+/// - `count` must be the length of the array.
+/// - `ptr` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_c_string_array(ptr: *const *const c_char, count: usize) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let slice = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr.cast_mut(), count)) };
+    let _: Vec<_> = slice
+        .iter()
+        .filter(|p| !p.is_null())
+        .map(|arg| unsafe { CString::from_raw((*arg).cast_mut()) })
+        .collect();
+}

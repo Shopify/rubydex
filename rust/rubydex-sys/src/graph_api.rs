@@ -443,6 +443,44 @@ pub unsafe extern "C" fn rdx_resolve_require_path(
     })
 }
 
+/// Returns all require paths for completion.
+/// Returns array of C strings and writes count to `out_count`.
+/// Returns null if `load_path` contain invalid UTF-8.
+/// Caller must free with `free_c_string_array`.
+///
+/// # Safety
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `load_path` must be an array of `load_path_count` valid, null-terminated UTF-8 strings.
+/// - `out_count` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_require_paths(
+    pointer: GraphPointer,
+    load_path: *const *const c_char,
+    load_path_count: usize,
+    out_count: *mut usize,
+) -> *const *const c_char {
+    let Ok(paths_vec) = (unsafe { utils::convert_double_pointer_to_vec(load_path, load_path_count) }) else {
+        return ptr::null_mut();
+    };
+    let paths_vec = paths_vec.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+
+    let results = with_graph(pointer, |graph| query::require_paths(graph, &paths_vec));
+
+    let c_strings: Vec<*const c_char> = results
+        .into_iter()
+        .filter_map(|string| {
+            CString::new(string)
+                .ok()
+                .map(|c_string| c_string.into_raw().cast_const())
+        })
+        .collect();
+
+    unsafe { *out_count = c_strings.len() };
+
+    let boxed = c_strings.into_boxed_slice();
+    Box::into_raw(boxed).cast::<*const c_char>()
+}
+
 #[cfg(test)]
 mod tests {
     use rubydex::indexing::ruby_indexer::RubyIndexer;
