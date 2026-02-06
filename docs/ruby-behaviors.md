@@ -643,7 +643,7 @@ Ruby provides three ways to mix modules into classes or other modules: `include`
 
 ### Include
 
-`include` adds module methods as instance methods, inserted **after** the class in the ancestor chain:
+`include` inserts the module into the ancestor chain **after** the class, making the module's constants, methods, and module variables available:
 
 ```ruby
 module Foo; end
@@ -657,7 +657,7 @@ Bar.ancestors  # => [Bar, Foo, Object, Kernel, BasicObject]
 
 ### Prepend
 
-`prepend` adds module methods as instance methods, inserted **before** the class in the ancestor chain:
+`prepend` inserts the module into the ancestor chain **before** the class:
 
 ```ruby
 module Foo; end
@@ -684,6 +684,22 @@ end
 
 Baz.bar  # Works (class method)
 Baz.new.bar  # NoMethodError (not an instance method)
+```
+
+#### Extend Self Pattern
+
+A common pattern is `extend self` to make module methods callable on the module itself:
+
+```ruby
+module Foo
+  extend self
+
+  def bar
+    "bar"
+  end
+end
+
+Foo.bar  # => "bar"
 ```
 
 #### Extend vs Include in Singleton Class
@@ -770,9 +786,7 @@ Foo.ancestors  # => [Foo, C, B, A]
 # A appears only once despite being in both B and C
 ```
 
-### Duplicate Mixins Across Parent and Child
-
-When both parent and child include the same module, the module appears **twice** in the ancestor chain:
+When both parent and child include the same module, Ruby deduplicates it - the module appears **once** in the ancestor chain:
 
 ```ruby
 module A; end
@@ -801,23 +815,29 @@ Mixins at the top level affect `Object`:
 include Foo  # Makes Foo's methods available everywhere
 ```
 
-**Note:** `include self`, `prepend self`, or `extend self` at the top level is invalid and will produce a warning.
+**Note:** `include self`, `prepend self`, or `extend self` at the top level is invalid and will produce an error:
 
-### Extend Self Pattern
+```ruby
+include self # => TypeError: wrong argument type Object (expected Module)
+prepend self # => NoMethodError: undefined method 'prepend' for main
+extend self  # => TypeError: wrong argument type Object (expected Module)
+```
 
-A common pattern is `extend self` to make module methods callable on the module itself:
+### Cyclic Mixins
+
+`include self` and `prepend self` inside a module are rejected as cyclic:
 
 ```ruby
 module Foo
-  extend self
-
-  def bar
-    "bar"
-  end
+  include self # => ArgumentError: cyclic include detected
 end
 
-Foo.bar  # => "bar"
+module Bar
+  prepend self # => ArgumentError: cyclic prepend detected
+end
 ```
+
+`extend self` inside a module is valid (see [Extend Self Pattern](#extend-self-pattern) above).
 
 ## Constant References
 
@@ -1252,7 +1272,7 @@ Instance variables behave the same as in regular class definitions:
 Foo = Class.new do
   @class_ivar = 1     # instance variable of the Foo class
   def initialize
-    @ivar = 2         # instance varriable of Foo instances
+    @ivar = 2         # instance variable of Foo instances
   end
 end
 ```
@@ -1312,22 +1332,24 @@ end
 # Baz is Foo::Baz, not Foo::Bar::Baz
 ```
 
-You cannot reliably reference the assigned constant inside the block because the assignment happens after the block runs. `Bar::Baz` inside the block refers to an outer `Bar` (if any) or raises `NameError`.
+You cannot reliably reference the assigned constant inside the block because the assignment happens after the block runs. `Bar::Baz` inside the block refers to an outer `Bar` (if any) or raises `NameError`. Using `self::Bar` as a superclass also fails because `self` is the anonymous class, not the outer scope:
 
 ```ruby
 class Foo
   Bar = Class.new do
-    class Baz < Bar; end # causes uninitialized constant Foo::Bar (NameError)
+    class Baz < Bar; end       # NameError: uninitialized constant Foo::Bar
+    class Baz < self::Bar; end # NameError: uninitialized constant #<Class:...>::Bar
   end
 end
 ```
 
-To define under the new class, use `self::Baz` (or `const_set`) inside the block, or define it after the assignment:
+To define classes or constants under the new class, use `class self::Baz` or `self::Baz = Class.new` (or `const_set`) inside the block, or define them after the assignment:
 
 ```ruby
 class Foo
   Bar = Class.new do
-    self::Baz = Class.new
+    class self::Baz; end      # defines Foo::Bar::Baz
+    self::Qux = Class.new     # defines Foo::Bar::Qux
   end
 end
 
