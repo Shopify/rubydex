@@ -41,6 +41,8 @@ pub struct Graph {
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
+
+    resolved: bool,
 }
 
 impl Graph {
@@ -55,6 +57,7 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
+            resolved: false,
         }
     }
 
@@ -624,24 +627,33 @@ impl Graph {
     pub fn update(&mut self, other: LocalGraph) -> (IdentityHashSet<DefinitionId>, IdentityHashSet<ReferenceId>) {
         let uri_id = other.uri_id();
 
-        let mut names = self.namespace_names_for_uri(uri_id);
-        for definition in other.definitions().values() {
-            if let Some(name_id) = definition.name_id() {
-                names.insert(*name_id);
+        if self.resolved {
+            let mut names = self.namespace_names_for_uri(uri_id);
+            for definition in other.definitions().values() {
+                if let Some(name_id) = definition.name_id() {
+                    names.insert(*name_id);
+                }
             }
+            let (mut definition_ids, mut reference_ids) = self.invalidate(names);
+
+            self.remove_definitions_for_uri(uri_id);
+
+            let new_definition_ids: IdentityHashSet<DefinitionId> = other.definitions().keys().copied().collect();
+            let new_reference_ids: IdentityHashSet<ReferenceId> = other.constant_references().keys().copied().collect();
+
+            self.extend(other);
+
+            definition_ids.extend(new_definition_ids);
+            reference_ids.extend(new_reference_ids);
+            (definition_ids, reference_ids)
+        } else {
+            self.remove_definitions_for_uri(uri_id);
+
+            let definition_ids = other.definitions().keys().copied().collect();
+            let reference_ids = other.constant_references().keys().copied().collect();
+            self.extend(other);
+            (definition_ids, reference_ids)
         }
-        let (mut definition_ids, mut reference_ids) = self.invalidate(names);
-
-        self.remove_definitions_for_uri(uri_id);
-
-        let new_definition_ids: IdentityHashSet<DefinitionId> = other.definitions().keys().copied().collect();
-        let new_reference_ids: IdentityHashSet<ReferenceId> = other.constant_references().keys().copied().collect();
-
-        self.extend(other);
-
-        definition_ids.extend(new_definition_ids);
-        reference_ids.extend(new_reference_ids);
-        (definition_ids, reference_ids)
     }
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
@@ -816,6 +828,10 @@ impl Graph {
     /// Sets the encoding that should be used for transforming byte offsets into LSP code unit line/column positions
     pub fn set_encoding(&mut self, encoding: Encoding) {
         self.position_encoding = encoding;
+    }
+
+    pub fn set_resolved(&mut self) {
+        self.resolved = true;
     }
 
     #[must_use]

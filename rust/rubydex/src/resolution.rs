@@ -124,6 +124,7 @@ impl<'a> Resolver<'a> {
         let definition_ids: IdentityHashSet<DefinitionId> = self.graph.definitions().keys().copied().collect();
         let reference_ids: IdentityHashSet<ReferenceId> = self.graph.constant_references().keys().copied().collect();
         self.resolve(&definition_ids, &reference_ids);
+        self.graph.set_resolved();
     }
 
     /// Resolves only the specified definitions and references
