@@ -69,8 +69,7 @@ fn match_score(query: &str, target: &str) -> usize {
 /// Panics if one of the search threads panics
 #[must_use]
 pub fn resolve_require_path(graph: &Graph, require_path: &str, load_paths: &[PathBuf]) -> Option<UriId> {
-    let found = AtomicBool::new(false);
-    let found_ref = &found;
+    let found_ref = &AtomicBool::new(false);
     let normalized = require_path.trim_end_matches(".rb");
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let documents = graph.documents().iter().collect::<Vec<_>>();
@@ -200,14 +199,8 @@ mod tests {
     }
 
     fn test_root() -> PathBuf {
-        let root = if cfg!(windows) {
-            PathBuf::from_str("C:\\")
-        } else {
-            PathBuf::from_str("/")
-        }
-        .unwrap();
-
-        root.join("test")
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        PathBuf::from_str(root).unwrap()
     }
 
     #[test]
