@@ -18,13 +18,13 @@ pub enum ReferenceKind {
 /// Shared iterator over reference (id, kind) pairs
 #[derive(Debug)]
 pub struct ReferencesIter {
-    pub entries: Box<[(u32, ReferenceKind)]>,
+    pub entries: Box<[(u64, ReferenceKind)]>,
     pub index: usize,
 }
 
 impl ReferencesIter {
     #[must_use]
-    pub fn new(entries: Box<[(u32, ReferenceKind)]>) -> *mut ReferencesIter {
+    pub fn new(entries: Box<[(u64, ReferenceKind)]>) -> *mut ReferencesIter {
         Box::into_raw(Box::new(ReferencesIter { entries, index: 0 }))
     }
 }
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn rdx_references_iter_len(iter: *const ReferencesIter) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_references_iter_next(
     iter: *mut ReferencesIter,
-    out_id: *mut u32,
+    out_id: *mut u64,
     out_kind: *mut ReferenceKind,
 ) -> bool {
     if iter.is_null() || out_id.is_null() || out_kind.is_null() {
@@ -101,7 +101,7 @@ pub unsafe extern "C" fn rdx_references_iter_free(iter: *mut ReferencesIter) {
 ///
 /// This function will panic if the reference cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, reference_id: u32) -> *const c_char {
+pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, reference_id: u64) -> *const c_char {
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
 ///
 /// This function will panic if the reference cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, reference_id: u32) -> *const c_char {
+pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, reference_id: u64) -> *const c_char {
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, refere
 ///
 /// This function will panic if a reference or document cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, reference_id: u32) -> *mut Location {
+pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, reference_id: u64) -> *mut Location {
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, 
 ///
 /// This function will panic if a reference or document cannot be found.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, reference_id: u32) -> *mut Location {
+pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, reference_id: u64) -> *mut Location {
     with_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");

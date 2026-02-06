@@ -275,7 +275,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_free(iter: *mut Declaration
 #[derive(Debug)]
 pub struct DocumentsIter {
     /// The snapshot of document (URI) IDs
-    ids: Box<[u32]>,
+    ids: Box<[u64]>,
     /// The current index of the iterator
     index: usize,
 }
@@ -294,7 +294,7 @@ pub unsafe extern "C" fn rdx_graph_documents_iter_new(pointer: GraphPointer) -> 
             .documents()
             .keys()
             .map(|uri_id| **uri_id)
-            .collect::<Vec<u32>>()
+            .collect::<Vec<_>>()
             .into_boxed_slice()
     });
 
@@ -323,7 +323,7 @@ pub unsafe extern "C" fn rdx_graph_documents_iter_len(iter: *const DocumentsIter
 /// - `iter` must be a valid pointer previously returned by `rdx_graph_documents_iter_new`.
 /// - `out_id` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_documents_iter_next(iter: *mut DocumentsIter, out_id: *mut u32) -> bool {
+pub unsafe extern "C" fn rdx_graph_documents_iter_next(iter: *mut DocumentsIter, out_id: *mut u64) -> bool {
     if iter.is_null() || out_id.is_null() {
         return false;
     }
@@ -387,7 +387,7 @@ pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
     with_graph(pointer, |graph| {
-        let refs: Vec<(u32, ReferenceKind)> = graph
+        let refs: Vec<_> = graph
             .constant_references()
             .keys()
             .map(|id| (**id, ReferenceKind::Constant))
@@ -404,7 +404,7 @@ pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPo
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
     with_graph(pointer, |graph| {
-        let refs: Vec<(u32, ReferenceKind)> = graph
+        let refs: Vec<_> = graph
             .method_references()
             .keys()
             .map(|id| (**id, ReferenceKind::Method))
@@ -416,7 +416,7 @@ pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPoin
 
 /// Resolves a require path to its document URI ID.
 /// Returns a pointer to the URI ID if found, or NULL if not found.
-/// Caller must free with `free_u32`.
+/// Caller must free with the returned pointer.
 ///
 /// # Safety
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
@@ -428,7 +428,7 @@ pub unsafe extern "C" fn rdx_resolve_require_path(
     require_path: *const c_char,
     load_paths: *const *const c_char,
     load_paths_count: usize,
-) -> *const u32 {
+) -> *const u64 {
     let Ok(path_str) = (unsafe { utils::convert_char_ptr_to_string(require_path) }) else {
         return ptr::null();
     };

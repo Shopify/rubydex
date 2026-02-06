@@ -118,9 +118,9 @@ static VALUE graph_documents_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    uint32_t id = 0;
+    uint64_t id = 0;
     while (rdx_graph_documents_iter_next(iter, &id)) {
-        VALUE argv[] = {self, UINT2NUM(id)};
+        VALUE argv[] = {self, ULL2NUM(id)};
         VALUE handle = rb_class_new_instance(2, argv, cDocument);
         rb_yield(handle);
     }
@@ -181,7 +181,7 @@ static VALUE rdxr_graph_aref(VALUE self, VALUE key) {
     }
 
     VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
-    VALUE argv[] = {self, UINT2NUM(decl->id)};
+    VALUE argv[] = {self, ULL2NUM(decl->id)};
     free_c_declaration(decl);
 
     return rb_class_new_instance(2, argv, decl_class);
@@ -192,11 +192,11 @@ static VALUE graph_references_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    uint32_t id = 0;
+    uint64_t id = 0;
     ReferenceKind kind;
     while (rdx_references_iter_next(iter, &id, &kind)) {
         VALUE ref_class = rdxi_reference_class_for_kind(kind);
-        VALUE argv[] = {self, UINT2NUM(id)};
+        VALUE argv[] = {self, ULL2NUM(id)};
         VALUE obj = rb_class_new_instance(2, argv, ref_class);
         rb_yield(obj);
     }
@@ -323,7 +323,7 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
     }
 
     VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
-    VALUE argv[] = {self, UINT2NUM(decl->id)};
+    VALUE argv[] = {self, ULL2NUM(decl->id)};
     free_c_declaration(decl);
 
     return rb_class_new_instance(2, argv, decl_class);
@@ -342,7 +342,7 @@ static VALUE rdxr_graph_resolve_require_path(VALUE self, VALUE require_path, VAL
     size_t paths_len = RARRAY_LEN(load_paths);
     char **converted_paths = rdxi_str_array_to_char(load_paths, paths_len);
 
-    const uint32_t *uri_id = rdx_resolve_require_path(graph, path_str, (const char **)converted_paths, paths_len);
+    const uint64_t *uri_id = rdx_resolve_require_path(graph, path_str, (const char **)converted_paths, paths_len);
 
     for (size_t i = 0; i < paths_len; i++) {
         free(converted_paths[i]);
@@ -353,8 +353,8 @@ static VALUE rdxr_graph_resolve_require_path(VALUE self, VALUE require_path, VAL
         return Qnil;
     }
 
-    VALUE argv[] = {self, UINT2NUM(*uri_id)};
-    free_u32(uri_id);
+    VALUE argv[] = {self, ULL2NUM(*uri_id)};
+    free_u64(uri_id);
     return rb_class_new_instance(2, argv, cDocument);
 }
 
