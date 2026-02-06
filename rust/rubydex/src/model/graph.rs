@@ -516,10 +516,12 @@ impl Graph {
     }
 
     //// Handles the deletion of a document identified by `uri`
-    pub fn delete_uri(&mut self, uri: &str) {
+    pub fn delete_uri(&mut self, uri: &str) -> (IdentityHashSet<DefinitionId>, IdentityHashSet<ReferenceId>) {
         let uri_id = UriId::from(uri);
         self.remove_definitions_for_uri(uri_id);
         self.documents.remove(&uri_id);
+
+        (IdentityHashSet::default(), IdentityHashSet::default())
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
@@ -577,13 +579,18 @@ impl Graph {
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
     /// updates to existing entries
-    pub fn update(&mut self, other: LocalGraph) {
+    pub fn update(&mut self, other: LocalGraph) -> (IdentityHashSet<DefinitionId>, IdentityHashSet<ReferenceId>) {
         // For each URI that was indexed through `other`, check what was discovered and update our current global
         // representation
         let uri_id = other.uri_id();
         self.remove_definitions_for_uri(uri_id);
 
+        let definition_ids: IdentityHashSet<DefinitionId> = other.definitions().keys().copied().collect();
+        let reference_ids: IdentityHashSet<ReferenceId> = other.constant_references().keys().copied().collect();
+
         self.extend(other);
+
+        (definition_ids, reference_ids)
     }
 
     // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a

@@ -67,7 +67,7 @@ fn main() {
     // Indexing
 
     let mut graph = Graph::new();
-    let errors = time_it!(indexing, { indexing::index_files(&mut graph, file_paths) });
+    let (_, errors) = time_it!(indexing, { indexing::index_files(&mut graph, file_paths) });
 
     for error in errors {
         eprintln!("{error}");

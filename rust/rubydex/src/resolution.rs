@@ -121,7 +121,18 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let other_ids = self.prepare_units();
+        let definition_ids: IdentityHashSet<DefinitionId> = self.graph.definitions().keys().copied().collect();
+        let reference_ids: IdentityHashSet<ReferenceId> = self.graph.constant_references().keys().copied().collect();
+        self.resolve(&definition_ids, &reference_ids);
+    }
+
+    /// Resolves only the specified definitions and references
+    pub fn resolve(
+        &mut self,
+        definition_ids: &IdentityHashSet<DefinitionId>,
+        reference_ids: &IdentityHashSet<ReferenceId>,
+    ) {
+        let other_ids = self.prepare_units(definition_ids.iter(), reference_ids.iter());
 
         loop {
             // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
@@ -1338,13 +1349,19 @@ impl<'a> Resolver<'a> {
         parent_depth + nesting_depth + 1
     }
 
-    fn prepare_units(&mut self) -> Vec<DefinitionId> {
-        let estimated_length = self.graph.definitions().len() / 2;
-        let mut definitions = Vec::with_capacity(estimated_length);
-        let mut others = Vec::with_capacity(estimated_length);
+    fn prepare_units<'b, D, R>(&mut self, definition_ids: D, reference_ids: R) -> Vec<DefinitionId>
+    where
+        D: Iterator<Item = &'b DefinitionId>,
+        R: Iterator<Item = &'b ReferenceId>,
+    {
+        let mut definitions = Vec::new();
+        let mut others = Vec::new();
         let names = self.graph.names();
 
-        for (id, definition) in self.graph.definitions() {
+        for id in definition_ids {
+            let Some(definition) = self.graph.definitions().get(id) else {
+                continue;
+            };
             let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
 
             match definition {
@@ -1390,19 +1407,19 @@ impl<'a> Resolver<'a> {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
-        let mut const_refs = self
-            .graph
-            .constant_references()
-            .iter()
-            .map(|(id, constant_ref)| {
-                let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
+        let mut const_refs = Vec::new();
 
-                (
-                    Unit::ConstantRef(*id),
-                    (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
-                )
-            })
-            .collect::<Vec<_>>();
+        for id in reference_ids {
+            let Some(constant_ref) = self.graph.constant_references().get(id) else {
+                continue;
+            };
+            let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
+
+            const_refs.push((
+                Unit::ConstantRef(*id),
+                (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
+            ));
+        }
 
         // Sort constant references based on their name complexity so that simpler names are always first
         const_refs.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
@@ -1414,7 +1431,6 @@ impl<'a> Resolver<'a> {
         self.unit_queue
             .extend(const_refs.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
 
-        others.shrink_to_fit();
         others
     }
 
