@@ -59,11 +59,13 @@ fn names_equal(a: &Graph, b: &Graph, id: NameId) -> bool {
         return false;
     };
 
-    match (name_a, name_b) {
+    let resolution_equal = match (name_a, name_b) {
         (NameRef::Resolved(a), NameRef::Resolved(b)) => a.declaration_id() == b.declaration_id(),
         (NameRef::Unresolved(_), NameRef::Unresolved(_)) => true,
         _ => false,
-    }
+    };
+
+    resolution_equal && name_a.dependents() == name_b.dependents()
 }
 
 #[must_use]
