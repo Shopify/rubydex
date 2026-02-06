@@ -1033,10 +1033,12 @@ mod tests {
     use super::*;
     use crate::model::comment::Comment;
     use crate::model::declaration::Ancestors;
+    use crate::model::name::NameRef;
     use crate::test_utils::GraphTest;
     use crate::{
-        assert_descendants, assert_incremental_update_integrity, assert_members_eq, assert_no_diagnostics,
-        assert_no_members,
+        assert_constant_reference_to, assert_constant_reference_unresolved, assert_declaration_does_not_exist,
+        assert_declaration_exists, assert_descendants, assert_incremental_update_integrity, assert_members_eq,
+        assert_no_diagnostics, assert_no_members,
     };
 
     #[test]
@@ -1710,5 +1712,243 @@ mod tests {
 
         let result = context.index_uri("file:///b.rb", "class Bar < Foo; end");
         assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_invalidates_affected_references() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", "module Bar; end");
+        context.index_uri("file:///c.rb", "Foo\nBar");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///c.rb:1:1-1:4");
+        assert_constant_reference_to!(context, "Bar", "file:///c.rb:2:1-2:4");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module Foo
+              class Nested; end
+            end
+            "
+        });
+
+        assert_constant_reference_unresolved!(context, "file:///c.rb:1:1-1:4");
+        assert_constant_reference_to!(context, "Bar", "file:///c.rb:2:1-2:4");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_nested_namespace_cascade() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", {
+            "
+            module Foo
+              class Bar; end
+            end
+            "
+        });
+        context.index_uri("file:///c.rb", "Foo\nFoo::Bar");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///c.rb:1:1-1:4");
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///c.rb:2:6-2:9");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module Foo
+              class Nested; end
+            end
+            "
+        });
+
+        assert_constant_reference_unresolved!(context, "file:///c.rb:1:1-1:4");
+        assert_constant_reference_unresolved!(context, "file:///c.rb:2:6-2:9");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_reopening_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///c.rb", "Foo");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///c.rb:1:1-1:4");
+
+        let result = context.index_uri("file:///b.rb", {
+            "
+            module Foo
+              class Bar; end
+            end
+            "
+        });
+
+        assert_constant_reference_unresolved!(context, "file:///c.rb:1:1-1:4");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_one_of_multiple_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", "module Foo; end");
+        context.index_uri("file:///c.rb", "Foo");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///c.rb:1:1-1:4");
+
+        let result = context.index_uri("file:///a.rb", "");
+
+        assert_constant_reference_unresolved!(context, "file:///c.rb:1:1-1:4");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_delete_uri_with_downstream_dependents() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", "class Bar < Foo; end");
+        context.index_uri("file:///c.rb", "Foo\nBar");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///c.rb:1:1-1:4");
+        assert_constant_reference_to!(context, "Bar", "file:///c.rb:2:1-2:4");
+
+        let result = context.delete_uri("file:///a.rb");
+
+        assert_constant_reference_unresolved!(context, "file:///c.rb:1:1-1:4");
+        assert_constant_reference_unresolved!(context, "file:///c.rb:2:1-2:4");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_superclass_change() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo; end");
+        context.index_uri("file:///b.rb", "class Baz; end");
+        context.index_uri("file:///c.rb", "class Bar < Foo; end");
+        context.index_uri("file:///d.rb", "Foo\nBar\nBaz");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///d.rb:1:1-1:4");
+        assert_constant_reference_to!(context, "Bar", "file:///d.rb:2:1-2:4");
+        assert_constant_reference_to!(context, "Baz", "file:///d.rb:3:1-3:4");
+
+        let result = context.index_uri("file:///c.rb", "class Bar < Baz; end");
+
+        assert_constant_reference_to!(context, "Foo", "file:///d.rb:1:1-1:4");
+        assert_constant_reference_unresolved!(context, "file:///d.rb:2:1-2:4");
+        assert_constant_reference_to!(context, "Baz", "file:///d.rb:3:1-3:4");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_include_invalidation() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module M; end");
+        context.index_uri("file:///b.rb", "class C; include M; end");
+        context.index_uri("file:///c.rb", "M\nC");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "M", "file:///c.rb:1:1-1:2");
+        assert_constant_reference_to!(context, "C", "file:///c.rb:2:1-2:2");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module M
+              def hello; end
+            end
+            "
+        });
+
+        assert_constant_reference_unresolved!(context, "file:///c.rb:1:1-1:2");
+        assert_constant_reference_unresolved!(context, "file:///c.rb:2:1-2:2");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_constant_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", "module Bar; end");
+        context.index_uri("file:///c.rb", "A = Foo");
+        context.index_uri("file:///d.rb", "Foo\nBar");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///d.rb:1:1-1:4");
+        assert_constant_reference_to!(context, "Bar", "file:///d.rb:2:1-2:4");
+
+        let result = context.index_uri("file:///c.rb", "A = Bar");
+
+        assert_constant_reference_to!(context, "Foo", "file:///d.rb:1:1-1:4");
+        assert_constant_reference_to!(context, "Bar", "file:///d.rb:2:1-2:4");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_diamond_include() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module A; end");
+        context.index_uri("file:///b.rb", "module B; include A; end");
+        context.index_uri("file:///c.rb", "module C; include A; end");
+        context.index_uri("file:///d.rb", "class D; include B; include C; end");
+        context.index_uri("file:///e.rb", "A\nB\nC\nD");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "A", "file:///e.rb:1:1-1:2");
+        assert_constant_reference_to!(context, "B", "file:///e.rb:2:1-2:2");
+        assert_constant_reference_to!(context, "C", "file:///e.rb:3:1-3:2");
+        assert_constant_reference_to!(context, "D", "file:///e.rb:4:1-4:2");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module A
+              def shared; end
+            end
+            "
+        });
+
+        assert_constant_reference_unresolved!(context, "file:///e.rb:1:1-1:2");
+        assert_constant_reference_unresolved!(context, "file:///e.rb:2:1-2:2");
+        assert_constant_reference_unresolved!(context, "file:///e.rb:3:1-3:2");
+        assert_constant_reference_unresolved!(context, "file:///e.rb:4:1-4:2");
+
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_lazy_singleton_creation() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo; end");
+        context.index_uri("file:///b.rb", "Foo.bar");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_constant_reference_to!(context, "Foo", "file:///b.rb:1:1-1:4");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              def hello; end
+            end
+            "
+        });
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:1-1:4");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+
+        assert_incremental_update_integrity!(context, result);
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
     }
 }

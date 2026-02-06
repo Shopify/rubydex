@@ -298,6 +298,52 @@ macro_rules! assert_constant_reference_to {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_constant_reference_unresolved {
+    ($context:expr, $location:expr) => {
+        let mut all_references = $context
+            .graph()
+            .constant_references()
+            .values()
+            .map(|reference| {
+                (
+                    reference,
+                    format!(
+                        "{}:{}",
+                        $context.graph().documents().get(&reference.uri_id()).unwrap().uri(),
+                        reference
+                            .offset()
+                            .to_display_range($context.graph().documents().get(&reference.uri_id()).unwrap())
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        all_references.sort_by_key(|(_, reference_location)| reference_location.clone());
+
+        let reference_at_location = all_references
+            .iter()
+            .find(|(_, reference_location)| reference_location == $location)
+            .map(|(reference, _)| reference)
+            .expect(&format!(
+                "No constant reference at `{}`, found references at {:?}",
+                $location,
+                all_references
+                    .iter()
+                    .map(|(_reference, reference_location)| reference_location)
+                    .collect::<Vec<_>>()
+            ));
+
+        let reference_name = $context.graph().names().get(reference_at_location.name_id()).unwrap();
+        assert!(
+            matches!(reference_name, $crate::model::name::NameRef::Unresolved(_)),
+            "Expected reference at `{}` to be unresolved, but it was resolved",
+            $location
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_declaration_references_count_eq {
     ($context:expr, $declaration_name:expr, $expected_references:expr) => {
         let declaration = $context
