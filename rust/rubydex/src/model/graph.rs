@@ -669,113 +669,12 @@ impl Graph {
             }
         }
 
-        // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
-        let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
-        let mut definitions_to_delete: Vec<DefinitionId> = Vec::new();
-        let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
-        let mut declarations_to_invalidate_ancestor_chains: Vec<DeclarationId> = Vec::new();
-
         for def_id in document.definitions() {
-            definitions_to_delete.push(*def_id);
-
-            if let Some(declaration_id) = self.definition_id_to_declaration_id(*def_id).copied()
-                && let Some(declaration) = self.declarations.get_mut(&declaration_id)
-                && declaration.remove_definition(def_id)
-            {
-                declaration.clear_diagnostics();
-                if declaration.as_namespace().is_some() {
-                    declarations_to_invalidate_ancestor_chains.push(declaration_id);
-                }
-
-                if declaration.has_no_definitions() {
-                    let unqualified_str_id = StringId::from(&declaration.unqualified_name());
-                    members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                    declarations_to_delete.push(declaration_id);
-
-                    if let Some(namespace) = declaration.as_namespace()
-                        && let Some(singleton_id) = namespace.singleton_class()
-                    {
-                        declarations_to_delete.push(*singleton_id);
-                    }
-                }
-            }
-
             if let Some(name_id) = self.definitions.get(def_id).unwrap().name_id() {
                 self.untrack_name(*name_id);
             }
-        }
-
-        self.invalidate_ancestor_chains(declarations_to_invalidate_ancestor_chains);
-
-        for declaration_id in declarations_to_delete {
-            self.declarations.remove(&declaration_id);
-        }
-
-        // Clean up any members that pointed to declarations that were removed
-        for (owner_id, member_str_id) in members_to_delete {
-            // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
-            if let Some(owner) = self.declarations.get_mut(&owner_id) {
-                match owner {
-                    Declaration::Namespace(Namespace::Class(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    Declaration::Namespace(Namespace::SingletonClass(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    Declaration::Namespace(Namespace::Module(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    _ => {} // Nothing happens
-                }
-            }
-        }
-
-        for def_id in definitions_to_delete {
-            let definition = self.definitions.remove(&def_id).unwrap();
+            let definition = self.definitions.remove(def_id).unwrap();
             self.untrack_definition_strings(&definition);
-        }
-    }
-
-    fn invalidate_ancestor_chains(&mut self, initial_ids: Vec<DeclarationId>) {
-        let mut queue = initial_ids;
-        let mut visited = IdentityHashSet::<DeclarationId>::default();
-
-        while let Some(declaration_id) = queue.pop() {
-            if !visited.insert(declaration_id) {
-                continue;
-            }
-
-            let namespace = self
-                .declarations_mut()
-                .get_mut(&declaration_id)
-                .unwrap()
-                .as_namespace_mut()
-                .expect("expected namespace declaration");
-
-            for ancestor in &namespace.clone_ancestors() {
-                if let Ancestor::Complete(ancestor_id) = ancestor {
-                    self.declarations_mut()
-                        .get_mut(ancestor_id)
-                        .unwrap()
-                        .as_namespace_mut()
-                        .unwrap()
-                        .remove_descendant(&declaration_id);
-                }
-            }
-
-            let namespace = self
-                .declarations_mut()
-                .get_mut(&declaration_id)
-                .unwrap()
-                .as_namespace_mut()
-                .unwrap();
-
-            namespace.for_each_descendant(|descendant_id| {
-                queue.push(*descendant_id);
-            });
-
-            namespace.clear_ancestors();
-            namespace.clear_descendants();
         }
     }
 
