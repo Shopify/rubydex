@@ -9,7 +9,7 @@ class GraphTest < Minitest::Test
   def test_indexing_empty_context
     with_context do |context|
       graph = Rubydex::Graph.new
-      assert_nil(graph.index_all(context.glob("**/*.rb")))
+      assert_instance_of(Rubydex::IndexResult, graph.index_all(context.glob("**/*.rb")))
     end
   end
 
@@ -19,7 +19,7 @@ class GraphTest < Minitest::Test
       context.write!("bar.rb", "class Bar; end")
 
       graph = Rubydex::Graph.new
-      assert_nil(graph.index_all(context.glob("**/*.rb")))
+      assert_instance_of(Rubydex::IndexResult, graph.index_all(context.glob("**/*.rb")))
     end
   end
 
