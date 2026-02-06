@@ -69,9 +69,12 @@ impl LocalGraph {
 
     pub fn add_definition(&mut self, definition: Definition) -> DefinitionId {
         let definition_id = definition.id();
-        self.definitions.insert(definition_id, definition);
-        self.document.add_definition(definition_id);
 
+        if self.definitions.insert(definition_id, definition).is_some() {
+            debug_assert!(false, "DefinitionId collision in local graph");
+        }
+
+        self.document.add_definition(definition_id);
         definition_id
     }
 
@@ -84,14 +87,17 @@ impl LocalGraph {
 
     pub fn intern_string(&mut self, string: String) -> StringId {
         let string_id = StringId::from(&string);
+
         match self.strings.entry(string_id) {
             Entry::Occupied(mut entry) => {
+                debug_assert!(string == **entry.get(), "StringId collision in local graph");
                 entry.get_mut().increment_ref_count(1);
             }
             Entry::Vacant(entry) => {
                 entry.insert(StringRef::new(string));
             }
         }
+
         string_id
     }
 
@@ -104,14 +110,17 @@ impl LocalGraph {
 
     pub fn add_name(&mut self, name: Name) -> NameId {
         let name_id = name.id();
+
         match self.names.entry(name_id) {
             Entry::Occupied(mut entry) => {
+                debug_assert!(*entry.get() == name, "NameId collision in local graph");
                 entry.get_mut().increment_ref_count(1);
             }
             Entry::Vacant(entry) => {
                 entry.insert(NameRef::Unresolved(Box::new(name)));
             }
         }
+
         name_id
     }
 
@@ -124,7 +133,11 @@ impl LocalGraph {
 
     pub fn add_constant_reference(&mut self, reference: ConstantReference) -> ReferenceId {
         let reference_id = reference.id();
-        self.constant_references.insert(reference_id, reference);
+
+        if self.constant_references.insert(reference_id, reference).is_some() {
+            debug_assert!(false, "ReferenceId collision in local graph");
+        }
+
         self.document.add_constant_reference(reference_id);
         reference_id
     }
@@ -138,7 +151,11 @@ impl LocalGraph {
 
     pub fn add_method_reference(&mut self, reference: MethodRef) -> ReferenceId {
         let reference_id = reference.id();
-        self.method_references.insert(reference_id, reference);
+
+        if self.method_references.insert(reference_id, reference).is_some() {
+            debug_assert!(false, "ReferenceId collision in local graph");
+        }
+
         self.document.add_method_reference(reference_id);
         reference_id
     }
