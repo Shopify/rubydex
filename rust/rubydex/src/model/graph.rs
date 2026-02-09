@@ -1915,4 +1915,915 @@ mod tests {
 
         assert_declaration_exists!(context, "Foo::<Foo>");
     }
+
+    #[test]
+    fn incremental_update_identical_content() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo; end");
+        context.index_uri("file:///b.rb", "Foo");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///b.rb:1:1-1:4");
+
+        let result = context.index_uri("file:///a.rb", "class Foo; end");
+        assert_incremental_update_integrity!(context, result);
+
+        assert_constant_reference_to!(context, "Foo", "file:///b.rb:1:1-1:4");
+    }
+
+    #[test]
+    fn incremental_update_removing_ancestor_invalidates_descendants() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Parent
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "class Child < Parent; end");
+        context.index_uri("file:///c.rb", "Child::CONST");
+        context.resolve();
+
+        let result = context.delete_uri("file:///a.rb");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_definition_resolves_unresolved_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "Foo");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///a.rb:1:1-1:4");
+
+        let result = context.index_uri("file:///b.rb", "class Foo; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_nested_definition_resolves_unresolved_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo; end");
+        context.index_uri("file:///b.rb", "Foo::Bar");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:6-1:9");
+
+        let result = context.index_uri("file:///c.rb", "class Foo::Bar; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_nested_class_resolves_unresolved_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo; end");
+        context.index_uri("file:///b.rb", "Foo::Bar");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:6-1:9");
+
+        let result = context.index_uri("file:///c.rb", {
+            "
+            class Foo
+              class Bar; end
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_definition_overrides_inherited_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Parent
+              CONST = 1
+            end
+
+            class Child < Parent; end
+            "
+        });
+        context.index_uri("file:///b.rb", "Child::CONST");
+        context.resolve();
+
+        let result = context.index_uri("file:///c.rb", {
+            "
+            class Child
+              CONST = 2
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_superclass_invalidates_inherited_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Parent
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "class Child < Parent; end");
+        context.index_uri("file:///c.rb", "Child::CONST");
+        context.resolve();
+
+        let result = context.index_uri("file:///b.rb", "class Child; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_superclass_resolves_previously_unresolved_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Parent
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "class Child; end");
+        context.index_uri("file:///c.rb", "Child::CONST");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///c.rb:1:8-1:13");
+
+        let result = context.index_uri("file:///b.rb", "class Child < Parent; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_changing_ancestor_invalidates_descendant_references() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class GrandParent
+              CONST = 1
+            end
+
+            class Parent < GrandParent; end
+
+            class Child < Parent; end
+            "
+        });
+        context.index_uri("file:///b.rb", "Child::CONST");
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class GrandParent
+              CONST = 1
+            end
+
+            class Parent; end
+
+            class Child < Parent; end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_constant_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Bar; end
+
+            Foo = Bar
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///b.rb:1:1-1:4");
+
+        let result = context.index_uri("file:///a.rb", "class Bar; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_constant_alias_target() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Bar; end
+
+            Foo = Bar
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///b.rb:1:1-1:4");
+
+        let result = context.index_uri("file:///a.rb", "Foo = Bar");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_constant_alias_target_later() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "Foo = Bar");
+        context.index_uri("file:///b.rb", "Foo");
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class Bar; end
+
+            Foo = Bar
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_member_to_target_resolves_alias_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Foo; end
+
+            A = Foo
+            "
+        });
+        context.index_uri("file:///b.rb", "A::Bar");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:4-1:7");
+
+        let result = context.index_uri("file:///c.rb", "module Foo::Bar; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_member_from_target_invalidates_alias_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Foo
+              module Bar; end
+            end
+
+            A = Foo
+            "
+        });
+        context.index_uri("file:///b.rb", "A::Bar");
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module Foo; end
+
+            A = Foo
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_member_through_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Foo; end
+
+            A = Foo
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo::Bar\nA::Bar");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:6-1:9");
+        assert_constant_reference_unresolved!(context, "file:///b.rb:2:4-2:7");
+
+        let result = context.index_uri("file:///c.rb", "module A::Bar; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_member_through_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Foo; end
+
+            A = Foo
+            "
+        });
+        context.index_uri("file:///b.rb", "module A::Bar; end");
+        context.index_uri("file:///c.rb", "Foo::Bar\nA::Bar");
+        context.resolve();
+
+        let result = context.index_uri("file:///b.rb", "");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_include_resolves_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              BAR
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            "
+            module Mixin
+              BAR = 1
+            end
+            "
+        });
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              include Mixin
+              BAR
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_include_invalidates_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              include Mixin
+              BAR
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            "
+            module Mixin
+              BAR = 1
+            end
+            "
+        });
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              BAR
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_include_to_parent_resolves_child_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Parent; end
+
+            class Child < Parent
+              BAR
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            "
+            module Mixin
+              BAR = 1
+            end
+            "
+        });
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class Parent
+              include Mixin
+            end
+
+            class Child < Parent
+              BAR
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_prepend_resolves_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              BAR
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            "
+            module Mixin
+              BAR = 1
+            end
+            "
+        });
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              prepend Mixin
+              BAR
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_prepend_invalidates_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              prepend Mixin
+              BAR
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            "
+            module Mixin
+              BAR = 1
+            end
+            "
+        });
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              BAR
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_member_only_invalidates_matching_references() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Foo; end
+
+            class Bar; end
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo\nBar");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo", "file:///b.rb:1:1-1:4");
+        assert_constant_reference_to!(context, "Bar", "file:///b.rb:2:1-2:4");
+
+        let result = context.index_uri("file:///a.rb", "class Foo; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_nested_member_only_invalidates_matching_references() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              BAR = 1
+              BAZ = 2
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo::BAR\nFoo::BAZ");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::BAR", "file:///b.rb:1:6-1:9");
+        assert_constant_reference_to!(context, "Foo::BAZ", "file:///b.rb:2:6-2:9");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            class Foo
+              BAZ = 2
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_local_constant_shadows_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            BAR = 1
+
+            class Foo
+              BAR
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "BAR", "file:///a.rb:4:3-4:6");
+
+        let result = context.index_uri("file:///b.rb", {
+            "
+            class Foo
+              BAR = 2
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_removing_local_constant_unshadows_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            BAR = 1
+
+            class Foo
+              BAR
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            "
+            class Foo
+              BAR = 2
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::BAR", "file:///a.rb:4:3-4:6");
+
+        let result = context.index_uri("file:///b.rb", "");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_adding_member_via_alias_shadows_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            BAR = 1
+
+            class Foo
+              BAR
+            end
+
+            F = Foo
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "BAR", "file:///a.rb:4:3-4:6");
+
+        let result = context.index_uri("file:///b.rb", {
+            "
+            class F
+              BAR = 2
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_deep_nesting() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module A
+              module B
+                module C; end
+              end
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "A::B::C::D");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:10-1:11");
+
+        let result = context.index_uri("file:///c.rb", "module A::B::C::D; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_complex_inheritance_chain() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            class A
+              CONST = 1
+            end
+
+            class B < A; end
+
+            class C < B; end
+
+            class D < C; end
+            "
+        });
+        context.index_uri("file:///b.rb", "D::CONST");
+        context.resolve();
+
+        let result = context.index_uri("file:///c.rb", {
+            "
+            class B
+              CONST = 2
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_alias_to_nested_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Outer
+              class Inner; end
+            end
+
+            I = Outer::Inner
+            "
+        });
+        context.index_uri("file:///b.rb", "I::CONST");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:4-1:9");
+
+        let result = context.index_uri("file:///c.rb", {
+            "
+            class Outer::Inner
+              CONST = 1
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_mixin_with_inheritance() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Mixin
+              CONST = 1
+            end
+
+            class Parent
+              include Mixin
+            end
+
+            class Child < Parent; end
+            "
+        });
+        context.index_uri("file:///b.rb", "Child::CONST");
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module Mixin
+              CONST = 1
+            end
+
+            class Parent; end
+
+            class Child < Parent; end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_prepend_vs_include_precedence() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Included
+              CONST = 1
+            end
+
+            module Prepended
+              CONST = 2
+            end
+
+            class Foo
+              include Included
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo::CONST");
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module Included
+              CONST = 1
+            end
+
+            module Prepended
+              CONST = 2
+            end
+
+            class Foo
+              include Included
+              prepend Prepended
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_multiple_mixins() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module M1
+              CONST = 1
+            end
+
+            module M2
+              CONST = 2
+            end
+
+            class Foo
+              include M1
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo::CONST");
+        context.resolve();
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module M1
+              CONST = 1
+            end
+
+            module M2
+              CONST = 2
+            end
+
+            class Foo
+              include M2
+              include M1
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_changing_mixin_relinearizes_includer() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Bar; end
+
+            class Foo
+              include Bar
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo::CONST");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:6-1:11");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module Bar
+              CONST = 1
+            end
+
+            class Foo
+              include Bar
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_changing_mixin_ancestors_relinearizes_includer() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module GrandMixin
+              CONST = 1
+            end
+
+            module Bar; end
+
+            class Foo
+              include Bar
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo::CONST");
+        context.resolve();
+
+        assert_constant_reference_unresolved!(context, "file:///b.rb:1:6-1:11");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module GrandMixin
+              CONST = 1
+            end
+
+            module Bar
+              include GrandMixin
+            end
+
+            class Foo
+              include Bar
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_parent_scope_definition_survives_parent_change() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Foo
+              CONST = 1
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "module Foo::Bar; end");
+        context.index_uri("file:///c.rb", "Foo::Bar");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///c.rb:1:6-1:9");
+
+        let result = context.index_uri("file:///a.rb", "module Foo; end");
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_nested_definition_survives_parent_change() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            "
+            module Foo
+              CONST = 1
+              module Bar; end
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", "Foo::Bar");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///b.rb:1:6-1:9");
+
+        let result = context.index_uri("file:///a.rb", {
+            "
+            module Foo
+              module Bar; end
+            end
+            "
+        });
+        assert_incremental_update_integrity!(context, result);
+    }
+
+    #[test]
+    fn incremental_update_deleting_parent_also_deletes_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", "module Foo::Bar; end");
+        context.index_uri("file:///c.rb", "Foo::Bar");
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///c.rb:1:6-1:9");
+
+        let result = context.index_uri("file:///a.rb", "");
+        assert_incremental_update_integrity!(context, result);
+    }
 }
