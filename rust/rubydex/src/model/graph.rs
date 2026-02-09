@@ -191,60 +191,42 @@ impl Graph {
             Definition::ConstantAlias(it) => {
                 return self.name_id_to_declaration_id(*it.name_id());
             }
-            Definition::GlobalVariable(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
-            }
-            Definition::GlobalVariableAlias(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.new_name_str_id())
-            }
-            Definition::InstanceVariable(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
-            }
-            Definition::ClassVariable(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
-            }
-            Definition::AttrAccessor(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
-            }
-            Definition::AttrReader(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
-            }
-            Definition::AttrWriter(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
-            }
-            Definition::Method(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.str_id())
-            }
-            Definition::MethodAlias(it) => {
-                let nesting_definition = it
-                    .lexical_nesting_id()
-                    .and_then(|id| self.definitions().get(&id).unwrap().name_id());
-                (nesting_definition, it.new_name_str_id())
-            }
+            Definition::GlobalVariable(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.str_id(),
+            ),
+            Definition::GlobalVariableAlias(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.new_name_str_id(),
+            ),
+            Definition::InstanceVariable(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.str_id(),
+            ),
+            Definition::ClassVariable(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.str_id(),
+            ),
+            Definition::AttrAccessor(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.str_id(),
+            ),
+            Definition::AttrReader(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.str_id(),
+            ),
+            Definition::AttrWriter(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.str_id(),
+            ),
+            Definition::Method(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.str_id(),
+            ),
+            Definition::MethodAlias(it) => (
+                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                it.new_name_str_id(),
+            ),
         };
 
         let nesting_declaration_id = match nesting_name_id {
@@ -253,11 +235,26 @@ impl Graph {
         }?;
 
         self.declarations
-            .get(nesting_declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
+            .get(nesting_declaration_id)?
+            .as_namespace()?
             .member(member_str_id)
+    }
+
+    /// Finds the closest namespace name ID to connect a definition to its declaration
+    fn find_enclosing_namespace_name_id(&self, starting_id: Option<&DefinitionId>) -> Option<&NameId> {
+        let mut current = starting_id;
+
+        while let Some(id) = current {
+            let def = self.definitions.get(id).unwrap();
+
+            if let Some(name_id) = def.name_id() {
+                return Some(name_id);
+            }
+
+            current = def.lexical_nesting_id().as_ref();
+        }
+
+        None
     }
 
     #[must_use]
@@ -1501,5 +1498,86 @@ mod tests {
         assert!(context.graph().get("Foo").is_none());
         assert!(context.graph().get("Foo::<Foo>").is_none());
         assert!(context.graph().get("Foo::<Foo>::<<Foo>>").is_none());
+    }
+
+    #[test]
+    fn indexing_the_same_document_twice() {
+        let mut context = GraphTest::new();
+        let source = "
+          module Bar; end
+
+          $global_var_1 = 1
+          alias $global_alias_1 $global_var_1
+          ALIAS_CONST_1 = Bar
+
+          class Foo
+            alias $global_alias_2 $global_var_1
+            attr_reader :attr_1
+            attr_writer :attr_2
+            attr_accessor :attr_3
+            ALIAS_CONST_2 = Bar
+
+            $global_var_2 = 1
+            @ivar_1 = 1
+            @@class_var_1 = 1
+
+            def method_1
+              $global_var_3 = 1
+              @ivar_2 = 1
+              @@class_var_2 = 1
+              ALIAS_CONST_3 = Bar
+            end
+            alias_method :aliased_method_1, :method_1
+
+            def self.method_2
+              $global_var_4 = 1
+              @ivar_3 = 1
+              @@class_var_3 = 1
+              ALIAS_CONST_4 = Bar
+            end
+
+            class << self
+              alias $global_alias_3 $global_var_1
+              attr_reader :attr_4
+              attr_writer :attr_5
+              attr_accessor :attr_6
+              ALIAS_CONST_5 = Bar
+
+              $global_var_3 = 1
+              @ivar_4 = 1
+              @@class_var_4 = 1
+
+              def method_3
+                $global_var_4 = 1
+                @ivar_5 = 1
+                @@class_var_5 = 1
+                ALIAS_CONST_6 = Bar
+              end
+              alias_method :aliased_method_1, :method_1
+
+              def self.method_4
+                $global_var_5 = 1
+                @ivar_6 = 1
+                @@class_var_6 = 1
+                ALIAS_CONST_7 = Bar
+              end
+            end
+          end
+        ";
+
+        context.index_uri("file:///foo.rb", source);
+        assert_eq!(44, context.graph().definitions.len());
+        assert_eq!(7, context.graph().constant_references.len());
+        assert_eq!(2, context.graph().method_references.len());
+        assert_eq!(1, context.graph().documents.len());
+        assert_eq!(12, context.graph().names.len());
+        assert_eq!(41, context.graph().strings.len());
+        context.index_uri("file:///foo.rb", source);
+        assert_eq!(44, context.graph().definitions.len());
+        assert_eq!(7, context.graph().constant_references.len());
+        assert_eq!(2, context.graph().method_references.len());
+        assert_eq!(1, context.graph().documents.len());
+        assert_eq!(12, context.graph().names.len());
+        assert_eq!(41, context.graph().strings.len());
     }
 }
