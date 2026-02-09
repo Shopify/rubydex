@@ -19,7 +19,7 @@ module Rubydex
     end
 
     # Index all files and dependencies of the workspace that exists in `@workspace_path`
-    #: -> String?
+    #: -> Array[String]
     def index_workspace
       index_all(workspace_paths)
     end

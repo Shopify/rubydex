@@ -115,7 +115,9 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
     })
 }
 
-/// Indexes all given file paths in parallel using the provided Graph pointer
+/// Indexes all given file paths in parallel using the provided Graph pointer.
+/// Returns an array of error message strings and writes the count to `out_error_count`.
+/// Returns NULL if there are no errors. Caller must free with `free_c_string_array`.
 ///
 /// # Panics
 ///
@@ -130,34 +132,38 @@ pub unsafe extern "C" fn rdx_index_all(
     pointer: GraphPointer,
     file_paths: *const *const c_char,
     count: usize,
-) -> *const c_char {
+    out_error_count: *mut usize,
+) -> *const *const c_char {
     let file_paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(file_paths, count).unwrap() };
-    let (file_paths, errors) = listing::collect_file_paths(file_paths);
-
-    if !errors.is_empty() {
-        let error_messages = errors
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        return CString::new(error_messages).unwrap().into_raw().cast_const();
-    }
+    let (file_paths, listing_errors) = listing::collect_file_paths(file_paths);
 
     with_mut_graph(pointer, |graph| {
-        let errors = indexing::index_files(graph, file_paths);
+        let indexing_errors = indexing::index_files(graph, file_paths);
 
-        if !errors.is_empty() {
-            let error_messages = errors
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("\n");
+        let all_errors: Vec<String> = listing_errors
+            .into_iter()
+            .chain(indexing_errors)
+            .map(|e| e.to_string())
+            .collect();
 
-            return CString::new(error_messages).unwrap().into_raw().cast_const();
+        if all_errors.is_empty() {
+            unsafe { *out_error_count = 0 };
+            return ptr::null();
         }
 
-        ptr::null()
+        let c_strings: Vec<*const c_char> = all_errors
+            .into_iter()
+            .filter_map(|string| {
+                CString::new(string)
+                    .ok()
+                    .map(|c_string| c_string.into_raw().cast_const())
+            })
+            .collect();
+
+        unsafe { *out_error_count = c_strings.len() };
+
+        let boxed = c_strings.into_boxed_slice();
+        Box::into_raw(boxed).cast::<*const c_char>()
     })
 }
 
