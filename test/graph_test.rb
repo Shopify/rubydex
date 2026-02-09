@@ -414,6 +414,44 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_workspace_paths
+    with_context do |context|
+      context.write!("lib/foo.rb", "class Foo; end")
+      context.write!("app/bar.rb", "class Bar; end")
+      context.write!(".git/config", "")
+      context.write!("node_modules/pkg/index.js", "")
+      context.write!("top_level.rb", "class TopLevel; end")
+
+      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      paths = graph.workspace_paths
+
+      # Includes workspace directories
+      assert_includes(paths, context.absolute_path_to("lib"))
+      assert_includes(paths, context.absolute_path_to("app"))
+
+      # Excludes ignored directories
+      refute_includes(paths, context.absolute_path_to(".git"))
+      refute_includes(paths, context.absolute_path_to("node_modules"))
+
+      # Includes the top level files
+      assert_includes(paths, context.absolute_path_to("top_level.rb"))
+
+      # Includes gem dependency paths from Bundler
+      gem_require_paths = Bundler.locked_gems.specs.flat_map do |lazy_spec|
+        spec = Gem::Specification.find_by_name(lazy_spec.name)
+        spec.require_paths.reject { |path| File.absolute_path?(path) }
+      rescue Gem::MissingSpecError
+        []
+      end
+
+      gem_require_paths.each do |require_path|
+        assert(paths.any? { |path| path.end_with?(require_path) }, "Expect workspace paths to include dependency require path `#{require_path}`")
+      end
+
+      assert_equal(paths.length, paths.uniq.length)
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)
