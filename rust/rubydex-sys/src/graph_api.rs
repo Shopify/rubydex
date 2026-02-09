@@ -161,6 +161,22 @@ pub unsafe extern "C" fn rdx_index_all(
     })
 }
 
+/// Deletes a document and all of its definitions from the graph
+///
+/// # Safety
+///
+/// Expects both the graph pointer and uri string pointer to be valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_delete_uri(pointer: GraphPointer, uri: *const c_char) {
+    let Ok(uri_str) = (unsafe { utils::convert_char_ptr_to_string(uri) }) else {
+        return;
+    };
+
+    with_mut_graph(pointer, |graph| {
+        graph.delete_uri(&uri_str);
+    });
+}
+
 /// Runs the resolver to compute declarations, ownership and related structures
 #[unsafe(no_mangle)]
 pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
