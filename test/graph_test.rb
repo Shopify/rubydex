@@ -414,7 +414,7 @@ class GraphTest < Minitest::Test
       assert_equal(2, graph.documents.count)
       foo = graph["Foo"]
 
-      graph.delete_uri(context.uri_to("foo.rb"))
+      graph.delete_document(context.uri_to("foo.rb"))
 
       # Existing reference to foo doesn't crash, but data is no longer available in the graph
       assert_empty(foo.definitions.to_a)
@@ -427,14 +427,14 @@ class GraphTest < Minitest::Test
 
   def test_delete_uri_with_non_existing_uri
     graph = Rubydex::Graph.new
-    graph.delete_uri("file:///non_existing.rb")
+    graph.delete_document("file:///non_existing.rb")
   end
 
   def test_delete_uri_with_invalid_argument
     graph = Rubydex::Graph.new
 
     assert_raises(TypeError) do
-      graph.delete_uri(123)
+      graph.delete_document(123)
     end
   end
 

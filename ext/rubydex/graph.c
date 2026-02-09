@@ -272,14 +272,14 @@ static VALUE rdxr_graph_method_references(VALUE self) {
     return self;
 }
 
-// Graph#delete_uri: (String uri) -> nil
+// Graph#delete_document: (String uri) -> nil
 // Deletes a document and all of its definitions from the graph
-static VALUE rdxr_graph_delete_uri(VALUE self, VALUE uri) {
+static VALUE rdxr_graph_delete_document(VALUE self, VALUE uri) {
     Check_Type(uri, T_STRING);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
-    rdx_graph_delete_uri(graph, StringValueCStr(uri));
+    rdx_graph_delete_document(graph, StringValueCStr(uri));
 
     return Qnil;
 }
@@ -442,7 +442,7 @@ void rdxi_initialize_graph(VALUE mRubydex) {
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
-    rb_define_method(cGraph, "delete_uri", rdxr_graph_delete_uri, 1);
+    rb_define_method(cGraph, "delete_document", rdxr_graph_delete_document, 1);
     rb_define_method(cGraph, "resolve", rdxr_graph_resolve, 0);
     rb_define_method(cGraph, "resolve_constant", rdxr_graph_resolve_constant, 2);
     rb_define_method(cGraph, "declarations", rdxr_graph_declarations, 0);

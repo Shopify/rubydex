@@ -167,13 +167,13 @@ pub unsafe extern "C" fn rdx_index_all(
 ///
 /// Expects both the graph pointer and uri string pointer to be valid
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_delete_uri(pointer: GraphPointer, uri: *const c_char) {
+pub unsafe extern "C" fn rdx_graph_delete_document(pointer: GraphPointer, uri: *const c_char) {
     let Ok(uri_str) = (unsafe { utils::convert_char_ptr_to_string(uri) }) else {
         return;
     };
 
     with_mut_graph(pointer, |graph| {
-        graph.delete_uri(&uri_str);
+        graph.delete_document(&uri_str);
     });
 }
 

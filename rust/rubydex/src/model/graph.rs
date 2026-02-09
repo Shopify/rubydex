@@ -513,7 +513,7 @@ impl Graph {
     }
 
     //// Handles the deletion of a document identified by `uri`
-    pub fn delete_uri(&mut self, uri: &str) {
+    pub fn delete_document(&mut self, uri: &str) {
         let uri_id = UriId::from(uri);
         self.remove_definitions_for_uri(uri_id);
         self.documents.remove(&uri_id);
