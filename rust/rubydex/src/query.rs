@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+
+use url::Url;
 
 use crate::model::graph::Graph;
 use crate::model::ids::{DeclarationId, UriId};
@@ -64,45 +65,24 @@ fn match_score(query: &str, target: &str) -> usize {
 
 /// Resolves a require path to its URI ID. Used for go-to-definition.
 ///
-/// # Panics
-///
-/// Panics if one of the search threads panics
+/// Searches the `load_path` in order and returns the first match, mirroring how Ruby's `require`
+/// walks `$LOAD_PATH`.
 #[must_use]
-pub fn resolve_require_path(graph: &Graph, require_path: &str, load_paths: &[PathBuf]) -> Option<UriId> {
-    let found_ref = &AtomicBool::new(false);
+pub fn resolve_require_path(graph: &Graph, require_path: &str, load_path: &[PathBuf]) -> Option<UriId> {
     let normalized = require_path.trim_end_matches(".rb");
-    let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
-    let documents = graph.documents().iter().collect::<Vec<_>>();
-    let chunk_size = documents.len().div_ceil(num_threads);
 
-    if chunk_size == 0 {
-        return None;
+    for path in load_path {
+        let file_path = path.join(format!("{normalized}.rb"));
+        let Ok(url) = Url::from_file_path(&file_path) else {
+            continue;
+        };
+        let uri_id = UriId::from(url.as_str());
+        if graph.documents().contains_key(&uri_id) {
+            return Some(uri_id);
+        }
     }
 
-    thread::scope(|scope| {
-        let handles: Vec<_> = documents
-            .chunks(chunk_size)
-            .map(|chunk| {
-                scope.spawn(move || {
-                    for (id, document) in chunk {
-                        // Check if another thread found it
-                        if found_ref.load(Ordering::Relaxed) {
-                            return None;
-                        }
-                        if let Some((computed, _)) = document.require_path(load_paths)
-                            && computed == normalized
-                        {
-                            found_ref.store(true, Ordering::Relaxed);
-                            return Some(**id);
-                        }
-                    }
-                    None
-                })
-            })
-            .collect();
-
-        handles.into_iter().find_map(|handle| handle.join().unwrap())
-    })
+    None
 }
 
 /// Returns all require paths. Used for completion.
@@ -231,6 +211,39 @@ mod tests {
 
         // returns None for nonexistent
         assert!(resolve_require_path(context.graph(), "nonexistent", &load_paths).is_none());
+    }
+
+    #[test]
+    fn test_resolve_require_path_prefers_earliest_load_path() {
+        let root = test_root();
+        let lib_path = root.join("lib").join("foo").join("bar.rb");
+        let test_path = root.join("test").join("foo").join("bar.rb");
+        let lib_uri = Url::from_file_path(&lib_path).unwrap().to_string();
+        let test_uri = Url::from_file_path(&test_path).unwrap().to_string();
+
+        let mut context = GraphTest::new();
+        context.index_uri(&lib_uri, "class Bar; end");
+        context.index_uri(&test_uri, "class Bar; end");
+
+        // lib comes first in load paths
+        let load_paths = [root.join("lib"), root.join("test")];
+        let uri_id = resolve_require_path(context.graph(), "foo/bar", &load_paths).unwrap();
+        let doc = context.graph().documents().get(&uri_id).unwrap();
+        assert!(
+            doc.uri().contains("lib/foo/bar.rb"),
+            "Expected lib path, got {}",
+            doc.uri()
+        );
+
+        // test comes first in load paths
+        let load_paths = [root.join("test"), root.join("lib")];
+        let uri_id = resolve_require_path(context.graph(), "foo/bar", &load_paths).unwrap();
+        let doc = context.graph().documents().get(&uri_id).unwrap();
+        assert!(
+            doc.uri().contains("test/foo/bar.rb"),
+            "Expected test path, got {}",
+            doc.uri()
+        );
     }
 
     #[test]
