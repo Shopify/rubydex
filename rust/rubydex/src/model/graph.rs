@@ -838,7 +838,11 @@ mod tests {
     use crate::model::comment::Comment;
     use crate::model::declaration::Ancestors;
     use crate::test_utils::GraphTest;
-    use crate::{assert_descendants, assert_members_eq, assert_no_diagnostics, assert_no_members};
+    use crate::{
+        assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
+        assert_declaration_references_count_eq, assert_descendants, assert_members_eq, assert_no_constant_alias_target,
+        assert_no_diagnostics, assert_no_members,
+    };
 
     #[test]
     fn deleting_a_uri() {
@@ -1579,5 +1583,311 @@ mod tests {
         assert_eq!(1, context.graph().documents.len());
         assert_eq!(12, context.graph().names.len());
         assert_eq!(41, context.graph().strings.len());
+    }
+
+    #[test]
+    fn ancestor_changes_invalidate_constant_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+
+            module Bar
+              CONST = 2
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            r"
+            class Baz
+              include Foo
+
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        // Initially, CONST points to `Foo::CONST`
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo2.rb:4:3-4:8");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 1);
+
+        // By adding a new file that prepends `Bar`, we change the ancestors of `Baz` and now `CONST` should point to
+        // `Bar::CONST`
+        context.index_uri(
+            "file:///foo3.rb",
+            r"
+            class Baz
+              prepend Bar
+            end
+            ",
+        );
+
+        // Verify that indexing the new file unresolves the constant reference
+        let reference_name = context
+            .graph()
+            .constant_references()
+            .values()
+            .find_map(|r| {
+                let name = context.graph().names().get(r.name_id()).unwrap();
+
+                if context.graph().strings().get(name.str()).unwrap().as_str() == "CONST" {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        assert!(
+            matches!(reference_name, NameRef::Unresolved(_)),
+            "Did not properly invalidate constant reference"
+        );
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
+    }
+
+    #[test]
+    fn new_constants_invalidate_applicable_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module Bar
+                module Baz
+                end
+              end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///qux.rb",
+            r"
+            module Foo
+              module Bar
+                module Baz
+                  class Qux
+                    include Bar
+                  end
+                end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        // Initially, `Bar` points to `Foo::Bar`
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///qux.rb:5:17-5:20");
+        assert_declaration_references_count_eq!(context, "Foo::Bar", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::Bar::Baz::Qux",
+            ["Foo::Bar::Baz::Qux", "Foo::Bar", "Object"]
+        );
+
+        // After a new `Bar` constant is created closer in the lexical scope of `Qux`, the constant reference needs to
+        // be invalidated alongside `Qux`'s ancestor chain
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module Bar
+                module Baz
+                  module Bar; end
+                end
+              end
+            end
+            ",
+        );
+
+        // Verify that indexing the new file unresolves the constant reference
+        let reference_name = context
+            .graph()
+            .constant_references()
+            .values()
+            .find_map(|r| {
+                let name = context.graph().names().get(r.name_id()).unwrap();
+
+                if context.graph().strings().get(name.str()).unwrap().as_str() == "Bar" {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        assert!(
+            matches!(reference_name, NameRef::Unresolved(_)),
+            "Did not properly invalidate constant reference"
+        );
+        assert_declaration_references_count_eq!(context, "Foo::Bar", 0);
+        let empty_ancestors: [&str; 0] = [];
+        assert_ancestors_eq!(context, "Foo::Bar::Baz::Qux", empty_ancestors);
+    }
+
+    #[test]
+    fn deleting_a_file_invalidates_ancestors() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+
+            class Bar
+              CONST
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              include Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        // Initially, `CONST` points to `Foo::CONST`
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:3-6:8");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 1);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
+
+        // After deleting the `bar.rb` file, the ancestors of `Bar` are invalidated and so should the `CONST` reference
+        context.delete_uri("file:///bar.rb");
+
+        // Verify that indexing the new file unresolves the constant reference
+        let reference_name = context
+            .graph()
+            .constant_references()
+            .values()
+            .find_map(|r| {
+                let name = context.graph().names().get(r.name_id()).unwrap();
+
+                if context.graph().strings().get(name.str()).unwrap().as_str() == "CONST" {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        assert!(
+            matches!(reference_name, NameRef::Unresolved(_)),
+            "Did not properly invalidate constant reference"
+        );
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
+        let empty_ancestors: [&str; 0] = [];
+        assert_ancestors_eq!(context, "Bar", empty_ancestors);
+    }
+
+    #[test]
+    fn invalidating_constant_aliases() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+
+            class Bar
+              ALIAS_CONST = CONST
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              include Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        // Initially, `ALIAS_CONST` targets `Foo::CONST`
+        assert_alias_targets_contain!(context, "Bar::ALIAS_CONST", "Foo::CONST");
+
+        // After deleting the `bar.rb` file, the ancestors of `Bar` are invalidated and so should the `CONST` reference
+        context.delete_uri("file:///bar.rb");
+
+        assert_no_constant_alias_target!(context, "Bar::ALIAS_CONST");
+    }
+
+    #[test]
+    fn new_constant_in_existing_chain_invalidates_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+
+            module Bar
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            r"
+            class Baz
+              include Foo
+              prepend Bar
+
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        // Initially, CONST points to `Foo::CONST`
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo2.rb:5:3-5:8");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 1);
+
+        // Now, we define a new constant earlier in the ancestor chain and `CONST` needs to be invalidated since it will
+        // point to `Bar::CONST`
+        context.index_uri(
+            "file:///foo3.rb",
+            r"
+            module Bar
+              CONST = 2
+            end
+            ",
+        );
+
+        // Verify that indexing the new file unresolves the constant reference
+        let reference_name = context
+            .graph()
+            .constant_references()
+            .values()
+            .find_map(|r| {
+                let name = context.graph().names().get(r.name_id()).unwrap();
+
+                if context.graph().strings().get(name.str()).unwrap().as_str() == "CONST" {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+
+        assert!(
+            matches!(reference_name, NameRef::Unresolved(_)),
+            "Did not properly invalidate constant reference"
+        );
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
     }
 }
