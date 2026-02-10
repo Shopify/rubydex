@@ -402,6 +402,43 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_delete_uri_removes_document_and_definitions
+    with_context do |context|
+      context.write!("foo.rb", "class Foo; end")
+      context.write!("bar.rb", "class Bar; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(2, graph.documents.count)
+      foo = graph["Foo"]
+
+      deleted = graph.delete_document(context.uri_to("foo.rb"))
+      assert_instance_of(Rubydex::Document, deleted)
+
+      # Existing reference to foo doesn't crash, but data is no longer available in the graph
+      assert_empty(foo.definitions.to_a)
+      assert_nil(graph["Foo"])
+
+      assert_equal(1, graph.documents.count)
+      assert_equal("Bar", graph.documents.first.definitions.first.name)
+    end
+  end
+
+  def test_delete_uri_with_non_existing_uri
+    graph = Rubydex::Graph.new
+    assert_nil(graph.delete_document("file:///non_existing.rb"))
+  end
+
+  def test_delete_uri_with_invalid_argument
+    graph = Rubydex::Graph.new
+
+    assert_raises(TypeError) do
+      graph.delete_document(123)
+    end
+  end
+
   def test_require_paths_with_invalid_arguments
     graph = Rubydex::Graph.new
 

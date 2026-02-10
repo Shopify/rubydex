@@ -272,6 +272,25 @@ static VALUE rdxr_graph_method_references(VALUE self) {
     return self;
 }
 
+// Graph#delete_document: (String uri) -> Document?
+// Deletes a document and all of its definitions from the graph.
+// Returns the removed Document or nil if it doesn't exist.
+static VALUE rdxr_graph_delete_document(VALUE self, VALUE uri) {
+    Check_Type(uri, T_STRING);
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+    const uint64_t *uri_id = rdx_graph_delete_document(graph, StringValueCStr(uri));
+
+    if (uri_id == NULL) {
+        return Qnil;
+    }
+
+    VALUE argv[] = {self, ULL2NUM(*uri_id)};
+    free_u64(uri_id);
+    return rb_class_new_instance(2, argv, cDocument);
+}
+
 // Graph#resolve: () -> self
 // Runs the resolver to compute declarations and ownership
 static VALUE rdxr_graph_resolve(VALUE self) {
@@ -430,6 +449,7 @@ void rdxi_initialize_graph(VALUE mRubydex) {
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
+    rb_define_method(cGraph, "delete_document", rdxr_graph_delete_document, 1);
     rb_define_method(cGraph, "resolve", rdxr_graph_resolve, 0);
     rb_define_method(cGraph, "resolve_constant", rdxr_graph_resolve_constant, 2);
     rb_define_method(cGraph, "declarations", rdxr_graph_declarations, 0);

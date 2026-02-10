@@ -36,7 +36,7 @@ impl GraphTest {
     }
 
     pub fn delete_uri(&mut self, uri: &str) {
-        self.graph.delete_uri(uri);
+        self.graph.delete_document(uri);
     }
 
     pub fn resolve(&mut self) {
