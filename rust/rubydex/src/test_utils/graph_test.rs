@@ -301,8 +301,21 @@ macro_rules! assert_ancestors_eq {
                         .join(", ")
                 );
             }
-            $crate::model::declaration::Ancestors::Partial(_) => {
-                panic!("Expected ancestors to be resolved for {}", declaration.name());
+            $crate::model::declaration::Ancestors::Partial(ancestors) => {
+                // Partial with empty ancestors is valid when expecting empty ancestors
+                // (e.g. after invalidation). Otherwise it's unexpected.
+                let expected_ancestors: Vec<$crate::model::declaration::Ancestor> = $expected
+                    .iter()
+                    .map(|n| {
+                        $crate::model::declaration::Ancestor::Complete($crate::model::ids::DeclarationId::from(*n))
+                    })
+                    .collect();
+                assert!(
+                    expected_ancestors.is_empty() && ancestors.is_empty(),
+                    "Expected ancestors to be resolved for {}, got Partial with {} entries",
+                    declaration.name(),
+                    ancestors.len()
+                );
             }
         }
     };

@@ -157,6 +157,13 @@ impl ResolvedName {
     pub fn declaration_id(&self) -> &DeclarationId {
         &self.declaration_id
     }
+
+    /// Consumes this `ResolvedName` and returns the inner Name, preserving `ref_count`.
+    /// Used during invalidation to convert Resolved → Unresolved.
+    #[must_use]
+    pub fn into_name(self) -> Name {
+        self.name
+    }
 }
 
 /// A usage of a constant name. This could be a constant reference or a definition like a class or module

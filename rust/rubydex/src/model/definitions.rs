@@ -135,6 +135,20 @@ impl Definition {
         }
     }
 
+    /// Returns true if this definition is a constant-like entity that participates in
+    /// constant resolution (Class, Module, Constant, `ConstantAlias`, `SingletonClass`).
+    #[must_use]
+    pub fn is_constant_like(&self) -> bool {
+        matches!(
+            self,
+            Definition::Class(_)
+                | Definition::Module(_)
+                | Definition::Constant(_)
+                | Definition::ConstantAlias(_)
+                | Definition::SingletonClass(_)
+        )
+    }
+
     #[must_use]
     pub fn name_id(&self) -> Option<&NameId> {
         match self {
