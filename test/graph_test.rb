@@ -9,7 +9,7 @@ class GraphTest < Minitest::Test
   def test_indexing_empty_context
     with_context do |context|
       graph = Rubydex::Graph.new
-      assert_nil(graph.index_all(context.glob("**/*.rb")))
+      assert_empty(graph.index_all(context.glob("**/*.rb")))
     end
   end
 
@@ -19,19 +19,17 @@ class GraphTest < Minitest::Test
       context.write!("bar.rb", "class Bar; end")
 
       graph = Rubydex::Graph.new
-      assert_nil(graph.index_all(context.glob("**/*.rb")))
+      assert_empty(graph.index_all(context.glob("**/*.rb")))
     end
   end
 
   def test_indexing_invalid_file_paths
     graph = Rubydex::Graph.new
 
-    error = assert_raises(Rubydex::IndexingError) do
-      graph.index_all(["not_found.rb"])
-    end
+    errors = graph.index_all(["not_found.rb"])
 
-    assert_kind_of(Rubydex::Error, error)
-    assert_match(/FileError: Path `.*not_found.rb` does not exist/, error.message)
+    assert_equal(1, errors.length)
+    assert_match(/FileError: Path `.*not_found.rb` does not exist/, errors.first)
   end
 
   def test_indexing_with_parse_errors

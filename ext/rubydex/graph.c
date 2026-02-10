@@ -9,7 +9,6 @@
 #include "utils.h"
 
 static VALUE cGraph;
-static VALUE eIndexingError;
 
 // Free function for the custom Graph allocator. We always have to call into Rust to free data allocated by it
 static void graph_free(void *ptr) {
@@ -27,8 +26,8 @@ static VALUE rdxr_graph_alloc(VALUE klass) {
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
 }
 
-// Graph#index_all: (Array[String] file_paths) -> nil
-// Raises IndexingError if anything failed during indexing
+// Graph#index_all: (Array[String] file_paths) -> Array[String]
+// Returns an array of IO error messages encountered during indexing
 static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     rdxi_check_array_of_strings(file_paths);
 
@@ -36,10 +35,12 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     size_t length = RARRAY_LEN(file_paths);
     char **converted_file_paths = rdxi_str_array_to_char(file_paths, length);
 
-    // Get the underying graph pointer and then invoke the Rust index all implementation
+    // Get the underlying graph pointer and then invoke the Rust index all implementation
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
-    const char *error_messages = rdx_index_all(graph, (const char **)converted_file_paths, length);
+
+    size_t error_count = 0;
+    const char *const *errors = rdx_index_all(graph, (const char **)converted_file_paths, length, &error_count);
 
     // Free the converted file paths and allow the GC to collect them
     for (size_t i = 0; i < length; i++) {
@@ -47,15 +48,17 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     }
     free(converted_file_paths);
 
-    // If indexing errors were returned, turn them into a Ruby string, call Rust to free the CString it allocated and
-    // return the Ruby string
-    if (error_messages != NULL) {
-        VALUE error_string = rb_utf8_str_new_cstr(error_messages);
-        free_c_string(error_messages);
-        rb_raise(eIndexingError, "%s", StringValueCStr(error_string));
+    if (errors == NULL) {
+        return rb_ary_new();
     }
 
-    return Qnil;
+    VALUE array = rb_ary_new_capa((long)error_count);
+    for (size_t i = 0; i < error_count; i++) {
+        rb_ary_push(array, rb_utf8_str_new_cstr(errors[i]));
+    }
+
+    free_c_string_array(errors, error_count);
+    return array;
 }
 
 // Size function for the declarations enumerator
@@ -443,9 +446,6 @@ static VALUE rdxr_graph_diagnostics(VALUE self) {
 }
 
 void rdxi_initialize_graph(VALUE mRubydex) {
-    VALUE eRubydexError = rb_const_get(mRubydex, rb_intern("Error"));
-    eIndexingError = rb_define_class_under(mRubydex, "IndexingError", eRubydexError);
-
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
