@@ -512,11 +512,13 @@ impl Graph {
         }
     }
 
-    //// Handles the deletion of a document identified by `uri`
-    pub fn delete_document(&mut self, uri: &str) {
+    /// Handles the deletion of a document identified by `uri`.
+    /// Returns the `UriId` of the removed document, or `None` if it didn't exist.
+    pub fn delete_document(&mut self, uri: &str) -> Option<UriId> {
         let uri_id = UriId::from(uri);
-        self.remove_definitions_for_uri(uri_id);
-        self.documents.remove(&uri_id);
+        let document = self.documents.remove(&uri_id)?;
+        self.remove_definitions_for_document(&document);
+        Some(uri_id)
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
@@ -578,18 +580,17 @@ impl Graph {
         // For each URI that was indexed through `other`, check what was discovered and update our current global
         // representation
         let uri_id = other.uri_id();
-        self.remove_definitions_for_uri(uri_id);
+        if let Some(document) = self.documents.remove(&uri_id) {
+            self.remove_definitions_for_document(&document);
+        }
 
         self.extend(other);
     }
 
-    // Removes all nodes and relationships associated to the given URI. This is used to clean up stale data when a
-    // document (identified by `uri_id`) changes or when a document is closed and we need to clean up the memory
-    fn remove_definitions_for_uri(&mut self, uri_id: UriId) {
-        let Some(document) = self.documents.remove(&uri_id) else {
-            return;
-        };
-
+    // Removes all nodes and relationships associated to the given document. This is used to clean up stale data when a
+    // document changes or when a document is deleted and we need to clean up the memory.
+    // The document must already have been removed from `self.documents` before calling this.
+    fn remove_definitions_for_document(&mut self, document: &Document) {
         // TODO: Remove method references from method declarations once method inference is implemented
         for ref_id in document.method_references() {
             if let Some(method_ref) = self.method_references.remove(ref_id) {

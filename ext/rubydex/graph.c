@@ -272,16 +272,23 @@ static VALUE rdxr_graph_method_references(VALUE self) {
     return self;
 }
 
-// Graph#delete_document: (String uri) -> nil
-// Deletes a document and all of its definitions from the graph
+// Graph#delete_document: (String uri) -> Document?
+// Deletes a document and all of its definitions from the graph.
+// Returns the removed Document or nil if it doesn't exist.
 static VALUE rdxr_graph_delete_document(VALUE self, VALUE uri) {
     Check_Type(uri, T_STRING);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
-    rdx_graph_delete_document(graph, StringValueCStr(uri));
+    const uint64_t *uri_id = rdx_graph_delete_document(graph, StringValueCStr(uri));
 
-    return Qnil;
+    if (uri_id == NULL) {
+        return Qnil;
+    }
+
+    VALUE argv[] = {self, ULL2NUM(*uri_id)};
+    free_u64(uri_id);
+    return rb_class_new_instance(2, argv, cDocument);
 }
 
 // Graph#resolve: () -> self

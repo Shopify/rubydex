@@ -161,20 +161,23 @@ pub unsafe extern "C" fn rdx_index_all(
     })
 }
 
-/// Deletes a document and all of its definitions from the graph
+/// Deletes a document and all of its definitions from the graph.
+/// Returns a pointer to the URI ID if the document was found and removed, or NULL if it didn't exist.
+/// Caller must free the returned pointer with `free_u64`.
 ///
 /// # Safety
 ///
 /// Expects both the graph pointer and uri string pointer to be valid
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_delete_document(pointer: GraphPointer, uri: *const c_char) {
+pub unsafe extern "C" fn rdx_graph_delete_document(pointer: GraphPointer, uri: *const c_char) -> *const u64 {
     let Ok(uri_str) = (unsafe { utils::convert_char_ptr_to_string(uri) }) else {
-        return;
+        return ptr::null();
     };
 
-    with_mut_graph(pointer, |graph| {
-        graph.delete_document(&uri_str);
-    });
+    with_mut_graph(pointer, |graph| match graph.delete_document(&uri_str) {
+        Some(uri_id) => Box::into_raw(Box::new(*uri_id)),
+        None => ptr::null(),
+    })
 }
 
 /// Runs the resolver to compute declarations, ownership and related structures
