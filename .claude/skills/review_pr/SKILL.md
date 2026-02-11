@@ -10,14 +10,14 @@ Review a GitHub pull request for Saturn/Rubydex, applying zone-specific criteria
 ## PR Intake
 
 1. Parse the user's input:
-   - Number: `577` → use directly
+   - Number: `577` -- use directly
    - URL: extract number from `https://github.com/.../pull/577`
-   - Branch name: run `gh pr list --head <branch> --json number -q '.[0].number'`
-   - No argument: run `gh pr view --json number -q .number` for the current branch's PR
-2. Fetch PR data (run in parallel):
+   - Branch: `gh pr list --head <branch> --json number -q '.[0].number'`
+   - No argument: `gh pr view --json number -q .number` (current branch)
+2. Fetch PR data (in parallel):
    - **Metadata**: `gh pr view <N> --json title,body,author,state,baseRefName,headRefName,additions,deletions,files,reviews,comments`
    - **Diff**: `gh pr diff <N>`
-3. If the PR is merged or closed, warn the user and ask whether to proceed.
+3. If merged or closed, warn the user and ask whether to proceed.
 4. Classify each changed file into a review zone:
 
 | Path pattern | Zone |
@@ -36,17 +36,15 @@ Review a GitHub pull request for Saturn/Rubydex, applying zone-specific criteria
 1. Read the PR description and understand the stated goal
 2. Read linked issues or PRs referenced in the description
 3. Scan the file list to understand scope
-4. Read full file contents for modified files to understand context (not just the diff)
+4. Read full file contents for modified files (not just the diff)
 
 ### Phase 1: Dispatch
 
-Compute: `total_changed = additions + deletions`. Count active zones (rust-core, ffi, c-extension, ruby — exclude docs and meta).
+Compute `total_changed = additions + deletions`. Count active zones (rust-core, ffi, c-extension, ruby -- exclude docs/meta).
 
-**Single-pass** (main agent reviews directly, no subagents):
-- `total_changed < 100` AND only one active zone
+**Single-pass** (main agent, no subagents): `total_changed < 100` AND one active zone.
 
-**Parallel expert review** (launch subagents in parallel):
-- Otherwise
+**Parallel expert review** (subagents): otherwise.
 
 | Zone(s) with changes | Subagent |
 |---|---|
@@ -55,12 +53,12 @@ Compute: `total_changed = additions + deletions`. Count active zones (rust-core,
 | c-extension, ruby | `ruby-vm-expert` |
 | docs | `general-purpose` |
 
-Each subagent receives: PR title/body, their zone's diff sections, zone review criteria from this skill, and the maintainer review patterns from Cross-Cutting Concerns.
+Each subagent receives: PR title/body, their zone's diff, zone review criteria, and the cross-cutting concerns from this skill.
 
-**Large PR plan file** (10+ changed files OR 500+ lines changed):
+**Large PR plan file** (10+ files OR 500+ lines changed):
 1. Generate `docs/plans/YYYY-MM-DD-review-pr-<N>.md` before reviewing
 2. Include: PR metadata, file-to-zone table, subagent assignments, key questions
-3. Inform the user, then proceed with review
+3. Inform the user, then proceed
 
 ### Phase 2: Cross-Cutting Analysis
 
@@ -74,15 +72,15 @@ Merge zone findings into the output format below. Deduplicate overlapping findin
 
 ### Correctness (Tier 1)
 
-- **Ruby behavior modeling**: Does the Rust code correctly model the Ruby semantics? Cross-reference `docs/ruby-behaviors.md`.
-- **Explicit match arms**: Flag any catch-all `_` on enums that may gain variants (`Definition`, `Declaration`, `DeclarationKind`, `Receiver`). Always list all variants.
-- **Definition/reference completeness**: When a new type is added, verify all iteration sites are updated (e.g., `str_ids()`, `name_ids()`, document removal cleanup paths).
-- **Balanced lifecycle**: For every ref-count increment (`intern_string`, `intern_name`), verify the decrement path exists in document removal (`untrack_string`, `untrack_name`).
+- **Ruby behavior modeling**: Does the Rust code correctly model Ruby semantics? Cross-reference `docs/ruby-behaviors.md`.
+- **Explicit match arms**: Flag catch-all `_` on enums that may gain variants (`Definition`, `Declaration`, `DeclarationKind`, `Receiver`). Always list all variants.
+- **Definition/reference completeness**: New types must update all iteration sites (`str_ids()`, `name_ids()`, document removal cleanup).
+- **Balanced lifecycle**: Every ref-count increment (`intern_string`, `intern_name`) needs a decrement path in document removal (`untrack_string`, `untrack_name`).
 
 ### Memory (Tier 2)
 
-- **`assert_mem_size!` compliance**: If struct fields change, the size assertion must be updated. A struct growing by 8 bytes matters at scale (millions of instances).
-- **Enum niche optimization**: Verify `Option<Enum>` uses niche (same size as enum alone). Flag regressions.
+- **`assert_mem_size!` compliance**: Struct field changes require updated size assertions. 8 bytes matters at millions of instances.
+- **Enum niche optimization**: `Option<Enum>` should use niche (same size as enum alone). Flag regressions.
 - **String interning**: All user-facing strings go through `intern_string`/`intern_name`. Flag raw `String` fields in model structs.
 - **`IdentityHashMap`**: Prefer over `HashMap` for ID-keyed maps.
 
@@ -91,14 +89,14 @@ Merge zone findings into the output format below. Deduplicate overlapping findin
 - **Allocation hot paths**: In indexing visitor, flag `String::from()`, `to_string()`, `format!()`, `Vec::new()`. Prefer interning.
 - **Clone avoidance**: Flag `.clone()` on `String`, `Vec`, or non-Copy types unless justified.
 - **Iterators over collect**: Flag `.collect::<Vec<_>>()` feeding another iterator. Prefer lazy chains.
-- **Lock contention**: For `Mutex`/`RwLock`, verify lock scope is minimal. Changes to `Graph::merge()` affect parallel indexing.
+- **Lock contention**: `Mutex`/`RwLock` lock scope must be minimal. `Graph::merge()` changes affect parallel indexing.
 - **Pre-allocation**: `Vec::with_capacity()` where size is known.
 
 ### API Design
 
 - **Visibility**: `pub(crate)` for items not needed outside the crate. Flag unnecessary `pub`.
 - **Naming precision**: Flag vague names (`process`, `handle`, `resolve` without qualifier).
-- **Reuse infrastructure**: Flag over-engineering or new abstractions where existing patterns suffice.
+- **Reuse infrastructure**: Flag new abstractions where existing patterns suffice.
 - **Id discipline**: All IDs are `Id<T>` (4-byte, Copy). Never box, heap-allocate, or use raw `u32`.
 
 ### Code Quality
@@ -110,12 +108,12 @@ Merge zone findings into the output format below. Deduplicate overlapping findin
 
 ## FFI Bridge Review Criteria
 
-FFI bugs cause segfaults in production. These are the highest-risk changes.
+FFI bugs cause segfaults in production. Highest-risk changes.
 
 ### Safety
 
-- **No panics across `extern "C"`**: Flag `unwrap()`, `expect()`, or panic-possible code inside `extern "C"` functions.
-- **Null checks**: Every pointer from `Box::into_raw()` has a deallocation path. Check before every dereference.
+- **No panics across `extern "C"`**: Flag `unwrap()`, `expect()`, or panic-possible code in `extern "C"` functions.
+- **Pointer lifecycle**: Every `Box::into_raw()` has a deallocation path. NULL-check before every dereference.
 - **CString/CStr**: Handle null termination. Verify UTF-8 assumptions for Ruby string inputs.
 
 ### Conventions
@@ -126,7 +124,7 @@ FFI bugs cause segfaults in production. These are the highest-risk changes.
 ### Boundary
 
 - **`#[repr(C)]`** on any struct crossing the boundary with verified alignment.
-- **Memory ownership**: Unambiguous — document who allocates and who frees.
+- **Memory ownership**: Unambiguous -- document who allocates and who frees.
 - **Error propagation**: Return null/error codes, never exceptions or panics.
 
 ## C Extension Review Criteria
@@ -134,7 +132,7 @@ FFI bugs cause segfaults in production. These are the highest-risk changes.
 ### Naming Prefixes (flag all violations)
 
 | Prefix | Meaning | Example |
-|--------|---------|---------|
+|---|---|---|
 | `rdx_` | Rust FFI export | `rdx_graph_new()` |
 | `rdxr_` | Ruby VM callback | `rdxr_graph_resolve()` |
 | `rdxi_` | Internal cross-file helper | `rdxi_check_array_of_strings()` |
@@ -150,14 +148,14 @@ FFI bugs cause segfaults in production. These are the highest-risk changes.
 
 ### Type Safety
 
-- Arguments validated with `Check_Type()` or `rdxi_check_array_of_strings()` before Rust calls
+- Validate arguments with `Check_Type()` or `rdxi_check_array_of_strings()` before Rust calls
 - Enum switch `default:` cases `rb_raise` on unknown values
-- `// Keep this in sync with` comments — if Rust enums changed, verify C switch cases match
+- `// Keep this in sync with` comments -- if Rust enums changed, verify C switch cases match
 
 ## Ruby Review Criteria
 
 - `# frozen_string_literal: true` pragma on every `.rb` file
-- Ruby naming: `snake_case` methods, `predicate?` booleans, `bang!` mutation
+- Naming: `snake_case` methods, `predicate?` booleans, `bang!` mutation
 - API consistency: `rb_define_method` registrations have corresponding wrappers in `lib/`
 - Enumerator duality: collection APIs support both block and enumerator forms
 
@@ -165,7 +163,7 @@ FFI bugs cause segfaults in production. These are the highest-risk changes.
 
 When the PR modifies `ruby_indexer.rs`, `resolution.rs`, or `docs/ruby-behaviors.md`:
 
-1. Cross-reference `docs/ruby-behaviors.md` to verify the implementation matches documented semantics
+1. Cross-reference `docs/ruby-behaviors.md` to verify implementation matches documented semantics
 2. Flag commonly-missed edge cases:
    - `private` does NOT affect `def self.method` (but DOES affect methods inside `class << self`)
    - `Class.new do ... end` blocks do NOT create lexical scope
@@ -186,26 +184,18 @@ When the PR modifies `ruby_indexer.rs`, `resolution.rs`, or `docs/ruby-behaviors
 
 ## Cross-Cutting Concerns
 
-1. **Naming consistency**: Rust `snake_case` → C `rdx_`/`rdxr_`/`rdxi_` → Ruby `snake_case`
-2. **API completeness**: New Rust API → FFI exposure → Ruby binding. Flag gaps.
-3. **Memory ownership chain**: Who allocates? Who frees? Verified across FFI?
-4. **Error propagation**: Rust `Result` → C null/error code → Ruby exception. Complete?
+Apply after zone reviews and throughout all phases:
+
+1. **Naming consistency**: Rust `snake_case` -> C `rdx_`/`rdxr_`/`rdxi_` -> Ruby `snake_case`
+2. **API completeness**: New Rust API -> FFI exposure -> Ruby binding. Flag gaps.
+3. **Memory ownership chain**: Who allocates? Who frees? Verified across FFI boundary?
+4. **Error propagation chain**: Rust `Result` -> C null/error code -> Ruby exception. Complete?
 5. **Test coverage**: Rust unit tests + Ruby integration tests. Flag gaps.
-6. **Documentation**: Flag changes that need `docs/architecture.md`, `docs/ruby-behaviors.md`, or `AGENTS.md` updates
-
-### Maintainer Review Patterns
-
-Apply throughout:
-- Explicit match arms — never catch-all `_` on extensible enums
-- Memory efficiency — question struct size growth, bit packing, interning
-- `pub(crate)` for internals
-- Cross-platform correctness — URI/path handling on Windows
-- Reuse existing infrastructure before new abstractions
-- Concrete code suggestions, not vague advice
+6. **Documentation**: Flag changes needing `docs/architecture.md`, `docs/ruby-behaviors.md`, or `AGENTS.md` updates.
+7. **Cross-platform correctness**: URI/path handling on Windows.
+8. **Concrete suggestions**: Every recommendation includes a code suggestion, not vague advice.
 
 ## Output Format
-
-Present all findings to the user.
 
 ```
 ## PR Review: <title>
@@ -213,11 +203,11 @@ Present all findings to the user.
 **Summary**: 1-3 sentences.
 
 **Critical Issues** (must fix):
-- `file.rs:42` — Description.
+- `file.rs:42` -- Description.
   [code suggestion]
 
 **Recommendations** (should fix):
-- `file.rs:88` — Description with code suggestion.
+- `file.rs:88` -- Description with code suggestion.
 
 **Observations** (trade-offs, architecture):
 - Description.
@@ -226,12 +216,12 @@ Present all findings to the user.
 - What's tested, what's missing. Suggested test cases.
 
 **Nits**:
-- `file.rs:12` — Minor suggestion.
+- `file.rs:12` -- Minor suggestion.
 
 **Files Reviewed**:
-- `path/file1.rs` — 3 findings
-- `path/file2.c` — No issues found
-- `path/file3.rb` — 1 finding
+- `path/file1.rs` -- 3 findings
+- `path/file2.c` -- No issues found
+- `path/file3.rb` -- 1 finding
 ```
 
 Rules:
@@ -240,7 +230,7 @@ Rules:
 - Omit empty severity sections
 - Every changed file appears in "Files Reviewed"
 
-## Common Mistakes
+## Anti-Rationalization
 
 | Shortcut | Why it's wrong |
 |---|---|
