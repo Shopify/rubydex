@@ -60,9 +60,71 @@ impl Offset {
     /// Converts an offset to a display range like `1:1-1:5`
     #[must_use]
     pub fn to_display_range(&self, document: &Document) -> String {
+        let loc = self.to_location(document).to_presentation();
+        format!(
+            "{}:{}-{}:{}",
+            loc.start_line(),
+            loc.start_col(),
+            loc.end_line(),
+            loc.end_col()
+        )
+    }
+
+    /// Converts this offset to a 0-indexed [`Location`] with start and end line/column numbers.
+    #[must_use]
+    pub fn to_location(&self, document: &Document) -> Location {
         let line_index = document.line_index();
         let start = line_index.line_col(self.start().into());
         let end = line_index.line_col(self.end().into());
-        format!("{}:{}-{}:{}", start.line + 1, start.col + 1, end.line + 1, end.col + 1)
+        Location {
+            start_line: start.line,
+            start_col: start.col,
+            end_line: end.line,
+            end_col: end.col,
+        }
+    }
+}
+
+/// A resolved location within a file, with start and end line/column positions.
+/// Values are 0-indexed by default. Use [`to_presentation`](Location::to_presentation)
+/// for 1-indexed values suitable for display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    start_line: u32,
+    start_col: u32,
+    end_line: u32,
+    end_col: u32,
+}
+
+impl Location {
+    #[must_use]
+    pub fn start_line(&self) -> u32 {
+        self.start_line
+    }
+
+    #[must_use]
+    pub fn start_col(&self) -> u32 {
+        self.start_col
+    }
+
+    #[must_use]
+    pub fn end_line(&self) -> u32 {
+        self.end_line
+    }
+
+    #[must_use]
+    pub fn end_col(&self) -> u32 {
+        self.end_col
+    }
+
+    /// Returns a new `Location` with 1-indexed values for display purposes.
+    #[must_use]
+    pub fn to_presentation(&self) -> Self {
+        Self {
+            start_line: self.start_line + 1,
+            start_col: self.start_col + 1,
+            end_line: self.end_line + 1,
+            end_col: self.end_col + 1,
+        }
     }
 }

@@ -57,10 +57,12 @@ When necessary, commands can be executed for the Ruby code.
 
 ## Rust workspace
 
-The Rust workspace under the `rust` directory contains two crates:
+The Rust workspace under the `rust` directory contains three crates:
 
 - `rubydex`: this crate implements the entire indexing and static analysis logic. The implementation aims to be optimized
 to achieve maximum performance in super large codebases while maintaining memory usage to a minimum
+- `rubydex-mcp`: an MCP (Model Context Protocol) server that exposes rubydex's code intelligence as tools for AI
+assistants. Communicates over stdio using JSON-RPC
 - `rubydex-sys`: this crate provides bindings for C, so that the logic from `rubydex` can be called through FFI
 
 The workspace's goal is to provide all indexing and static analysis capabilities to power tools such as language servers,
@@ -85,9 +87,11 @@ When necessary, commands can be executed for the Rust code.
 - `cargo run -- <directory> --stats`: runs the indexer with detailed performance breakdown
 - `cargo run -- <directory> --stop-after <stage>`: stops after the specified stage (Listing, Indexing, or Resolution)
 - `cargo run -- <directory> --visualize`: generates a DOT visualization of the graph
-- `cargo test`: runs Rust tests
+- `cargo test`: runs Rust tests (all workspace crates)
+- `cargo test -p rubydex-mcp`: runs MCP server tests only
 - `cargo test test_name`: runs a specific tests example
 - `cargo fmt`: auto formats the Rust code
 - `cargo clippy`: lints the Rust code
+- `cargo install --path rust/rubydex-mcp`: installs the MCP server binary
 - `bundle exec rake lint_rust`: lints the Rust code
 - `bundle exec rake format_rust`: auto formats the Rust code

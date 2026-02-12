@@ -77,6 +77,49 @@ diagnostic.message
 diagnostic.location
 ```
 
+## MCP Server (Experimental)
+
+Rubydex can run as an MCP (Model Context Protocol) server, enabling AI assistants
+like Claude to semantically query your Ruby codebase.
+
+### Setup
+
+1. Install the binary:
+   ```bash
+   cargo install --path rust/rubydex-mcp
+   ```
+
+2. Add rubydex to the Ruby project you want to index:
+   ```bash
+   claude mcp add --scope project rubydex "\${HOME}/.cargo/bin/rubydex_mcp"
+   ```
+
+   Or manually create a `.mcp.json` in the project root:
+   ```json
+   {
+     "mcpServers": {
+       "rubydex": {
+         "command": "${HOME}/.cargo/bin/rubydex_mcp"
+       }
+     }
+   }
+   ```
+
+3. Start Claude Code from that project directory. The MCP server indexes
+   the project at startup and provides semantic code intelligence tools.
+   Verify with `/mcp` in the session.
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_declarations` | Fuzzy search for classes, modules, methods, constants |
+| `get_declaration` | Full details by fully qualified name with docs, ancestors, members |
+| `get_descendants` | What classes/modules inherit from or include this one |
+| `find_constant_references` | All precise, resolved constant references across the codebase |
+| `get_file_declarations` | List declarations defined in a specific file |
+| `codebase_stats` | High-level statistics about the indexed codebase |
+
 ## Contributing
 
 See [the contributing documentation](CONTRIBUTING.md).
