@@ -1,12 +1,13 @@
 name: "Package and release gems with precompiled binaries"
 on:
+  # Manually trigger a dry-run that doesn't publish to RubyGems
   workflow_dispatch:
-    inputs:
-      release:
-        description: "If the whole build passes on all platforms, release the gems on RubyGems.org"
-        required: false
-        type: boolean
-        default: false
+  # Trigger release flow through pushing tags
+  push:
+    tags:
+      - v[0-9]+.[0-9]+.[0-9]+
+      - v[0-9]+.[0-9]+.[0-9]+-beta[0-9]*
+
 jobs:
   compile:
     timeout-minutes: 20
@@ -76,7 +77,7 @@ jobs:
       id-token: write
       contents: read
     timeout-minutes: 5
-    if: ${{ inputs.release }}
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     name: "Release all gems with RubyGems"
     needs: install
     runs-on: "ubuntu-latest"
@@ -89,3 +90,21 @@ jobs:
         uses: "shopify/cibuildgem/.github/actions/cibuildgem@main"
         with:
           step: "release"
+  release_github:
+    name: Create GitHub release
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub release
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          script: |
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: "${{ github.ref_name }}",
+              name: "${{ github.ref_name }}",
+              generate_release_notes: true,
+              prerelease: "${{ github.ref_name }}".includes("-beta")
+            });
