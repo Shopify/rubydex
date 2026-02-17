@@ -437,6 +437,64 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_index_source_with_ruby
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.resolve
+
+    assert_equal(1, graph.documents.count)
+    refute_nil(graph["Foo"])
+  end
+
+  def test_index_source_with_rbs
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rbs", "class Foo\nend", "rbs")
+
+    assert_equal(1, graph.documents.count)
+  end
+
+  def test_index_source_with_unknown_language_id
+    graph = Rubydex::Graph.new
+
+    error = assert_raises(ArgumentError) do
+      graph.index_source("file:///foo.py", "class Foo: pass", "python")
+    end
+
+    assert_match(/unsupported language_id `python`/, error.message)
+  end
+
+  def test_index_source_with_invalid_arguments
+    graph = Rubydex::Graph.new
+
+    assert_raises(TypeError) do
+      graph.index_source(123, "class Foo; end", "ruby")
+    end
+
+    assert_raises(TypeError) do
+      graph.index_source("file:///foo.rb", 123, "ruby")
+    end
+
+    assert_raises(TypeError) do
+      graph.index_source("file:///foo.rb", "class Foo; end", 123)
+    end
+  end
+
+  def test_index_source_replaces_existing_document
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.resolve
+
+    refute_nil(graph["Foo"])
+    assert_nil(graph["Bar"])
+
+    graph.index_source("file:///foo.rb", "class Bar; end", "ruby")
+    graph.resolve
+
+    assert_equal(1, graph.documents.count)
+    assert_nil(graph["Foo"])
+    refute_nil(graph["Bar"])
+  end
+
   def test_require_paths_with_invalid_arguments
     graph = Rubydex::Graph.new
 

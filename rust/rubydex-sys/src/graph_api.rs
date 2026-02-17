@@ -5,6 +5,7 @@ use crate::declaration_api::DeclarationsIter;
 use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
+use rubydex::indexing::LanguageId;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::DeclarationId;
@@ -504,6 +505,42 @@ pub unsafe extern "C" fn rdx_require_paths(
 
     let boxed = c_strings.into_boxed_slice();
     Box::into_raw(boxed).cast::<*const c_char>()
+}
+
+/// Indexes source code from memory using the specified language.  Returns `true` on success or `false` if the
+/// `language_id` is unknown or string conversion fails.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `uri`, `source`, and `language_id` must be valid, null-terminated UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_index_source(
+    pointer: GraphPointer,
+    uri: *const c_char,
+    source: *const c_char,
+    language_id: *const c_char,
+) -> bool {
+    let Ok(uri_str) = (unsafe { utils::convert_char_ptr_to_string(uri) }) else {
+        return false;
+    };
+
+    let Ok(source_str) = (unsafe { utils::convert_char_ptr_to_string(source) }) else {
+        return false;
+    };
+
+    let Ok(language_id_str) = (unsafe { utils::convert_char_ptr_to_string(language_id) }) else {
+        return false;
+    };
+
+    let Ok(language) = LanguageId::from_language_id(&language_id_str) else {
+        return false;
+    };
+
+    with_mut_graph(pointer, |graph| {
+        indexing::index_source(graph, &uri_str, &source_str, &language);
+        true
+    })
 }
 
 #[cfg(test)]
