@@ -192,7 +192,7 @@ pub unsafe extern "C" fn rdx_graph_delete_document(pointer: GraphPointer, uri: *
 pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
     with_mut_graph(pointer, |graph| {
         let mut resolver = Resolver::new(graph);
-        resolver.resolve_all();
+        resolver.resolve();
     });
 }
 
@@ -577,7 +577,7 @@ mod tests {
         let mut graph = Graph::new();
         graph.update(indexer.local_graph());
         let mut resolver = Resolver::new(&mut graph);
-        resolver.resolve_all();
+        resolver.resolve();
 
         assert_eq!(
             1,
