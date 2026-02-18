@@ -471,6 +471,10 @@ impl Namespace {
         all_namespaces!(self, it => it.member(str_id))
     }
 
+    pub fn remove_member(&mut self, str_id: &StringId) -> Option<DeclarationId> {
+        all_namespaces!(self, it => it.remove_member(str_id))
+    }
+
     #[must_use]
     pub fn singleton_class(&self) -> Option<&DeclarationId> {
         all_namespaces!(self, it => it.singleton_class_id())

@@ -6,9 +6,14 @@ use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::graph::Graph;
 use crate::resolution::Resolver;
 
-#[derive(Default)]
 pub struct GraphTest {
     graph: Graph,
+}
+
+impl Default for GraphTest {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GraphTest {
@@ -39,9 +44,10 @@ impl GraphTest {
         self.graph.delete_document(uri);
     }
 
+    /// Resolves pending work accumulated from update/delete operations.
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
-        resolver.resolve_all();
+        resolver.resolve();
     }
 
     /// # Panics
@@ -301,8 +307,24 @@ macro_rules! assert_ancestors_eq {
                         .join(", ")
                 );
             }
-            $crate::model::declaration::Ancestors::Partial(_) => {
-                panic!("Expected ancestors to be resolved for {}", declaration.name());
+            $crate::model::declaration::Ancestors::Partial(ancestors) => {
+                let expected_ancestors: Vec<$crate::model::declaration::Ancestor> = $expected
+                    .iter()
+                    .map(|n| {
+                        $crate::model::declaration::Ancestor::Complete($crate::model::ids::DeclarationId::from(*n))
+                    })
+                    .collect();
+
+                // Allow Partial ancestors when both expected and actual are empty (invalidation cleared them)
+                if expected_ancestors.is_empty() && ancestors.is_empty() {
+                    // OK - both empty
+                } else {
+                    panic!(
+                        "Expected ancestors to be resolved for {}, got Partial({:?})",
+                        declaration.name(),
+                        ancestors
+                    );
+                }
             }
         }
     };

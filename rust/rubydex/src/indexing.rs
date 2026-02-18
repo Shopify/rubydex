@@ -75,6 +75,7 @@ impl Job for IndexingJob {
 }
 
 /// Indexes the given paths, reading the content from disk and populating the given `Graph` instance.
+/// Pending work is accumulated on the graph; drained by the resolver.
 ///
 /// # Panics
 ///

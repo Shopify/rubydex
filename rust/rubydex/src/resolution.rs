@@ -10,7 +10,7 @@ use crate::model::{
         Namespace, SingletonClassDeclaration,
     },
     definitions::{Definition, Mixin},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
+    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, PendingWork},
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
     name::{Name, NameRef, ParentScope},
@@ -81,56 +81,55 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are computed:
+    /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are
+    /// computed:
     ///
     /// 1. Declarations for all definitions
     /// 2. Members and ownership for all declarations
     /// 3. Resolution of all constant references
     /// 4. Inheritance relationships between declarations
     ///
+    /// Drains pending work accumulated by graph mutations (`update`/`delete_document`).
+    /// For the initial resolve, this contains all definitions and references.
+    /// For incremental resolves, only the invalidated subset.
+    ///
     /// # Panics
     ///
     /// Can panic if there's inconsistent data in the graph
-    pub fn resolve_all(&mut self) {
-        // TODO: temporary code while we don't have synchronization. We clear all declarations instead of doing the minimal
-        // amount of work
-        self.graph.clear_declarations();
-        // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
+    pub fn resolve(&mut self) {
+        let work = self.graph.take_pending_work();
+        self.ensure_bootstrap_declarations();
+        let other_ids = self.prepare_pending_units(work);
+        self.run_resolution_loop();
+        self.handle_remaining_definitions(other_ids);
+    }
 
-        {
-            self.graph.declarations_mut().insert(
-                *OBJECT_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Object".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
-            self.graph.declarations_mut().insert(
-                *MODULE_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Module".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
-            self.graph.declarations_mut().insert(
-                *CLASS_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Class".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
+    /// Ensures Object, Module, and Class declarations exist in the graph.
+    fn ensure_bootstrap_declarations(&mut self) {
+        use std::collections::hash_map::Entry;
+
+        if let Entry::Vacant(e) = self.graph.declarations_mut().entry(*OBJECT_ID) {
+            e.insert(Declaration::Namespace(Namespace::Class(Box::new(
+                ClassDeclaration::new("Object".to_string(), *OBJECT_ID),
+            ))));
         }
+        if let Entry::Vacant(e) = self.graph.declarations_mut().entry(*MODULE_ID) {
+            e.insert(Declaration::Namespace(Namespace::Class(Box::new(
+                ClassDeclaration::new("Module".to_string(), *OBJECT_ID),
+            ))));
+        }
+        if let Entry::Vacant(e) = self.graph.declarations_mut().entry(*CLASS_ID) {
+            e.insert(Declaration::Namespace(Namespace::Class(Box::new(
+                ClassDeclaration::new("Class".to_string(), *OBJECT_ID),
+            ))));
+        }
+    }
 
-        let other_ids = self.prepare_units();
-
+    /// Runs the core resolution loop, processing units until no more progress can be made.
+    fn run_resolution_loop(&mut self) {
         loop {
-            // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
-            // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
-            // to be done
             self.made_progress = false;
 
-            // Loop through the current length of the queue, which won't change during this pass. Retries pushed to the back
-            // are only processed in the next pass, so that we can assess whether we made any progress
             for _ in 0..self.unit_queue.len() {
                 let Some(unit_id) = self.unit_queue.pop_front() else {
                     break;
@@ -153,8 +152,6 @@ impl<'a> Resolver<'a> {
                 break;
             }
         }
-
-        self.handle_remaining_definitions(other_ids);
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -1338,71 +1335,87 @@ impl<'a> Resolver<'a> {
         parent_depth + nesting_depth + 1
     }
 
-    fn prepare_units(&mut self) -> Vec<DefinitionId> {
-        let estimated_length = self.graph.definitions().len() / 2;
-        let mut definitions = Vec::with_capacity(estimated_length);
-        let mut others = Vec::with_capacity(estimated_length);
+    /// Prepares resolution units from pending work.
+    fn prepare_pending_units(&mut self, work: PendingWork) -> Vec<DefinitionId> {
+        let PendingWork {
+            definitions: mut pending_definitions,
+            references: pending_references,
+            ancestors: pending_ancestors,
+        } = work;
+
+        // Deduplicate: the same definition can appear multiple times (e.g., from both
+        // remove_declaration_tree and extend)
+        pending_definitions.sort_unstable_by_key(|id| **id);
+        pending_definitions.dedup();
+
+        let mut definitions = Vec::new();
+        let mut others = Vec::new();
         let names = self.graph.names();
 
-        for (id, definition) in self.graph.definitions() {
+        for id in pending_definitions {
+            let Some(definition) = self.graph.definitions().get(&id) else {
+                continue;
+            };
+
             let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
 
             match definition {
                 Definition::Class(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::Module(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::Constant(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::ConstantAlias(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 Definition::SingletonClass(def) => {
                     definitions.push((
-                        Unit::Definition(*id),
+                        Unit::Definition(id),
                         (names.get(def.name_id()).unwrap(), uri, definition.offset()),
                     ));
                 }
                 _ => {
-                    others.push(*id);
+                    others.push(id);
                 }
             }
         }
 
         // Sort namespaces based on their name complexity so that simpler names are always first
-        // When the depth is the same, sort by URI and offset to maintain determinism
         definitions.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
             (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
         });
 
-        let mut const_refs = self
-            .graph
-            .constant_references()
-            .iter()
-            .map(|(id, constant_ref)| {
-                let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
-
-                (
-                    Unit::ConstantRef(*id),
-                    (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut const_refs = Vec::new();
+        for id in pending_references {
+            let Some(constant_ref) = self.graph.constant_references().get(&id) else {
+                continue;
+            };
+            let Some(name_ref) = names.get(constant_ref.name_id()) else {
+                continue;
+            };
+            // Skip references whose names are already resolved
+            if matches!(name_ref, NameRef::Resolved(_)) {
+                continue;
+            }
+            let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
+            const_refs.push((Unit::ConstantRef(id), (name_ref, uri, constant_ref.offset())));
+        }
 
         // Sort constant references based on their name complexity so that simpler names are always first
         const_refs.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
@@ -1413,6 +1426,16 @@ impl<'a> Resolver<'a> {
             .extend(definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
         self.unit_queue
             .extend(const_refs.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+
+        // Queue ancestor re-linearization after definitions and references
+        for decl_id in pending_ancestors {
+            if let Some(decl) = self.graph.declarations().get(&decl_id)
+                && let Some(ns) = decl.as_namespace()
+                && !ns.has_complete_ancestors()
+            {
+                self.unit_queue.push_back(Unit::Ancestors(decl_id));
+            }
+        }
 
         others.shrink_to_fit();
         others
