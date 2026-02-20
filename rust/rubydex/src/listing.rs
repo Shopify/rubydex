@@ -30,7 +30,7 @@ impl FileDiscoveryJob {
 
 impl FileDiscoveryJob {
     fn handle_file(&self, path: &Path) {
-        if path.extension().is_some_and(|ext| ext == "rb") {
+        if path.extension().is_some_and(|ext| ext == "rb" || ext == "rbs") {
             self.paths_tx
                 .send(path.to_path_buf())
                 .expect("file receiver dropped before run completion");
@@ -222,6 +222,29 @@ mod tests {
         assert_eq!(
             files,
             [baz.to_str().unwrap().to_string(), qux.to_str().unwrap().to_string()]
+        );
+    }
+
+    #[test]
+    fn collect_rbs_files() {
+        let context = Context::new();
+        let ruby_file = PathBuf::from("lib").join("foo.rb");
+        let rbs_file = PathBuf::from("sig").join("foo.rbs");
+        let txt_file = PathBuf::from("lib").join("notes.txt");
+        context.touch(&ruby_file);
+        context.touch(&rbs_file);
+        context.touch(&txt_file);
+
+        let (files, errors) = collect_document_paths(&context, &["lib", "sig"]);
+
+        assert!(errors.is_empty());
+
+        assert_eq!(
+            [
+                ruby_file.to_str().unwrap().to_string(),
+                rbs_file.to_str().unwrap().to_string(),
+            ],
+            files.as_slice()
         );
     }
 

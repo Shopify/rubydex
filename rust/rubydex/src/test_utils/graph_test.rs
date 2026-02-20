@@ -27,6 +27,12 @@ impl GraphTest {
         indexing::index_source(&mut self.graph, uri, &source, &LanguageId::Ruby);
     }
 
+    /// Indexes an RBS source
+    pub fn index_rbs_uri(&mut self, uri: &str, source: &str) {
+        let source = normalize_indentation(source);
+        indexing::index_source(&mut self.graph, uri, &source, &LanguageId::Rbs);
+    }
+
     pub fn delete_uri(&mut self, uri: &str) {
         self.graph.delete_document(uri);
     }

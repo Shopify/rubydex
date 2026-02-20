@@ -47,6 +47,23 @@ impl Offset {
         )
     }
 
+    /// # Panics
+    ///
+    /// This function can panic if the RBS location offsets don't fit into u32
+    #[must_use]
+    pub fn from_rbs_location(location: &ruby_rbs::node::RBSLocationRange) -> Self {
+        Self::new(
+            location
+                .start()
+                .try_into()
+                .expect("RBS location start offset should fit into u32"),
+            location
+                .end()
+                .try_into()
+                .expect("RBS location end offset should fit into u32"),
+        )
+    }
+
     #[must_use]
     pub fn start(&self) -> u32 {
         self.start
