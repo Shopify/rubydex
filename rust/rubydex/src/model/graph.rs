@@ -320,6 +320,31 @@ impl Graph {
         name_id
     }
 
+    /// Searches for the initial attached object for an arbitrarily nested singleton class.
+    /// Walks up the owner chain until finding a non-singleton namespace.
+    ///
+    /// # Example
+    /// For `Foo::<Foo>::<<Foo>>`, returns `Foo`
+    ///
+    /// # Panics
+    ///
+    /// Panics if we attached a singleton class to something that isn't a namespace
+    #[must_use]
+    pub fn attached_object<'a>(&'a self, maybe_singleton: &'a Namespace) -> &'a Namespace {
+        let mut attached_object = maybe_singleton;
+
+        while matches!(attached_object, Namespace::SingletonClass(_)) {
+            attached_object = self
+                .declarations
+                .get(attached_object.owner_id())
+                .unwrap()
+                .as_namespace()
+                .unwrap();
+        }
+
+        attached_object
+    }
+
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
         let declaration_id = DeclarationId::from(name);

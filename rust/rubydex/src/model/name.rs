@@ -157,6 +157,11 @@ impl ResolvedName {
     pub fn declaration_id(&self) -> &DeclarationId {
         &self.declaration_id
     }
+
+    #[must_use]
+    pub fn nesting(&self) -> &Option<NameId> {
+        self.name.nesting()
+    }
 }
 
 /// A usage of a constant name. This could be a constant reference or a definition like a class or module
