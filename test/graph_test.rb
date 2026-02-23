@@ -566,7 +566,7 @@ class GraphTest < Minitest::Test
     assert_equal(
       expected,
       actual.sort_by { |d| [d.location, d.message] }
-        .map { |d| { rule: d.rule, path: File.basename(d.location.path), message: d.message } },
+        .map { |d| { rule: d.rule, path: File.basename(d.location.to_file_path), message: d.message } },
     )
   end
 end
