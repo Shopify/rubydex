@@ -18,6 +18,14 @@ pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
 pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
 
+/// Items processed by the unified invalidation worklist.
+enum InvalidationItem {
+    /// A declaration whose ancestor chain is stale, or that has become empty and needs removal.
+    Declaration(DeclarationId),
+    /// A name whose dependencies may have changed, needing cascade or reference re-evaluation.
+    Name(NameId),
+}
+
 /// Work items produced by graph mutations (update/delete) that need resolution.
 /// Drained internally by the resolver.
 #[derive(Default, Debug)]
@@ -765,10 +773,12 @@ impl Graph {
         self.pending_work.merge(work);
     }
 
-    /// Detaches old document data from declarations, checks the new `LocalGraph` for
-    /// declarations that need ancestor re-linearization, then runs `invalidate_ancestor_chains`,
-    /// `unresolve_affected_references`, and `cascade_name_invalidation` once with the combined
-    /// set of affected declarations.
+    /// Detaches old definitions from declarations, identifies declarations touched by the
+    /// new `LocalGraph`, and feeds everything into `invalidate_graph` as a single worklist.
+    ///
+    /// Constant reference detachment is deferred to `remove_document_data`, which runs after
+    /// invalidation. References unresolved during invalidation are already detached by
+    /// `unresolve_reference`; the rest are still resolved and detached during cleanup.
     ///
     /// Does NOT remove raw data (refs/defs/names/strings) from maps — the caller must
     /// follow up with `remove_document_data` for that.
@@ -778,84 +788,48 @@ impl Graph {
         new_local_graph: Option<&LocalGraph>,
         work: &mut PendingWork,
     ) {
-        let mut declarations_to_invalidate = IdentityHashSet::<DeclarationId>::default();
-        let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
+        let mut items: Vec<InvalidationItem> = Vec::new();
 
-        // --- Part A: Detach old document data from declarations ---
+        // Detach old definitions from their declarations, queue affected directly
         if let Some(document) = old_document {
-            // Detach constant references from their resolved target declarations
-            for ref_id in document.constant_references() {
-                if let Some(constant_ref) = self.constant_references.get(ref_id)
-                    && let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
-                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
-                {
-                    declaration.remove_reference(ref_id);
-                }
-            }
-
-            // Detach definitions from their declarations, collect affected
             for def_id in document.definitions() {
                 if let Some(declaration_id) = self.definition_id_to_declaration_id(*def_id).copied()
                     && let Some(declaration) = self.declarations.get_mut(&declaration_id)
                     && declaration.remove_definition(def_id)
                 {
                     declaration.clear_diagnostics();
-                    if declaration.as_namespace().is_some() {
-                        declarations_to_invalidate.insert(declaration_id);
-                    }
-
-                    if declaration.has_no_definitions() {
-                        declarations_to_delete.push(declaration_id);
-                    }
+                    items.push(InvalidationItem::Declaration(declaration_id));
                 }
             }
         }
 
-        // --- Part B: Declarations touched by new local graph ---
+        // Declarations touched by the new local graph. Non-namespace declarations
+        // are harmless no-ops in the queue (process_declaration returns early).
         if let Some(lg) = new_local_graph {
-            // New namespace definitions whose name is already resolved -> declaration gets
-            // a new definition that might change its mixin list or members.
+            // New definitions whose name is already resolved -> declaration might get
+            // new mixins or members.
             for def in lg.definitions().values() {
                 if let Some(name_id) = def.name_id()
                     && let Some(NameRef::Resolved(resolved)) = self.names.get(name_id)
                 {
-                    let decl_id = *resolved.declaration_id();
-                    if let Some(decl) = self.declarations.get(&decl_id)
-                        && decl.as_namespace().is_some()
-                    {
-                        declarations_to_invalidate.insert(decl_id);
-                    }
+                    items.push(InvalidationItem::Declaration(*resolved.declaration_id()));
                 }
             }
 
             // New constant references whose nesting is already resolved -> that declaration's
             // ancestor chain might change (new include/prepend/superclass).
             for cr in lg.constant_references().values() {
-                let name_id = cr.name_id();
-                if let Some(name_ref) = self.names.get(name_id)
+                if let Some(name_ref) = self.names.get(cr.name_id())
                     && let Some(nesting_id) = name_ref.nesting()
                     && let Some(NameRef::Resolved(resolved)) = self.names.get(nesting_id)
                 {
-                    let decl_id = *resolved.declaration_id();
-                    if let Some(decl) = self.declarations.get(&decl_id)
-                        && decl.as_namespace().is_some()
-                    {
-                        declarations_to_invalidate.insert(decl_id);
-                    }
+                    items.push(InvalidationItem::Declaration(*resolved.declaration_id()));
                 }
             }
         }
 
-        // --- Part C: Shared invalidation (runs once for combined set) ---
-        if !declarations_to_invalidate.is_empty() {
-            let affected = self.invalidate_ancestor_chains(declarations_to_invalidate.into_iter().collect(), work);
-            let seeds = self.unresolve_affected_references(&affected, work);
-            self.cascade_name_invalidation(seeds, work);
-        }
-
-        // Remove empty declarations and their entire sub-trees
-        for declaration_id in &declarations_to_delete {
-            self.remove_declaration_tree(*declaration_id, work);
+        if !items.is_empty() {
+            self.invalidate_graph(items, work);
         }
     }
 
@@ -870,6 +844,14 @@ impl Graph {
 
         for ref_id in document.constant_references() {
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
+                // Detach from target declaration. References unresolved during invalidation
+                // were already detached by `unresolve_reference`; this catches the rest.
+                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
+                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
+                {
+                    declaration.remove_reference(ref_id);
+                }
+
                 if let Some(refs) = self.name_to_references.get_mut(constant_ref.name_id()) {
                     refs.retain(|r| r != ref_id);
                     if refs.is_empty() {
@@ -898,250 +880,87 @@ impl Graph {
         }
     }
 
-    /// Invalidates ancestor chains for the given declarations and all their descendants via BFS.
-    /// Returns the set of all declaration IDs that were affected (had their ancestors cleared).
-    fn invalidate_ancestor_chains(
+    /// Unified invalidation worklist processing. Handles both ancestor-chain invalidation
+    /// and declaration removal in a single loop, with name cascade integrated.
+    ///
+    /// Declaration items are processed in two modes:
+    /// - **Empty (no definitions)**: removed from the graph, members/singleton queued recursively
+    /// - **Has definitions (ancestors stale)**: ancestor chains cleared, descendants queued
+    ///
+    /// Name items cascade through `name_dependents`, checking dynamically whether the name
+    /// needs full structural cascade or just reference re-evaluation.
+    fn invalidate_graph(&mut self, items: Vec<InvalidationItem>, work: &mut PendingWork) {
+        let mut queue: Vec<InvalidationItem> = items;
+        let mut visited_declarations = IdentityHashSet::<DeclarationId>::default();
+        let mut visited_names = IdentityHashSet::<NameId>::default();
+
+        while let Some(item) = queue.pop() {
+            match item {
+                InvalidationItem::Declaration(decl_id) => {
+                    self.process_declaration(decl_id, &mut queue, &mut visited_declarations, work);
+                }
+                InvalidationItem::Name(name_id) => {
+                    self.process_name(name_id, &mut queue, &mut visited_names, work);
+                }
+            }
+        }
+    }
+
+    /// Processes a declaration in the invalidation worklist.
+    ///
+    /// A declaration should be removed if it has no definitions or if its owner has already
+    /// been removed from the graph (orphaned). Otherwise, its ancestor chain is cleared and
+    /// descendants are queued for the same treatment.
+    fn process_declaration(
         &mut self,
-        initial_ids: Vec<DeclarationId>,
+        decl_id: DeclarationId,
+        queue: &mut Vec<InvalidationItem>,
+        visited_declarations: &mut IdentityHashSet<DeclarationId>,
         work: &mut PendingWork,
-    ) -> IdentityHashSet<DeclarationId> {
-        let mut queue = initial_ids;
-        let mut visited = IdentityHashSet::<DeclarationId>::default();
+    ) {
+        let Some(decl) = self.declarations.get(&decl_id) else {
+            return;
+        };
 
-        while let Some(declaration_id) = queue.pop() {
-            if !visited.insert(declaration_id) {
-                continue;
-            }
+        // A declaration should be removed if it has no definitions left, or if its owner
+        // was already removed (making it orphaned). Orphaned declarations still carry
+        // definitions from other files — those get queued for re-resolution.
+        let should_remove = decl.has_no_definitions() || !self.declarations.contains_key(decl.owner_id());
 
-            let Some(namespace) = self
-                .declarations_mut()
-                .get_mut(&declaration_id)
-                .and_then(|d| d.as_namespace_mut())
-            else {
-                continue;
-            };
+        if should_remove {
+            // --- Empty declaration: remove it ---
+            // No visited guard: a declaration can become empty after ancestor-clearing.
+            // Guard against already-removed via the get() above.
 
-            for ancestor in &namespace.clone_ancestors() {
-                if let Ancestor::Complete(ancestor_id) = ancestor
-                    && let Some(anc_decl) = self.declarations_mut().get_mut(ancestor_id)
-                    && let Some(ns) = anc_decl.as_namespace_mut()
-                {
-                    ns.remove_descendant(&declaration_id);
-                }
-            }
-
-            let namespace = self
-                .declarations_mut()
-                .get_mut(&declaration_id)
-                .unwrap()
-                .as_namespace_mut()
-                .unwrap();
-
-            namespace.for_each_descendant(|descendant_id| {
-                queue.push(*descendant_id);
-            });
-
-            namespace.clear_ancestors();
-            namespace.clear_descendants();
-
-            // Track this declaration for incremental ancestor re-linearization
-            work.ancestors.push(declaration_id);
-        }
-
-        visited
-    }
-
-    /// Unresolves constant references that are in the scope of affected declarations.
-    ///
-    /// A reference is "in scope" of a declaration if its name's nesting chain resolves to that declaration.
-    ///
-    /// Uses reverse indices to walk DOWN from affected declarations through `name_dependents`
-    /// instead of scanning all constant references (O(affected) instead of O(R)).
-    fn unresolve_affected_references(
-        &mut self,
-        affected_decl_ids: &IdentityHashSet<DeclarationId>,
-        work: &mut PendingWork,
-    ) -> Vec<NameId> {
-        if affected_decl_ids.is_empty() {
-            return Vec::new();
-        }
-
-        let mut refs_to_unresolve: Vec<ReferenceId> = Vec::new();
-
-        // Collect all names resolved to affected declarations
-        let mut seed_names: Vec<NameId> = Vec::new();
-        for decl_id in affected_decl_ids {
-            if let Some(name_set) = self.declaration_to_names.get(decl_id) {
-                seed_names.extend(name_set.iter());
-            }
-        }
-
-        // BFS through name_dependents to find all names "in scope" of affected declarations.
-        // Only follow dependents (not the seed names themselves) to avoid unresolving
-        // references TO the affected declaration (like superclass refs).
-        let mut in_scope_names = IdentityHashSet::<NameId>::default();
-        let mut queue: Vec<NameId> = Vec::new();
-        for seed in &seed_names {
-            if let Some(deps) = self.name_dependents.get(seed) {
-                queue.extend(deps.iter());
-            }
-        }
-        while let Some(name_id) = queue.pop() {
-            if !in_scope_names.insert(name_id) {
-                continue;
-            }
-            if let Some(deps) = self.name_dependents.get(&name_id) {
-                queue.extend(deps.iter());
-            }
-        }
-
-        // For each in-scope name that has constant references:
-        // - Resolved references need unresolving (they may resolve differently now)
-        // - Unresolved references need re-queuing (they may now resolve with new ancestors)
-        for name_id in &in_scope_names {
-            if let Some(ref_ids) = self.name_to_references.get(name_id)
-                && let Some(name_ref) = self.names.get(name_id)
-            {
-                if matches!(name_ref, NameRef::Resolved(_)) {
-                    refs_to_unresolve.extend(ref_ids.iter());
-                } else {
-                    // Previously-unresolved references get a second chance
-                    work.references.extend(ref_ids.iter());
-                }
-            }
-        }
-
-        refs_to_unresolve.sort_unstable_by_key(|id| **id);
-        refs_to_unresolve.dedup();
-
-        // Unresolve the collected references and track which names became unresolved
-        let mut unresolved_names: Vec<NameId> = Vec::new();
-        for ref_id in &refs_to_unresolve {
-            let name_id = self.constant_references.get(ref_id).map(|cr| *cr.name_id());
-            if self.unresolve_reference(ref_id).is_some()
-                && let Some(nid) = name_id
-            {
-                unresolved_names.push(nid);
-            }
-        }
-
-        // Track all unresolved references for incremental re-resolution
-        work.references.extend(refs_to_unresolve);
-
-        unresolved_names.sort_unstable_by_key(|id| **id);
-        unresolved_names.dedup();
-        unresolved_names
-    }
-
-    /// Cascades name invalidation: when a name is unresolved, any name that depends on it
-    /// (via `parent_scope` or nesting) must also be unresolved. When a definition's name becomes
-    /// unresolved, the declaration it was associated with must be cleaned up.
-    ///
-    /// Takes a seed set of recently-unresolved `NameId`s and walks their dependents via
-    /// reverse indices instead of scanning all names (O(affected) instead of O(N * `cascade_depth`)).
-    fn cascade_name_invalidation(&mut self, seeds: Vec<NameId>, work: &mut PendingWork) {
-        let mut queue = seeds;
-        let mut visited = IdentityHashSet::<NameId>::default();
-
-        while let Some(seed_name_id) = queue.pop() {
-            if !visited.insert(seed_name_id) {
-                continue;
-            }
-
-            // Collect dependents of this unresolved name
-            let mut dependents: Vec<NameId> = Vec::new();
-            if let Some(deps) = self.name_dependents.get(&seed_name_id) {
-                dependents.extend(deps.iter().copied());
-            }
-
-            for dep_name_id in dependents {
-                if let Some(old_decl_id) = self.unresolve_name(dep_name_id) {
-                    // Add the newly unresolved name to the queue for further cascading
-                    queue.push(dep_name_id);
-
-                    // Unresolve any constant references that used this name (via index)
-                    let refs_using_name: Vec<ReferenceId> =
-                        self.name_to_references.get(&dep_name_id).cloned().unwrap_or_default();
-
-                    for ref_id in refs_using_name {
-                        if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
-                            decl.remove_reference(&ref_id);
-                        }
-                        // Track this reference for incremental re-resolution
-                        work.references.push(ref_id);
-                    }
-
-                    // Check if any definitions use this name (via index) - if so, remove them from the declaration
-                    let defs_using_name: Vec<DefinitionId> =
-                        self.name_to_definitions.get(&dep_name_id).cloned().unwrap_or_default();
-
-                    for def_id in defs_using_name {
-                        // Track this definition for incremental re-resolution
-                        work.definitions.push(def_id);
-
-                        if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
-                            decl.remove_definition(&def_id);
-                        }
-
-                        // If declaration has no definitions left, remove it and its entire sub-tree
-                        if self
-                            .declarations
-                            .get(&old_decl_id)
-                            .is_some_and(super::declaration::Declaration::has_no_definitions)
-                        {
-                            self.remove_declaration_tree(old_decl_id, work);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Recursively removes a declaration and everything it owns: members, singleton classes,
-    /// and their sub-trees. For each removed declaration, unresolves names pointing to it and
-    /// adds affected IDs to the pending sets for re-resolution.
-    ///
-    /// Also removes the declaration from its owner's member list.
-    fn remove_declaration_tree(&mut self, decl_id: DeclarationId, work: &mut PendingWork) {
-        // Collect all declaration IDs to remove via DFS
-        let mut to_remove = Vec::new();
-        let mut visited = IdentityHashSet::<DeclarationId>::default();
-        let mut stack = vec![decl_id];
-
-        while let Some(current_id) = stack.pop() {
-            if !visited.insert(current_id) {
-                continue;
-            }
-            to_remove.push(current_id);
-
-            let Some(decl) = self.declarations.get(&current_id) else {
-                continue;
-            };
-
-            // Queue singleton class for removal
+            // Queue members + singleton as Declaration items
             if let Some(ns) = decl.as_namespace() {
                 if let Some(singleton_id) = ns.singleton_class() {
-                    stack.push(*singleton_id);
+                    queue.push(InvalidationItem::Declaration(*singleton_id));
+                }
+                for member_decl_id in ns.members().values() {
+                    queue.push(InvalidationItem::Declaration(*member_decl_id));
                 }
 
-                // Queue all member declarations for removal
-                for member_decl_id in ns.members().values() {
-                    stack.push(*member_decl_id);
+                // Queue descendants for ancestor re-linearization
+                for descendant_id in ns.descendants() {
+                    queue.push(InvalidationItem::Declaration(*descendant_id));
                 }
             }
-        }
 
-        // Remove each declaration and clean up reverse indices
-        for remove_id in &to_remove {
-            // Unresolve names that pointed to this declaration
-            if let Some(name_set) = self.declaration_to_names.remove(remove_id) {
+            // Unresolve names resolved to this declaration, queue their dependents
+            if let Some(name_set) = self.declaration_to_names.remove(&decl_id) {
                 for name_id in name_set {
                     self.unresolve_name(name_id);
+                    if let Some(deps) = self.name_dependents.get(&name_id) {
+                        for dep in deps.clone() {
+                            queue.push(InvalidationItem::Name(dep));
+                        }
+                    }
                 }
             }
 
             // Remove from owner's members
-            if let Some(decl) = self.declarations.get(remove_id) {
+            if let Some(decl) = self.declarations.get(&decl_id) {
                 let unqualified_str_id = StringId::from(&decl.unqualified_name());
                 let owner_id = *decl.owner_id();
 
@@ -1152,25 +971,152 @@ impl Graph {
                 }
             }
 
-            // Queue remaining definitions for re-resolution so they aren't orphaned
-            // (definitions from OTHER files that were linked to this declaration)
-            if let Some(decl) = self.declarations.get(remove_id) {
+            // Queue remaining definitions for re-resolution (from OTHER files)
+            if let Some(decl) = self.declarations.get(&decl_id) {
                 for def_id in decl.definitions() {
                     work.definitions.push(*def_id);
                 }
             }
 
-            // Add descendants to pending ancestors since their ancestor chains reference this
-            if let Some(decl) = self.declarations.get(remove_id)
-                && let Some(ns) = decl.as_namespace()
-            {
-                for descendant_id in ns.descendants() {
-                    work.ancestors.push(*descendant_id);
+            self.declarations.remove(&decl_id);
+        } else {
+            // --- Has definitions: ancestors stale ---
+            if !visited_declarations.insert(decl_id) {
+                return;
+            }
+
+            let Some(namespace) = self.declarations.get_mut(&decl_id).and_then(|d| d.as_namespace_mut()) else {
+                return;
+            };
+
+            // Remove self from each ancestor's descendant set
+            for ancestor in &namespace.clone_ancestors() {
+                if let Ancestor::Complete(ancestor_id) = ancestor
+                    && let Some(anc_decl) = self.declarations.get_mut(ancestor_id)
+                    && let Some(ns) = anc_decl.as_namespace_mut()
+                {
+                    ns.remove_descendant(&decl_id);
                 }
             }
 
-            self.declarations.remove(remove_id);
+            let namespace = self.declarations.get_mut(&decl_id).unwrap().as_namespace_mut().unwrap();
+
+            // Queue descendants as Declaration items
+            namespace.for_each_descendant(|descendant_id| {
+                queue.push(InvalidationItem::Declaration(*descendant_id));
+            });
+
+            namespace.clear_ancestors();
+            namespace.clear_descendants();
+
+            work.ancestors.push(decl_id);
+
+            // Queue dependents of resolved names (skipping seeds themselves)
+            if let Some(name_set) = self.declaration_to_names.get(&decl_id) {
+                for seed_name_id in name_set {
+                    if let Some(deps) = self.name_dependents.get(seed_name_id) {
+                        for dep in deps.clone() {
+                            queue.push(InvalidationItem::Name(dep));
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    /// Processes a name in the invalidation worklist.
+    ///
+    /// Always propagates to `name_dependents`. Then checks whether the name needs full structural cascade (nesting /
+    /// parent scope unresolved) or just reference re-evaluation (ancestor context changed).
+    fn process_name(
+        &mut self,
+        name_id: NameId,
+        queue: &mut Vec<InvalidationItem>,
+        visited_names: &mut IdentityHashSet<NameId>,
+        work: &mut PendingWork,
+    ) {
+        if !visited_names.insert(name_id) {
+            return;
+        }
+
+        // Always propagate to dependents
+        if let Some(deps) = self.name_dependents.get(&name_id) {
+            for dep in deps.clone() {
+                queue.push(InvalidationItem::Name(dep));
+            }
+        }
+
+        if self.has_unresolved_dependency(name_id) {
+            // Structural cascade: the name's resolution is invalid
+            if let Some(old_decl_id) = self.unresolve_name(name_id) {
+                let refs_using_name: Vec<ReferenceId> =
+                    self.name_to_references.get(&name_id).cloned().unwrap_or_default();
+
+                for ref_id in refs_using_name {
+                    if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
+                        decl.remove_reference(&ref_id);
+                    }
+                    work.references.push(ref_id);
+                }
+
+                let defs_using_name: Vec<DefinitionId> =
+                    self.name_to_definitions.get(&name_id).cloned().unwrap_or_default();
+
+                for def_id in defs_using_name {
+                    work.definitions.push(def_id);
+
+                    if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
+                        decl.remove_definition(&def_id);
+                    }
+
+                    if self
+                        .declarations
+                        .get(&old_decl_id)
+                        .is_some_and(Declaration::has_no_definitions)
+                    {
+                        queue.push(InvalidationItem::Declaration(old_decl_id));
+                    }
+                }
+            }
+        } else {
+            // Ancestor change only: re-evaluate constant references, leave names/defs intact
+            if let Some(ref_ids) = self.name_to_references.get(&name_id) {
+                let ref_ids = ref_ids.clone();
+                if let Some(name_ref) = self.names.get(&name_id) {
+                    if matches!(name_ref, NameRef::Resolved(_)) {
+                        for ref_id in &ref_ids {
+                            self.unresolve_reference(ref_id);
+                            work.references.push(*ref_id);
+                        }
+                    } else {
+                        // Already unresolved — give references a second chance
+                        work.references.extend(ref_ids.iter());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns true if the name's nesting or parent scope is currently unresolved (or missing), indicating a structural
+    /// dependency has been broken and the name needs full cascade.
+    fn has_unresolved_dependency(&self, name_id: NameId) -> bool {
+        let Some(name_ref) = self.names.get(&name_id) else {
+            return false;
+        };
+
+        if let Some(nesting_id) = name_ref.nesting()
+            && matches!(self.names.get(nesting_id), Some(NameRef::Unresolved(_)) | None)
+        {
+            return true;
+        }
+
+        if let Some(parent_id) = name_ref.parent_scope().as_ref()
+            && matches!(self.names.get(parent_id), Some(NameRef::Resolved(_)) | None)
+        {
+            return true;
+        }
+
+        false
     }
 
     /// Sets the encoding that should be used for transforming byte offsets into LSP code unit line/column positions
