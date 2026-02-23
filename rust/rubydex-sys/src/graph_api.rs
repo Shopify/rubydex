@@ -10,7 +10,7 @@ use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::DeclarationId;
 use rubydex::resolution::Resolver;
-use rubydex::{indexing, listing, query};
+use rubydex::{indexing, integrity, listing, query};
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::{mem, ptr};
@@ -194,6 +194,42 @@ pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
         let mut resolver = Resolver::new(graph);
         resolver.resolve_all();
     });
+}
+
+/// Checks the integrity of the graph and returns an array of error message strings. Returns NULL if there are no
+/// errors. Caller must free with `free_c_string_array`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `out_error_count` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_check_integrity(
+    pointer: GraphPointer,
+    out_error_count: *mut usize,
+) -> *const *const c_char {
+    with_graph(pointer, |graph| {
+        let errors = integrity::check_integrity(graph);
+
+        if errors.is_empty() {
+            unsafe { *out_error_count = 0 };
+            return ptr::null();
+        }
+
+        let c_strings: Vec<*const c_char> = errors
+            .into_iter()
+            .filter_map(|error| {
+                CString::new(error.to_string())
+                    .ok()
+                    .map(|c_string| c_string.into_raw().cast_const())
+            })
+            .collect();
+
+        unsafe { *out_error_count = c_strings.len() };
+
+        let boxed = c_strings.into_boxed_slice();
+        Box::into_raw(boxed).cast::<*const c_char>()
+    })
 }
 
 /// # Safety

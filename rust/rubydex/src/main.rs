@@ -2,7 +2,7 @@ use clap::{Parser, ValueEnum};
 use std::mem;
 
 use rubydex::{
-    indexing, listing,
+    indexing, integrity, listing,
     model::graph::Graph,
     resolution::Resolver,
     stats::{
@@ -27,6 +27,9 @@ struct Args {
 
     #[arg(long = "stats", help = "Show detailed performance statistics")]
     stats: bool,
+
+    #[arg(long = "check-integrity", help = "Check the integrity of the graph after resolution")]
+    check_integrity: bool,
 
     #[arg(
         long = "report-orphans",
@@ -96,6 +99,23 @@ fn main() {
 
     if let Some(StopAfter::Resolution) = args.stop_after {
         return exit(args.stats);
+    }
+
+    // Integrity check
+    if args.check_integrity {
+        let errors = time_it!(integrity_check, { integrity::check_integrity(&graph) });
+
+        if errors.is_empty() {
+            println!("Integrity check passed: no issues found");
+        } else {
+            eprintln!("Integrity check found {} issue(s):", errors.len());
+
+            for error in &errors {
+                eprintln!("  - {error}");
+            }
+
+            std::process::exit(1);
+        }
     }
 
     // Querying

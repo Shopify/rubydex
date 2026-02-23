@@ -9,6 +9,7 @@
 #include "utils.h"
 
 static VALUE cGraph;
+static VALUE mRubydex;
 
 // Free function for the custom Graph allocator. We always have to call into Rust to free data allocated by it
 static void graph_free(void *ptr) {
@@ -449,6 +450,32 @@ static VALUE rdxr_graph_require_paths(VALUE self, VALUE load_path) {
     return array;
 }
 
+// Graph#check_integrity: () -> Array[Rubydex::IntegrityError]
+// Returns an array of IntegrityError objects, empty if no issues found
+static VALUE rdxr_graph_check_integrity(VALUE self) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    size_t error_count = 0;
+    const char *const *errors = rdx_check_integrity(graph, &error_count);
+
+    if (errors == NULL) {
+        return rb_ary_new();
+    }
+
+    VALUE cIntegrityError = rb_const_get(mRubydex, rb_intern("IntegrityError"));
+    VALUE array = rb_ary_new_capa((long)error_count);
+
+    for (size_t i = 0; i < error_count; i++) {
+        VALUE argv[] = {rb_utf8_str_new_cstr(errors[i])};
+        VALUE error = rb_class_new_instance(1, argv, cIntegrityError);
+        rb_ary_push(array, error);
+    }
+
+    free_c_string_array(errors, error_count);
+    return array;
+}
+
 // Graph#diagnostics -> Array[Rubydex::Diagnostic]
 static VALUE rdxr_graph_diagnostics(VALUE self) {
     void *graph;
@@ -482,7 +509,8 @@ static VALUE rdxr_graph_diagnostics(VALUE self) {
     return diagnostics;
 }
 
-void rdxi_initialize_graph(VALUE mRubydex) {
+void rdxi_initialize_graph(VALUE moduleRubydex) {
+    mRubydex = moduleRubydex;
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
@@ -495,6 +523,7 @@ void rdxi_initialize_graph(VALUE mRubydex) {
     rb_define_method(cGraph, "constant_references", rdxr_graph_constant_references, 0);
     rb_define_method(cGraph, "method_references", rdxr_graph_method_references, 0);
     rb_define_method(cGraph, "diagnostics", rdxr_graph_diagnostics, 0);
+    rb_define_method(cGraph, "check_integrity", rdxr_graph_check_integrity, 0);
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
     rb_define_method(cGraph, "search", rdxr_graph_search, 1);
     rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);

@@ -122,5 +122,6 @@ make_timer! {
     listing, "Listing";
     indexing, "Indexing";
     resolution, "Resolution";
+    integrity_check, "Integrity check";
     querying, "Querying";
 }

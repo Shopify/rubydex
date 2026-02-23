@@ -2,11 +2,6 @@
 
 require "bundler"
 require "uri"
-
-module Rubydex
-  class Error < StandardError; end
-end
-
 require "rubydex/version"
 
 begin
@@ -18,6 +13,7 @@ rescue LoadError
   require "rubydex/rubydex"
 end
 
+require "rubydex/errors"
 require "rubydex/location"
 require "rubydex/comment"
 require "rubydex/diagnostic"

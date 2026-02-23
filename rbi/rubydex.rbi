@@ -235,7 +235,7 @@ module Rubydex
     def end_line; end
 
     sig { returns(String) }
-    def path; end
+    def to_file_path; end
 
     sig { returns(Integer) }
     def start_column; end
