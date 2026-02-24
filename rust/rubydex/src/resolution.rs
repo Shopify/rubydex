@@ -4229,4 +4229,90 @@ mod tests {
         assert_no_diagnostics!(&context);
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
     }
+
+    #[test]
+    fn rbs_simple_module() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo");
+    }
+
+    #[test]
+    fn rbs_nested_modules() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Foo
+              module Bar
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::Bar");
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
+        assert_members_eq!(context, "Foo", ["Bar"]);
+    }
+
+    #[test]
+    fn rbs_qualified_module_name() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///parents.rbs", {
+            r"
+            module Foo
+              module Bar
+              end
+            end
+            "
+        });
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Foo::Bar::Baz
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo::Bar::Baz");
+    }
+
+    #[test]
+    fn rbs_qualified_name_inside_nested_module() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///foo.rbs", {
+            r"
+            module Outer
+              module Foo
+              end
+            end
+            "
+        });
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Outer
+              module Foo::Bar
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::Foo");
+        assert_declaration_exists!(context, "Outer::Foo::Bar");
+        assert_owner_eq!(context, "Outer::Foo::Bar", "Outer::Foo");
+    }
 }
