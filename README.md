@@ -12,7 +12,7 @@ of using the Ruby API:
 # Create a new graph representing the current workspace
 graph = Rubydex::Graph.new
 # Configuring graph LSP encoding
-graph.set_encoding("utf16")
+graph.encoding = "utf16"
 # Index the entire workspace with all dependencies
 graph.index_workspace
 # Or index specific file paths
