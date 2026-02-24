@@ -1,8 +1,7 @@
 use super::normalize_indentation;
 #[cfg(test)]
 use crate::diagnostic::Rule;
-use crate::indexing::local_graph::LocalGraph;
-use crate::indexing::ruby_indexer::RubyIndexer;
+use crate::indexing::{self, LanguageId};
 use crate::model::graph::Graph;
 use crate::resolution::Resolver;
 
@@ -22,17 +21,10 @@ impl GraphTest {
         &self.graph
     }
 
-    #[must_use]
-    fn index_source(uri: &str, source: &str) -> LocalGraph {
-        let mut indexer = RubyIndexer::new(uri.to_string(), source);
-        indexer.index();
-        indexer.local_graph()
-    }
-
+    /// Indexes a Ruby source
     pub fn index_uri(&mut self, uri: &str, source: &str) {
         let source = normalize_indentation(source);
-        let local_index = Self::index_source(uri, &source);
-        self.graph.update(local_index);
+        indexing::index_source(&mut self.graph, uri, &source, &LanguageId::Ruby);
     }
 
     pub fn delete_uri(&mut self, uri: &str) {

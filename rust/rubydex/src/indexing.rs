@@ -5,12 +5,39 @@ use crate::{
     model::graph::Graph,
 };
 use crossbeam_channel::{Sender, unbounded};
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{ffi::OsStr, fs, path::PathBuf, sync::Arc};
 use url::Url;
 
 pub mod local_graph;
 pub mod rbs_indexer;
 pub mod ruby_indexer;
+
+/// The language of a source document, used to dispatch to the appropriate indexer
+pub enum LanguageId {
+    Ruby,
+    Rbs,
+}
+
+impl From<&OsStr> for LanguageId {
+    fn from(ext: &OsStr) -> Self {
+        if ext == "rbs" { Self::Rbs } else { Self::Ruby }
+    }
+}
+
+impl LanguageId {
+    /// Determines the language from an LSP language ID string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the language ID is not recognized.
+    pub fn from_language_id(language_id: &str) -> Result<Self, Errors> {
+        match language_id {
+            "ruby" => Ok(Self::Ruby),
+            "rbs" => Ok(Self::Rbs),
+            _ => Err(Errors::FileError(format!("Unsupported language_id `{language_id}`"))),
+        }
+    }
+}
 
 /// Job that indexes a single file
 pub struct IndexingJob {
@@ -56,22 +83,19 @@ impl Job for IndexingJob {
             return;
         };
 
-        let local_graph = if let Some(ext) = self.path.extension()
-            && ext == "rbs"
-        {
-            let mut indexer = RBSIndexer::new(url.to_string(), &source);
-            indexer.index();
-            indexer.local_graph()
-        } else {
-            let mut indexer = RubyIndexer::new(url.to_string(), &source);
-            indexer.index();
-            indexer.local_graph()
-        };
+        let language = self.path.extension().map_or(LanguageId::Ruby, LanguageId::from);
+        let local_graph = build_local_graph(url.to_string(), &source, &language);
 
         self.local_graph_tx
             .send(local_graph)
             .expect("graph receiver dropped before merge");
     }
+}
+
+/// Indexes a single source string in memory, dispatching to the appropriate indexer based on `language_id`.
+pub fn index_source(graph: &mut Graph, uri: &str, source: &str, language_id: &LanguageId) {
+    let local_graph = build_local_graph(uri.to_string(), source, language_id);
+    graph.update(local_graph);
 }
 
 /// Indexes the given paths, reading the content from disk and populating the given `Graph` instance.
@@ -104,6 +128,22 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
     errors_rx.iter().collect()
 }
 
+/// Indexes a source string using the appropriate indexer for the given language.
+fn build_local_graph(uri: String, source: &str, language: &LanguageId) -> LocalGraph {
+    match language {
+        LanguageId::Ruby => {
+            let mut indexer = RubyIndexer::new(uri, source);
+            indexer.index();
+            indexer.local_graph()
+        }
+        LanguageId::Rbs => {
+            let mut indexer = RBSIndexer::new(uri, source);
+            indexer.index();
+            indexer.local_graph()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -134,5 +174,32 @@ mod tests {
 
         assert!(errors.is_empty());
         assert_eq!(graph.documents().len(), 1);
+    }
+
+    #[test]
+    fn from_language_id_unknown() {
+        let result = LanguageId::from_language_id("python");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn updating_document_from_in_memory_source() {
+        let context = Context::new();
+        let path = context.absolute_path_to("foo/bar.rb");
+        context.write(&path, "class Foo; end");
+
+        let uri = Url::from_file_path(&path).unwrap().to_string();
+
+        let mut graph = Graph::new();
+        let errors = index_files(&mut graph, vec![path]);
+
+        assert!(errors.is_empty(), "Expected no errors, got: {errors:#?}");
+        assert_eq!(1, graph.definitions().len());
+        assert_eq!(1, graph.documents().len());
+
+        index_source(&mut graph, &uri, "", &LanguageId::Ruby);
+
+        assert_eq!(0, graph.definitions().len());
+        assert_eq!(1, graph.documents().len());
     }
 }

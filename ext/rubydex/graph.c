@@ -61,6 +61,28 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     return array;
 }
 
+// Indexes a single source string in memory, dispatching to the appropriate indexer based on language_id
+//
+// Graph#index_source: (String uri, String source, String language_id) -> void
+static VALUE rdxr_graph_index_source(VALUE self, VALUE uri, VALUE source, VALUE language_id) {
+    Check_Type(uri, T_STRING);
+    Check_Type(source, T_STRING);
+    Check_Type(language_id, T_STRING);
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    const char *uri_str = StringValueCStr(uri);
+    const char *source_str = StringValueCStr(source);
+    const char *language_id_str = StringValueCStr(language_id);
+
+    if (!rdx_index_source(graph, uri_str, source_str, language_id_str)) {
+        rb_raise(rb_eArgError, "unsupported language_id `%s`", language_id_str);
+    }
+
+    return Qnil;
+}
+
 // Size function for the declarations enumerator
 static VALUE graph_declarations_size(VALUE self, VALUE _args, VALUE _eobj) {
     void *graph;
@@ -449,6 +471,7 @@ void rdxi_initialize_graph(VALUE mRubydex) {
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
+    rb_define_method(cGraph, "index_source", rdxr_graph_index_source, 3);
     rb_define_method(cGraph, "delete_document", rdxr_graph_delete_document, 1);
     rb_define_method(cGraph, "resolve", rdxr_graph_resolve, 0);
     rb_define_method(cGraph, "resolve_constant", rdxr_graph_resolve_constant, 2);
