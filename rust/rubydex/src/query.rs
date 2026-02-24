@@ -142,6 +142,9 @@ pub enum CompletionReceiver {
     /// Completion requested for an expression with no previous token (e.g.: at the start of a line with nothing before)
     /// Includes: all keywords, all global variables and reacheable instance variables, class variables, constants and methods
     Expression(NameId),
+    /// Completion requested after a namespace access operator (e.g.: `Foo::`)
+    /// Includes: all constants and singleton methods for the namespace and its ancestors
+    NamespaceAccess(DeclarationId),
 }
 
 pub struct CompletionContext<'a> {
@@ -197,8 +200,6 @@ macro_rules! collect_candidates {
 ///   resolves to
 /// - Method calls on anything (e.g.: `foo.`, `@bar.`, `@@baz.`, `Qux.`) collects all methods that exist on the type
 ///   returned by the receiver
-/// - Require path completion collects all require paths accessible from the `$LOAD_PATH`
-/// - Relative require path completion collects all require paths accessible from the directory of the current file
 ///
 /// # Panics
 ///
@@ -213,7 +214,56 @@ pub fn completion_candidates<'a>(
 ) -> Result<Vec<DeclarationId>, Box<dyn Error>> {
     match context.completion_receiver {
         CompletionReceiver::Expression(self_name_id) => expression_completion(graph, self_name_id, context),
+        CompletionReceiver::NamespaceAccess(decl_id) => namespace_access_completion(graph, decl_id, context),
     }
+}
+
+/// Collect completion for a namespace access (e.g.: `Foo::`)
+fn namespace_access_completion<'a>(
+    graph: &'a Graph,
+    namespace_decl_id: DeclarationId,
+    mut context: CompletionContext<'a>,
+) -> Result<Vec<DeclarationId>, Box<dyn Error>> {
+    let Some(Declaration::Namespace(namespace)) = graph.declarations().get(&namespace_decl_id) else {
+        return Err(format!("Expected declaration {namespace_decl_id:?} to be a namespace").into());
+    };
+    let mut candidates = Vec::new();
+
+    // Walk ancestors collecting inherited constants, stopping at Object to avoid surfacing top-level constants
+    // from Object, Kernel, BasicObject, etc.
+    for ancestor in namespace.ancestors() {
+        if let Ancestor::Complete(ancestor_id) = ancestor {
+            // Do not offer completion for constants inherited after `Object` (e.g.: `Object::String`). While this is
+            // valid Ruby code, it's extremely uncommon and not a super valuable completion suggestion
+            if *ancestor_id == *OBJECT_ID {
+                break;
+            }
+
+            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
+
+            collect_candidates!(
+                graph,
+                &ancestor_decl,
+                context,
+                candidates,
+                Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
+            );
+        }
+    }
+
+    // Collect singleton methods from the singleton class and its ancestors
+    if let Some(singleton_id) = namespace.singleton_class() {
+        let singleton = graph.declarations().get(singleton_id).unwrap().as_namespace().unwrap();
+
+        for ancestor in singleton.ancestors() {
+            if let Ancestor::Complete(ancestor_id) = ancestor {
+                let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
+                collect_candidates!(graph, &ancestor_decl, context, candidates, Declaration::Method(_));
+            }
+        }
+    }
+
+    Ok(candidates)
 }
 
 /// Collect completion for an expression
@@ -786,5 +836,258 @@ mod tests {
         .collect::<Vec<_>>();
 
         assert_eq!(vec!["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"], candidates);
+    }
+
+    #[test]
+    fn namespace_access_completion_collects_constants_and_singleton_methods() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              CONST = 1
+              class Bar; end
+
+              class << self
+                def class_method; end
+              end
+
+              def instance_method; end
+            end
+            ",
+        );
+        context.resolve();
+
+        let decl_id = DeclarationId::from("Foo");
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Foo::CONST", "Foo::Bar", "Foo::<Foo>#class_method()"], candidates);
+    }
+
+    #[test]
+    fn namespace_access_completion_includes_inherited_members() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Parent
+              PARENT_CONST = 1
+
+              class << self
+                def parent_class_method; end
+              end
+            end
+
+            class Child < Parent
+              CHILD_CONST = 2
+
+              class << self
+                def child_class_method; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let decl_id = DeclarationId::from("Child");
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec![
+                "Child::CHILD_CONST",
+                "Parent::PARENT_CONST",
+                "Child::<Child>#child_class_method()",
+                "Parent::<Parent>#parent_class_method()",
+            ],
+            candidates
+        );
+    }
+
+    #[test]
+    fn namespace_access_completion_deduplicates_overridden_members() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Parent
+              CONST = 1
+
+              class << self
+                def shared_method; end
+              end
+            end
+
+            class Child < Parent
+              CONST = 2
+
+              class << self
+                def shared_method; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let decl_id = DeclarationId::from("Child");
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Child::CONST", "Child::<Child>#shared_method()",], candidates);
+    }
+
+    #[test]
+    fn namespace_access_completion_excludes_object_owned_constants() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              CONST = 1
+            end
+
+            class Bar; end
+            ",
+        );
+        context.resolve();
+
+        let decl_id = DeclarationId::from("Foo");
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Foo::CONST"], candidates);
+    }
+
+    #[test]
+    fn namespace_access_completion_includes_constant_aliases() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              Bar = String
+              CONST = 1
+            end
+            ",
+        );
+        context.resolve();
+
+        let decl_id = DeclarationId::from("Foo");
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Foo::CONST", "Foo::Bar"], candidates);
+    }
+
+    #[test]
+    fn namespace_access_completion_on_basic_object_subclass() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo < BasicObject
+              CONST = 1
+
+              class << self
+                def class_method; end
+              end
+            end
+
+            class Bar; end
+            ",
+        );
+        context.resolve();
+
+        let decl_id = DeclarationId::from("Foo");
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(vec!["Foo::CONST", "Foo::<Foo>#class_method()"], candidates);
+    }
+
+    #[test]
+    fn namespace_access_completion_includes_module_members() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar
+              CONST = 1
+
+              class << self
+                def bar_class_method; end
+              end
+            end
+
+            class Foo
+              FOO_CONST = 2
+              include Bar
+
+              class << self
+                def foo_class_method; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let decl_id = DeclarationId::from("Foo");
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec!["Foo::FOO_CONST", "Bar::CONST", "Foo::<Foo>#foo_class_method()"],
+            candidates
+        );
     }
 }
