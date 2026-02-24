@@ -6,6 +6,7 @@ use std::thread;
 use url::Url;
 
 use crate::model::declaration::{Ancestor, Declaration};
+use crate::model::definitions::{Definition, Parameter};
 use crate::model::graph::{Graph, OBJECT_ID};
 use crate::model::identity_maps::IdentityHashSet;
 use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
@@ -137,6 +138,12 @@ pub fn require_paths(graph: &Graph, load_paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// A completion candidate that can be either a declaration or a keyword argument name
+pub enum CompletionCandidate {
+    Declaration(DeclarationId),
+    KeywordArgument(StringId),
+}
+
 /// The context in which completion is being requested
 pub enum CompletionReceiver {
     /// Completion requested for an expression with no previous token (e.g.: at the start of a line with nothing before)
@@ -149,6 +156,12 @@ pub enum CompletionReceiver {
     /// In the case of singleton completion (e.g.: `Foo.`), the declaration ID should be for the singleton class (i.e.: `Foo::<Foo>`)
     /// Includes: all methods that exist on the type of the receiver and its ancestors
     MethodCall(DeclarationId),
+    /// Completion requested inside a method call's argument list (e.g.: `foo.bar(|)`)
+    /// Includes: everything expressions do plus keyword parameter names of the method being called
+    MethodArgument {
+        self_name_id: NameId,
+        method_decl_id: DeclarationId,
+    },
 }
 
 pub struct CompletionContext<'a> {
@@ -176,7 +189,7 @@ macro_rules! collect_candidates {
     ($declaration:expr, $context:expr, $candidates:expr) => {
         for (member_str_id, member_declaration_id) in $declaration.members() {
             if $context.dedup(member_str_id) {
-                $candidates.push(*member_declaration_id);
+                $candidates.push(CompletionCandidate::Declaration(*member_declaration_id));
             }
         }
     };
@@ -186,7 +199,7 @@ macro_rules! collect_candidates {
             let member = $graph.declarations().get(member_declaration_id).unwrap();
 
             if matches!(member, $kinds) && $context.dedup(member_str_id) {
-                $candidates.push(*member_declaration_id);
+                $candidates.push(CompletionCandidate::Declaration(*member_declaration_id));
             }
         }
     };
@@ -215,11 +228,15 @@ macro_rules! collect_candidates {
 pub fn completion_candidates<'a>(
     graph: &'a Graph,
     context: CompletionContext<'a>,
-) -> Result<Vec<DeclarationId>, Box<dyn Error>> {
+) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
     match context.completion_receiver {
         CompletionReceiver::Expression(self_name_id) => expression_completion(graph, self_name_id, context),
         CompletionReceiver::NamespaceAccess(decl_id) => namespace_access_completion(graph, decl_id, context),
         CompletionReceiver::MethodCall(decl_id) => method_call_completion(graph, decl_id, context),
+        CompletionReceiver::MethodArgument {
+            self_name_id,
+            method_decl_id,
+        } => method_argument_completion(graph, self_name_id, method_decl_id, context),
     }
 }
 
@@ -228,7 +245,7 @@ fn namespace_access_completion<'a>(
     graph: &'a Graph,
     namespace_decl_id: DeclarationId,
     mut context: CompletionContext<'a>,
-) -> Result<Vec<DeclarationId>, Box<dyn Error>> {
+) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
     let Some(Declaration::Namespace(namespace)) = graph.declarations().get(&namespace_decl_id) else {
         return Err(format!("Expected declaration {namespace_decl_id:?} to be a namespace").into());
     };
@@ -276,7 +293,7 @@ fn method_call_completion<'a>(
     graph: &'a Graph,
     receiver_decl_id: DeclarationId,
     mut context: CompletionContext<'a>,
-) -> Result<Vec<DeclarationId>, Box<dyn Error>> {
+) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
     let Some(Declaration::Namespace(namespace)) = graph.declarations().get(&receiver_decl_id) else {
         return Err(format!("Expected declaration {receiver_decl_id:?} to be a namespace").into());
     };
@@ -297,7 +314,7 @@ fn expression_completion<'a>(
     graph: &'a Graph,
     self_name_id: NameId,
     mut context: CompletionContext<'a>,
-) -> Result<Vec<DeclarationId>, Box<dyn Error>> {
+) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
     let Some(name_ref) = graph.names().get(&self_name_id) else {
         return Err(format!("Name {self_name_id} not found in graph").into());
     };
@@ -374,6 +391,36 @@ fn expression_completion<'a>(
     Ok(candidates)
 }
 
+/// Collect completion for a method argument (e.g.: `foo.bar(|)`)
+fn method_argument_completion<'a>(
+    graph: &'a Graph,
+    self_name_id: NameId,
+    method_decl_id: DeclarationId,
+    context: CompletionContext<'a>,
+) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
+    let mut candidates = expression_completion(graph, self_name_id, context)?;
+    let Some(method_decl) = graph.declarations().get(&method_decl_id) else {
+        return Ok(candidates);
+    };
+
+    // Find the first Method definition to extract keyword parameters
+    for def_id in method_decl.definitions() {
+        if let Some(Definition::Method(method_def)) = graph.definitions().get(def_id) {
+            for param in method_def.parameters() {
+                match param {
+                    Parameter::RequiredKeyword(p) | Parameter::OptionalKeyword(p) => {
+                        candidates.push(CompletionCandidate::KeywordArgument(*p.str()));
+                    }
+                    _ => {}
+                }
+            }
+            break;
+        }
+    }
+
+    Ok(candidates)
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -420,13 +467,18 @@ mod tests {
                 *completion_candidates($context.graph(), CompletionContext::new($receiver))
                     .unwrap()
                     .iter()
-                    .map(|id| $context
-                        .graph()
-                        .declarations()
-                        .get(id)
-                        .unwrap()
-                        .name()
-                        .to_string())
+                    .map(|candidate| match candidate {
+                        CompletionCandidate::Declaration(id) => $context
+                            .graph()
+                            .declarations()
+                            .get(id)
+                            .unwrap()
+                            .name()
+                            .to_string(),
+                        CompletionCandidate::KeywordArgument(str_id) => {
+                            format!("{}:", $context.graph().strings().get(str_id).unwrap().as_str())
+                        }
+                    })
                     .collect::<Vec<_>>()
             );
         };
@@ -1185,6 +1237,114 @@ mod tests {
             context,
             CompletionReceiver::MethodCall(DeclarationId::from("Foo::<Foo>")),
             ["Foo::<Foo>#baz()", "Foo::<Foo>#bar()"]
+        );
+    }
+
+    #[test]
+    fn method_argument_completion_includes_keyword_params() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def greet(name:, greeting: 'hello'); end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodArgument {
+                self_name_id: name_id,
+                method_decl_id: DeclarationId::from("Foo#greet()"),
+            },
+            ["Foo", "Foo#greet()", "name:", "greeting:"]
+        );
+    }
+
+    #[test]
+    fn method_argument_completion_no_keyword_params() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def bar(x, y); end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodArgument {
+                self_name_id: name_id,
+                method_decl_id: DeclarationId::from("Foo#bar()"),
+            },
+            ["Foo", "Foo#bar()"]
+        );
+    }
+
+    #[test]
+    fn method_argument_completion_mixed_params() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def search(query, limit:, offset: 0, **opts); end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodArgument {
+                self_name_id: name_id,
+                method_decl_id: DeclarationId::from("Foo#search()"),
+            },
+            // Only RequiredKeyword and OptionalKeyword, not RestKeyword (**opts)
+            ["Foo", "Foo#search()", "limit:", "offset:"]
+        );
+    }
+
+    #[test]
+    fn first_entry_is_always_used_overridden_methods() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def bar(first:, second:); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
+            class Foo
+              def bar(first:); end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodArgument {
+                self_name_id: name_id,
+                method_decl_id: DeclarationId::from("Foo#bar()"),
+            },
+            ["Foo", "Foo#bar()", "first:", "second:"]
         );
     }
 }
