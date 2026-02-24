@@ -411,6 +411,26 @@ mod tests {
         };
     }
 
+    /// Asserts that the completion candidates match the expected list
+    macro_rules! assert_completion_eq {
+        ($context:expr, $receiver:expr, $expected:expr) => {
+            assert_eq!(
+                $expected,
+                completion_candidates($context.graph(), CompletionContext::new($receiver))
+                    .unwrap()
+                    .iter()
+                    .map(|id| $context
+                        .graph()
+                        .declarations()
+                        .get(id)
+                        .unwrap()
+                        .name()
+                        .to_string())
+                    .collect::<Vec<_>>()
+            );
+        };
+    }
+
     #[test]
     fn fuzzy_search_returns_partial_matches() {
         let mut context = GraphTest::new();
@@ -565,16 +585,9 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Child"), ParentScope::None, None).id();
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
             vec![
                 "Child",
                 "Foo",
@@ -584,8 +597,7 @@ mod tests {
                 "Foo#bar()",
                 "Parent#initialize()",
                 "Parent#@var"
-            ],
-            candidates
+            ]
         );
     }
 
@@ -614,16 +626,11 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Child"), ParentScope::None, None).id();
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Child", "Foo", "Parent", "Child#bar()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            vec!["Child", "Foo", "Parent", "Child#bar()"]
+        );
     }
 
     #[test]
@@ -655,18 +662,10 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(
-            vec!["Baz", "Foo", "Bar", "Foo#foo_m()", "Baz#baz_m()", "Bar#bar_m()"],
-            candidates
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            vec!["Baz", "Foo", "Bar", "Foo#foo_m()", "Baz#baz_m()", "Bar#bar_m()"]
         );
     }
 
@@ -698,32 +697,18 @@ mod tests {
 
         let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
         let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), None).id();
-
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(
-            vec!["Foo", "Bar", "Foo::<Foo>#do_something()", "Foo#@@foo_var"],
-            candidates
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            vec!["Foo", "Bar", "Foo::<Foo>#do_something()", "Foo#@@foo_var"]
         );
 
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo", "Bar", "Bar#baz()", "Foo#@@foo_var"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            vec!["Foo", "Bar", "Bar#baz()", "Foo#@@foo_var"]
+        );
     }
 
     #[test]
@@ -758,31 +743,18 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(
-            vec!["Foo::CONST_A", "Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"],
-            candidates
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            vec!["Foo::CONST_A", "Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"]
         );
 
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            vec!["Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"]
+        );
     }
 
     #[test]
@@ -807,20 +779,11 @@ mod tests {
 
         let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, Some(foo_id)).id();
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        // Foo::CONST is reachable from Foo::Bar through lexical scoping, so it must
-        // appear as a completion candidate when the user types the unqualified name CONST
-        assert!(
-            candidates.contains(&"Foo::CONST".to_string()),
-            "Expected Foo::CONST in candidates, got: {candidates:?}",
+        // Foo::CONST is reachable from Foo::Bar through lexical scoping
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            vec!["Foo::CONST", "Foo::Bar", "Foo", "Foo::Bar#baz()"]
         );
     }
 
@@ -851,16 +814,11 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::Expression(name_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            vec!["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"]
+        );
     }
 
     #[test]
@@ -884,17 +842,11 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Foo");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo::CONST", "Foo::Bar", "Foo::<Foo>#class_method()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            vec!["Foo::CONST", "Foo::Bar", "Foo::<Foo>#class_method()"]
+        );
     }
 
     #[test]
@@ -923,24 +875,15 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Child");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Child")),
             vec![
                 "Child::CHILD_CONST",
                 "Parent::PARENT_CONST",
                 "Child::<Child>#child_class_method()",
                 "Parent::<Parent>#parent_class_method()",
-            ],
-            candidates
+            ]
         );
     }
 
@@ -970,17 +913,11 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Child");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Child::CONST", "Child::<Child>#shared_method()",], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Child")),
+            vec!["Child::CONST", "Child::<Child>#shared_method()"]
+        );
     }
 
     #[test]
@@ -999,17 +936,11 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Foo");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo::CONST"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            vec!["Foo::CONST"]
+        );
     }
 
     #[test]
@@ -1027,17 +958,11 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Foo");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo::CONST", "Foo::Bar"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            vec!["Foo::CONST", "Foo::Bar"]
+        );
     }
 
     #[test]
@@ -1060,17 +985,11 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Foo");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo::CONST", "Foo::<Foo>#class_method()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            vec!["Foo::CONST", "Foo::<Foo>#class_method()"]
+        );
     }
 
     #[test]
@@ -1100,19 +1019,10 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Foo");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::NamespaceAccess(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(
-            vec!["Foo::FOO_CONST", "Bar::CONST", "Foo::<Foo>#foo_class_method()"],
-            candidates
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            vec!["Foo::FOO_CONST", "Bar::CONST", "Foo::<Foo>#foo_class_method()"]
         );
     }
 
@@ -1137,17 +1047,11 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Foo");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::MethodCall(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo#baz()", "Foo#bar()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall(DeclarationId::from("Foo")),
+            vec!["Foo#baz()", "Foo#bar()"]
+        );
     }
 
     #[test]
@@ -1168,17 +1072,11 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Child");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::MethodCall(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Child#child_method()", "Parent#parent_method()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall(DeclarationId::from("Child")),
+            vec!["Child#child_method()", "Parent#parent_method()"]
+        );
     }
 
     #[test]
@@ -1201,17 +1099,11 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Foo");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::MethodCall(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo#foo_method()", "Mixin#mixin_method()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall(DeclarationId::from("Foo")),
+            vec!["Foo#foo_method()", "Mixin#mixin_method()"]
+        );
     }
 
     #[test]
@@ -1234,19 +1126,10 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Child");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::MethodCall(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(
-            vec!["Child#shared_method()", "Child#child_only()", "Parent#parent_only()"],
-            candidates
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall(DeclarationId::from("Child")),
+            vec!["Child#shared_method()", "Child#child_only()", "Parent#parent_only()"]
         );
     }
 
@@ -1271,16 +1154,10 @@ mod tests {
         );
         context.resolve();
 
-        let decl_id = DeclarationId::from("Foo");
-        let candidates = completion_candidates(
-            context.graph(),
-            CompletionContext::new(CompletionReceiver::MethodCall(decl_id)),
-        )
-        .unwrap()
-        .iter()
-        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
-        .collect::<Vec<_>>();
-
-        assert_eq!(vec!["Foo#initialize()", "Foo#bar()"], candidates);
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall(DeclarationId::from("Foo")),
+            vec!["Foo#initialize()", "Foo#bar()"]
+        );
     }
 }
