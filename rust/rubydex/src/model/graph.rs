@@ -12,6 +12,7 @@ use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, String
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
+use crate::model::visibility::Visibility;
 use crate::stats;
 
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
@@ -596,6 +597,26 @@ impl Graph {
                     it.add_member(member_str_id, member_declaration_id);
                 }
                 _ => panic!("Tried to add member to a declaration that isn't a namespace"),
+            }
+        }
+    }
+
+    /// Returns the visibility of a declaration by inspecting its definitions
+    ///
+    /// # Panics
+    ///
+    /// Will panic if there's corrupt definition data in the graph
+    #[must_use]
+    pub fn visibility(&self, declaration: &Declaration) -> Visibility {
+        match declaration {
+            Declaration::GlobalVariable(_) => Visibility::Public,
+            Declaration::InstanceVariable(_) | Declaration::ClassVariable(_) => Visibility::Private,
+            Declaration::Namespace(_)
+            | Declaration::Constant(_)
+            | Declaration::ConstantAlias(_)
+            | Declaration::Method(_) => {
+                let definition = self.definitions.get(&declaration.definitions()[0]).unwrap();
+                definition.visibility()
             }
         }
     }

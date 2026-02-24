@@ -117,6 +117,32 @@ impl Definition {
     }
 
     #[must_use]
+    pub fn visibility(&self) -> Visibility {
+        match self {
+            Self::GlobalVariable(_) | Self::GlobalVariableAlias(_) => {
+                // Global variables can be accessed from anywhere
+                Visibility::Public
+            }
+            Self::InstanceVariable(_) | Self::ClassVariable(_) => {
+                // Instance and class variables can only be accessed within their namespace
+                Visibility::Private
+            }
+            Self::Class(_) | Self::SingletonClass(_) | Self::Module(_) | Self::Constant(_) | Self::ConstantAlias(_) => {
+                // TODO: we need to handle visibility for constants
+                Visibility::Public
+            }
+            Self::MethodAlias(_) => {
+                // TODO: we need to handle visibility for method aliases
+                Visibility::Public
+            }
+            Self::Method(it) => *it.visibility(),
+            Self::AttrAccessor(it) => *it.visibility(),
+            Self::AttrReader(it) => *it.visibility(),
+            Self::AttrWriter(it) => *it.visibility(),
+        }
+    }
+
+    #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         all_definitions!(self, it => &it.lexical_nesting_id())
     }
