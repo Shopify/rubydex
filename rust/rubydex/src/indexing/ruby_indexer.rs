@@ -2004,8 +2004,8 @@ impl Visit<'_> for RubyIndexer<'_> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq, assert_definition_at, assert_name_path_eq,
-        assert_string_eq,
+        assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq, assert_definition_at,
+        assert_local_diagnostics_eq, assert_name_path_eq, assert_no_local_diagnostics, assert_string_eq,
         model::{
             definitions::{Definition, Mixin, Parameter},
             ids::{StringId, UriId},
@@ -2211,40 +2211,6 @@ mod tests {
         }};
     }
 
-    // Diagnostic assertions
-
-    fn format_diagnostics(context: &LocalGraphTest) -> Vec<String> {
-        let mut diagnostics = context.graph().diagnostics().iter().collect::<Vec<_>>();
-
-        diagnostics.sort_by_key(|d| d.offset());
-        diagnostics
-            .iter()
-            .map(|d| d.formatted(context.graph().document()))
-            .collect()
-    }
-
-    macro_rules! assert_diagnostics_eq {
-        ($context:expr, $expected_diagnostics:expr) => {{
-            assert_eq!(
-                $expected_diagnostics,
-                format_diagnostics($context).as_slice(),
-                "diagnostics mismatch: expected `{:?}`, got `{:?}`",
-                $expected_diagnostics,
-                format_diagnostics($context)
-            );
-        }};
-    }
-
-    macro_rules! assert_no_diagnostics {
-        ($context:expr) => {{
-            assert!(
-                $context.graph().diagnostics().is_empty(),
-                "expected no diagnostics, got {:?}",
-                format_diagnostics($context)
-            );
-        }};
-    }
-
     fn index_source(source: &str) -> LocalGraphTest {
         LocalGraphTest::new("file:///foo.rb", source)
     }
@@ -2257,7 +2223,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             [
                 "parse-error: expected an `end` to close the `class` statement (1:1-1:6)",
@@ -2280,7 +2246,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
         );
@@ -2298,7 +2264,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
@@ -2346,7 +2312,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |def| {
@@ -2391,7 +2357,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"]
         );
@@ -2410,7 +2376,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
@@ -2454,7 +2420,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
@@ -2495,7 +2461,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["dynamic-constant-reference: Dynamic constant reference (1:8-1:11)"]
         );
@@ -2514,7 +2480,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
@@ -2545,7 +2511,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
@@ -2584,7 +2550,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 3);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
@@ -2617,7 +2583,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
@@ -2658,7 +2624,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
@@ -2715,7 +2681,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:1-1:13", Method, |def| {
@@ -2763,7 +2729,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
         );
@@ -2793,7 +2759,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         // class Bar
         assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
@@ -2860,7 +2826,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
             assert_def_name_eq!(&context, class_def, "Foo::Bar");
@@ -2887,7 +2853,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
             assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
@@ -2910,7 +2876,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
         );
@@ -2929,7 +2895,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         // During indexing, lexical_nesting_id is the actual enclosing scope (singleton class).
         // The resolution phase handles bypassing singleton classes for class variable ownership.
@@ -2955,7 +2921,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         // During indexing, lexical_nesting_id is the actual enclosing scope (innermost singleton class).
         // The resolution phase handles bypassing singleton classes for class variable ownership.
@@ -2979,7 +2945,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
             assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
@@ -2997,7 +2963,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:51", Method, |def| {
             assert_eq!(def.parameters().len(), 8);
@@ -3044,7 +3010,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:18", Method, |def| {
             assert_eq!(def.parameters().len(), 1);
@@ -3068,7 +3034,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:12", Method, |def| {
             assert_def_str_eq!(&context, def, "m1()");
@@ -3109,7 +3075,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:3-2:15", Method, |def| {
             assert_def_str_eq!(&context, def, "bar()");
@@ -3212,7 +3178,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "4:3-4:14", Method, |def| {
             assert_def_str_eq!(&context, def, "m1()");
@@ -3253,7 +3219,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:1-3:17", Method, |def| {
             assert_def_str_eq!(&context, def, "m1()");
@@ -3291,7 +3257,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "5:5-5:16", Method, |def| {
             assert_def_str_eq!(&context, def, "m1()");
@@ -3323,7 +3289,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
@@ -3362,7 +3328,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
@@ -3401,7 +3367,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
@@ -3442,7 +3408,7 @@ mod tests {
             "#
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 6);
 
         assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
@@ -3496,7 +3462,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
             assert_def_str_eq!(&context, def, "foo()");
@@ -3540,7 +3506,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
             assert_def_str_eq!(&context, def, "foo()");
@@ -3580,7 +3546,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 8);
 
         assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
@@ -3646,7 +3612,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
             assert_def_str_eq!(&context, def, "@foo");
@@ -3738,7 +3704,7 @@ mod tests {
 
         // This is actually not allowed in Ruby and will raise a runtime error
         // But we should still index it so we can insert a diagnostic for it
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
             assert_def_str_eq!(&context, def, "@@foo");
@@ -3835,7 +3801,7 @@ mod tests {
             "##
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             [
                 "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
@@ -3866,7 +3832,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_constant_references_eq!(
             &context,
@@ -3887,7 +3853,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_constant_references_eq!(&context, ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
     }
@@ -3909,7 +3875,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_constant_references_eq!(
             &context,
@@ -3952,7 +3918,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_constant_references_eq!(
             &context,
@@ -4001,7 +3967,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
         );
@@ -4027,7 +3993,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_method_references_eq!(
             &context,
@@ -4051,7 +4017,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_method_references_eq!(
             &context,
@@ -4086,7 +4052,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             [
                 "parse-warning: possibly useless use of != in void context (1:1-1:7)",
@@ -4120,7 +4086,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
         );
@@ -4136,7 +4102,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
         );
@@ -4152,7 +4118,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
         );
@@ -4168,7 +4134,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let method_ref = context.graph().method_references().values().next().unwrap();
         assert_eq!(StringId::from("bar"), *method_ref.str());
@@ -4202,7 +4168,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let method_ref = context.graph().method_references().values().next().unwrap();
         assert_eq!(StringId::from("baz"), *method_ref.str());
@@ -4228,7 +4194,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let method_ref = context.graph().method_references().values().next().unwrap();
         assert_eq!(StringId::from("baz"), *method_ref.str());
@@ -4251,7 +4217,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let method_ref = context.graph().method_references().values().next().unwrap();
         assert_eq!(StringId::from("baz"), *method_ref.str());
@@ -4286,7 +4252,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let method_ref = context.graph().method_references().values().next().unwrap();
         assert_eq!(StringId::from("baz"), *method_ref.str());
@@ -4340,7 +4306,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let method_ref = context.graph().method_references().values().next().unwrap();
         assert_eq!(StringId::from("bar"), *method_ref.str());
@@ -4375,7 +4341,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             ["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
         );
@@ -4391,7 +4357,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let method_ref = context
             .graph()
@@ -4422,7 +4388,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let method_ref = context
             .graph()
@@ -4455,7 +4421,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_method_references_eq!(&context, ["m1()", "m2()"]);
     }
 
@@ -4471,7 +4437,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
             assert_definition_at!(&context, "3:5-3:34", MethodAlias, |alias_method| {
@@ -4492,7 +4458,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
             assert_definition_at!(&context, "3:5-3:24", MethodAlias, |alias_method| {
@@ -4509,7 +4475,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:21", Class, |def| {
             assert_def_superclass_ref_eq!(&context, def, "Bar");
@@ -4524,7 +4490,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         let mut refs = context.graph().constant_references().values().collect::<Vec<_>>();
         refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
@@ -4546,7 +4512,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             [
                 "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
@@ -4583,7 +4549,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         // FIXME: This should be indexed
         assert_eq!(context.graph().definitions().len(), 0);
@@ -4600,7 +4566,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
             assert_def_mixins_eq!(&context, def, Include, ["Baz", "Bar", "Qux"]);
@@ -4618,7 +4584,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
             assert_def_mixins_eq!(&context, def, Include, ["Baz", "Bar", "Qux"]);
@@ -4634,7 +4600,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         // FIXME: This should be indexed
         assert_eq!(context.graph().definitions().len(), 0);
@@ -4651,7 +4617,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |def| {
             assert_def_mixins_eq!(&context, def, Prepend, ["Baz", "Bar", "Qux"]);
@@ -4669,7 +4635,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
             assert_def_mixins_eq!(&context, def, Prepend, ["Baz", "Bar", "Qux"]);
@@ -4687,7 +4653,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
             assert_def_mixins_eq!(&context, class_def, Extend, ["Bar", "Baz"]);
@@ -4706,7 +4672,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |def| {
             assert_def_mixins_eq!(&context, def, Include, ["Foo"]);
@@ -4729,7 +4695,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             [
                 "dynamic-constant-reference: Dynamic constant reference (1:9-1:12)",
@@ -4756,7 +4722,7 @@ mod tests {
             "
         });
 
-        assert_diagnostics_eq!(
+        assert_local_diagnostics_eq!(
             &context,
             [
                 "top-level-mixin-self: Top level mixin self (1:9-1:13)",
@@ -4782,7 +4748,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-7:4", Class, |foo_class_def| {
             assert_definition_at!(&context, "2:3-2:7", InstanceVariable, |foo_var_def| {
@@ -4821,7 +4787,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
             assert_def_str_eq!(&context, def, "@bar");
@@ -4848,7 +4814,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         // The instance variable is associated with the singleton class of String.
         // During indexing, we can't know what String resolves to because we haven't
@@ -4875,7 +4841,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-4:4", Class, |foo_class_def| {
             assert_definition_at!(&context, "2:3-2:16", MethodAlias, |def| {
@@ -4907,7 +4873,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:14", MethodAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
@@ -4945,7 +4911,7 @@ mod tests {
             "#
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:38", MethodAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
@@ -4989,7 +4955,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:16", GlobalVariableAlias, |def| {
             let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
@@ -5028,7 +4994,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
@@ -5087,7 +5053,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
@@ -5146,7 +5112,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
@@ -5207,7 +5173,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
@@ -5266,7 +5232,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
@@ -5324,7 +5290,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-3:6", Class, |bar| {
@@ -5355,7 +5321,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-9:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-4:6", Class, |anonymous| {
@@ -5388,7 +5354,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
@@ -5413,7 +5379,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
@@ -5437,7 +5403,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Module, |foo| {
             assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
@@ -5460,7 +5426,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
             let receiver = bar.receiver().unwrap();
@@ -5485,7 +5451,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
             assert_definition_at!(&context, "4:7-4:12", ClassVariable, |var| {
@@ -5506,7 +5472,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
             let receiver = bar.receiver().unwrap();
@@ -5529,7 +5495,7 @@ mod tests {
             end
             "
         });
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
             assert_definition_at!(&context, "2:3-4:6", Method, |bar| {
@@ -5551,7 +5517,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS1");
@@ -5574,7 +5540,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "4:1-4:6", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS");
@@ -5595,7 +5561,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-4:4", Module, |bar_module_def| {
             assert_definition_at!(&context, "3:3-3:8", ConstantAlias, |def| {
@@ -5615,7 +5581,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:6-3:11", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "Bar::ALIAS");
@@ -5631,7 +5597,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:2", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "A");
@@ -5654,7 +5620,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:6", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS");
@@ -5672,7 +5638,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
             assert_def_name_eq!(&context, def, "ALIAS1");
@@ -5721,7 +5687,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-2:18", Class, |def| {
             assert_def_name_eq!(&context, def, "Single");
@@ -5786,7 +5752,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "2:1-12:4", Class, |def| {
             assert_def_name_eq!(&context, def, "Outer");
@@ -5857,7 +5823,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:16-3:19", AttrReader, |def| {
             assert_def_comments_eq!(&context, def, ["# Comment"]);
@@ -5927,7 +5893,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         // We expect two constant references for `Foo` and `<Foo>` on each singleton method call
         assert_eq!(6, context.graph().constant_references().len());
     }

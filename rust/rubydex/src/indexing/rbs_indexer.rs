@@ -155,41 +155,10 @@ impl Visit for RBSIndexer<'_> {
 #[cfg(test)]
 mod tests {
     use crate::test_utils::LocalGraphTest;
-    use crate::{assert_def_name_eq, assert_def_name_offset_eq, assert_definition_at};
-
-    // Diagnostic assertions
-
-    fn format_diagnostics(context: &LocalGraphTest) -> Vec<String> {
-        let mut diagnostics = context.graph().diagnostics().iter().collect::<Vec<_>>();
-
-        diagnostics.sort_by_key(|d| d.offset());
-        diagnostics
-            .iter()
-            .map(|d| d.formatted(context.graph().document()))
-            .collect()
-    }
-
-    macro_rules! assert_diagnostics_eq {
-        ($context:expr, $expected_diagnostics:expr) => {{
-            assert_eq!(
-                $expected_diagnostics,
-                format_diagnostics($context).as_slice(),
-                "diagnostics mismatch: expected `{:?}`, got `{:?}`",
-                $expected_diagnostics,
-                format_diagnostics($context)
-            );
-        }};
-    }
-
-    macro_rules! assert_no_diagnostics {
-        ($context:expr) => {{
-            assert!(
-                $context.graph().diagnostics().is_empty(),
-                "expected no diagnostics, got {:?}",
-                format_diagnostics($context)
-            );
-        }};
-    }
+    use crate::{
+        assert_def_name_eq, assert_def_name_offset_eq, assert_definition_at, assert_local_diagnostics_eq,
+        assert_no_local_diagnostics,
+    };
 
     fn index_source(source: &str) -> LocalGraphTest {
         LocalGraphTest::new_rbs("file:///foo.rbs", source)
@@ -199,7 +168,7 @@ mod tests {
     fn index_source_with_errors() {
         let context = index_source("module");
 
-        assert_diagnostics_eq!(&context, ["parse-error: Failed to parse RBS document (1:1-1:1)"]);
+        assert_local_diagnostics_eq!(&context, ["parse-error: Failed to parse RBS document (1:1-1:1)"]);
 
         assert!(context.graph().definitions().is_empty());
     }
@@ -215,7 +184,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 2);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {
@@ -247,7 +216,7 @@ mod tests {
             "
         });
 
-        assert_no_diagnostics!(&context);
+        assert_no_local_diagnostics!(&context);
         assert_eq!(context.graph().definitions().len(), 2);
 
         assert_definition_at!(&context, "1:1-4:4", Module, |def| {

@@ -282,6 +282,41 @@ macro_rules! assert_def_str_eq {
     }};
 }
 
+// Diagnostic assertions
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_local_diagnostics_eq {
+    ($context:expr, $expected_diagnostics:expr) => {{
+        let mut diagnostics = $context.graph().diagnostics().iter().collect::<Vec<_>>();
+        diagnostics.sort_by_key(|d| d.offset());
+        let formatted: Vec<String> = diagnostics
+            .iter()
+            .map(|d| d.formatted($context.graph().document()))
+            .collect();
+        assert_eq!(
+            $expected_diagnostics,
+            formatted.as_slice(),
+            "diagnostics mismatch: expected `{:?}`, got `{:?}`",
+            $expected_diagnostics,
+            formatted
+        );
+    }};
+}
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_no_local_diagnostics {
+    ($context:expr) => {{
+        let diagnostics = $context.graph().diagnostics().iter().collect::<Vec<_>>();
+        let formatted: Vec<String> = diagnostics
+            .iter()
+            .map(|d| d.formatted($context.graph().document()))
+            .collect();
+        assert!(diagnostics.is_empty(), "expected no diagnostics, got {:?}", formatted);
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
