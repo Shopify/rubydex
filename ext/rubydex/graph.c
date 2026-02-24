@@ -325,7 +325,7 @@ static VALUE rdxr_graph_resolve(VALUE self) {
     return self;
 }
 
-// Graph#set_encoding: (String) -> void
+// Graph#encoding=: (String) -> void
 // Sets the encoding used for transforming byte offsets into LSP code unit line/column positions
 static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
     Check_Type(encoding, T_STRING);
@@ -482,7 +482,7 @@ void rdxi_initialize_graph(VALUE mRubydex) {
     rb_define_method(cGraph, "diagnostics", rdxr_graph_diagnostics, 0);
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
     rb_define_method(cGraph, "search", rdxr_graph_search, 1);
-    rb_define_method(cGraph, "set_encoding", rdxr_graph_set_encoding, 1);
+    rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);
     rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
     rb_define_method(cGraph, "require_paths", rdxr_graph_require_paths, 1);
 }
