@@ -239,15 +239,29 @@ pub fn completion_candidates<'a>(
     }
 }
 
+/// Resolves a declaration ID to a namespace, following constant aliases if necessary.
+fn resolve_to_namespace(graph: &Graph, decl_id: DeclarationId) -> Result<DeclarationId, Box<dyn Error>> {
+    if let Some(Declaration::Namespace(_)) = graph.declarations().get(&decl_id) {
+        return Ok(decl_id);
+    }
+
+    if let Some(target_id) = graph.resolve_alias(&decl_id)
+        && let Some(Declaration::Namespace(_)) = graph.declarations().get(&target_id)
+    {
+        return Ok(target_id);
+    }
+
+    Err(format!("Expected declaration {decl_id:?} to be a namespace or alias to a namespace").into())
+}
+
 /// Collect completion for a namespace access (e.g.: `Foo::`)
 fn namespace_access_completion<'a>(
     graph: &'a Graph,
     namespace_decl_id: DeclarationId,
     mut context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
-    let Some(Declaration::Namespace(namespace)) = graph.declarations().get(&namespace_decl_id) else {
-        return Err(format!("Expected declaration {namespace_decl_id:?} to be a namespace").into());
-    };
+    let resolved_id = resolve_to_namespace(graph, namespace_decl_id)?;
+    let namespace = graph.declarations().get(&resolved_id).unwrap().as_namespace().unwrap();
     let mut candidates = Vec::new();
 
     // Walk ancestors collecting inherited constants, stopping at Object to avoid surfacing top-level constants
@@ -293,9 +307,8 @@ fn method_call_completion<'a>(
     receiver_decl_id: DeclarationId,
     mut context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
-    let Some(Declaration::Namespace(namespace)) = graph.declarations().get(&receiver_decl_id) else {
-        return Err(format!("Expected declaration {receiver_decl_id:?} to be a namespace").into());
-    };
+    let resolved_id = resolve_to_namespace(graph, receiver_decl_id)?;
+    let namespace = graph.declarations().get(&resolved_id).unwrap().as_namespace().unwrap();
     let mut candidates = Vec::new();
 
     for ancestor in namespace.ancestors() {
@@ -1018,6 +1031,68 @@ mod tests {
     }
 
     #[test]
+    fn namespace_access_completion_follows_constant_alias() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Original
+              CONST = 1
+              class Nested; end
+
+              class << self
+                def class_method; end
+              end
+            end
+
+            module Foo
+              MyOriginal = Original
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo::MyOriginal")),
+            vec![
+                "Original::CONST",
+                "Original::Nested",
+                "Original::<Original>#class_method()"
+            ]
+        );
+    }
+
+    #[test]
+    fn namespace_access_completion_follows_chained_constant_alias() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Original
+              CONST = 1
+
+              class << self
+                def class_method; end
+              end
+            end
+
+            Alias1 = Original
+            Alias2 = Alias1
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from("Alias2")),
+            vec!["Original::CONST", "Original::<Original>#class_method()"]
+        );
+    }
+
+    #[test]
     fn namespace_access_completion_on_basic_object_subclass() {
         let mut context = GraphTest::new();
 
@@ -1103,6 +1178,36 @@ mod tests {
             context,
             CompletionReceiver::MethodCall(DeclarationId::from("Foo")),
             vec!["Foo#baz()", "Foo#bar()"]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_follows_constant_alias() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Original
+              def bar; end
+              def baz; end
+
+              class << self
+                def class_method; end
+              end
+            end
+
+            module Foo
+              MyOriginal = Original
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall(DeclarationId::from("Foo::MyOriginal")),
+            vec!["Original#baz()", "Original#bar()"]
         );
     }
 

@@ -396,6 +396,38 @@ impl Graph {
         Some(targets)
     }
 
+    /// Resolves a constant alias chain to the final non-alias declaration.
+    ///
+    /// Returns `None` if the declaration is not a constant alias, the chain is circular, or the chain leads to an
+    /// unresolved name.
+    #[must_use]
+    pub fn resolve_alias(&self, declaration_id: &DeclarationId) -> Option<DeclarationId> {
+        let mut seen = IdentityHashSet::default();
+        let mut current_id = *declaration_id;
+
+        loop {
+            if !seen.insert(current_id) {
+                return None;
+            }
+
+            if let Some(targets) = self.alias_targets(&current_id)
+                && let Some(&first_target) = targets.first()
+            {
+                if matches!(
+                    self.declarations.get(&first_target),
+                    Some(Declaration::ConstantAlias(_))
+                ) {
+                    current_id = first_target;
+                    continue;
+                }
+
+                return Some(first_target);
+            }
+
+            return None;
+        }
+    }
+
     #[must_use]
     pub fn names(&self) -> &IdentityHashMap<NameId, NameRef> {
         &self.names
@@ -1605,5 +1637,52 @@ mod tests {
         assert_eq!(1, context.graph().documents.len());
         assert_eq!(12, context.graph().names.len());
         assert_eq!(41, context.graph().strings.len());
+    }
+
+    #[test]
+    fn resolve_alias_follows_chain_to_namespace() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Original; end
+            Alias1 = Original
+            Alias2 = Alias1
+            ",
+        );
+        context.resolve();
+
+        let target = context.graph().resolve_alias(&DeclarationId::from("Alias2"));
+        assert_eq!(target, Some(DeclarationId::from("Original")));
+    }
+
+    #[test]
+    fn resolve_alias_returns_none_for_circular_aliases() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              A = B
+              B = A
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_eq!(context.graph().resolve_alias(&DeclarationId::from("Foo::A")), None);
+        assert_eq!(context.graph().resolve_alias(&DeclarationId::from("Foo::B")), None);
+    }
+
+    #[test]
+    fn resolve_alias_returns_none_for_non_alias() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        assert_eq!(context.graph().resolve_alias(&DeclarationId::from("Foo")), None);
     }
 }
