@@ -103,8 +103,8 @@ jobs:
             await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: "${{ github.ref_name }}",
+              tag_name: "${{ github.ref }}",
               name: "${{ github.ref_name }}",
               generate_release_notes: true,
-              prerelease: "${{ github.ref_name }}".includes("-beta")
+              prerelease: "${{ github.ref_name }}".includes(".beta")
             });
