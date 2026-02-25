@@ -507,39 +507,52 @@ pub unsafe extern "C" fn rdx_require_paths(
     Box::into_raw(boxed).cast::<*const c_char>()
 }
 
-/// Indexes source code from memory using the specified language.  Returns `true` on success or `false` if the
-/// `language_id` is unknown or string conversion fails.
+#[repr(C)]
+pub enum IndexSourceResult {
+    Success = 0,
+    InvalidUri = 1,
+    InvalidSource = 2,
+    InvalidLanguageId = 3,
+    UnsupportedLanguageId = 4,
+}
+
+/// Indexes source code from memory using the specified language.  Returns `IndexSourceResult::Success` on success
+/// or a specific error variant if string conversion or language lookup fails.
 ///
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - `uri`, `source`, and `language_id` must be valid, null-terminated UTF-8 strings.
+/// - `uri` and `language_id` must be valid, null-terminated UTF-8 strings.
+/// - `source` must point to a valid UTF-8 byte buffer of at least `source_len` bytes.
+///   It may contain null bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_index_source(
     pointer: GraphPointer,
     uri: *const c_char,
     source: *const c_char,
+    source_len: usize,
     language_id: *const c_char,
-) -> bool {
+) -> IndexSourceResult {
     let Ok(uri_str) = (unsafe { utils::convert_char_ptr_to_string(uri) }) else {
-        return false;
+        return IndexSourceResult::InvalidUri;
     };
 
-    let Ok(source_str) = (unsafe { utils::convert_char_ptr_to_string(source) }) else {
-        return false;
+    let source_bytes = unsafe { std::slice::from_raw_parts(source.cast::<u8>(), source_len) };
+    let Ok(source_str) = std::str::from_utf8(source_bytes) else {
+        return IndexSourceResult::InvalidSource;
     };
 
     let Ok(language_id_str) = (unsafe { utils::convert_char_ptr_to_string(language_id) }) else {
-        return false;
+        return IndexSourceResult::InvalidLanguageId;
     };
 
     let Ok(language) = LanguageId::from_language_id(&language_id_str) else {
-        return false;
+        return IndexSourceResult::UnsupportedLanguageId;
     };
 
     with_mut_graph(pointer, |graph| {
-        indexing::index_source(graph, &uri_str, &source_str, &language);
-        true
+        indexing::index_source(graph, &uri_str, source_str, &language);
+        IndexSourceResult::Success
     })
 }
 
