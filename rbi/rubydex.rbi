@@ -58,6 +58,9 @@ module Rubydex
     sig { params(name: String).returns(T.nilable(Declaration)) }
     def member(name); end
 
+    sig { params(name: String, only_inherited: T::Boolean).returns(T.nilable(Declaration)) }
+    def find_member(name, only_inherited: false); end
+
     sig { returns(T.nilable(SingletonClass)) }
     def singleton_class; end
   end

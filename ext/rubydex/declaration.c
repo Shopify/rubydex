@@ -169,6 +169,42 @@ static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
     return rb_class_new_instance(2, argv, decl_class);
 }
 
+// Namespace#find_member: (String member, only_inherited: false) -> Declaration?
+// Searches for a member in the ancestor chain of the declaration
+static VALUE rdxr_declaration_find_member(int argc, VALUE *argv, VALUE self) {
+    VALUE member, opts;
+    rb_scan_args(argc, argv, "1:", &member, &opts);
+    Check_Type(member, T_STRING);
+
+    bool only_inherited = false;
+    if (!NIL_P(opts)) {
+        ID kwarg_id = rb_intern("only_inherited");
+        VALUE kwarg_val;
+        rb_get_kwargs(opts, &kwarg_id, 0, 1, &kwarg_val);
+
+        if (kwarg_val != Qundef) {
+            only_inherited = RTEST(kwarg_val);
+        }
+    }
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const CDeclaration *decl = rdx_declaration_find_member(graph, data->id, StringValueCStr(member), only_inherited);
+    if (decl == NULL) {
+        return Qnil;
+    }
+
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE result_argv[] = {data->graph_obj, ULL2NUM(decl->id)};
+    free_c_declaration(decl);
+
+    return rb_class_new_instance(2, result_argv, decl_class);
+}
+
 // Declaration#singleton_class -> SingletonClass
 static VALUE rdxr_declaration_singleton_class(VALUE self) {
     HandleData *data;
@@ -277,6 +313,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
 
     // Namespace only methods
     rb_define_method(cNamespace, "member", rdxr_declaration_member, 1);
+    rb_define_method(cNamespace, "find_member", rdxr_declaration_find_member, -1);
     rb_define_method(cNamespace, "singleton_class", rdxr_declaration_singleton_class, 0);
     rb_define_method(cNamespace, "ancestors", rdxr_declaration_ancestors, 0);
     rb_define_method(cNamespace, "descendants", rdxr_declaration_descendants, 0);

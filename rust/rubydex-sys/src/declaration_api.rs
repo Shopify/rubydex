@@ -161,6 +161,64 @@ pub unsafe extern "C" fn rdx_declaration_member(
     })
 }
 
+/// Searches for a member in the ancestors of the given declaration
+///
+/// # Safety
+/// - `member` must be a valid, null-terminated UTF-8 string
+///
+/// # Panics
+///
+/// Will panic if there's inconsistent graph data
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_declaration_find_member(
+    pointer: GraphPointer,
+    declaration_id: u64,
+    member: *const c_char,
+    only_inherited: bool,
+) -> *const CDeclaration {
+    let Ok(member_str) = (unsafe { utils::convert_char_ptr_to_string(member) }) else {
+        return ptr::null();
+    };
+
+    with_graph(pointer, |graph| {
+        let id = DeclarationId::new(declaration_id);
+
+        let Some(Declaration::Namespace(decl)) = graph.declarations().get(&id) else {
+            return ptr::null();
+        };
+
+        let member_id = StringId::from(member_str.as_str());
+        let mut found_main_namespace = false;
+
+        decl.ancestors()
+            .iter()
+            .find_map(|ancestor| match ancestor {
+                Ancestor::Complete(ancestor_id) => {
+                    if *ancestor_id == id {
+                        found_main_namespace = true;
+                        return None;
+                    }
+
+                    if only_inherited && !found_main_namespace {
+                        return None;
+                    }
+
+                    let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
+
+                    if let Some(member_decl_id) = ancestor_decl.member(&member_id) {
+                        return Some((member_decl_id, graph.declarations().get(member_decl_id).unwrap()));
+                    }
+
+                    None
+                }
+                Ancestor::Partial(_) => None,
+            })
+            .map_or(ptr::null(), |(member_decl_id, member_decl)| {
+                Box::into_raw(Box::new(CDeclaration::from_declaration(*member_decl_id, member_decl))).cast_const()
+            })
+    })
+}
+
 /// Returns the UTF-8 unqualified name string for a declaration id.
 /// Caller must free with `free_c_string`.
 ///

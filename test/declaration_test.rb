@@ -379,4 +379,38 @@ class DeclarationTest < Minitest::Test
       assert_equal("Parent\#@name", name.name)
     end
   end
+
+  def test_find_member_returns_inherited_members
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent
+          @@class_var = 1
+
+          def initialize
+            @name = "John"
+          end
+        end
+
+        class Child < Parent
+          def initialize
+            super
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      child = graph["Child"]
+      decl = child.find_member("@name")
+      assert_equal("Parent\#@name", decl.name)
+
+      decl = child.find_member("@@class_var")
+      assert_equal("Parent\#@@class_var", decl.name)
+
+      decl = child.find_member("initialize()", only_inherited: true)
+      assert_equal("Parent#initialize()", decl.name)
+    end
+  end
 end
