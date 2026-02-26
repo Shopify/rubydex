@@ -39,6 +39,19 @@ module Rubydex
       a <=> b
     end
 
+    # Turns this zero based location into a one based location for display purposes.
+    #
+    #: () -> Location
+    def to_display
+      self.class.new(
+        uri: @uri,
+        start_line: @start_line + 1,
+        end_line: @end_line + 1,
+        start_column: @start_column + 1,
+        end_column: @end_column + 1,
+      )
+    end
+
     #: -> String
     def to_s
       "#{path}:#{@start_line}:#{@start_column}-#{@end_line}:#{@end_column}"

@@ -84,7 +84,7 @@ class DefinitionTest < Minitest::Test
 
       def_a = graph.documents.first.definitions.find { |d| d.name == "A" }
       refute_nil(def_a)
-      location = def_a.location
+      location = def_a.location.to_display
       refute_nil(location)
       assert_equal(context.uri_to("file1.rb"), location.uri)
       assert_equal(context.absolute_path_to("file1.rb"), location.path)
@@ -95,7 +95,7 @@ class DefinitionTest < Minitest::Test
 
       def_foo = graph.documents.first.definitions.find { |d| d.name == "foo()" }
       refute_nil(def_foo)
-      location = def_foo.location
+      location = def_foo.location.to_display
       refute_nil(location)
       assert_equal(context.uri_to("file1.rb"), location.uri)
       assert_equal(context.absolute_path_to("file1.rb"), location.path)
@@ -209,7 +209,7 @@ class DefinitionTest < Minitest::Test
   # Comment locations on Windows include the carriage return. This means that the end column is off by one when compared
   # to Unix locations. This method creates a fake adjusted location for Windows so that we can assert locations once
   def normalized_comment_location(comment)
-    loc = comment.location
+    loc = comment.location.to_display
     return loc unless Gem.win_platform?
 
     Rubydex::Location.new(

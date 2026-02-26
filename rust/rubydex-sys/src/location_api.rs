@@ -37,18 +37,18 @@ pub(crate) fn create_location_for_uri_and_offset(graph: &Graph, document: &Docum
 
         Location {
             uri: CString::new(document.uri()).unwrap().into_raw().cast_const(),
-            start_line: wide_start_pos.line + 1,
-            end_line: wide_end_pos.line + 1,
-            start_column: wide_start_pos.col + 1,
-            end_column: wide_end_pos.col + 1,
+            start_line: wide_start_pos.line,
+            end_line: wide_end_pos.line,
+            start_column: wide_start_pos.col,
+            end_column: wide_end_pos.col,
         }
     } else {
         Location {
             uri: CString::new(document.uri()).unwrap().into_raw().cast_const(),
-            start_line: start_pos.line + 1,
-            end_line: end_pos.line + 1,
-            start_column: start_pos.col + 1,
-            end_column: end_pos.col + 1,
+            start_line: start_pos.line,
+            end_line: end_pos.line,
+            start_column: start_pos.col,
+            end_column: end_pos.col,
         }
     };
 

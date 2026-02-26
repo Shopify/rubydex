@@ -181,7 +181,7 @@ class GraphTest < Minitest::Test
       foo = graph["Foo\#@叫聲😍x"].definitions.first
 
       # UTF-8: code units => number of bytes
-      loc = foo.location
+      loc = foo.location.to_display
       assert_equal(3, loc.start_line)
       assert_equal(5, loc.start_column)
       assert_equal(3, loc.end_line)
@@ -189,7 +189,7 @@ class GraphTest < Minitest::Test
 
       # UTF-16: code units => 1 for 1,2 byte characters, 2 for 3,4 byte characters
       graph.encoding = "utf16"
-      loc = foo.location
+      loc = foo.location.to_display
       assert_equal(3, loc.start_line)
       assert_equal(5, loc.start_column)
       assert_equal(3, loc.end_line)
@@ -197,7 +197,7 @@ class GraphTest < Minitest::Test
 
       # UTF-32: code units => 1 for all characters
       graph.encoding = "utf32"
-      loc = foo.location
+      loc = foo.location.to_display
       assert_equal(3, loc.start_line)
       assert_equal(5, loc.start_column)
       assert_equal(3, loc.end_line)
