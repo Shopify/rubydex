@@ -251,6 +251,42 @@ macro_rules! assert_def_name_eq {
     }};
 }
 
+/// Asserts that a definition's superclass reference matches the expected name.
+///
+/// Usage:
+/// - `assert_def_superclass_ref_eq!(ctx, def, "Bar::Baz")`
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_def_superclass_ref_eq {
+    ($context:expr, $def:expr, $expected_name:expr) => {{
+        let name = $context
+            .graph()
+            .strings()
+            .get(
+                $context
+                    .graph()
+                    .names()
+                    .get(
+                        $context
+                            .graph()
+                            .constant_references()
+                            .get($def.superclass_ref().unwrap())
+                            .unwrap()
+                            .name_id(),
+                    )
+                    .unwrap()
+                    .str(),
+            )
+            .unwrap()
+            .as_str();
+        assert_eq!(
+            $expected_name, name,
+            "superclass reference mismatch: expected `{}`, got `{name}`",
+            $expected_name,
+        );
+    }};
+}
+
 /// Asserts that a definition's name offset matches the expected location.
 ///
 /// Usage:

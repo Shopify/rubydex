@@ -4231,27 +4231,37 @@ mod tests {
     }
 
     #[test]
-    fn rbs_simple_module() {
+    fn rbs_module_and_class_declarations() {
         let mut context = GraphTest::new();
         context.index_rbs_uri("file:///test.rbs", {
             r"
             module Foo
+            end
+
+            class Bar
             end
             "
         });
         context.resolve();
 
         assert_no_diagnostics!(&context);
+
         assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Bar");
     }
 
     #[test]
-    fn rbs_nested_modules() {
+    fn rbs_nested_declarations() {
         let mut context = GraphTest::new();
         context.index_rbs_uri("file:///test.rbs", {
             r"
             module Foo
               module Bar
+              end
+
+              class Baz
+                class Qux
+                end
               end
             end
             "
@@ -4259,10 +4269,12 @@ mod tests {
         context.resolve();
 
         assert_no_diagnostics!(&context);
-        assert_declaration_exists!(context, "Foo");
-        assert_declaration_exists!(context, "Foo::Bar");
+
         assert_owner_eq!(context, "Foo::Bar", "Foo");
-        assert_members_eq!(context, "Foo", ["Bar"]);
+        assert_owner_eq!(context, "Foo::Baz", "Foo");
+        assert_owner_eq!(context, "Foo::Baz::Qux", "Foo::Baz");
+        assert_members_eq!(context, "Foo", ["Bar", "Baz"]);
+        assert_members_eq!(context, "Foo::Baz", ["Qux"]);
     }
 
     #[test]
@@ -4285,6 +4297,7 @@ mod tests {
         context.resolve();
 
         assert_no_diagnostics!(&context);
+
         assert_declaration_exists!(context, "Foo::Bar::Baz");
     }
 
@@ -4310,9 +4323,35 @@ mod tests {
         context.resolve();
 
         assert_no_diagnostics!(&context);
-        assert_declaration_exists!(context, "Outer");
-        assert_declaration_exists!(context, "Outer::Foo");
-        assert_declaration_exists!(context, "Outer::Foo::Bar");
+
         assert_owner_eq!(context, "Outer::Foo::Bar", "Outer::Foo");
+    }
+
+    #[test]
+    fn rbs_superclass_resolution() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            class Foo
+            end
+
+            class Bar < Foo
+            end
+
+            module Baz
+              class Base
+              end
+
+              class Child < Base
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
+        assert_ancestors_eq!(context, "Baz::Child", ["Baz::Child", "Baz::Base", "Object"]);
     }
 }
