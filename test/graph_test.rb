@@ -495,6 +495,21 @@ class GraphTest < Minitest::Test
     refute_nil(graph["Bar"])
   end
 
+  def test_index_source_with_invalid_source_encoding
+    graph = Rubydex::Graph.new
+    error = assert_raises(ArgumentError) do
+      graph.index_source("file:///test.rb", "\xFF\xFE".b, "ruby")
+    end
+    assert_match(/source is not valid UTF-8/, error.message)
+  end
+
+  def test_index_source_with_null_bytes_in_source
+    # Edge case supported by Prism. The `\0` cannot be confused with a string termination null byte
+    graph = Rubydex::Graph.new
+    source = "%\0abc\0"
+    graph.index_source("file:///test.rb", source, "ruby")
+  end
+
   def test_require_paths_with_invalid_arguments
     graph = Rubydex::Graph.new
 

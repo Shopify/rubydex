@@ -73,11 +73,26 @@ static VALUE rdxr_graph_index_source(VALUE self, VALUE uri, VALUE source, VALUE 
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
     const char *uri_str = StringValueCStr(uri);
-    const char *source_str = StringValueCStr(source);
     const char *language_id_str = StringValueCStr(language_id);
+    const char *source_str = RSTRING_PTR(source);
+    size_t source_len = RSTRING_LEN(source);
 
-    if (!rdx_index_source(graph, uri_str, source_str, language_id_str)) {
+    enum IndexSourceResult result = rdx_index_source(graph, uri_str, source_str, source_len, language_id_str);
+    switch (result) {
+    case IndexSourceResult_Success:
+        break;
+    case IndexSourceResult_InvalidUri:
+        rb_raise(rb_eArgError, "invalid URI (not valid UTF-8)");
+        break;
+    case IndexSourceResult_InvalidSource:
+        rb_raise(rb_eArgError, "source is not valid UTF-8");
+        break;
+    case IndexSourceResult_InvalidLanguageId:
+        rb_raise(rb_eArgError, "invalid language_id (not valid UTF-8)");
+        break;
+    case IndexSourceResult_UnsupportedLanguageId:
         rb_raise(rb_eArgError, "unsupported language_id `%s`", language_id_str);
+        break;
     }
 
     return Qnil;
