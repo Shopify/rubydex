@@ -712,9 +712,21 @@ pub struct MethodDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     parameters: Vec<Parameter>,
     visibility: Visibility,
-    receiver: Option<NameId>,
+    receiver: Option<Receiver>,
 }
+
 assert_mem_size!(MethodDefinition, 112);
+
+/// The receiver of a singleton method definition.
+#[derive(Debug)]
+pub enum Receiver {
+    /// `def self.foo` - receiver is the enclosing definition (class, module, singleton class or DSL)
+    SelfReceiver(DefinitionId),
+    /// `def Foo.bar` - receiver is an explicit constant that needs resolution
+    ConstantReceiver(NameId),
+}
+
+assert_mem_size!(Receiver, 16);
 
 impl MethodDefinition {
     #[allow(clippy::too_many_arguments)]
@@ -728,7 +740,7 @@ impl MethodDefinition {
         lexical_nesting_id: Option<DefinitionId>,
         parameters: Vec<Parameter>,
         visibility: Visibility,
-        receiver: Option<NameId>,
+        receiver: Option<Receiver>,
     ) -> Self {
         Self {
             str_id,
@@ -747,8 +759,13 @@ impl MethodDefinition {
     pub fn id(&self) -> DefinitionId {
         let mut formatted_id = format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id);
 
-        if let Some(receiver) = self.receiver {
-            formatted_id.push_str(&receiver.to_string());
+        if let Some(receiver) = &self.receiver {
+            match receiver {
+                Receiver::SelfReceiver(def_id) => formatted_id.push_str(&def_id.to_string()),
+                Receiver::ConstantReceiver(name_id) => {
+                    formatted_id.push_str(&name_id.to_string());
+                }
+            }
         }
 
         DefinitionId::from(&formatted_id)
@@ -785,7 +802,7 @@ impl MethodDefinition {
     }
 
     #[must_use]
-    pub fn receiver(&self) -> &Option<NameId> {
+    pub fn receiver(&self) -> &Option<Receiver> {
         &self.receiver
     }
 

@@ -8,7 +8,7 @@ use crate::model::definitions::{
     ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition,
     GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition, InstanceVariableDefinition,
     MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct, PrependDefinition,
-    SingletonClassDefinition,
+    Receiver, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -1042,9 +1042,17 @@ impl<'a> RubyIndexer<'a> {
                             unreachable!("method definition for nesting should exist")
                         };
 
-                        if let Some(method_def_receiver) = definition.receiver() {
+                        if let Some(receiver) = definition.receiver() {
                             is_singleton_name = true;
-                            Some(*method_def_receiver)
+                            match receiver {
+                                Receiver::SelfReceiver(def_id) => self
+                                    .local_graph
+                                    .definitions()
+                                    .get(def_id)
+                                    .and_then(Definition::name_id)
+                                    .copied(),
+                                Receiver::ConstantReceiver(name_id) => Some(*name_id),
+                            }
                         } else {
                             self.current_owner_name_id()
                         }
@@ -1416,12 +1424,12 @@ impl Visit<'_> for RubyIndexer<'_> {
 
         let receiver = if let Some(recv_node) = node.receiver() {
             match recv_node {
-                // def self.foo - receiver is the current owner's NameId (includes Class.new/Module.new)
-                ruby_prism::Node::SelfNode { .. } => self.current_owner_name_id(),
+                // def self.foo - receiver is the enclosing definition's DefinitionId
+                ruby_prism::Node::SelfNode { .. } => self.current_nesting_definition_id().map(Receiver::SelfReceiver),
                 // def Foo.bar or def Foo::Bar.baz - receiver is the constant's NameId
-                ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => {
-                    self.index_constant_reference(&recv_node, true)
-                }
+                ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => self
+                    .index_constant_reference(&recv_node, true)
+                    .map(Receiver::ConstantReceiver),
                 // Dynamic receiver (def foo.bar) - visit and then skip
                 // We still want to visit because it could be a variable reference
                 _ => {
@@ -1451,7 +1459,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 parent_nesting_id,
                 parameters.clone(),
                 Visibility::Public,
-                self.current_owner_name_id(),
+                self.current_nesting_definition_id().map(Receiver::SelfReceiver),
             )));
             let definition_id = self.local_graph.add_definition(method);
 
@@ -2008,7 +2016,7 @@ mod tests {
         assert_definition_at, assert_local_diagnostics_eq, assert_name_path_eq, assert_no_local_diagnostics,
         assert_string_eq,
         model::{
-            definitions::{Definition, Mixin, Parameter},
+            definitions::{Definition, Mixin, Parameter, Receiver},
             ids::{StringId, UriId},
             visibility::Visibility,
         },
@@ -2081,20 +2089,27 @@ mod tests {
     /// - `assert_method_has_receiver!(ctx, method, "<Bar>")`
     macro_rules! assert_method_has_receiver {
         ($context:expr, $method:expr, $expected_receiver:expr) => {{
-            if let Some(receiver_name_id) = $method.receiver() {
-                let name = $context.graph().names().get(receiver_name_id).unwrap();
-                let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
-                assert_eq!(
-                    $expected_receiver, actual_name,
-                    "method receiver mismatch: expected `{}`, got `{}`",
-                    $expected_receiver, actual_name
-                );
-            } else {
-                panic!(
-                    "Method receiver mismatch: expected `{}`, got `None`",
-                    $expected_receiver
-                );
-            }
+            let name_id = match $method.receiver() {
+                Some(Receiver::SelfReceiver(def_id)) => {
+                    let def = $context.graph().definitions().get(def_id).unwrap();
+                    *def.name_id().expect("SelfReceiver definition should have a name_id")
+                }
+                Some(Receiver::ConstantReceiver(name_id)) => *name_id,
+                None => {
+                    panic!(
+                        "Method receiver mismatch: expected `{}`, got `None`",
+                        $expected_receiver
+                    );
+                }
+            };
+
+            let name = $context.graph().names().get(&name_id).unwrap();
+            let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
+            assert_eq!(
+                $expected_receiver, actual_name,
+                "method receiver mismatch: expected `{}`, got `{}`",
+                $expected_receiver, actual_name
+            );
         }};
     }
 
@@ -5396,8 +5411,12 @@ mod tests {
         assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
-            let receiver = bar.receiver().unwrap();
-            let name_ref = context.graph().names().get(&receiver).unwrap();
+            let Receiver::SelfReceiver(def_id) = bar.receiver().as_ref().unwrap() else {
+                panic!("Expected SelfReceiver for def self.bar in Class.new");
+            };
+            let def = context.graph().definitions().get(def_id).unwrap();
+            let name_id = def.name_id().expect("Owner definition should have a name_id");
+            let name_ref = context.graph().names().get(name_id).unwrap();
             assert_eq!(StringId::from("A"), *name_ref.str());
 
             let nesting_name = context.graph().names().get(&name_ref.nesting().unwrap()).unwrap();
@@ -5442,8 +5461,12 @@ mod tests {
         assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
-            let receiver = bar.receiver().unwrap();
-            let name_ref = context.graph().names().get(&receiver).unwrap();
+            let Receiver::SelfReceiver(def_id) = bar.receiver().as_ref().unwrap() else {
+                panic!("Expected SelfReceiver for def self.bar in anonymous Class.new");
+            };
+            let def = context.graph().definitions().get(def_id).unwrap();
+            let name_id = def.name_id().expect("Owner definition should have a name_id");
+            let name_ref = context.graph().names().get(name_id).unwrap();
             let uri_id = UriId::from("file:///foo.rb");
             assert_eq!(StringId::from(&format!("{uri_id}:13<anonymous>")), *name_ref.str());
             assert!(name_ref.nesting().is_none());
