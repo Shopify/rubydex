@@ -2004,8 +2004,9 @@ impl Visit<'_> for RubyIndexer<'_> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq, assert_definition_at,
-        assert_local_diagnostics_eq, assert_name_path_eq, assert_no_local_diagnostics, assert_string_eq,
+        assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq, assert_def_superclass_ref_eq,
+        assert_definition_at, assert_local_diagnostics_eq, assert_name_path_eq, assert_no_local_diagnostics,
+        assert_string_eq,
         model::{
             definitions::{Definition, Mixin, Parameter},
             ids::{StringId, UriId},
@@ -2067,40 +2068,6 @@ mod tests {
                 "mixins mismatch: expected `{:?}`, got `{:?}`",
                 $expected_names,
                 actual_names
-            );
-        }};
-    }
-
-    /// Asserts that a definition's superclass reference matches the expected name.
-    ///
-    /// Usage:
-    /// - `assert_def_superclass_ref_eq!(ctx, def, "Bar::Baz")`
-    macro_rules! assert_def_superclass_ref_eq {
-        ($context:expr, $def:expr, $expected_name:expr) => {{
-            let name = $context
-                .graph()
-                .strings()
-                .get(
-                    $context
-                        .graph()
-                        .names()
-                        .get(
-                            $context
-                                .graph()
-                                .constant_references()
-                                .get($def.superclass_ref().unwrap())
-                                .unwrap()
-                                .name_id(),
-                        )
-                        .unwrap()
-                        .str(),
-                )
-                .unwrap()
-                .as_str();
-            assert_eq!(
-                $expected_name, name,
-                "superclass reference mismatch: expected `{}`, got `{name}`",
-                $expected_name,
             );
         }};
     }

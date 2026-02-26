@@ -1,14 +1,15 @@
 //! Visit the RBS AST and create type definitions.
 
-use ruby_rbs::node::{self, ModuleNode, Node, TypeNameNode, Visit};
+use ruby_rbs::node::{self, ClassNode, ModuleNode, Node, TypeNameNode, Visit};
 
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
-use crate::model::definitions::{Definition, DefinitionFlags, ModuleDefinition};
+use crate::model::definitions::{ClassDefinition, Definition, DefinitionFlags, ModuleDefinition};
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::name::{Name, ParentScope};
+use crate::model::references::ConstantReference;
 use crate::offset::Offset;
 
 pub struct RBSIndexer<'a> {
@@ -87,6 +88,17 @@ impl<'a> RBSIndexer<'a> {
         self.nesting_stack.last().copied()
     }
 
+    fn nesting_name_id(&self, lexical_nesting_id: Option<DefinitionId>) -> Option<NameId> {
+        lexical_nesting_id.map(|id| {
+            let owner = self
+                .local_graph
+                .definitions()
+                .get(&id)
+                .expect("owner definition should exist");
+            *owner.name_id().expect("nesting definition should have a name")
+        })
+    }
+
     fn add_member_to_current_lexical_scope(&mut self, owner_id: DefinitionId, member_id: DefinitionId) {
         let owner = self
             .local_graph
@@ -99,19 +111,71 @@ impl<'a> RBSIndexer<'a> {
             _ => unreachable!("RBS nesting stack only contains modules/classes"),
         }
     }
+
+    fn register_definition(
+        &mut self,
+        definition: Definition,
+        lexical_nesting_id: Option<DefinitionId>,
+    ) -> DefinitionId {
+        let definition_id = self.local_graph.add_definition(definition);
+        if let Some(id) = lexical_nesting_id {
+            self.add_member_to_current_lexical_scope(id, definition_id);
+        }
+        definition_id
+    }
 }
 
 impl Visit for RBSIndexer<'_> {
+    fn visit_class_node(&mut self, class_node: &ClassNode) {
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+        let nesting_name_id = self.nesting_name_id(lexical_nesting_id);
+
+        let type_name = class_node.name();
+        let name_id = self.index_type_name(&type_name, nesting_name_id);
+        let offset = Offset::from_rbs_location(&class_node.location());
+        let name_offset = Offset::from_rbs_location(&type_name.name().location());
+
+        let comments: Vec<_> = class_node
+            .comment()
+            .into_iter()
+            .map(|comment| {
+                let text = Self::bytes_to_string(comment.string().as_bytes());
+                Comment::new(Offset::from_rbs_location(&comment.location()), text)
+            })
+            .collect();
+
+        let superclass_ref = class_node.super_class().as_ref().map(|super_node| {
+            let type_name = super_node.name();
+            let name_id = self.index_type_name(&type_name, nesting_name_id);
+            let offset = Offset::from_rbs_location(&super_node.location());
+            self.local_graph
+                .add_constant_reference(ConstantReference::new(name_id, self.uri_id, offset))
+        });
+
+        let definition = Definition::Class(Box::new(ClassDefinition::new(
+            name_id,
+            self.uri_id,
+            offset,
+            name_offset,
+            comments,
+            DefinitionFlags::empty(),
+            lexical_nesting_id,
+            superclass_ref,
+        )));
+
+        let definition_id = self.register_definition(definition, lexical_nesting_id);
+        self.nesting_stack.push(definition_id);
+
+        for member in class_node.members().iter() {
+            self.visit(&member);
+        }
+
+        self.nesting_stack.pop();
+    }
+
     fn visit_module_node(&mut self, module_node: &ModuleNode) {
         let lexical_nesting_id = self.parent_lexical_scope_id();
-        let nesting_name_id = lexical_nesting_id.map(|id| {
-            let owner = self
-                .local_graph
-                .definitions()
-                .get(&id)
-                .expect("owner definition should exist");
-            *owner.name_id().expect("nesting definition should have a name")
-        });
+        let nesting_name_id = self.nesting_name_id(lexical_nesting_id);
 
         let type_name = module_node.name();
         let name_id = self.index_type_name(&type_name, nesting_name_id);
@@ -137,11 +201,7 @@ impl Visit for RBSIndexer<'_> {
             lexical_nesting_id,
         )));
 
-        let definition_id = self.local_graph.add_definition(definition);
-        if let Some(id) = lexical_nesting_id {
-            self.add_member_to_current_lexical_scope(id, definition_id);
-        }
-
+        let definition_id = self.register_definition(definition, lexical_nesting_id);
         self.nesting_stack.push(definition_id);
 
         for member in module_node.members().iter() {
@@ -156,8 +216,8 @@ impl Visit for RBSIndexer<'_> {
 mod tests {
     use crate::test_utils::LocalGraphTest;
     use crate::{
-        assert_def_name_eq, assert_def_name_offset_eq, assert_definition_at, assert_local_diagnostics_eq,
-        assert_no_local_diagnostics,
+        assert_def_name_eq, assert_def_name_offset_eq, assert_def_superclass_ref_eq, assert_definition_at,
+        assert_local_diagnostics_eq, assert_no_local_diagnostics,
     };
 
     fn index_source(source: &str) -> LocalGraphTest {
@@ -233,6 +293,82 @@ mod tests {
             assert_definition_at!(&context, "1:1-4:4", Module, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_node() {
+        let context = index_source({
+            "
+            class Foo
+              class Bar
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 2);
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+            assert_def_name_offset_eq!(&context, def, "1:7-1:10");
+            assert_eq!(1, def.members().len());
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:3-3:6", Class, |def| {
+            assert_def_name_eq!(&context, def, "Bar");
+            assert_def_name_offset_eq!(&context, def, "2:9-2:12");
+
+            assert_definition_at!(&context, "1:1-4:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_node_with_superclass() {
+        let context = index_source({
+            "
+            class Foo < Bar
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-2:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+            assert!(def.superclass_ref().is_some());
+            assert_def_superclass_ref_eq!(&context, def, "Bar");
+        });
+    }
+
+    #[test]
+    fn index_class_and_module_nesting() {
+        let context = index_source({
+            "
+            module Foo
+              class Bar
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 2);
+
+        assert_definition_at!(&context, "1:1-4:4", Module, |module_def| {
+            assert_def_name_eq!(&context, module_def, "Foo");
+            assert_eq!(1, module_def.members().len());
+
+            assert_definition_at!(&context, "2:3-3:6", Class, |class_def| {
+                assert_eq!(module_def.members()[0], class_def.id());
+                assert_def_name_eq!(&context, class_def, "Bar");
+                assert_eq!(module_def.id(), class_def.lexical_nesting_id().unwrap());
             });
         });
     }
