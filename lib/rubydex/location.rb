@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 module Rubydex
+  # A zero based internal location. Intended to be used for tool-to-tool communication, such as a language server
+  # communicating with an editor.
   class Location
     include Comparable
 
@@ -41,15 +43,31 @@ module Rubydex
 
     # Turns this zero based location into a one based location for display purposes.
     #
-    #: () -> Location
+    #: () -> DisplayLocation
     def to_display
-      self.class.new(
+      DisplayLocation.new(
         uri: @uri,
         start_line: @start_line + 1,
         end_line: @end_line + 1,
         start_column: @start_column + 1,
         end_column: @end_column + 1,
       )
+    end
+
+    #: -> String
+    def to_s
+      "#{path}:#{@start_line + 1}:#{@start_column + 1}-#{@end_line + 1}:#{@end_column + 1}"
+    end
+  end
+
+  # A one based location intended for display purposes. This is what should be used when displaying a location to users,
+  # like in CLIs
+  class DisplayLocation < Location
+    # Returns itself
+    #
+    #: () -> DisplayLocation
+    def to_display
+      self
     end
 
     #: -> String
