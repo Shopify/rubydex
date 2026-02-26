@@ -192,6 +192,12 @@ module Rubydex
     sig { params(encoding: String).void }
     def encoding=(encoding); end
 
+    sig { returns(String) }
+    def workspace_path; end
+
+    sig { params(workspace_path: String).returns(String) }
+    def workspace_path=(workspace_path); end
+
     sig { returns(T::Array[String]) }
     def workspace_paths; end
 

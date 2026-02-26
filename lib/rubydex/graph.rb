@@ -13,6 +13,9 @@ module Rubydex
       "tmp",
     ].freeze
 
+    #: String
+    attr_accessor :workspace_path
+
     #: (?workspace_path: String) -> void
     def initialize(workspace_path: Dir.pwd)
       @workspace_path = workspace_path
