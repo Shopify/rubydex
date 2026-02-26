@@ -560,6 +560,23 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_index_workspace_includes_rbs_core_definitions
+    # Ensure the `rbs` gem is installed on CI
+    Gem.install("rbs") if ENV["CI"]
+
+    graph = Rubydex::Graph.new
+    graph.index_workspace
+    graph.resolve
+
+    ["Kernel", "Object", "BasicObject", "Integer"].each do |core_namespace|
+      rbs_kernel = graph[core_namespace].definitions.find do |definition|
+        uri = URI(definition.location.uri)
+        File.extname(uri.path) == ".rbs"
+      end
+      assert(rbs_kernel, "Expected to find RBS definition for `#{core_namespace}` in the graph")
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)
