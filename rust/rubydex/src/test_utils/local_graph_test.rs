@@ -318,6 +318,27 @@ macro_rules! assert_def_str_eq {
     }};
 }
 
+// Comment assertions
+
+#[cfg(test)]
+#[macro_export]
+/// Asserts that a definition's comments matches the expected comments.
+///
+/// Usage:
+/// - `assert_def_comments_eq!(ctx, def, ["# Comment 1", "# Comment 2"])`
+macro_rules! assert_def_comments_eq {
+    ($context:expr, $def:expr, $expected_comments:expr) => {{
+        let actual_comments: Vec<String> = $def.comments().iter().map(|c| c.string().to_string()).collect();
+        assert_eq!(
+            $expected_comments,
+            actual_comments.as_slice(),
+            "comments mismatch: expected `{:?}`, got `{:?}`",
+            $expected_comments,
+            actual_comments
+        );
+    }};
+}
+
 // Diagnostic assertions
 
 #[cfg(test)]

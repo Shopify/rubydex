@@ -1,11 +1,11 @@
 //! Visit the RBS AST and create type definitions.
 
-use ruby_rbs::node::{self, ClassNode, ModuleNode, Node, TypeNameNode, Visit};
+use ruby_rbs::node::{self, ClassNode, CommentNode, ConstantNode, ModuleNode, Node, TypeNameNode, Visit};
 
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
-use crate::model::definitions::{ClassDefinition, Definition, DefinitionFlags, ModuleDefinition};
+use crate::model::definitions::{ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, ModuleDefinition};
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::name::{Name, ParentScope};
@@ -112,6 +112,16 @@ impl<'a> RBSIndexer<'a> {
         }
     }
 
+    fn collect_comments(comment_node: Option<CommentNode>) -> Vec<Comment> {
+        comment_node
+            .into_iter()
+            .map(|comment| {
+                let text = Self::bytes_to_string(comment.string().as_bytes());
+                Comment::new(Offset::from_rbs_location(&comment.location()), text)
+            })
+            .collect()
+    }
+
     fn register_definition(
         &mut self,
         definition: Definition,
@@ -135,14 +145,7 @@ impl Visit for RBSIndexer<'_> {
         let offset = Offset::from_rbs_location(&class_node.location());
         let name_offset = Offset::from_rbs_location(&type_name.name().location());
 
-        let comments: Vec<_> = class_node
-            .comment()
-            .into_iter()
-            .map(|comment| {
-                let text = Self::bytes_to_string(comment.string().as_bytes());
-                Comment::new(Offset::from_rbs_location(&comment.location()), text)
-            })
-            .collect();
+        let comments = Self::collect_comments(class_node.comment());
 
         let superclass_ref = class_node.super_class().as_ref().map(|super_node| {
             let type_name = super_node.name();
@@ -182,14 +185,7 @@ impl Visit for RBSIndexer<'_> {
         let offset = Offset::from_rbs_location(&module_node.location());
         let name_offset = Offset::from_rbs_location(&type_name.name().location());
 
-        let comments: Vec<_> = module_node
-            .comment()
-            .into_iter()
-            .map(|comment| {
-                let text = Self::bytes_to_string(comment.string().as_bytes());
-                Comment::new(Offset::from_rbs_location(&comment.location()), text)
-            })
-            .collect();
+        let comments = Self::collect_comments(module_node.comment());
 
         let definition = Definition::Module(Box::new(ModuleDefinition::new(
             name_id,
@@ -210,14 +206,36 @@ impl Visit for RBSIndexer<'_> {
 
         self.nesting_stack.pop();
     }
+
+    fn visit_constant_node(&mut self, constant_node: &ConstantNode) {
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+        let nesting_name_id = self.nesting_name_id(lexical_nesting_id);
+
+        let type_name = constant_node.name();
+        let name_id = self.index_type_name(&type_name, nesting_name_id);
+        let offset = Offset::from_rbs_location(&constant_node.location());
+
+        let comments = Self::collect_comments(constant_node.comment());
+
+        let definition = Definition::Constant(Box::new(ConstantDefinition::new(
+            name_id,
+            self.uri_id,
+            offset,
+            comments,
+            DefinitionFlags::empty(),
+            lexical_nesting_id,
+        )));
+
+        self.register_definition(definition, lexical_nesting_id);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::test_utils::LocalGraphTest;
     use crate::{
-        assert_def_name_eq, assert_def_name_offset_eq, assert_def_superclass_ref_eq, assert_definition_at,
-        assert_local_diagnostics_eq, assert_no_local_diagnostics,
+        assert_def_comments_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_superclass_ref_eq,
+        assert_definition_at, assert_local_diagnostics_eq, assert_no_local_diagnostics,
     };
 
     fn index_source(source: &str) -> LocalGraphTest {
@@ -344,6 +362,72 @@ mod tests {
             assert_def_name_eq!(&context, def, "Foo");
             assert!(def.superclass_ref().is_some());
             assert_def_superclass_ref_eq!(&context, def, "Bar");
+        });
+    }
+
+    #[test]
+    fn index_constant_node() {
+        let context = index_source("FOO: String");
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 1);
+
+        assert_definition_at!(&context, "1:1-1:12", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+    }
+
+    #[test]
+    fn index_qualified_constant_node() {
+        let context = index_source("Foo::BAR: String");
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 1);
+
+        assert_definition_at!(&context, "1:1-1:17", Constant, |def| {
+            assert_def_name_eq!(&context, def, "Foo::BAR");
+        });
+    }
+
+    #[test]
+    fn index_constant_inside_class() {
+        let context = index_source({
+            "
+            class Foo
+              FOO: Integer
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+            assert_def_name_eq!(&context, class_def, "Foo");
+            assert_eq!(1, class_def.members().len());
+
+            assert_definition_at!(&context, "2:3-2:15", Constant, |def| {
+                assert_def_name_eq!(&context, def, "FOO");
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(class_def.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_constant_node_with_comment() {
+        let context = index_source({
+            "
+            # Some documentation
+            FOO: String
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:12", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert_def_comments_eq!(&context, def, ["Some documentation\n"]);
         });
     }
 
