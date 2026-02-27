@@ -77,6 +77,10 @@ pub struct Graph {
     /// Used during invalidation to efficiently find affected entities without scanning the full graph.
     name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
 
+    /// When true, work items from update/delete are discarded instead of accumulated.
+    /// Use for tools that only need definitions without resolution.
+    without_resolution: bool,
+
     /// Accumulated work items from update/delete operations.
     /// Drained by `take_pending_work()` before resolution.
     pending_work: Vec<Unit>,
@@ -96,6 +100,7 @@ impl Graph {
             position_encoding: Encoding::default(),
             declaration_to_names: IdentityHashMap::default(),
             name_dependents: IdentityHashMap::default(),
+            without_resolution: false,
             pending_work: Vec::default(),
         }
     }
@@ -718,7 +723,9 @@ impl Graph {
         let mut work = Vec::new();
         self.invalidate(Some(&document), None, &mut work);
         self.remove_document_data(&document);
-        self.pending_work.extend(work);
+        if !self.without_resolution {
+            self.pending_work.extend(work);
+        }
         Some(uri_id)
     }
 
@@ -811,7 +818,9 @@ impl Graph {
         }
 
         self.extend(other, &mut work);
-        self.pending_work.extend(work);
+        if !self.without_resolution {
+            self.pending_work.extend(work);
+        }
     }
 
     /// Detaches old definitions from declarations, identifies declarations touched by the
@@ -1138,6 +1147,17 @@ impl Graph {
         }
 
         false
+    }
+
+    /// Configures the graph to skip accumulating resolution work items. Use for tools that only
+    /// need definitions and don't intend to call `resolve()`.
+    pub fn set_without_resolution(&mut self, without_resolution: bool) {
+        self.without_resolution = without_resolution;
+    }
+
+    #[must_use]
+    pub fn without_resolution(&self) -> bool {
+        self.without_resolution
     }
 
     /// Sets the encoding that should be used for transforming byte offsets into LSP code unit line/column positions

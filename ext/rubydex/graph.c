@@ -356,6 +356,24 @@ static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
     return Qnil;
 }
 
+// Graph#without_resolution=: (Boolean) -> void
+// Configures the graph to skip accumulating resolution work items
+static VALUE rdxr_graph_set_without_resolution(VALUE self, VALUE without_resolution) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+    rdx_graph_set_without_resolution(graph, RTEST(without_resolution));
+    return Qnil;
+}
+
+// Graph#without_resolution?: () -> Boolean
+// Returns whether the graph is configured to skip accumulating resolution work items
+static VALUE rdxr_graph_without_resolution(VALUE self) {
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    return rdx_graph_without_resolution(graph) ? Qtrue : Qfalse;
+}
+
 // Graph#resolve_constant: (String, Array[String]) -> Declaration?
 // Runs the resolver on a single constant reference to determine what it points to
 static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesting) {
@@ -498,6 +516,8 @@ void rdxi_initialize_graph(VALUE mRubydex) {
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
     rb_define_method(cGraph, "search", rdxr_graph_search, 1);
     rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);
+    rb_define_method(cGraph, "without_resolution=", rdxr_graph_set_without_resolution, 1);
+    rb_define_method(cGraph, "without_resolution?", rdxr_graph_without_resolution, 0);
     rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
     rb_define_method(cGraph, "require_paths", rdxr_graph_require_paths, 1);
 }
