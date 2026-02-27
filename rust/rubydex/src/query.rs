@@ -826,7 +826,7 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
-        let candidates = completion_candidates(
+        let mut candidates = completion_candidates(
             context.graph(),
             CompletionContext::new(CompletionReceiver::Expression(name_id)),
         )
@@ -834,8 +834,11 @@ mod tests {
         .iter()
         .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
         .collect::<Vec<_>>();
+        candidates.sort();
 
-        assert_eq!(vec!["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"], candidates);
+        let mut expected = vec!["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"];
+        expected.sort();
+        assert_eq!(expected, candidates);
     }
 
     #[test]

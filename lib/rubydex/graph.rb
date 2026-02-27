@@ -16,9 +16,10 @@ module Rubydex
     #: String
     attr_accessor :workspace_path
 
-    #: (?workspace_path: String) -> void
-    def initialize(workspace_path: Dir.pwd)
+    #: (?workspace_path: String, ?without_resolution: bool) -> void
+    def initialize(workspace_path: Dir.pwd, without_resolution: false)
       @workspace_path = workspace_path
+      self.without_resolution = without_resolution
     end
 
     # Index all files and dependencies of the workspace that exists in `@workspace_path`

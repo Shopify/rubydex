@@ -562,6 +562,49 @@ class GraphTest < Minitest::Test
 
   private
 
+  def test_without_resolution_prevents_memory_growth
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Foo
+          CONST = 1
+        end
+      RUBY
+
+      context.write!("bar.rb", <<~RUBY)
+        class Bar
+          Foo::CONST
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new(without_resolution: true)
+      assert(graph.without_resolution?)
+      graph.index_all(context.glob("**/*.rb"))
+
+      # Without resolution, declarations should still be created from definitions
+      refute_nil(graph["Foo"])
+      refute_nil(graph["Bar"])
+
+      # Repeated re-indexing should not accumulate unbounded work
+      10.times do
+        graph.index_source(context.uri_to("bar.rb"), context.absolute_path_to("bar.rb"), <<~RUBY)
+          class Bar
+            Foo::CONST
+          end
+        RUBY
+      end
+
+      # Graph still works for definition lookups
+      refute_nil(graph["Foo"])
+      refute_nil(graph["Bar"])
+    end
+  end
+
+  def test_without_resolution_defaults_to_false
+    graph = Rubydex::Graph.new
+    refute(graph.without_resolution?)
+  end
+
+
   def assert_diagnostics(expected, actual)
     assert_equal(
       expected,

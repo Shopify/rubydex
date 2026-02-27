@@ -192,7 +192,7 @@ pub unsafe extern "C" fn rdx_graph_delete_document(pointer: GraphPointer, uri: *
 pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
     with_mut_graph(pointer, |graph| {
         let mut resolver = Resolver::new(graph);
-        resolver.resolve_all();
+        resolver.resolve();
     });
 }
 
@@ -219,6 +219,28 @@ pub unsafe extern "C" fn rdx_graph_set_encoding(pointer: GraphPointer, encoding_
     });
 
     true
+}
+
+/// Configures the graph to skip accumulating resolution work items.
+///
+/// # Safety
+///
+/// Expects the graph pointer to be valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_set_without_resolution(pointer: GraphPointer, without_resolution: bool) {
+    with_mut_graph(pointer, |graph| {
+        graph.set_without_resolution(without_resolution);
+    });
+}
+
+/// Returns whether the graph is configured to skip accumulating resolution work items.
+///
+/// # Safety
+///
+/// Expects the graph pointer to be valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_without_resolution(pointer: GraphPointer) -> bool {
+    with_graph(pointer, |graph| graph.without_resolution())
 }
 
 /// Creates a new iterator over declaration IDs by snapshotting the current set of IDs.
@@ -577,7 +599,7 @@ mod tests {
         let mut graph = Graph::new();
         graph.update(indexer.local_graph());
         let mut resolver = Resolver::new(&mut graph);
-        resolver.resolve_all();
+        resolver.resolve();
 
         assert_eq!(
             1,
