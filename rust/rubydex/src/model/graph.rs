@@ -14,12 +14,13 @@ use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::stats;
 
-/// A definition or constant reference that uses a particular `NameId`.
-/// Used as the value type in the `name_users` reverse index.
+/// An entity whose validity depends on a particular `NameId`.
+/// Used as the value type in the `name_dependents` reverse index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NameUser {
+pub enum NameDependent {
     Definition(DefinitionId),
     Reference(ReferenceId),
+    Name(NameId),
 }
 
 /// Items processed by the unified invalidation worklist.
@@ -72,13 +73,9 @@ pub struct Graph {
     /// Used during incremental invalidation to find names that need unresolving when a declaration is removed.
     declaration_to_names: IdentityHashMap<DeclarationId, IdentityHashSet<NameId>>,
 
-    /// Reverse index: for each `NameId`, which definitions and constant references use it.
-    /// Eliminates O(D+R) scans during invalidation.
-    name_users: IdentityHashMap<NameId, Vec<NameUser>>,
-
-    /// Reverse index: for each `NameId`, which other names depend on it
-    /// (via nesting or `parent_scope`). Used for cascade invalidation.
-    name_dependents: IdentityHashMap<NameId, IdentityHashSet<NameId>>,
+    /// Reverse index: for each `NameId`, what depends on it (definitions, references, and child names).
+    /// Used during invalidation to efficiently find affected entities without scanning the full graph.
+    name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
 
     /// Accumulated work items from update/delete operations.
     /// Drained by `take_pending_work()` before resolution.
@@ -98,7 +95,6 @@ impl Graph {
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
             declaration_to_names: IdentityHashMap::default(),
-            name_users: IdentityHashMap::default(),
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
         }
@@ -578,19 +574,13 @@ impl Graph {
             let nesting_id = name_ref.nesting().as_ref().copied();
             let parent_scope_id = name_ref.parent_scope().as_ref().copied();
 
-            // Remove this name from name_dependents of its nesting and parent_scope names
+            // Remove this name from its nesting/parent_scope owners' dependent lists
             for dep_owner_id in [nesting_id, parent_scope_id].into_iter().flatten() {
-                if let Some(deps) = self.name_dependents.get_mut(&dep_owner_id) {
-                    deps.remove(&name_id);
-                    if deps.is_empty() {
-                        self.name_dependents.remove(&dep_owner_id);
-                    }
-                }
+                self.remove_name_dependent(dep_owner_id, NameDependent::Name(name_id));
             }
         }
 
         self.name_dependents.remove(&name_id);
-        self.name_users.remove(&name_id);
         self.names.remove(&name_id);
     }
 
@@ -768,10 +758,18 @@ impl Graph {
                 Entry::Vacant(entry) => {
                     // Track nesting and parent_scope dependents for new names only
                     if let Some(nesting_id) = entry.insert(name_ref).nesting() {
-                        self.name_dependents.entry(*nesting_id).or_default().insert(name_id);
+                        let deps = self.name_dependents.entry(*nesting_id).or_default();
+                        let dep = NameDependent::Name(name_id);
+                        if !deps.contains(&dep) {
+                            deps.push(dep);
+                        }
                     }
                     if let Some(parent_id) = self.names.get(&name_id).unwrap().parent_scope().as_ref() {
-                        self.name_dependents.entry(*parent_id).or_default().insert(name_id);
+                        let deps = self.name_dependents.entry(*parent_id).or_default();
+                        let dep = NameDependent::Name(name_id);
+                        if !deps.contains(&dep) {
+                            deps.push(dep);
+                        }
                     }
                 }
             }
@@ -779,10 +777,10 @@ impl Graph {
 
         for (definition_id, definition) in definitions {
             if let Some(name_id) = definition.name_id() {
-                self.name_users
+                self.name_dependents
                     .entry(*name_id)
                     .or_default()
-                    .push(NameUser::Definition(definition_id));
+                    .push(NameDependent::Definition(definition_id));
             }
 
             if self.definitions.insert(definition_id, definition).is_some() {
@@ -793,10 +791,10 @@ impl Graph {
         }
 
         for (constant_ref_id, constant_ref) in constant_references {
-            self.name_users
+            self.name_dependents
                 .entry(*constant_ref.name_id())
                 .or_default()
-                .push(NameUser::Reference(constant_ref_id));
+                .push(NameDependent::Reference(constant_ref_id));
 
             work.push(Unit::ConstantRef(constant_ref_id));
 
@@ -907,7 +905,7 @@ impl Graph {
                     declaration.remove_reference(ref_id);
                 }
 
-                self.remove_name_user(*constant_ref.name_id(), NameUser::Reference(*ref_id));
+                self.remove_name_dependent(*constant_ref.name_id(), NameDependent::Reference(*ref_id));
                 self.untrack_name(*constant_ref.name_id());
             }
         }
@@ -919,19 +917,19 @@ impl Graph {
 
             let definition = self.definitions.remove(def_id).unwrap();
             if let Some(name_id) = definition.name_id() {
-                self.remove_name_user(*name_id, NameUser::Definition(*def_id));
+                self.remove_name_dependent(*name_id, NameDependent::Definition(*def_id));
             }
             self.untrack_definition_strings(&definition);
         }
     }
 
-    /// Removes a specific user from the `name_users` entry for `name_id`, cleaning up the entry
-    /// if no users remain.
-    fn remove_name_user(&mut self, name_id: NameId, user: NameUser) {
-        if let Some(users) = self.name_users.get_mut(&name_id) {
-            users.retain(|u| *u != user);
-            if users.is_empty() {
-                self.name_users.remove(&name_id);
+    /// Removes a specific dependent from the `name_dependents` entry for `name_id`,
+    /// cleaning up the entry if no dependents remain.
+    fn remove_name_dependent(&mut self, name_id: NameId, dependent: NameDependent) {
+        if let Some(deps) = self.name_dependents.get_mut(&name_id) {
+            deps.retain(|d| *d != dependent);
+            if deps.is_empty() {
+                self.name_dependents.remove(&name_id);
             }
         }
     }
@@ -987,13 +985,15 @@ impl Graph {
                 }
             }
 
-            // Unresolve names resolved to this declaration, queue their dependents
+            // Unresolve names resolved to this declaration, queue their Name dependents
             if let Some(name_set) = self.declaration_to_names.remove(&decl_id) {
                 for name_id in name_set {
                     self.unresolve_name(name_id);
                     if let Some(deps) = self.name_dependents.get(&name_id) {
                         for dep in deps {
-                            queue.push(InvalidationItem::Name(*dep));
+                            if let NameDependent::Name(dep_name_id) = dep {
+                                queue.push(InvalidationItem::Name(*dep_name_id));
+                            }
                         }
                     }
                 }
@@ -1047,12 +1047,14 @@ impl Graph {
 
             work.push(Unit::Ancestors(decl_id));
 
-            // Queue dependents of resolved names (skipping seeds themselves)
+            // Queue Name dependents of resolved names (skipping seeds themselves)
             if let Some(name_set) = self.declaration_to_names.get(&decl_id) {
                 for seed_name_id in name_set {
                     if let Some(deps) = self.name_dependents.get(seed_name_id) {
                         for dep in deps {
-                            queue.push(InvalidationItem::Name(*dep));
+                            if let NameDependent::Name(dep_name_id) = dep {
+                                queue.push(InvalidationItem::Name(*dep_name_id));
+                            }
                         }
                     }
                 }
@@ -1076,31 +1078,31 @@ impl Graph {
             return;
         }
 
-        // Always propagate to dependents
-        if let Some(deps) = self.name_dependents.get(&name_id) {
-            for dep in deps {
-                queue.push(InvalidationItem::Name(*dep));
+        let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
+
+        // Always propagate to Name dependents
+        for dep in &dependents {
+            if let NameDependent::Name(dep_name_id) = dep {
+                queue.push(InvalidationItem::Name(*dep_name_id));
             }
         }
 
         if self.has_unresolved_dependency(name_id) {
             // Structural cascade: the name's resolution is invalid
             if let Some(old_decl_id) = self.unresolve_name(name_id) {
-                let users: Vec<NameUser> = self.name_users.get(&name_id).cloned().unwrap_or_default();
-
-                for user in users {
-                    match user {
-                        NameUser::Reference(ref_id) => {
+                for dep in &dependents {
+                    match dep {
+                        NameDependent::Reference(ref_id) => {
                             if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
-                                decl.remove_reference(&ref_id);
+                                decl.remove_reference(ref_id);
                             }
-                            work.push(Unit::ConstantRef(ref_id));
+                            work.push(Unit::ConstantRef(*ref_id));
                         }
-                        NameUser::Definition(def_id) => {
-                            work.push(Unit::Definition(def_id));
+                        NameDependent::Definition(def_id) => {
+                            work.push(Unit::Definition(*def_id));
 
                             if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
-                                decl.remove_definition(&def_id);
+                                decl.remove_definition(def_id);
                             }
 
                             if self
@@ -1111,29 +1113,21 @@ impl Graph {
                                 queue.push(InvalidationItem::Declaration(old_decl_id));
                             }
                         }
+                        NameDependent::Name(_) => {} // already propagated above
                     }
                 }
             }
         } else {
             // Ancestor change only: re-evaluate constant references under this name
-            let ref_ids: Vec<ReferenceId> = self
-                .name_users
-                .get(&name_id)
-                .into_iter()
-                .flatten()
-                .filter_map(|u| match u {
-                    NameUser::Reference(id) => Some(*id),
-                    NameUser::Definition(_) => None,
-                })
-                .collect();
-
             let is_resolved = matches!(self.names.get(&name_id), Some(NameRef::Resolved(_)));
 
-            for ref_id in ref_ids {
-                if is_resolved {
-                    self.unresolve_reference(ref_id);
+            for dep in &dependents {
+                if let NameDependent::Reference(ref_id) = dep {
+                    if is_resolved {
+                        self.unresolve_reference(*ref_id);
+                    }
+                    work.push(Unit::ConstantRef(*ref_id));
                 }
-                work.push(Unit::ConstantRef(ref_id));
             }
         }
     }
