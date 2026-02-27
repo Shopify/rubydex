@@ -2035,9 +2035,9 @@ impl Visit<'_> for RubyIndexer<'_> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq, assert_def_superclass_ref_eq,
-        assert_definition_at, assert_local_diagnostics_eq, assert_name_path_eq, assert_no_local_diagnostics,
-        assert_string_eq,
+        assert_def_comments_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
+        assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_name_path_eq,
+        assert_no_local_diagnostics, assert_string_eq,
         model::{
             definitions::{Definition, Mixin, Parameter, Receiver},
             ids::{StringId, UriId},
@@ -2045,23 +2045,6 @@ mod tests {
         },
         test_utils::LocalGraphTest,
     };
-
-    /// Asserts that a definition's comments matches the expected comments.
-    ///
-    /// Usage:
-    /// - `assert_def_comments_eq!(ctx, def, ["# Comment 1", "# Comment 2"])`
-    macro_rules! assert_def_comments_eq {
-        ($context:expr, $def:expr, $expected_comments:expr) => {{
-            let actual_comments: Vec<String> = $def.comments().iter().map(|c| c.string().to_string()).collect();
-            assert_eq!(
-                $expected_comments,
-                actual_comments.as_slice(),
-                "comments mismatch: expected `{:?}`, got `{:?}`",
-                $expected_comments,
-                actual_comments
-            );
-        }};
-    }
 
     /// Asserts that a definition's mixins matches the expected mixins.
     ///
