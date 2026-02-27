@@ -1,11 +1,13 @@
 //! Visit the RBS AST and create type definitions.
 
-use ruby_rbs::node::{self, ClassNode, CommentNode, ConstantNode, ModuleNode, Node, TypeNameNode, Visit};
+use ruby_rbs::node::{self, ClassNode, CommentNode, ConstantNode, GlobalNode, ModuleNode, Node, TypeNameNode, Visit};
 
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
-use crate::model::definitions::{ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, ModuleDefinition};
+use crate::model::definitions::{
+    ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, GlobalVariableDefinition, ModuleDefinition,
+};
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, UriId};
 use crate::model::name::{Name, ParentScope};
@@ -228,14 +230,36 @@ impl Visit for RBSIndexer<'_> {
 
         self.register_definition(definition, lexical_nesting_id);
     }
+
+    fn visit_global_node(&mut self, global_node: &GlobalNode) {
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+
+        let str_id = self
+            .local_graph
+            .intern_string(Self::bytes_to_string(global_node.name().name()));
+        let offset = Offset::from_rbs_location(&global_node.location());
+
+        let comments = Self::collect_comments(global_node.comment());
+
+        let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
+            str_id,
+            self.uri_id,
+            offset,
+            comments,
+            DefinitionFlags::empty(),
+            lexical_nesting_id,
+        )));
+
+        self.register_definition(definition, lexical_nesting_id);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::test_utils::LocalGraphTest;
     use crate::{
-        assert_def_comments_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_superclass_ref_eq,
-        assert_definition_at, assert_local_diagnostics_eq, assert_no_local_diagnostics,
+        assert_def_comments_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
+        assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_no_local_diagnostics,
     };
 
     fn index_source(source: &str) -> LocalGraphTest {
@@ -428,6 +452,37 @@ mod tests {
         assert_definition_at!(&context, "2:1-2:12", Constant, |def| {
             assert_def_name_eq!(&context, def, "FOO");
             assert_def_comments_eq!(&context, def, ["Some documentation\n"]);
+        });
+    }
+
+    #[test]
+    fn index_global_node() {
+        let context = index_source("$foo: String");
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 1);
+
+        assert_definition_at!(&context, "1:1-1:13", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$foo");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+    }
+
+    #[test]
+    fn index_global_node_with_comment() {
+        let context = index_source({
+            "
+            # A global variable
+            $bar: Integer
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 1);
+
+        assert_definition_at!(&context, "2:1-2:14", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$bar");
+            assert_def_comments_eq!(&context, def, ["A global variable\n"]);
         });
     }
 

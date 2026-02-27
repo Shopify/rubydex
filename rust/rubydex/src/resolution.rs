@@ -4514,6 +4514,17 @@ mod tests {
     }
 
     #[test]
+    fn rbs_global_declaration() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", "$foo: String");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Object", ["$foo"]);
+    }
+
+    #[test]
     fn resolving_meta_programming_class_reopened() {
         // It's often not possible to provide first-class support to meta-programming constructs, but we have to prevent
         // the implementation from crashing in cases like these.
