@@ -36,9 +36,12 @@ module Rubydex
     def <=>(other)
       return -1 unless other.is_a?(Location)
 
-      a = [@uri, @start_line, @start_column, @end_line, @end_column]
-      b = [other.uri, other.start_line, other.start_column, other.end_line, other.end_column]
-      a <=> b
+      comparable_values <=> other.comparable_values
+    end
+
+    #: () -> [String, Integer, Integer, Integer, Integer]
+    def comparable_values
+      [@uri, @start_line, @start_column, @end_line, @end_column]
     end
 
     # Turns this zero based location into a one based location for display purposes.
@@ -68,6 +71,13 @@ module Rubydex
     #: () -> DisplayLocation
     def to_display
       self
+    end
+
+    # Normalize to zero-based for comparison with Location
+    #
+    #: () -> [String, Integer, Integer, Integer, Integer]
+    def comparable_values
+      [@uri, @start_line - 1, @start_column - 1, @end_line - 1, @end_column - 1]
     end
 
     #: -> String
