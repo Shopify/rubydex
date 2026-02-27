@@ -168,14 +168,18 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for resolving a constant definition
     fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
+        let mut needs_linearization = false;
+
         let outcome = match self.graph.definitions().get(&id).unwrap() {
             Definition::Class(class) => {
                 self.handle_constant_declaration(*class.name_id(), id, false, |name, owner_id| {
+                    needs_linearization = true;
                     Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(name, owner_id))))
                 })
             }
             Definition::Module(module) => {
                 self.handle_constant_declaration(*module.name_id(), id, false, |name, owner_id| {
+                    needs_linearization = true;
                     Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
                 })
             }
@@ -191,6 +195,7 @@ impl<'a> Resolver<'a> {
             }
             Definition::SingletonClass(singleton) => {
                 self.handle_constant_declaration(*singleton.name_id(), id, true, |name, owner_id| {
+                    needs_linearization = true;
                     Declaration::Namespace(Namespace::SingletonClass(Box::new(SingletonClassDeclaration::new(
                         name, owner_id,
                     ))))
@@ -212,7 +217,9 @@ impl<'a> Resolver<'a> {
                 self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             }
             Outcome::Resolved(id, None) => {
-                self.unit_queue.push_back(Unit::Ancestors(id));
+                if needs_linearization {
+                    self.unit_queue.push_back(Unit::Ancestors(id));
+                }
                 self.made_progress = true;
             }
             Outcome::Resolved(_, Some(id_needing_linearization)) => {
@@ -280,16 +287,36 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
                             self.get_or_create_singleton_class(owner_decl_id)
+                                .expect("Methods with self receiver should always be inside a namespace")
                         }
                         Some(Receiver::ConstantReceiver(name_id)) => {
-                            let receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
+                            let mut receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
                                 NameRef::Resolved(resolved) => *resolved.declaration_id(),
                                 NameRef::Unresolved(_) => {
                                     continue;
                                 }
                             };
 
-                            self.get_or_create_singleton_class(receiver_decl_id)
+                            let receiver_decl = self.graph.declarations().get(&receiver_decl_id).unwrap();
+
+                            // If the method receiver is a constant alias, it needs to point to a namespace or else we don't have a place to declare the method
+                            if matches!(receiver_decl, Declaration::ConstantAlias(_)) {
+                                let resolved_ids = self.resolve_alias_chains(receiver_decl_id);
+                                let Some(namespace) = resolved_ids
+                                    .iter()
+                                    .find(|id| self.graph.declarations().get(id).unwrap().as_namespace().is_some())
+                                else {
+                                    continue;
+                                };
+
+                                receiver_decl_id = *namespace;
+                            }
+
+                            let Some(singleton_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
+                                continue;
+                            };
+
+                            singleton_id
                         }
                         None => self.resolve_lexical_owner(*method_definition.lexical_nesting_id()),
                     };
@@ -359,18 +386,39 @@ impl<'a> Resolver<'a> {
                                         let Some(NameRef::Resolved(resolved)) = self.graph.names().get(name_id) else {
                                             continue;
                                         };
-                                        *resolved.declaration_id()
+
+                                        let mut receiver_decl_id = *resolved.declaration_id();
+                                        let receiver_decl = self.graph.declarations().get(&receiver_decl_id).unwrap();
+
+                                        // If the method receiver is a constant alias, it needs to point to a namespace or else we don't have a place to declare the method
+                                        if matches!(receiver_decl, Declaration::ConstantAlias(_)) {
+                                            let resolved_ids = self.resolve_alias_chains(receiver_decl_id);
+                                            let Some(namespace) = resolved_ids.iter().find(|id| {
+                                                self.graph.declarations().get(id).unwrap().as_namespace().is_some()
+                                            }) else {
+                                                continue;
+                                            };
+
+                                            receiver_decl_id = *namespace;
+                                        }
+
+                                        receiver_decl_id
                                     }
                                 };
 
-                                let owner_id = self.get_or_create_singleton_class(receiver_decl_id);
-                                debug_assert!(
-                                    matches!(
-                                        self.graph.declarations().get(&owner_id),
-                                        Some(Declaration::Namespace(Namespace::SingletonClass(_)))
-                                    ),
-                                    "Instance variable in singleton method should be owned by a SingletonClass"
-                                );
+                                // Instance variable in singleton method - owned by the receiver's singleton class
+                                let Some(owner_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
+                                    continue;
+                                };
+                                {
+                                    debug_assert!(
+                                        matches!(
+                                            self.graph.declarations().get(&owner_id),
+                                            Some(Declaration::Namespace(Namespace::SingletonClass(_)))
+                                        ),
+                                        "Instance variable in singleton method should be owned by a SingletonClass"
+                                    );
+                                }
                                 self.create_declaration(str_id, id, owner_id, |name| {
                                     Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
                                         name, owner_id,
@@ -413,7 +461,9 @@ impl<'a> Resolver<'a> {
                                 .definition_id_to_declaration_id(nesting_id)
                                 .copied()
                                 .unwrap_or(*OBJECT_ID);
-                            let owner_id = self.get_or_create_singleton_class(nesting_decl_id);
+                            let owner_id = self
+                                .get_or_create_singleton_class(nesting_decl_id)
+                                .expect("class/module nesting should always be a namespace");
                             {
                                 debug_assert!(
                                     matches!(
@@ -437,7 +487,9 @@ impl<'a> Resolver<'a> {
                                 .definition_id_to_declaration_id(nesting_id)
                                 .copied()
                                 .unwrap_or(*OBJECT_ID);
-                            let owner_id = self.get_or_create_singleton_class(singleton_class_decl_id);
+                            let owner_id = self
+                                .get_or_create_singleton_class(singleton_class_decl_id)
+                                .expect("singleton class nesting should always be a namespace");
                             {
                                 debug_assert!(
                                     matches!(
@@ -555,48 +607,50 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Gets or creates a singleton class declaration for a given class/module declaration.
-    /// For class `Foo`, this returns the declaration for `Foo::<Foo>`.
-    fn get_or_create_singleton_class(&mut self, attached_id: DeclarationId) -> DeclarationId {
-        let (decl_id, name) = {
-            let attached_decl = self.graph.declarations().get(&attached_id).unwrap();
+    /// Gets or creates a singleton class declaration for a given class/module declaration.  For class `Foo`, this
+    /// returns the declaration for `Foo::<Foo>`.
+    ///
+    /// If the declaration is a `Constant` with all-promotable definitions, it is automatically promoted to a `Class`
+    /// namespace before creating the singleton. Returns `None` if the declaration is not a namespace and cannot be
+    /// promoted (e.g., `FOO = 42`).
+    fn get_or_create_singleton_class(&mut self, attached_id: DeclarationId) -> Option<DeclarationId> {
+        let attached_decl = self.graph.declarations().get(&attached_id).unwrap();
 
-            // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
-            // and `Module.new`, which now seem like constants, but are actually namespaces
-            if !matches!(attached_decl, Declaration::Constant(_) | Declaration::ConstantAlias(_))
-                && let Some(singleton_id) = attached_decl.as_namespace().unwrap().singleton_class()
-            {
-                return *singleton_id;
+        if matches!(attached_decl, Declaration::Constant(_)) {
+            if self.graph.all_definitions_promotable(attached_decl) {
+                self.graph.promote_constant_to_namespace(attached_id, |name, owner_id| {
+                    Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
+                });
+
+                self.unit_queue.push_back(Unit::Ancestors(attached_id));
+            } else {
+                return None;
             }
-
-            let name = format!("{}::<{}>", attached_decl.name(), attached_decl.unqualified_name());
-            (DeclarationId::from(&name), name)
-        };
-
-        // TODO: the constant check is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new`
-        // and `Module.new`, which now seem like constants, but are actually namespaces
-        if !matches!(
-            self.graph.declarations().get(&attached_id).unwrap(),
-            Declaration::Constant(_) | Declaration::ConstantAlias(_)
-        ) {
-            self.graph
-                .declarations_mut()
-                .get_mut(&attached_id)
-                .unwrap()
-                .as_namespace_mut()
-                .unwrap()
-                .set_singleton_class_id(decl_id);
         }
+
+        let attached_decl = self.graph.declarations_mut().get_mut(&attached_id).unwrap();
+        let fully_qualified_name = format!("{}::<{}>", attached_decl.name(), attached_decl.unqualified_name());
+
+        let namespace_decl = attached_decl
+            .as_namespace_mut()
+            .expect("constants are handled above; all other callers pass namespace declarations");
+
+        if let Some(singleton_id) = namespace_decl.singleton_class() {
+            return Some(*singleton_id);
+        }
+
+        let decl_id = DeclarationId::from(&fully_qualified_name);
+        namespace_decl.set_singleton_class_id(decl_id);
 
         self.graph.declarations_mut().insert(
             decl_id,
             Declaration::Namespace(Namespace::SingletonClass(Box::new(SingletonClassDeclaration::new(
-                name,
+                fully_qualified_name,
                 attached_id,
             )))),
         );
 
-        decl_id
+        Some(decl_id)
     }
 
     /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
@@ -619,12 +673,6 @@ impl<'a> Resolver<'a> {
     fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
         {
             let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
-
-            // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
-            // `Module.new`, which now seem like constants, but are actually namespaces
-            if matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) {
-                return Ancestors::Complete(vec![]);
-            }
 
             // Add this declaration to the descendants so that we capture transitive descendant relationships
             context.descendants.insert(declaration_id);
@@ -669,12 +717,8 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // TODO: this check is against `Object` for now to avoid infinite recursion. After RBS indexing, we need to change
-        // this to `BasicObject` since it's the only class that cannot have a parent
         let parent_ancestors = self.linearize_parent_ancestors(declaration_id, context);
-
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
-
         let mut mixins = Vec::new();
 
         // If we're linearizing a singleton class, add the extends of the attached class to the list of mixins to process
@@ -808,7 +852,15 @@ impl<'a> Resolver<'a> {
                 Mixin::Prepend(_) => {
                     match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
-                            let ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
+                            let declaration_id = resolved.declaration_id();
+
+                            // Skip if the mixin is not a namespace (e.g.: dynamically defined class or module that we
+                            // misidentified as a constant)
+                            if !self.graph.is_namespace(declaration_id) {
+                                continue;
+                            }
+
+                            let ids = match self.linearize_ancestors(*declaration_id, context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
                                     context.cyclic = true;
@@ -843,7 +895,15 @@ impl<'a> Resolver<'a> {
                 Mixin::Include(_) | Mixin::Extend(_) => {
                     match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
-                            let mut ids = match self.linearize_ancestors(*resolved.declaration_id(), context) {
+                            let declaration_id = resolved.declaration_id();
+
+                            // Skip if the mixin is not a namespace (e.g.: dynamically defined class or module that we
+                            // misidentified as a constant)
+                            if !self.graph.is_namespace(declaration_id) {
+                                continue;
+                            }
+
+                            let mut ids = match self.linearize_ancestors(*declaration_id, context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
                                     context.cyclic = true;
@@ -925,14 +985,13 @@ impl<'a> Resolver<'a> {
             Outcome::Resolved(owner_id, id_needing_linearization) => {
                 let mut fully_qualified_name = self.graph.strings().get(&str_id).unwrap().to_string();
 
-                {
-                    let owner = self.graph.declarations().get(&owner_id).unwrap();
+                let owner = self.graph.declarations().get(&owner_id).unwrap();
+                let owner_is_namespace = owner.as_namespace().is_some();
 
-                    // We don't prefix declarations with `Object::`
-                    if owner_id != *OBJECT_ID {
-                        fully_qualified_name.insert_str(0, "::");
-                        fully_qualified_name.insert_str(0, owner.name());
-                    }
+                // We don't prefix declarations with `Object::`
+                if owner_id != *OBJECT_ID {
+                    fully_qualified_name.insert_str(0, "::");
+                    fully_qualified_name.insert_str(0, owner.name());
                 }
 
                 let declaration_id =
@@ -941,16 +1000,18 @@ impl<'a> Resolver<'a> {
                             declaration_builder(fully_qualified_name, owner_id)
                         });
 
-                if singleton {
-                    self.graph
-                        .declarations_mut()
-                        .get_mut(&owner_id)
-                        .unwrap()
-                        .as_namespace_mut()
-                        .unwrap()
-                        .set_singleton_class_id(declaration_id);
-                } else {
-                    self.graph.add_member(&owner_id, declaration_id, str_id);
+                if owner_is_namespace {
+                    if singleton {
+                        self.graph
+                            .declarations_mut()
+                            .get_mut(&owner_id)
+                            .unwrap()
+                            .as_namespace_mut()
+                            .unwrap()
+                            .set_singleton_class_id(declaration_id);
+                    } else {
+                        self.graph.add_member(&owner_id, declaration_id, str_id);
+                    }
                 }
 
                 self.graph.record_resolved_name(name_id, declaration_id);
@@ -1043,9 +1104,34 @@ impl<'a> Resolver<'a> {
                             return Outcome::Retry(None);
                         };
 
+                        let mut target_decl_id = *parent_scope.declaration_id();
+                        let target_decl = self.graph.declarations().get(&target_decl_id).unwrap();
+
+                        // If the attached object is a constant alias, resolve it to the target namespace
+                        // (e.g., ALIAS.bar where ALIAS = Foo should create the singleton class on Foo, not ALIAS)
+                        if matches!(target_decl, Declaration::ConstantAlias(_)) {
+                            let resolved_ids = self.resolve_alias_chains(target_decl_id);
+
+                            if resolved_ids.iter().any(|id| {
+                                matches!(self.graph.declarations().get(id), Some(Declaration::ConstantAlias(_)))
+                            }) {
+                                return Outcome::Retry(None);
+                            }
+
+                            let Some(&namespace_id) = resolved_ids.iter().find(|id| {
+                                matches!(self.graph.declarations().get(id), Some(Declaration::Namespace(_)))
+                            }) else {
+                                return Outcome::Unresolved(None);
+                            };
+
+                            target_decl_id = namespace_id;
+                        }
+
                         // If we found a singleton reference with a resolved attached object parent scope, we
                         // automatically create the singleton class
-                        let singleton_id = self.get_or_create_singleton_class(*parent_scope.declaration_id());
+                        let Some(singleton_id) = self.get_or_create_singleton_class(target_decl_id) else {
+                            return Outcome::Unresolved(None);
+                        };
                         self.graph.record_resolved_name(name_id, singleton_id);
                         Outcome::Resolved(singleton_id, Some(singleton_id))
                     }
@@ -1063,14 +1149,6 @@ impl<'a> Resolver<'a> {
                         let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() else {
                             return Outcome::Retry(None);
                         };
-                        let parent_declaration_id = parent_scope.declaration_id();
-                        let declaration = self.graph.declarations().get(parent_declaration_id).unwrap();
-
-                        // TODO: this is a temporary hack. We need to implement proper handling for `Struct.new`, `Class.new` and
-                        // `Module.new`, which now seem like constants, but are actually namespaces
-                        if matches!(declaration, Declaration::Constant(_)) {
-                            return Outcome::Unresolved(None);
-                        }
 
                         // Resolve the namespace in case it's an alias (e.g., ALIAS::CONST where ALIAS = Foo)
                         // An alias can have multiple targets, so we try all of them in order.
@@ -1079,6 +1157,7 @@ impl<'a> Resolver<'a> {
                         // Search each resolved target for the constant. Return early if found.
                         let mut missing_linearization_id = None;
                         let mut found_namespace = false;
+
                         for &id in &resolved_ids {
                             match self.graph.declarations().get(&id) {
                                 Some(Declaration::ConstantAlias(_)) => {
@@ -1087,10 +1166,11 @@ impl<'a> Resolver<'a> {
                                 }
                                 Some(Declaration::Namespace(_)) => {
                                     found_namespace = true;
+
                                     match self.search_ancestors(id, *name.str()) {
-                                        Outcome::Resolved(declaration_id, _) => {
+                                        Outcome::Resolved(declaration_id, missing_linearization_id) => {
                                             self.graph.record_resolved_name(name_id, declaration_id);
-                                            return Outcome::Resolved(declaration_id, None);
+                                            return Outcome::Resolved(declaration_id, missing_linearization_id);
                                         }
                                         Outcome::Retry(Some(needs_linearization_id))
                                         | Outcome::Unresolved(Some(needs_linearization_id)) => {
@@ -1262,11 +1342,25 @@ impl<'a> Resolver<'a> {
 
         while let Some(nesting_id) = current_name.nesting() {
             if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(nesting_id).unwrap() {
-                if let Some(declaration) = self.graph.declarations().get(nesting_name_ref.declaration_id())
-                    && !matches!(declaration, Declaration::Constant(_) | Declaration::ConstantAlias(_)) // TODO: temporary hack to avoid crashing on `Struct.new`
-                    && let Some(member) = declaration.as_namespace().unwrap().member(&str_id)
-                {
-                    return Outcome::Resolved(*member, None);
+                let declaration_id = *nesting_name_ref.declaration_id();
+
+                match self.graph.declarations().get(&declaration_id) {
+                    Some(Declaration::Namespace(namespace)) => {
+                        if let Some(member) = namespace.member(&str_id) {
+                            return Outcome::Resolved(*member, None);
+                        }
+                    }
+                    Some(Declaration::ConstantAlias(_)) => {
+                        for id in &self.resolve_alias_chains(declaration_id) {
+                            if let Some(declaration) = self.graph.declarations().get(id)
+                                && let Some(namespace) = declaration.as_namespace()
+                                && let Some(member) = namespace.member(&str_id)
+                            {
+                                return Outcome::Resolved(*member, None);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
 
                 current_name = nesting_name_ref.name();
@@ -1446,14 +1540,22 @@ impl<'a> Resolver<'a> {
                 let owner_id = *decl.owner_id();
 
                 let (inner_parent, partial) = self.singleton_parent_id(owner_id);
-                (self.get_or_create_singleton_class(inner_parent), partial)
+                (
+                    self.get_or_create_singleton_class(inner_parent)
+                        .expect("singleton parent should always be a namespace"),
+                    partial,
+                )
             }
             Declaration::Namespace(Namespace::Class(_)) => {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
 
                 let (picked_parent, partial) = self.get_parent_class(&definition_ids);
-                (self.get_or_create_singleton_class(picked_parent), partial)
+                (
+                    self.get_or_create_singleton_class(picked_parent)
+                        .expect("parent class should always be a namespace"),
+                    partial,
+                )
             }
             _ => {
                 // Other declaration types (constants, methods, etc.) shouldn't reach here,
@@ -1481,7 +1583,11 @@ impl<'a> Resolver<'a> {
 
                 match name {
                     NameRef::Resolved(resolved) => {
-                        explicit_parents.push(*resolved.declaration_id());
+                        let declaration_id = resolved.declaration_id();
+
+                        if self.graph.is_namespace(declaration_id) {
+                            explicit_parents.push(*declaration_id);
+                        }
                     }
                     NameRef::Unresolved(_) => {
                         partial = true;
@@ -1525,9 +1631,10 @@ mod tests {
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_alias_target_eq,
         assert_constant_reference_to, assert_declaration_definitions_count_eq, assert_declaration_does_not_exist,
-        assert_declaration_exists, assert_declaration_references_count_eq, assert_descendants, assert_diagnostics_eq,
-        assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target, assert_no_diagnostics,
-        assert_no_members, assert_owner_eq, assert_singleton_class_eq,
+        assert_declaration_exists, assert_declaration_kind_eq, assert_declaration_references_count_eq,
+        assert_descendants, assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq,
+        assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members, assert_owner_eq,
+        assert_singleton_class_eq,
     };
 
     #[test]
@@ -3885,6 +3992,22 @@ mod tests {
     }
 
     #[test]
+    fn resolving_instance_variable_on_alias_does_not_panic() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            ALIAS = Foo
+            def ALIAS.singleton_method
+              @ivar = 123
+            end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+    }
+
+    #[test]
     fn multi_target_alias_constant_added_to_primary_owner() {
         let mut context = GraphTest::new();
         context.index_uri("file:///modules.rb", {
@@ -4359,5 +4482,423 @@ mod tests {
 
         assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
         assert_ancestors_eq!(context, "Baz::Child", ["Baz::Child", "Baz::Base", "Object"]);
+    }
+
+    #[test]
+    fn resolving_meta_programming_class_reopened() {
+        // It's often not possible to provide first-class support to meta-programming constructs, but we have to prevent
+        // the implementation from crashing in cases like these.
+        //
+        // Here we use some meta-programming method call to define a class and then re-open it using the `class`
+        // keyword. The first definition of Bar is considered a constant because we don't know `dynamic_class` returns a
+        // new class. The second definition is a class.
+        //
+        // We need to ensure that the associated Declaration for Bar is transformed into a class if any of its
+        // definitions represent one, otherwise we have no place to store the includes and ancestors
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Baz; end
+
+            Bar = dynamic_class do
+            end
+
+            class Bar
+              include Baz
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object"]);
+    }
+
+    #[test]
+    fn resolving_accessing_meta_programming_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = Protobuf.some_dynamic_class
+            Foo::Bar = Protobuf.some_other_dynamic_class
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+    }
+
+    #[test]
+    fn inheriting_from_dynamic_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_dynamic_class
+            class Bar < Foo
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object"]);
+    }
+
+    #[test]
+    fn including_dynamic_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_dynamic_module
+            class Bar
+              include Foo
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object"]);
+    }
+
+    #[test]
+    fn prepending_dynamic_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_dynamic_module
+            class Bar
+              prepend Foo
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object"]);
+    }
+
+    #[test]
+    fn extending_dynamic_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_dynamic_module
+            class Bar
+              extend Foo
+
+              class << self
+              end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>",
+            [
+                "Bar::<Bar>",
+                "Object::<Object>",
+                // "BasicObject::<BasicObject>",
+                "Class",
+                // "Module",
+                "Object",
+                // "Kernel",
+                // "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn non_promotable_constant_not_promoted_to_class_with_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            FOO = 42
+            class FOO
+              def bar; end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "FOO");
+    }
+
+    #[test]
+    fn non_promotable_constant_not_promoted_to_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r#"
+            FOO = "hello"
+            module FOO
+            end
+            "#
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "FOO", "Constant");
+    }
+
+    #[test]
+    fn promotable_constant_is_promoted_to_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Baz; end
+
+            Bar = some_call
+
+            class Bar
+              include Baz
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object"]);
+    }
+
+    #[test]
+    fn mixed_promotable_and_non_promotable_blocks_promotion() {
+        // If the same constant has both a promotable and non-promotable definition,
+        // promotion should be blocked
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "Foo = some_call");
+        context.index_uri("file:///b.rb", "Foo = 42");
+        context.index_uri("file:///c.rb", "class Foo; end");
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Foo", "Constant");
+    }
+
+    #[test]
+    fn promotable_constant_promoted_to_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Baz; end
+
+            Bar = some_call
+
+            module Bar
+              include Baz
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz"]);
+    }
+
+    #[test]
+    fn class_first_then_constant_stays_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            Foo = some_call
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Foo", "Class");
+    }
+
+    #[test]
+    fn promotable_constant_path_write() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+            A::B = some_factory_call
+            class A::B; end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "A::B");
+    }
+
+    #[test]
+    fn ancestor_operations_on_meta_programming_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar; end
+
+            Qux = dynamic_class do
+              include Foo
+              prepend Bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+    }
+
+    #[test]
+    fn method_call_on_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Qux = some_factory_call
+            Qux.foo
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Qux::<Qux>");
+    }
+
+    #[test]
+    fn singleton_method_on_non_promotable_constant_does_not_crash() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            FOO = 42
+            FOO.bar
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "FOO::<FOO>");
+    }
+
+    #[test]
+    fn def_self_on_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Qux = some_factory_call
+            def Qux.foo; end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Qux::<Qux>");
+    }
+
+    #[test]
+    fn promoted_constant_has_correct_ancestors() {
+        // When a promotable constant is auto-promoted via singleton class access, we conservatively
+        // promote to a module (not a class) since we don't know what the call returns.
+        // Modules don't inherit from Object.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_factory_call
+            Foo.bar
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Foo", ["Foo"]);
+    }
+
+    #[test]
+    fn method_call_on_namespace_alias() {
+        // When a method call occurs in a constant alias to a namespace, the singleton class has to be created for the
+        // target namespace and not for the alias
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.bar; end
+            end
+
+            ALIAS = Foo
+            ALIAS.bar
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_does_not_exist!(context, "ALIAS::<ALIAS>");
+    }
+
+    #[test]
+    fn method_def_on_namespace_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+
+            ALIAS = Foo
+
+            def ALIAS.bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+        assert_declaration_does_not_exist!(context, "ALIAS::<ALIAS>");
+    }
+
+    #[test]
+    fn meta_programming_class_with_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = dynamic_class do
+              def bar; end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo#bar()");
+    }
+
+    #[test]
+    fn re_opening_constant_alias_as_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///alias.rb", {
+            r"
+            module Foo
+              class Bar; end
+            end
+
+            Baz = Foo::Bar
+            "
+        });
+        context.index_uri("file:///reopen.rb", {
+            r"
+            CONST = 1
+
+            class Baz
+              class Other
+                CONST
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Baz");
+        assert_constant_reference_to!(context, "CONST", "file:///reopen.rb:5:5-5:10");
     }
 }

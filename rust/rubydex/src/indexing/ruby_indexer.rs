@@ -571,7 +571,24 @@ impl<'a> RubyIndexer<'a> {
         definition_id
     }
 
-    fn add_constant_definition(&mut self, node: &ruby_prism::Node, also_add_reference: bool) -> Option<DefinitionId> {
+    /// Returns whether a value node represents a method call that could produce a class or module.
+    /// Only regular method calls (bare calls or dot/safe-nav calls) are considered promotable.
+    /// Operator calls like `1 + 2` are `CallNode`s in Prism but should not be promotable.
+    fn is_promotable_value(value: &ruby_prism::Node) -> bool {
+        value.as_call_node().is_some_and(|call| {
+            // Bare calls (no receiver): `some_factory_call`
+            // Dot/safe-nav/scope calls: `Struct.new(...)`, `foo&.bar`, `Struct::new`
+            // Excluded: operator calls like `1 + 2` which have a receiver but no call operator
+            call.receiver().is_none() || call.call_operator_loc().is_some()
+        })
+    }
+
+    fn add_constant_definition(
+        &mut self,
+        node: &ruby_prism::Node,
+        also_add_reference: bool,
+        promotable: bool,
+    ) -> Option<DefinitionId> {
         let name_id = self.index_constant_reference(node, also_add_reference)?;
 
         // Get the location for the constant name/path only (not including the value)
@@ -583,7 +600,10 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let offset = Offset::from_prism_location(&location);
-        let (comments, flags) = self.find_comments_for(offset.start());
+        let (comments, mut flags) = self.find_comments_for(offset.start());
+        if promotable {
+            flags |= DefinitionFlags::PROMOTABLE;
+        }
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
@@ -1297,7 +1317,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         if let Some(target_name_id) = self.index_constant_alias_target(&node.value()) {
             self.add_constant_alias_definition(&node.as_node(), target_name_id, true);
         } else {
-            self.add_constant_definition(&node.as_node(), true);
+            self.add_constant_definition(&node.as_node(), true, Self::is_promotable_value(&node.value()));
             self.visit(&node.value());
         }
     }
@@ -1311,7 +1331,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         if let Some(target_name_id) = self.index_constant_alias_target(&value) {
             self.add_constant_alias_definition(&node.as_node(), target_name_id, false);
         } else {
-            self.add_constant_definition(&node.as_node(), false);
+            self.add_constant_definition(&node.as_node(), false, Self::is_promotable_value(&value));
             self.visit(&value);
         }
     }
@@ -1330,7 +1350,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         if let Some(target_name_id) = self.index_constant_alias_target(&node.value()) {
             self.add_constant_alias_definition(&node.target().as_node(), target_name_id, true);
         } else {
-            self.add_constant_definition(&node.target().as_node(), true);
+            self.add_constant_definition(&node.target().as_node(), true, Self::is_promotable_value(&node.value()));
             self.visit(&node.value());
         }
     }
@@ -1344,7 +1364,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         if let Some(target_name_id) = self.index_constant_alias_target(&value) {
             self.add_constant_alias_definition(&node.target().as_node(), target_name_id, false);
         } else {
-            self.add_constant_definition(&node.target().as_node(), false);
+            self.add_constant_definition(&node.target().as_node(), false, Self::is_promotable_value(&value));
             self.visit(&value);
         }
     }
@@ -1361,7 +1381,10 @@ impl Visit<'_> for RubyIndexer<'_> {
         for left in &node.lefts() {
             match left {
                 ruby_prism::Node::ConstantTargetNode { .. } | ruby_prism::Node::ConstantPathTargetNode { .. } => {
-                    self.add_constant_definition(&left, false);
+                    // Individual values aren't available in multi-write, so we default to
+                    // promotable because multi-assignment often comes from meta-programming
+                    // (e.g., `A, B = create_classes`).
+                    self.add_constant_definition(&left, false, true);
                 }
                 ruby_prism::Node::GlobalVariableTargetNode { .. } => {
                     self.add_definition_from_location(
@@ -2189,6 +2212,24 @@ mod tests {
                 "method references mismatch: expected `{:?}`, got `{:?}`",
                 $expected_names,
                 actual_names
+            );
+        }};
+    }
+
+    macro_rules! assert_promotable {
+        ($def:expr) => {{
+            assert!(
+                $def.flags().is_promotable(),
+                "expected definition to be promotable, but it was not"
+            );
+        }};
+    }
+
+    macro_rules! assert_not_promotable {
+        ($def:expr) => {{
+            assert!(
+                !$def.flags().is_promotable(),
+                "expected definition to not be promotable, but it was"
             );
         }};
     }
@@ -5886,5 +5927,50 @@ mod tests {
         assert_no_local_diagnostics!(&context);
         // We expect two constant references for `Foo` and `<Foo>` on each singleton method call
         assert_eq!(6, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn constant_with_call_value_is_promotable() {
+        let context = index_source("Foo = some_call");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_promotable!(def);
+        });
+    }
+
+    #[test]
+    fn constant_with_literal_value_is_not_promotable() {
+        let context = index_source("FOO = 42");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_not_promotable!(def);
+        });
+    }
+
+    #[test]
+    fn constant_with_operator_call_is_not_promotable() {
+        let context = index_source("FOO = 1 + 2");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_not_promotable!(def);
+        });
+    }
+
+    #[test]
+    fn constant_with_dot_call_is_promotable() {
+        let context = index_source("Foo = Bar.new");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_promotable!(def);
+        });
+    }
+
+    #[test]
+    fn constant_with_colon_colon_call_is_promotable() {
+        let context = index_source("Foo = Bar::new");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_promotable!(def);
+        });
     }
 }

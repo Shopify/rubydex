@@ -125,11 +125,14 @@ macro_rules! namespace_declaration {
                 }
             }
 
-            pub fn extend(&mut self, mut other: Namespace) {
+            pub fn extend(&mut self, mut other: Declaration) {
                 self.definition_ids.extend(other.definitions());
                 self.references.extend(other.references());
-                self.members.extend(other.members());
                 self.diagnostics.extend(other.take_diagnostics());
+
+                if let Declaration::Namespace(namespace) = other {
+                    self.members.extend(namespace.members());
+                }
             }
 
             pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
@@ -412,6 +415,10 @@ impl Namespace {
         all_namespaces!(self, it => std::mem::take(&mut it.diagnostics))
     }
 
+    pub fn extend(&mut self, other: Declaration) {
+        all_namespaces!(self, it => it.extend(other));
+    }
+
     #[must_use]
     pub fn ancestors(&self) -> &Ancestors {
         all_namespaces!(self, it => it.ancestors())
@@ -483,6 +490,11 @@ impl Namespace {
     #[must_use]
     pub fn owner_id(&self) -> &DeclarationId {
         all_namespaces!(self, it => &it.owner_id)
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        all_namespaces!(self, it => &it.name)
     }
 }
 
