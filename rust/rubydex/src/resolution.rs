@@ -4485,6 +4485,35 @@ mod tests {
     }
 
     #[test]
+    fn rbs_constant_declarations() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            FOO: String
+
+            class Bar
+              BAZ: Integer
+            end
+
+            Bar::QUX: String
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_exists!(context, "FOO");
+        assert_declaration_kind_eq!(context, "FOO", "Constant");
+
+        assert_declaration_exists!(context, "Bar::BAZ");
+        assert_declaration_kind_eq!(context, "Bar::BAZ", "Constant");
+        assert_owner_eq!(context, "Bar::BAZ", "Bar");
+
+        assert_declaration_exists!(context, "Bar::QUX");
+        assert_declaration_kind_eq!(context, "Bar::QUX", "Constant");
+    }
+
+    #[test]
     fn resolving_meta_programming_class_reopened() {
         // It's often not possible to provide first-class support to meta-programming constructs, but we have to prevent
         // the implementation from crashing in cases like these.
