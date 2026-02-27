@@ -4,13 +4,16 @@
 # improvements or regressions
 #
 # Usage:
-#   utils/bench              # defaults to huge corpus
+#   utils/bench              # uses $DEFAULT_BENCH_WORKSPACE
 #   utils/bench tiny         # uses tiny corpus (scale 0.1)
 #   utils/bench small        # uses small corpus (scale 1)
 #   utils/bench medium       # uses medium corpus (scale 10)
 #   utils/bench large        # uses large corpus (scale 100)
 #   utils/bench huge         # uses huge corpus (scale 1000)
 #   utils/bench /path/to/dir # uses existing directory
+#
+# Environment variables:
+#   DEFAULT_BENCH_WORKSPACE  # path to a codebase used when no argument is given
 #
 # What this script does:
 # 1. Generate the corpus if it doesn't exist (for predefined sizes only)
@@ -20,45 +23,66 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Get corpus size from argument or default to huge
-CORPUS_SIZE="${1:-huge}"
-
 # Corpora base directory - outside project to avoid triggering LSP
 CORPUS_BASE="$(dirname "$PROJECT_ROOT")/rubydex_corpora"
 
-# Determine corpus path and scale based on input
-case "$CORPUS_SIZE" in
-    tiny)
-        CORPUS_PATH="$CORPUS_BASE/tiny"
-        SCALE=0.1
-        ;;
-    small)
-        CORPUS_PATH="$CORPUS_BASE/small"
-        SCALE=1
-        ;;
-    medium)
-        CORPUS_PATH="$CORPUS_BASE/medium"
-        SCALE=10
-        ;;
-    large)
-        CORPUS_PATH="$CORPUS_BASE/large"
-        SCALE=100
-        ;;
-    huge)
-        CORPUS_PATH="$CORPUS_BASE/huge"
-        SCALE=1000
-        ;;
-    *)
-        # Assume it's a path to an existing directory
-        CORPUS_PATH="$CORPUS_SIZE"
-        if [ ! -d "$CORPUS_PATH" ]; then
-            echo "Error: Directory '$CORPUS_PATH' does not exist"
-            echo "Usage: $0 [tiny|small|medium|large|huge|/path/to/existing/dir]"
-            exit 1
-        fi
-        SCALE=""
-        ;;
-esac
+# If no argument given, use DEFAULT_BENCH_WORKSPACE
+if [ -z "$1" ]; then
+    if [ -z "$DEFAULT_BENCH_WORKSPACE" ]; then
+        echo "Error: No argument given and DEFAULT_BENCH_WORKSPACE is not set"
+        echo ""
+        echo "Either pass an argument:"
+        echo "  $0 [tiny|small|medium|large|huge|/path/to/existing/dir]"
+        echo ""
+        echo "Or set DEFAULT_BENCH_WORKSPACE in your shell config:"
+        echo "  export DEFAULT_BENCH_WORKSPACE=/path/to/your/codebase"
+        exit 1
+    fi
+
+    if [ ! -d "$DEFAULT_BENCH_WORKSPACE" ]; then
+        echo "Error: DEFAULT_BENCH_WORKSPACE directory '$DEFAULT_BENCH_WORKSPACE' does not exist"
+        exit 1
+    fi
+
+    CORPUS_PATH="$DEFAULT_BENCH_WORKSPACE"
+    SCALE=""
+else
+    CORPUS_SIZE="$1"
+
+    # Determine corpus path and scale based on input
+    case "$CORPUS_SIZE" in
+        tiny)
+            CORPUS_PATH="$CORPUS_BASE/tiny"
+            SCALE=0.1
+            ;;
+        small)
+            CORPUS_PATH="$CORPUS_BASE/small"
+            SCALE=1
+            ;;
+        medium)
+            CORPUS_PATH="$CORPUS_BASE/medium"
+            SCALE=10
+            ;;
+        large)
+            CORPUS_PATH="$CORPUS_BASE/large"
+            SCALE=100
+            ;;
+        huge)
+            CORPUS_PATH="$CORPUS_BASE/huge"
+            SCALE=1000
+            ;;
+        *)
+            # Assume it's a path to an existing directory
+            CORPUS_PATH="$CORPUS_SIZE"
+            if [ ! -d "$CORPUS_PATH" ]; then
+                echo "Error: Directory '$CORPUS_PATH' does not exist"
+                echo "Usage: $0 [tiny|small|medium|large|huge|/path/to/existing/dir]"
+                exit 1
+            fi
+            SCALE=""
+            ;;
+    esac
+fi
 
 # Only generate corpus for predefined sizes
 if [ -n "$SCALE" ] && [ ! -d "$CORPUS_PATH" ]; then
@@ -69,6 +93,6 @@ fi
 echo "Benchmarking with corpus: $CORPUS_PATH"
 echo "----------------------------------------"
 
-cd "$PROJECT_ROOT/rust" || exit 1
+cd "$PROJECT_ROOT/rust/rubydex" || exit 1
 cargo build --release
 $PROJECT_ROOT/utils/mem-use "$PROJECT_ROOT/rust/target/release/rubydex_cli" "$CORPUS_PATH" --stats

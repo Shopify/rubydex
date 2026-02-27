@@ -95,3 +95,8 @@ When necessary, commands can be executed for the Rust code.
 - `cargo install --path rust/rubydex-mcp`: installs the MCP server binary
 - `bundle exec rake lint_rust`: lints the Rust code
 - `bundle exec rake format_rust`: auto formats the Rust code
+
+### Benchmarking
+
+When verifying the performance of implementations, use the `utils/bench` script to get statistics. The user should have
+configured a `DEFAULT_BENCH_WORKSPACE`. If not, prompt them to do so.
