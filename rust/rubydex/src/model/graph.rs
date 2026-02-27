@@ -730,7 +730,7 @@ impl Graph {
     /// Panics if a name that was just inserted into the graph cannot be found when looking up
     /// its `parent_scope`.
     fn extend(&mut self, local_graph: LocalGraph, work: &mut Vec<Unit>) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references) =
+        let (uri_id, document, definitions, strings, names, constant_references, method_references, name_dependents) =
             local_graph.into_parts();
 
         if self.documents.insert(uri_id, document).is_some() {
@@ -756,33 +756,12 @@ impl Graph {
                     entry.get_mut().increment_ref_count(name_ref.ref_count());
                 }
                 Entry::Vacant(entry) => {
-                    // Track nesting and parent_scope dependents for new names only
-                    if let Some(nesting_id) = entry.insert(name_ref).nesting() {
-                        let deps = self.name_dependents.entry(*nesting_id).or_default();
-                        let dep = NameDependent::Name(name_id);
-                        if !deps.contains(&dep) {
-                            deps.push(dep);
-                        }
-                    }
-                    if let Some(parent_id) = self.names.get(&name_id).unwrap().parent_scope().as_ref() {
-                        let deps = self.name_dependents.entry(*parent_id).or_default();
-                        let dep = NameDependent::Name(name_id);
-                        if !deps.contains(&dep) {
-                            deps.push(dep);
-                        }
-                    }
+                    entry.insert(name_ref);
                 }
             }
         }
 
         for (definition_id, definition) in definitions {
-            if let Some(name_id) = definition.name_id() {
-                self.name_dependents
-                    .entry(*name_id)
-                    .or_default()
-                    .push(NameDependent::Definition(definition_id));
-            }
-
             if self.definitions.insert(definition_id, definition).is_some() {
                 debug_assert!(false, "DefinitionId collision in global graph");
             }
@@ -791,11 +770,6 @@ impl Graph {
         }
 
         for (constant_ref_id, constant_ref) in constant_references {
-            self.name_dependents
-                .entry(*constant_ref.name_id())
-                .or_default()
-                .push(NameDependent::Reference(constant_ref_id));
-
             work.push(Unit::ConstantRef(constant_ref_id));
 
             if self.constant_references.insert(constant_ref_id, constant_ref).is_some() {
@@ -806,6 +780,15 @@ impl Graph {
         for (method_ref_id, method_ref) in method_references {
             if self.method_references.insert(method_ref_id, method_ref).is_some() {
                 debug_assert!(false, "Method ReferenceId collision in global graph");
+            }
+        }
+
+        for (name_id, deps) in name_dependents {
+            let global_deps = self.name_dependents.entry(name_id).or_default();
+            for dep in deps {
+                if !global_deps.contains(&dep) {
+                    global_deps.push(dep);
+                }
             }
         }
     }
