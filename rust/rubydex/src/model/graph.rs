@@ -69,6 +69,9 @@ impl Graph {
         &mut self.declarations
     }
 
+    /// # Panics
+    ///
+    /// Panics if `definition_id` is not present in the definitions map.
     pub fn add_declaration<F>(
         &mut self,
         definition_id: DefinitionId,
