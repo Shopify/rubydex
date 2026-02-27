@@ -4519,7 +4519,7 @@ mod tests {
         refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
 
         assert_definition_at!(&context, "1:1-1:26", Class, |def| {
-            assert_def_superclass_ref_eq!(&context, def, "Baz");
+            assert_def_superclass_ref_eq!(&context, def, "Bar::Baz");
             assert_def_name_offset_eq!(&context, def, "1:7-1:10");
         });
     }

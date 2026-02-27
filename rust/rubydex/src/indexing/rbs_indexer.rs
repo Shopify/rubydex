@@ -342,7 +342,6 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-2:4", Class, |def| {
             assert_def_name_eq!(&context, def, "Foo");
-            assert!(def.superclass_ref().is_some());
             assert_def_superclass_ref_eq!(&context, def, "Bar");
         });
     }
