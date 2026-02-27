@@ -49,6 +49,45 @@ impl DefinitionFlags {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum DefinitionKind {
+    Class,
+    SingletonClass,
+    Module,
+    Constant,
+    ConstantAlias,
+    GlobalVariable,
+    InstanceVariable,
+    ClassVariable,
+    AttrAccessor,
+    AttrReader,
+    AttrWriter,
+    Method,
+    MethodAlias,
+    GlobalVariableAlias,
+}
+
+impl std::fmt::Display for DefinitionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DefinitionKind::Class => write!(f, "class"),
+            DefinitionKind::SingletonClass => write!(f, "singleton class"),
+            DefinitionKind::Module => write!(f, "module"),
+            DefinitionKind::Constant => write!(f, "constant"),
+            DefinitionKind::ConstantAlias => write!(f, "constant alias"),
+            DefinitionKind::Method => write!(f, "method"),
+            DefinitionKind::AttrAccessor => write!(f, "attr_accessor"),
+            DefinitionKind::AttrReader => write!(f, "attr_reader"),
+            DefinitionKind::AttrWriter => write!(f, "attr_writer"),
+            DefinitionKind::GlobalVariable => write!(f, "global variable"),
+            DefinitionKind::InstanceVariable => write!(f, "instance variable"),
+            DefinitionKind::ClassVariable => write!(f, "class variable"),
+            DefinitionKind::MethodAlias => write!(f, "method alias"),
+            DefinitionKind::GlobalVariableAlias => write!(f, "global variable alias"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Definition {
     Class(Box<ClassDefinition>),
@@ -116,22 +155,22 @@ impl Definition {
     }
 
     #[must_use]
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> DefinitionKind {
         match self {
-            Definition::Class(_) => "Class",
-            Definition::SingletonClass(_) => "SingletonClass",
-            Definition::Module(_) => "Module",
-            Definition::Constant(_) => "Constant",
-            Definition::ConstantAlias(_) => "ConstantAlias",
-            Definition::Method(_) => "Method",
-            Definition::AttrAccessor(_) => "AttrAccessor",
-            Definition::AttrReader(_) => "AttrReader",
-            Definition::AttrWriter(_) => "AttrWriter",
-            Definition::GlobalVariable(_) => "GlobalVariable",
-            Definition::InstanceVariable(_) => "InstanceVariable",
-            Definition::ClassVariable(_) => "ClassVariable",
-            Definition::MethodAlias(_) => "AliasMethod",
-            Definition::GlobalVariableAlias(_) => "GlobalVariableAlias",
+            Definition::Class(_) => DefinitionKind::Class,
+            Definition::SingletonClass(_) => DefinitionKind::SingletonClass,
+            Definition::Module(_) => DefinitionKind::Module,
+            Definition::Constant(_) => DefinitionKind::Constant,
+            Definition::ConstantAlias(_) => DefinitionKind::ConstantAlias,
+            Definition::Method(_) => DefinitionKind::Method,
+            Definition::AttrAccessor(_) => DefinitionKind::AttrAccessor,
+            Definition::AttrReader(_) => DefinitionKind::AttrReader,
+            Definition::AttrWriter(_) => DefinitionKind::AttrWriter,
+            Definition::GlobalVariable(_) => DefinitionKind::GlobalVariable,
+            Definition::InstanceVariable(_) => DefinitionKind::InstanceVariable,
+            Definition::ClassVariable(_) => DefinitionKind::ClassVariable,
+            Definition::MethodAlias(_) => DefinitionKind::MethodAlias,
+            Definition::GlobalVariableAlias(_) => DefinitionKind::GlobalVariableAlias,
         }
     }
 

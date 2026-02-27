@@ -33,7 +33,7 @@ impl Graph {
         // Sort by type, then by location for consistent output
         orphans.sort_by(|(_, a), (_, b)| {
             a.kind()
-                .cmp(b.kind())
+                .cmp(&b.kind())
                 .then_with(|| a.uri_id().cmp(b.uri_id()))
                 .then_with(|| a.offset().cmp(b.offset()))
         });
@@ -171,6 +171,7 @@ impl Graph {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::definitions::DefinitionKind;
     use crate::test_utils::GraphTest;
 
     #[test]
@@ -212,7 +213,7 @@ mod tests {
                 .graph()
                 .definitions()
                 .values()
-                .find(|d| d.kind() == "Method" && d.name_id().is_none())
+                .find(|d| d.kind() == DefinitionKind::Method && d.name_id().is_none())
                 .unwrap_or_else(|| panic!("No Method definition without name_id found for source: {source}"));
 
             let actual = context.graph().build_concatenated_name_from_lexical_nesting(definition);
@@ -229,7 +230,7 @@ mod tests {
             .graph()
             .definitions()
             .values()
-            .find(|d| d.kind() == "InstanceVariable")
+            .find(|d| d.kind() == DefinitionKind::InstanceVariable)
             .unwrap();
 
         let actual = context.graph().build_concatenated_name_from_lexical_nesting(definition);
@@ -253,7 +254,7 @@ mod tests {
             .graph()
             .definitions()
             .values()
-            .find(|d| d.kind() == "Method")
+            .find(|d| d.kind() == DefinitionKind::Method)
             .unwrap();
 
         let actual = context.graph().definition_location(definition);
