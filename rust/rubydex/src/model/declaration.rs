@@ -417,7 +417,11 @@ impl Declaration {
     }
 
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
-        all_declarations!(self, it => it.diagnostics.push(diagnostic));
+        all_declarations!(self, it => {
+            if !it.diagnostics.iter().any(|d| d.rule() == diagnostic.rule() && d.uri_id() == diagnostic.uri_id() && d.offset() == diagnostic.offset()) {
+                it.diagnostics.push(diagnostic);
+            }
+        });
     }
 
     pub fn clear_diagnostics(&mut self) {

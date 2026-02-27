@@ -160,8 +160,8 @@ impl<'a> Resolver<'a> {
 
         self.handle_remaining_definitions(other_ids);
 
-        for left_unit in unit_queue {
-            if let Unit::Reference(id) = left_unit {
+        for left_unit in self.unit_queue.drain(..) {
+            if let Unit::ConstantRef(id) = left_unit {
                 let reference = self.graph.constant_references().get(&id).unwrap();
                 let uri_id = reference.uri_id();
                 let offset = reference.offset().clone();
@@ -172,6 +172,12 @@ impl<'a> Resolver<'a> {
                     .unwrap()
                     .deref()
                     .clone();
+
+                // Skip synthetic singleton class names (e.g., `<Foo>`). These are auto-generated
+                // for method call dispatch and would produce confusing diagnostics.
+                if name.starts_with('<') {
+                    continue;
+                }
 
                 self.graph
                     .documents_mut()
@@ -262,8 +268,8 @@ impl<'a> Resolver<'a> {
                 self.unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
-                // We couldn't resolve this name. Emit a diagnostic
-                unit_queue.push_back(unit_id);
+                // We couldn't resolve this name. It will be picked up by the drain loop
+                self.unit_queue.push_back(unit_id);
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
                 self.unit_queue.push_back(unit_id);
@@ -960,12 +966,16 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        self.graph
+        let existing = self.graph
             .declarations_mut()
             .get_mut(&declaration_id)
             .unwrap()
-            .diagnostics_mut()
-            .extend(diagnostics);
+            .diagnostics_mut();
+        for diagnostic in diagnostics {
+            if !existing.iter().any(|d| d.rule() == diagnostic.rule() && d.uri_id() == diagnostic.uri_id() && d.offset() == diagnostic.offset()) {
+                existing.push(diagnostic);
+            }
+        }
 
         if context.cyclic {
             for mixin in mixins {
@@ -4370,7 +4380,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["non-module-mixin: Mixin `B` is not a module (5:11-5:12)"],
+            &[Rule::ParseWarning]
+        );
 
         assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
         assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:7:3-7:4");
@@ -4502,7 +4516,11 @@ mod tests {
         });
         context.resolve();
 
-        assert_no_diagnostics!(&context);
+        assert_diagnostics_eq!(
+            &context,
+            vec!["unresolved-constant-reference: Unresolved constant reference: `Foo` (1:1-1:4)"],
+            &[Rule::ParseWarning]
+        );
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
     }
 
