@@ -69,6 +69,22 @@ pub enum DeclarationKind {
 }
 
 impl DeclarationKind {
+    /// Returns the canonical `PascalCase` name used in external APIs and serialization.
+    #[must_use]
+    pub fn as_api_str(self) -> &'static str {
+        match self {
+            DeclarationKind::Class => "Class",
+            DeclarationKind::SingletonClass => "SingletonClass",
+            DeclarationKind::Module => "Module",
+            DeclarationKind::Constant => "Constant",
+            DeclarationKind::ConstantAlias => "ConstantAlias",
+            DeclarationKind::Method => "Method",
+            DeclarationKind::GlobalVariable => "GlobalVariable",
+            DeclarationKind::InstanceVariable => "InstanceVariable",
+            DeclarationKind::ClassVariable => "ClassVariable",
+        }
+    }
+
     #[must_use]
     pub fn from_definition_kind(definition_kind: DefinitionKind) -> Self {
         match definition_kind {
