@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 module Rubydex
+  # A zero based internal location. Intended to be used for tool-to-tool communication, such as a language server
+  # communicating with an editor.
   class Location
     include Comparable
 
@@ -34,22 +36,48 @@ module Rubydex
     def <=>(other)
       return -1 unless other.is_a?(Location)
 
-      a = [@uri, @start_line, @start_column, @end_line, @end_column]
-      b = [other.uri, other.start_line, other.start_column, other.end_line, other.end_column]
-      a <=> b
+      comparable_values <=> other.comparable_values
+    end
+
+    #: () -> [String, Integer, Integer, Integer, Integer]
+    def comparable_values
+      [@uri, @start_line, @start_column, @end_line, @end_column]
     end
 
     # Turns this zero based location into a one based location for display purposes.
     #
-    #: () -> Location
+    #: () -> DisplayLocation
     def to_display
-      self.class.new(
+      DisplayLocation.new(
         uri: @uri,
         start_line: @start_line + 1,
         end_line: @end_line + 1,
         start_column: @start_column + 1,
         end_column: @end_column + 1,
       )
+    end
+
+    #: -> String
+    def to_s
+      "#{path}:#{@start_line + 1}:#{@start_column + 1}-#{@end_line + 1}:#{@end_column + 1}"
+    end
+  end
+
+  # A one based location intended for display purposes. This is what should be used when displaying a location to users,
+  # like in CLIs
+  class DisplayLocation < Location
+    # Returns itself
+    #
+    #: () -> DisplayLocation
+    def to_display
+      self
+    end
+
+    # Normalize to zero-based for comparison with Location
+    #
+    #: () -> [String, Integer, Integer, Integer, Integer]
+    def comparable_values
+      [@uri, @start_line - 1, @start_column - 1, @end_line - 1, @end_column - 1]
     end
 
     #: -> String
