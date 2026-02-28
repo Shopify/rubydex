@@ -2035,56 +2035,16 @@ impl Visit<'_> for RubyIndexer<'_> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        assert_def_comments_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
+        assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
         assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_name_path_eq,
         assert_no_local_diagnostics, assert_string_eq,
         model::{
-            definitions::{Definition, Mixin, Parameter, Receiver},
+            definitions::{Definition, Parameter, Receiver},
             ids::{StringId, UriId},
             visibility::Visibility,
         },
         test_utils::LocalGraphTest,
     };
-
-    /// Asserts that a definition's mixins matches the expected mixins.
-    ///
-    /// Usage:
-    /// - `assert_def_mixins_eq!(ctx, def, Include, ["Foo", "Bar"])`
-    macro_rules! assert_def_mixins_eq {
-        ($context:expr, $def:expr, $mixin_type:ident, $expected_names:expr) => {{
-            let actual_names = $def
-                .mixins()
-                .iter()
-                .filter_map(|mixin| {
-                    if let Mixin::$mixin_type(def) = mixin {
-                        let name = $context
-                            .graph()
-                            .names()
-                            .get(
-                                $context
-                                    .graph()
-                                    .constant_references()
-                                    .get(def.constant_reference_id())
-                                    .unwrap()
-                                    .name_id(),
-                            )
-                            .unwrap();
-                        Some($context.graph().strings().get(name.str()).unwrap().as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            assert_eq!(
-                $expected_names,
-                actual_names.as_slice(),
-                "mixins mismatch: expected `{:?}`, got `{:?}`",
-                $expected_names,
-                actual_names
-            );
-        }};
-    }
 
     // Method assertions
 

@@ -339,6 +339,52 @@ macro_rules! assert_def_comments_eq {
     }};
 }
 
+// Mixin assertions
+
+/// Asserts that a definition's mixins match the expected names for a given mixin type.
+///
+/// Usage:
+/// - `assert_def_mixins_eq!(ctx, def, Include, ["Foo", "Bar"])`
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_def_mixins_eq {
+    ($context:expr, $def:expr, $mixin_type:ident, $expected_names:expr) => {{
+        use $crate::model::definitions::Mixin;
+
+        let actual_names = $def
+            .mixins()
+            .iter()
+            .filter_map(|mixin| {
+                if let Mixin::$mixin_type(def) = mixin {
+                    let name = $context
+                        .graph()
+                        .names()
+                        .get(
+                            $context
+                                .graph()
+                                .constant_references()
+                                .get(def.constant_reference_id())
+                                .unwrap()
+                                .name_id(),
+                        )
+                        .unwrap();
+                    Some($context.graph().strings().get(name.str()).unwrap().as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            $expected_names,
+            actual_names.as_slice(),
+            "mixins mismatch: expected `{:?}`, got `{:?}`",
+            $expected_names,
+            actual_names
+        );
+    }};
+}
+
 // Diagnostic assertions
 
 #[cfg(test)]

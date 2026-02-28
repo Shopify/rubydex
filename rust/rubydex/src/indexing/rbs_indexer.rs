@@ -1,15 +1,19 @@
 //! Visit the RBS AST and create type definitions.
 
-use ruby_rbs::node::{self, ClassNode, CommentNode, ConstantNode, GlobalNode, ModuleNode, Node, TypeNameNode, Visit};
+use ruby_rbs::node::{
+    self, ClassNode, CommentNode, ConstantNode, ExtendNode, GlobalNode, IncludeNode, ModuleNode, Node, PrependNode,
+    TypeNameNode, Visit,
+};
 
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
-    ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, GlobalVariableDefinition, ModuleDefinition,
+    ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition, GlobalVariableDefinition,
+    IncludeDefinition, Mixin, ModuleDefinition, PrependDefinition,
 };
 use crate::model::document::Document;
-use crate::model::ids::{DefinitionId, NameId, UriId};
+use crate::model::ids::{DefinitionId, NameId, ReferenceId, UriId};
 use crate::model::name::{Name, ParentScope};
 use crate::model::references::ConstantReference;
 use crate::offset::Offset;
@@ -99,6 +103,35 @@ impl<'a> RBSIndexer<'a> {
                 .expect("owner definition should exist");
             *owner.name_id().expect("nesting definition should have a name")
         })
+    }
+
+    fn add_mixin_to_current_lexical_scope(&mut self, owner_id: DefinitionId, mixin: Mixin) {
+        let owner = self
+            .local_graph
+            .get_definition_mut(owner_id)
+            .expect("owner definition should exist");
+
+        match owner {
+            Definition::Class(class) => class.add_mixin(mixin),
+            Definition::Module(module) => module.add_mixin(mixin),
+            _ => unreachable!("RBS nesting stack only contains modules/classes"),
+        }
+    }
+
+    fn index_mixin(&mut self, type_name: &TypeNameNode, mixin_fn: fn(ReferenceId) -> Mixin) {
+        let Some(lexical_nesting_id) = self.parent_lexical_scope_id() else {
+            return;
+        };
+
+        let nesting_name_id = self.nesting_name_id(Some(lexical_nesting_id));
+        let name_id = self.index_type_name(type_name, nesting_name_id);
+        let offset = Offset::from_rbs_location(&type_name.location());
+
+        let constant_ref_id =
+            self.local_graph
+                .add_constant_reference(ConstantReference::new(name_id, self.uri_id, offset));
+
+        self.add_mixin_to_current_lexical_scope(lexical_nesting_id, mixin_fn(constant_ref_id));
     }
 
     fn add_member_to_current_lexical_scope(&mut self, owner_id: DefinitionId, member_id: DefinitionId) {
@@ -252,13 +285,31 @@ impl Visit for RBSIndexer<'_> {
 
         self.register_definition(definition, lexical_nesting_id);
     }
+
+    fn visit_include_node(&mut self, include_node: &IncludeNode) {
+        self.index_mixin(&include_node.name(), |ref_id| {
+            Mixin::Include(IncludeDefinition::new(ref_id))
+        });
+    }
+
+    fn visit_prepend_node(&mut self, prepend_node: &PrependNode) {
+        self.index_mixin(&prepend_node.name(), |ref_id| {
+            Mixin::Prepend(PrependDefinition::new(ref_id))
+        });
+    }
+
+    fn visit_extend_node(&mut self, extend_node: &ExtendNode) {
+        self.index_mixin(&extend_node.name(), |ref_id| {
+            Mixin::Extend(ExtendDefinition::new(ref_id))
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::test_utils::LocalGraphTest;
     use crate::{
-        assert_def_comments_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
+        assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
         assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_no_local_diagnostics,
     };
 
@@ -483,6 +534,62 @@ mod tests {
         assert_definition_at!(&context, "2:1-2:14", GlobalVariable, |def| {
             assert_def_str_eq!(&context, def, "$bar");
             assert_def_comments_eq!(&context, def, ["A global variable\n"]);
+        });
+    }
+
+    #[test]
+    fn index_mixins() {
+        let context = index_source({
+            "
+            class Foo
+              include Bar
+              prepend Baz
+              extend Qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |def| {
+            assert_def_mixins_eq!(&context, def, Include, ["Bar"]);
+            assert_def_mixins_eq!(&context, def, Prepend, ["Baz"]);
+            assert_def_mixins_eq!(&context, def, Extend, ["Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_multiple_includes() {
+        let context = index_source({
+            "
+            module Foo
+              include Bar
+              include Baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Module, |def| {
+            assert_def_mixins_eq!(&context, def, Include, ["Bar", "Baz"]);
+        });
+    }
+
+    #[test]
+    fn index_include_qualified_name() {
+        let context = index_source({
+            "
+            class Foo
+              include Bar::Baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |def| {
+            assert_def_mixins_eq!(&context, def, Include, ["Baz"]);
         });
     }
 

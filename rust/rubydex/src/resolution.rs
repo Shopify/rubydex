@@ -4525,6 +4525,30 @@ mod tests {
     }
 
     #[test]
+    fn rbs_mixin_resolution() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Bar
+            end
+
+            module Baz
+            end
+
+            class Foo
+              include Bar
+              include Baz
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object"]);
+    }
+
+    #[test]
     fn resolving_meta_programming_class_reopened() {
         // It's often not possible to provide first-class support to meta-programming constructs, but we have to prevent
         // the implementation from crashing in cases like these.
