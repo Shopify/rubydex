@@ -1,6 +1,6 @@
 //! Visit the RBS AST and create type definitions.
 
-use ruby_rbs::node::{self, ClassNode, ModuleNode, Node, TypeNameNode, Visit};
+use ruby_rbs::node::{self, ClassNode, ModuleNode, Node, NodeList, TypeNameNode, Visit};
 
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
@@ -123,6 +123,22 @@ impl<'a> RBSIndexer<'a> {
         }
         definition_id
     }
+
+    fn flags(list: &NodeList) -> DefinitionFlags {
+        let mut flags = DefinitionFlags::empty();
+
+        for node in list.iter() {
+            if let Node::Annotation(annotation) = node {
+                let string = annotation.string();
+                let content = string.as_bytes();
+                if content == b"deprecated" || content.starts_with(b"deprecated:") {
+                    flags |= DefinitionFlags::DEPRECATED;
+                }
+            }
+        }
+
+        flags
+    }
 }
 
 impl Visit for RBSIndexer<'_> {
@@ -158,7 +174,7 @@ impl Visit for RBSIndexer<'_> {
             offset,
             name_offset,
             comments,
-            DefinitionFlags::empty(),
+            Self::flags(&class_node.annotations()),
             lexical_nesting_id,
             superclass_ref,
         )));
@@ -197,7 +213,7 @@ impl Visit for RBSIndexer<'_> {
             offset,
             name_offset,
             comments,
-            DefinitionFlags::empty(),
+            Self::flags(&module_node.annotations()),
             lexical_nesting_id,
         )));
 
@@ -214,6 +230,7 @@ impl Visit for RBSIndexer<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::definitions::DefinitionFlags;
     use crate::test_utils::LocalGraphTest;
     use crate::{
         assert_def_name_eq, assert_def_name_offset_eq, assert_def_superclass_ref_eq, assert_definition_at,
@@ -369,6 +386,42 @@ mod tests {
                 assert_def_name_eq!(&context, class_def, "Bar");
                 assert_eq!(module_def.id(), class_def.lexical_nesting_id().unwrap());
             });
+        });
+    }
+
+    #[test]
+    fn index_module_with_deprecation() {
+        let context = index_source({
+            "
+            %a{deprecated}
+            module Foo
+            end
+
+            %a{deprecated: Use Bar2 instead}
+            module Bar
+            end
+
+            %a{deprecatedx}
+            module Baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-3:4", Module, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+            assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+
+        assert_definition_at!(&context, "6:1-7:4", Module, |def| {
+            assert_def_name_eq!(&context, def, "Bar");
+            assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+
+        assert_definition_at!(&context, "10:1-11:4", Module, |def| {
+            assert_def_name_eq!(&context, def, "Baz");
+            assert!(!def.flags().contains(DefinitionFlags::DEPRECATED));
         });
     }
 }
