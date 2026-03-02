@@ -31,6 +31,8 @@ jobs:
           key: ${{ runner.os }}-rust
 
       - name: Run Ruby tests
+        env:
+          RUST_BACKTRACE: full
         run: bundle exec rake index_top_gems
 
       - name: Save Rust compile cache

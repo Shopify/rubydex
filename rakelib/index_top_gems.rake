@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 desc "Index the top 100 gems from rubygems.org"
-task index_top_gems: :compile_release do
+task index_top_gems: :compile do
   $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
   require "net/http"
   require "rubygems/package"
@@ -51,7 +51,10 @@ task index_top_gems: :compile_release do
 
             # Index the gem's files and yield errors back to the main Ractor
             graph = Rubydex::Graph.new
-            errors = graph.index_all(Dir.glob("#{gem_dir}/**/*.rb"))
+            indexing_errors = graph.index_all(Dir.glob("#{gem_dir}/**/*.rb"))
+            graph.resolve
+
+            errors = indexing_errors + graph.check_integrity.map(&:message)
             next if errors.empty?
 
             @mutex.synchronize { @errors << "#{gem} => #{errors.join(", ")}" }

@@ -64,7 +64,7 @@ class LocationTest < Minitest::Test
 
   def test_location_to_s
     loc = Rubydex::Location.new(uri: "file:///foo.rb", start_line: 0, end_line: 5, start_column: 3, end_column: 10)
-    assert_equal("#{loc.path}:1:4-6:11", loc.to_s)
+    assert_equal("#{loc.to_file_path}:1:4-6:11", loc.to_s)
   end
 
   def test_display_location_equality
@@ -84,7 +84,7 @@ class LocationTest < Minitest::Test
 
   def test_display_location_to_s
     display = Rubydex::DisplayLocation.new(uri: "file:///foo.rb", start_line: 1, end_line: 6, start_column: 4, end_column: 11)
-    assert_equal("#{display.path}:1:4-6:11", display.to_s)
+    assert_equal("#{display.to_file_path}:1:4-6:11", display.to_s)
   end
 
   def test_location_and_its_display_location_are_equal
