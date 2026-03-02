@@ -308,7 +308,13 @@ impl<'a> Resolver<'a> {
 
                             singleton_id
                         }
-                        None => self.resolve_lexical_owner(*method_definition.lexical_nesting_id()),
+                        None => {
+                            let Some(resolved) = self.resolve_lexical_owner(*method_definition.lexical_nesting_id())
+                            else {
+                                continue;
+                            };
+                            resolved
+                        }
                     };
 
                     self.create_declaration(str_id, id, owner_id, |name| {
@@ -316,21 +322,27 @@ impl<'a> Resolver<'a> {
                     });
                 }
                 Definition::AttrAccessor(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
+                    let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
+                        continue;
+                    };
 
                     self.create_declaration(*attr.str_id(), id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
                 Definition::AttrReader(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
+                    let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
+                        continue;
+                    };
 
                     self.create_declaration(*attr.str_id(), id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
                 Definition::AttrWriter(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
+                    let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
+                        continue;
+                    };
 
                     self.create_declaration(*attr.str_id(), id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
@@ -403,7 +415,9 @@ impl<'a> Resolver<'a> {
                             }
 
                             // If the method has no explicit receiver, we resolve the owner based on the lexical nesting
-                            let method_owner_id = self.resolve_lexical_owner(*method.lexical_nesting_id());
+                            let Some(method_owner_id) = self.resolve_lexical_owner(*method.lexical_nesting_id()) else {
+                                continue;
+                            };
 
                             // If the method is in a singleton class, the instance variable belongs to the class object
                             // Like `class << Foo; def bar; @bar = 1; end; end`, where `@bar` is owned by `Foo::<Foo>`
@@ -436,9 +450,10 @@ impl<'a> Resolver<'a> {
                                 .definition_id_to_declaration_id(nesting_id)
                                 .copied()
                                 .unwrap_or(*OBJECT_ID);
-                            let owner_id = self
-                                .get_or_create_singleton_class(nesting_decl_id)
-                                .expect("class/module nesting should always be a namespace");
+
+                            let Some(owner_id) = self.get_or_create_singleton_class(nesting_decl_id) else {
+                                continue;
+                            };
                             {
                                 debug_assert!(
                                     matches!(
@@ -494,7 +509,9 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 Definition::MethodAlias(alias) => {
-                    let owner_id = self.resolve_lexical_owner(*alias.lexical_nesting_id());
+                    let Some(owner_id) = self.resolve_lexical_owner(*alias.lexical_nesting_id()) else {
+                        continue;
+                    };
 
                     self.create_declaration(*alias.new_name_str_id(), id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
@@ -537,7 +554,8 @@ impl<'a> Resolver<'a> {
         self.graph.add_member(&owner_id, declaration_id, str_id);
     }
 
-    /// Resolves owner for class variables, bypassing singleton classes.
+    /// Resolves owner for class variables, bypassing singleton classes. Returns `None` if the owner can't be
+    /// determined (e.g., unresolved constant alias).
     fn resolve_class_variable_owner(&self, lexical_nesting_id: Option<DefinitionId>) -> Option<DeclarationId> {
         let mut current_nesting = lexical_nesting_id;
         while let Some(nesting_id) = current_nesting {
@@ -549,13 +567,24 @@ impl<'a> Resolver<'a> {
                 break;
             }
         }
-        current_nesting.and_then(|id| self.graph.definition_id_to_declaration_id(id).copied())
+        let declaration_id = current_nesting.and_then(|id| self.graph.definition_id_to_declaration_id(id).copied())?;
+
+        // If the declaration is a constant alias, follow the alias chain to find the
+        // target namespace. Returns None if the alias target is unresolved.
+        if matches!(
+            self.graph.declarations().get(&declaration_id),
+            Some(Declaration::ConstantAlias(_))
+        ) {
+            self.resolve_to_namespace(declaration_id)
+        } else {
+            Some(declaration_id)
+        }
     }
 
     /// Resolves owner from lexical nesting.
-    fn resolve_lexical_owner(&self, lexical_nesting_id: Option<DefinitionId>) -> DeclarationId {
+    fn resolve_lexical_owner(&self, lexical_nesting_id: Option<DefinitionId>) -> Option<DeclarationId> {
         let Some(id) = lexical_nesting_id else {
-            return *OBJECT_ID;
+            return Some(*OBJECT_ID);
         };
 
         // If no declaration exists yet for this definition, walk up the lexical chain.
@@ -566,16 +595,20 @@ impl<'a> Resolver<'a> {
             return self.resolve_lexical_owner(*definition.lexical_nesting_id());
         };
 
-        let declarations = self.graph.declarations();
+        let decl = self.graph.declarations().get(declaration_id).unwrap();
 
         // If the associated declaration is a namespace that can own things, we found the right owner. Otherwise, we might
         // have found something nested inside something else (like a method), in which case we have to recurse until we find
         // the appropriate owner
         if matches!(
-            declarations.get(declaration_id).unwrap(),
+            decl,
             Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_) | Namespace::SingletonClass(_))
         ) {
-            *declaration_id
+            Some(*declaration_id)
+        } else if matches!(decl, Declaration::ConstantAlias(_)) {
+            // Follow the alias chain to find the target namespace. If the alias is unresolved,
+            // the definition cannot be properly owned and should be skipped by the caller.
+            self.resolve_to_namespace(*declaration_id)
         } else {
             let definition = self.graph.definitions().get(&id).unwrap();
             self.resolve_lexical_owner(*definition.lexical_nesting_id())
@@ -5030,5 +5063,126 @@ mod tests {
         // `CONST = 1` is non-promotable).
         context.resolve();
         assert_declaration_exists!(context, "CONST");
+    }
+
+    #[test]
+    fn including_unresolved_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            Foo::Bar = Bar
+
+            module Baz
+              include Foo::Bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_ancestors_eq!(context, "Baz", ["Baz"]);
+    }
+
+    #[test]
+    fn prepending_unresolved_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            Foo::Bar = Bar
+
+            module Baz
+              prepend Foo::Bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_ancestors_eq!(context, "Baz", ["Baz"]);
+    }
+
+    #[test]
+    fn inheriting_unresolved_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            Foo::Bar = Bar
+
+            class Baz < Foo::Bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_ancestors_eq!(context, "Baz", ["Baz", "Object"]);
+    }
+
+    #[test]
+    fn re_opening_unresolved_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            Foo::Bar = Bar
+
+            module Foo::Bar
+              CONST = 123
+              @class_ivar = 123
+              @@class_var = 789
+
+              attr_reader :some_attr
+
+              def self.class_method; end
+
+              def initialize
+                @instance_ivar = 456
+              end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_declaration_does_not_exist!(context, "Foo::Bar::CONST");
+        assert_declaration_does_not_exist!(context, "Foo::Bar::<Bar>#@class_ivar");
+        assert_declaration_does_not_exist!(context, "Foo::Bar#@instance_ivar");
+        assert_declaration_does_not_exist!(context, "Foo::Bar#@@class_var");
+        assert_declaration_does_not_exist!(context, "Foo::Bar#some_attr()");
+        assert_declaration_does_not_exist!(context, "Foo::Bar::<Bar>#class_method()");
+        assert_declaration_does_not_exist!(context, "Foo::Bar#initialize()");
+    }
+
+    #[test]
+    fn re_opening_namespace_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            ALIAS = Foo
+
+            module ALIAS
+              CONST = 123
+              @class_ivar = 123
+              @@class_var = 789
+
+              attr_reader :some_attr
+
+              def self.class_method; end
+
+              def initialize
+                @instance_ivar = 456
+              end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_declaration_exists!(context, "Foo::CONST");
+        assert_declaration_exists!(context, "Foo::<Foo>#@class_ivar");
+        assert_declaration_exists!(context, "Foo#@instance_ivar");
+        assert_declaration_exists!(context, "Foo#@@class_var");
+        assert_declaration_exists!(context, "Foo#some_attr()");
+        assert_declaration_exists!(context, "Foo::<Foo>#class_method()");
+        assert_declaration_exists!(context, "Foo#initialize()");
     }
 }
