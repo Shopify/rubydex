@@ -1,6 +1,8 @@
 //! Visit the RBS AST and create type definitions.
 
-use ruby_rbs::node::{self, ClassNode, CommentNode, ConstantNode, GlobalNode, ModuleNode, Node, TypeNameNode, Visit};
+use ruby_rbs::node::{
+    self, ClassNode, CommentNode, ConstantNode, GlobalNode, ModuleNode, Node, NodeList, TypeNameNode, Visit,
+};
 
 use crate::diagnostic::Rule;
 use crate::indexing::local_graph::LocalGraph;
@@ -135,6 +137,27 @@ impl<'a> RBSIndexer<'a> {
         }
         definition_id
     }
+
+    /// Extracts definition flags from the list of RBS annotations.
+    ///
+    /// panics when a non-annotation node is encountered in the list, since only annotations should be present.
+    fn flags(list: &NodeList) -> DefinitionFlags {
+        let mut flags = DefinitionFlags::empty();
+
+        for node in list.iter() {
+            if let Node::Annotation(annotation) = node {
+                let string = annotation.string();
+                let content = string.as_bytes();
+                if content == b"deprecated" || content.starts_with(b"deprecated:") {
+                    flags |= DefinitionFlags::DEPRECATED;
+                }
+            } else {
+                panic!("Expected annotation node, found {node:?}");
+            }
+        }
+
+        flags
+    }
 }
 
 impl Visit for RBSIndexer<'_> {
@@ -163,7 +186,7 @@ impl Visit for RBSIndexer<'_> {
             offset,
             name_offset,
             comments,
-            DefinitionFlags::empty(),
+            Self::flags(&class_node.annotations()),
             lexical_nesting_id,
             superclass_ref,
         )));
@@ -195,7 +218,7 @@ impl Visit for RBSIndexer<'_> {
             offset,
             name_offset,
             comments,
-            DefinitionFlags::empty(),
+            Self::flags(&module_node.annotations()),
             lexical_nesting_id,
         )));
 
@@ -224,7 +247,7 @@ impl Visit for RBSIndexer<'_> {
             self.uri_id,
             offset,
             comments,
-            DefinitionFlags::empty(),
+            Self::flags(&constant_node.annotations()),
             lexical_nesting_id,
         )));
 
@@ -246,7 +269,7 @@ impl Visit for RBSIndexer<'_> {
             self.uri_id,
             offset,
             comments,
-            DefinitionFlags::empty(),
+            Self::flags(&global_node.annotations()),
             lexical_nesting_id,
         )));
 
@@ -256,6 +279,10 @@ impl Visit for RBSIndexer<'_> {
 
 #[cfg(test)]
 mod tests {
+    use ruby_rbs::node::{self, Node, NodeList};
+
+    use crate::indexing::rbs_indexer::RBSIndexer;
+    use crate::model::definitions::DefinitionFlags;
     use crate::test_utils::LocalGraphTest;
     use crate::{
         assert_def_comments_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
@@ -502,6 +529,84 @@ mod tests {
                 assert_def_name_eq!(&context, class_def, "Bar");
                 assert_eq!(module_def.id(), class_def.lexical_nesting_id().unwrap());
             });
+        });
+    }
+
+    #[test]
+    fn flags_test_deprecation() {
+        fn extract_annotations<F: FnOnce(&NodeList)>(annots: &[u8], f: F) {
+            let source = format!("{} module Foo end", std::str::from_utf8(annots).unwrap());
+            let Ok(signature) = node::parse(source.as_bytes()) else {
+                panic!("Failed to parse RBS source");
+            };
+            let decl = signature
+                .declarations()
+                .iter()
+                .next()
+                .expect("Expected at least one declaration");
+            let Node::Module(module_node) = decl else {
+                panic!("Expected a module declaration");
+            };
+            f(&module_node.annotations());
+        }
+
+        extract_annotations(b"%a{deprecated}", |list| {
+            assert!(RBSIndexer::flags(list).contains(DefinitionFlags::DEPRECATED));
+        });
+        extract_annotations(b"%a{deprecated: Some message here}", |list| {
+            assert!(RBSIndexer::flags(list).contains(DefinitionFlags::DEPRECATED));
+        });
+        extract_annotations(b"%a{deprecated} %a{pure}", |list| {
+            assert!(RBSIndexer::flags(list).contains(DefinitionFlags::DEPRECATED));
+        });
+        extract_annotations(b"", |list| {
+            assert!(!RBSIndexer::flags(list).contains(DefinitionFlags::DEPRECATED));
+        });
+        extract_annotations(b"%a{deprecatedxxxx}", |list| {
+            assert!(!RBSIndexer::flags(list).contains(DefinitionFlags::DEPRECATED));
+        });
+    }
+
+    #[test]
+    fn index_declarations_with_deprecation() {
+        let context = index_source({
+            "
+            %a{deprecated}
+            module Foo
+            end
+
+            %a{deprecated: Use Bar2 instead}
+            class Bar
+            end
+
+            %a(deprecated)
+            FOO: String
+
+            %a[deprecated]
+            $BAR: String
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-3:4", Module, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+            assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+
+        assert_definition_at!(&context, "6:1-7:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Bar");
+            assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+
+        assert_definition_at!(&context, "10:1-10:12", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+
+        assert_definition_at!(&context, "13:1-13:13", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$BAR");
+            assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
         });
     }
 }
