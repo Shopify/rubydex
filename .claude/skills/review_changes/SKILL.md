@@ -17,7 +17,7 @@ Use the Rust and static analysis experts to review the code changes regarding th
 - Code quality and idiomatic patterns: does the code use idiomatic Rust? Are there opportunities to improve the code
 structure?
 - Performance: are there any performance pitfalls or opportunities for optimization?
-- Test coverage: are we missing scenarios?
+- Test coverage: are we missing scenarios? Are there repeated test setups that could be extracted into a test helper?
 - Documentation: are the key concepts clearly explained in the documentation (files under `docs` and README)?
 - Agent instructions: are there key concepts or major changes that should be reflected in AGENTS.md?
 
