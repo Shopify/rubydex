@@ -68,7 +68,7 @@ macro_rules! make_timer {
                     $(
                         accounted_time += timer.$phase;
                     )*
-                    let cleanup = total_duration - accounted_time;
+                    let cleanup = total_duration.saturating_sub(accounted_time);
 
                     println!();
                     println!("Timing breakdown");
@@ -122,6 +122,9 @@ make_timer! {
     listing, "Listing";
     indexing, "Indexing";
     resolution, "Resolution";
+    prepare_units, "  Prepare units";
+    constant_loop, "  Constant loop";
+    remaining_defs, "  Remaining defs";
     integrity_check, "Integrity check";
     querying, "Querying";
 }

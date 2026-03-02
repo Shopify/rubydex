@@ -3,18 +3,39 @@ use std::{
     hash::BuildHasher,
 };
 
-use crate::model::{
-    declaration::{
-        Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
-        Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        Namespace, SingletonClassDeclaration,
+use rayon::prelude::*;
+
+use crate::{
+    model::{
+        declaration::{
+            Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
+            Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
+            Namespace, SingletonClassDeclaration,
+        },
+        definitions::{Definition, Mixin, Receiver},
+        graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
+        identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
+        ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+        name::{NameRef, ParentScope},
     },
-    definitions::{Definition, Mixin, Receiver},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
-    identity_maps::{IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
-    name::{Name, NameRef, ParentScope},
 };
+use crate::stats::timer::time_it;
+
+/// A computed definition result ready to be applied to the graph serially.
+struct PendingDeclaration {
+    definition_id: DefinitionId,
+    str_id: StringId,
+    owner_id: DeclarationId,
+    fqn: String,
+    kind: PendingKind,
+}
+
+enum PendingKind {
+    Method,
+    InstanceVariable,
+    ClassVariable,
+    GlobalVariable,
+}
 
 pub enum Unit {
     /// A definition that defines a constant and might require resolution
@@ -62,6 +83,310 @@ impl LinearizationContext {
             partial: false,
         }
     }
+}
+
+fn get_singleton_class_readonly(graph: &Graph, attached_id: DeclarationId) -> Option<DeclarationId> {
+    let attached_decl = graph.declarations().get(&attached_id)?;
+    attached_decl.as_namespace()?.singleton_class().copied()
+}
+
+fn resolve_lexical_owner_standalone(graph: &Graph, lexical_nesting_id: Option<DefinitionId>) -> DeclarationId {
+    let Some(id) = lexical_nesting_id else {
+        return *OBJECT_ID;
+    };
+
+    let Some(declaration_id) = graph.definition_id_to_declaration_id(id) else {
+        let definition = graph.definitions().get(&id).unwrap();
+        return resolve_lexical_owner_standalone(graph, *definition.lexical_nesting_id());
+    };
+
+    if matches!(
+        graph.declarations().get(declaration_id).unwrap(),
+        Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_) | Namespace::SingletonClass(_))
+    ) {
+        *declaration_id
+    } else {
+        let definition = graph.definitions().get(&id).unwrap();
+        resolve_lexical_owner_standalone(graph, *definition.lexical_nesting_id())
+    }
+}
+
+fn resolve_class_variable_owner_standalone(
+    graph: &Graph,
+    lexical_nesting_id: Option<DefinitionId>,
+) -> Option<DeclarationId> {
+    let mut current_nesting = lexical_nesting_id;
+    while let Some(nesting_id) = current_nesting {
+        if let Some(nesting_def) = graph.definitions().get(&nesting_id)
+            && matches!(nesting_def, Definition::SingletonClass(_))
+        {
+            current_nesting = *nesting_def.lexical_nesting_id();
+        } else {
+            break;
+        }
+    }
+    current_nesting.and_then(|id| {
+        let decl_id = graph.definition_id_to_declaration_id(id).copied()?;
+        // Class variables require a namespace owner (class/module); skip constants
+        graph.declarations().get(&decl_id)?.as_namespace().map(|_| decl_id)
+    })
+}
+
+fn compute_member_fqn(graph: &Graph, owner_id: &DeclarationId, str_id: &StringId) -> String {
+    let owner = graph.declarations().get(owner_id).unwrap();
+    let name_str = graph.strings().get(str_id).unwrap();
+    format!("{}#{}", owner.name(), name_str.as_str())
+}
+
+fn resolve_alias_chains_standalone(graph: &Graph, declaration_id: DeclarationId) -> Vec<DeclarationId> {
+    let mut results = Vec::new();
+    let mut queue = VecDeque::from([declaration_id]);
+    let mut seen = HashSet::new();
+
+    while let Some(current) = queue.pop_front() {
+        if !seen.insert(current) {
+            continue;
+        }
+
+        match graph.declarations().get(&current) {
+            Some(Declaration::ConstantAlias(_)) => {
+                let targets = graph.alias_targets(&current).unwrap_or_default();
+                if targets.is_empty() {
+                    results.push(current);
+                } else {
+                    queue.extend(targets);
+                }
+            }
+            Some(_) => {
+                results.push(current);
+            }
+            None => {
+                panic!("Declaration {current:?} not found in graph");
+            }
+        }
+    }
+
+    results
+}
+
+fn compute_pending_definition(graph: &Graph, id: DefinitionId) -> Option<PendingDeclaration> {
+    match graph.definitions().get(&id).unwrap() {
+        Definition::Method(method_definition) => {
+            let str_id = *method_definition.str_id();
+            let owner_id = match method_definition.receiver() {
+                Some(Receiver::SelfReceiver(def_id)) => {
+                    let owner_decl_id = graph.definition_id_to_declaration_id(*def_id).copied()?;
+                    get_singleton_class_readonly(graph, owner_decl_id)?
+                }
+                Some(Receiver::ConstantReceiver(name_id)) => {
+                    let mut receiver_decl_id = match graph.names().get(name_id)? {
+                        NameRef::Resolved(resolved) => *resolved.declaration_id(),
+                        NameRef::Unresolved(_) => return None,
+                    };
+
+                    let receiver_decl = graph.declarations().get(&receiver_decl_id)?;
+                    if matches!(receiver_decl, Declaration::ConstantAlias(_)) {
+                        let resolved_ids = resolve_alias_chains_standalone(graph, receiver_decl_id);
+                        let namespace = resolved_ids
+                            .iter()
+                            .find(|&&id| graph.declarations().get(&id).and_then(|d| d.as_namespace()).is_some())?;
+                        receiver_decl_id = *namespace;
+                    }
+
+                    get_singleton_class_readonly(graph, receiver_decl_id)?
+                }
+                None => resolve_lexical_owner_standalone(graph, *method_definition.lexical_nesting_id()),
+            };
+
+            let fqn = compute_member_fqn(graph, &owner_id, &str_id);
+            Some(PendingDeclaration { definition_id: id, str_id, owner_id, fqn, kind: PendingKind::Method })
+        }
+        Definition::AttrAccessor(attr) => {
+            let owner_id = resolve_lexical_owner_standalone(graph, *attr.lexical_nesting_id());
+            let str_id = *attr.str_id();
+            let fqn = compute_member_fqn(graph, &owner_id, &str_id);
+            Some(PendingDeclaration { definition_id: id, str_id, owner_id, fqn, kind: PendingKind::Method })
+        }
+        Definition::AttrReader(attr) => {
+            let owner_id = resolve_lexical_owner_standalone(graph, *attr.lexical_nesting_id());
+            let str_id = *attr.str_id();
+            let fqn = compute_member_fqn(graph, &owner_id, &str_id);
+            Some(PendingDeclaration { definition_id: id, str_id, owner_id, fqn, kind: PendingKind::Method })
+        }
+        Definition::AttrWriter(attr) => {
+            let owner_id = resolve_lexical_owner_standalone(graph, *attr.lexical_nesting_id());
+            let str_id = *attr.str_id();
+            let fqn = compute_member_fqn(graph, &owner_id, &str_id);
+            Some(PendingDeclaration { definition_id: id, str_id, owner_id, fqn, kind: PendingKind::Method })
+        }
+        Definition::GlobalVariable(var) => {
+            let str_id = *var.str_id();
+            let fqn = graph.strings().get(&str_id)?.as_str().to_string();
+            Some(PendingDeclaration {
+                definition_id: id,
+                str_id,
+                owner_id: *OBJECT_ID,
+                fqn,
+                kind: PendingKind::GlobalVariable,
+            })
+        }
+        Definition::InstanceVariable(var) => {
+            let str_id = *var.str_id();
+            let nesting_id = (*var.lexical_nesting_id())?;
+            let nesting_def = graph.definitions().get(&nesting_id)?;
+
+            let owner_id = match nesting_def {
+                Definition::Method(method) => {
+                    if let Some(receiver) = method.receiver() {
+                        let receiver_decl_id = match receiver {
+                            Receiver::SelfReceiver(def_id) => *graph
+                                .definition_id_to_declaration_id(*def_id)
+                                .expect("SelfReceiver definition should have a declaration"),
+                            Receiver::ConstantReceiver(name_id) => {
+                                match graph.names().get(name_id) {
+                                    Some(NameRef::Resolved(resolved)) => {
+                                        let mut rcvr_id = *resolved.declaration_id();
+                                        let rcvr_decl = graph.declarations().get(&rcvr_id)?;
+                                        if matches!(rcvr_decl, Declaration::ConstantAlias(_)) {
+                                            let resolved_ids =
+                                                resolve_alias_chains_standalone(graph, rcvr_id);
+                                            let ns = resolved_ids.iter().find(|&&id| {
+                                                graph
+                                                    .declarations()
+                                                    .get(&id)
+                                                    .and_then(|d| d.as_namespace())
+                                                    .is_some()
+                                            })?;
+                                            rcvr_id = *ns;
+                                        }
+                                        rcvr_id
+                                    }
+                                    _ => return None,
+                                }
+                            }
+                        };
+                        get_singleton_class_readonly(graph, receiver_decl_id)?
+                    } else {
+                        resolve_lexical_owner_standalone(graph, *method.lexical_nesting_id())
+                    }
+                }
+                Definition::Class(_) | Definition::Module(_) => {
+                    let nesting_decl_id = graph
+                        .definition_id_to_declaration_id(nesting_id)
+                        .copied()
+                        .unwrap_or(*OBJECT_ID);
+                    get_singleton_class_readonly(graph, nesting_decl_id)?
+                }
+                Definition::SingletonClass(_) => {
+                    let singleton_class_decl_id = graph
+                        .definition_id_to_declaration_id(nesting_id)
+                        .copied()
+                        .unwrap_or(*OBJECT_ID);
+                    get_singleton_class_readonly(graph, singleton_class_decl_id)?
+                }
+                _ => panic!("Unexpected lexical nesting for instance variable: {nesting_def:?}"),
+            };
+
+            let fqn = compute_member_fqn(graph, &owner_id, &str_id);
+            Some(PendingDeclaration {
+                definition_id: id,
+                str_id,
+                owner_id,
+                fqn,
+                kind: PendingKind::InstanceVariable,
+            })
+        }
+        Definition::ClassVariable(var) => {
+            let owner_id = resolve_class_variable_owner_standalone(graph, *var.lexical_nesting_id())?;
+            let str_id = *var.str_id();
+            let fqn = compute_member_fqn(graph, &owner_id, &str_id);
+            Some(PendingDeclaration {
+                definition_id: id,
+                str_id,
+                owner_id,
+                fqn,
+                kind: PendingKind::ClassVariable,
+            })
+        }
+        Definition::MethodAlias(alias) => {
+            let owner_id = resolve_lexical_owner_standalone(graph, *alias.lexical_nesting_id());
+            let str_id = *alias.new_name_str_id();
+            let fqn = compute_member_fqn(graph, &owner_id, &str_id);
+            Some(PendingDeclaration { definition_id: id, str_id, owner_id, fqn, kind: PendingKind::Method })
+        }
+        Definition::GlobalVariableAlias(alias) => {
+            let str_id = *alias.new_name_str_id();
+            let fqn = compute_member_fqn(graph, &OBJECT_ID, &str_id);
+            Some(PendingDeclaration {
+                definition_id: id,
+                str_id,
+                owner_id: *OBJECT_ID,
+                fqn,
+                kind: PendingKind::GlobalVariable,
+            })
+        }
+        Definition::Class(_)
+        | Definition::SingletonClass(_)
+        | Definition::Module(_)
+        | Definition::Constant(_)
+        | Definition::ConstantAlias(_) => {
+            panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
+        }
+    }
+}
+
+fn apply_pending_declaration(graph: &mut Graph, pending: PendingDeclaration) {
+    let owner_id = pending.owner_id;
+    let declaration_id = graph.add_declaration(pending.definition_id, pending.fqn, |fully_qualified_name| {
+        match pending.kind {
+            PendingKind::Method => {
+                Declaration::Method(Box::new(MethodDeclaration::new(fully_qualified_name, owner_id)))
+            }
+            PendingKind::InstanceVariable => Declaration::InstanceVariable(Box::new(
+                InstanceVariableDeclaration::new(fully_qualified_name, owner_id),
+            )),
+            PendingKind::ClassVariable => Declaration::ClassVariable(Box::new(
+                ClassVariableDeclaration::new(fully_qualified_name, owner_id),
+            )),
+            PendingKind::GlobalVariable => Declaration::GlobalVariable(Box::new(
+                GlobalVariableDeclaration::new(fully_qualified_name, owner_id),
+            )),
+        }
+    });
+    graph.add_member(&pending.owner_id, declaration_id, pending.str_id);
+}
+
+fn compute_name_depth(
+    id: NameId,
+    names: &IdentityHashMap<NameId, NameRef>,
+    cache: &mut IdentityHashMap<NameId, u32>,
+) -> u32 {
+    if let Some(&d) = cache.get(&id) {
+        return d;
+    }
+
+    let name = names.get(&id).unwrap();
+    let parent_scope = *name.parent_scope();
+    let nesting_id = *name.nesting();
+
+    if parent_scope.is_top_level() {
+        cache.insert(id, 1);
+        return 1;
+    }
+
+    let parent_depth = parent_scope.map_or(0, |pid| compute_name_depth(*pid, names, cache));
+    let nesting_depth = nesting_id.map_or(0, |nid| compute_name_depth(nid, names, cache));
+    let d = parent_depth + nesting_depth + 1;
+    cache.insert(id, d);
+    d
+}
+
+fn compute_all_name_depths(names: &IdentityHashMap<NameId, NameRef>) -> IdentityHashMap<NameId, u32> {
+    let mut cache = IdentityHashMap::with_capacity_and_hasher(names.len(), IdentityHashBuilder);
+    for &id in names.keys() {
+        compute_name_depth(id, names, &mut cache);
+    }
+    cache
 }
 
 pub struct Resolver<'a> {
@@ -121,40 +446,44 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let other_ids = self.prepare_units();
+        let other_ids = time_it!(prepare_units, { self.prepare_units() });
 
-        loop {
-            // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
-            // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
-            // to be done
-            self.made_progress = false;
+        time_it!(constant_loop, {
+            loop {
+                // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
+                // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
+                // to be done
+                self.made_progress = false;
 
-            // Loop through the current length of the queue, which won't change during this pass. Retries pushed to the back
-            // are only processed in the next pass, so that we can assess whether we made any progress
-            for _ in 0..self.unit_queue.len() {
-                let Some(unit_id) = self.unit_queue.pop_front() else {
-                    break;
-                };
+                // Loop through the current length of the queue, which won't change during this pass. Retries pushed to the back
+                // are only processed in the next pass, so that we can assess whether we made any progress
+                for _ in 0..self.unit_queue.len() {
+                    let Some(unit_id) = self.unit_queue.pop_front() else {
+                        break;
+                    };
 
-                match unit_id {
-                    Unit::Definition(id) => {
-                        self.handle_definition_unit(unit_id, id);
-                    }
-                    Unit::ConstantRef(id) => {
-                        self.handle_reference_unit(unit_id, id);
-                    }
-                    Unit::Ancestors(id) => {
-                        self.handle_ancestor_unit(id);
+                    match unit_id {
+                        Unit::Definition(id) => {
+                            self.handle_definition_unit(unit_id, id);
+                        }
+                        Unit::ConstantRef(id) => {
+                            self.handle_reference_unit(unit_id, id);
+                        }
+                        Unit::Ancestors(id) => {
+                            self.handle_ancestor_unit(id);
+                        }
                     }
                 }
-            }
 
-            if !self.made_progress || self.unit_queue.is_empty() {
-                break;
+                if !self.made_progress || self.unit_queue.is_empty() {
+                    break;
+                }
             }
-        }
+        });
 
-        self.handle_remaining_definitions(other_ids);
+        time_it!(remaining_defs, {
+            self.handle_remaining_definitions(other_ids);
+        });
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -272,338 +601,61 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Handle other definitions that don't require resolution, but need to have their declarations and membership created
-    #[allow(clippy::too_many_lines)]
+    /// Handle other definitions that don't require resolution, but need to have their declarations and membership created.
+    ///
+    /// Uses 3 phases:
+    /// - Phase 0 (serial): Pre-create all singleton classes so Phase 1 can use read-only graph access
+    /// - Phase 1 (parallel): Compute pending declarations using immutable graph references
+    /// - Phase 2 (serial): Apply the computed pending declarations to the graph
     fn handle_remaining_definitions(&mut self, other_ids: Vec<DefinitionId>) {
-        for id in other_ids {
-            match self.graph.definitions().get(&id).unwrap() {
-                Definition::Method(method_definition) => {
-                    let str_id = *method_definition.str_id();
-                    let owner_id = match method_definition.receiver() {
-                        Some(Receiver::SelfReceiver(def_id)) => {
-                            let Some(&owner_decl_id) = self.graph.definition_id_to_declaration_id(*def_id) else {
-                                // The enclosing class/module couldn't be resolved (e.g., `class Foo::Bar` where
-                                // `Foo` is undefined). The method is orphaned as a consequence.
-                                continue;
-                            };
-                            self.get_or_create_singleton_class(owner_decl_id)
-                                .expect("Methods with self receiver should always be inside a namespace")
-                        }
-                        Some(Receiver::ConstantReceiver(name_id)) => {
-                            let mut receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
-                                NameRef::Resolved(resolved) => *resolved.declaration_id(),
-                                NameRef::Unresolved(_) => {
-                                    continue;
-                                }
-                            };
+        self.pre_create_singleton_classes();
 
-                            let receiver_decl = self.graph.declarations().get(&receiver_decl_id).unwrap();
+        let pending: Vec<PendingDeclaration> = other_ids
+            .par_iter()
+            .filter_map(|&id| compute_pending_definition(self.graph, id))
+            .collect();
 
-                            // If the method receiver is a constant alias, it needs to point to a namespace or else we don't have a place to declare the method
-                            if matches!(receiver_decl, Declaration::ConstantAlias(_)) {
-                                let resolved_ids = self.resolve_alias_chains(receiver_decl_id);
-                                let Some(namespace) = resolved_ids
-                                    .iter()
-                                    .find(|id| self.graph.declarations().get(id).unwrap().as_namespace().is_some())
-                                else {
-                                    continue;
-                                };
-
-                                receiver_decl_id = *namespace;
-                            }
-
-                            let Some(singleton_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
-                                continue;
-                            };
-
-                            singleton_id
-                        }
-                        None => self.resolve_lexical_owner(*method_definition.lexical_nesting_id()),
-                    };
-
-                    self.create_declaration(str_id, id, owner_id, |name| {
-                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                    });
-                }
-                Definition::AttrAccessor(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
-
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
-                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                    });
-                }
-                Definition::AttrReader(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
-
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
-                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                    });
-                }
-                Definition::AttrWriter(attr) => {
-                    let owner_id = self.resolve_lexical_owner(*attr.lexical_nesting_id());
-
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
-                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                    });
-                }
-                Definition::GlobalVariable(var) => {
-                    let owner_id = *OBJECT_ID;
-                    let str_id = *var.str_id();
-                    let name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
-
-                    let declaration_id = self.graph.add_declaration(id, name, |fully_qualified_name| {
-                        Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(
-                            fully_qualified_name,
-                            owner_id,
-                        )))
-                    });
-                    self.graph.add_member(&owner_id, declaration_id, str_id);
-                }
-                Definition::InstanceVariable(var) => {
-                    let str_id = *var.str_id();
-
-                    // Top-level instance variables belong to the `<main>` object, not `Object`.
-                    // We can't represent `<main>` yet, so skip creating declarations for these.
-                    // TODO: Make sure we introduce `<main>` representation later and update this
-                    let Some(nesting_id) = *var.lexical_nesting_id() else {
-                        continue;
-                    };
-
-                    let Some(nesting_def) = self.graph.definitions().get(&nesting_id) else {
-                        continue;
-                    };
-
-                    match nesting_def {
-                        // When the instance variable is inside a method body, we determine the owner based on the method's receiver
-                        Definition::Method(method) => {
-                            if let Some(receiver) = method.receiver() {
-                                let receiver_decl_id = match receiver {
-                                    Receiver::SelfReceiver(def_id) => *self
-                                        .graph
-                                        .definition_id_to_declaration_id(*def_id)
-                                        .expect("SelfReceiver definition should have a declaration"),
-                                    Receiver::ConstantReceiver(name_id) => {
-                                        let Some(NameRef::Resolved(resolved)) = self.graph.names().get(name_id) else {
-                                            continue;
-                                        };
-
-                                        let mut receiver_decl_id = *resolved.declaration_id();
-                                        let receiver_decl = self.graph.declarations().get(&receiver_decl_id).unwrap();
-
-                                        // If the method receiver is a constant alias, it needs to point to a namespace or else we don't have a place to declare the method
-                                        if matches!(receiver_decl, Declaration::ConstantAlias(_)) {
-                                            let resolved_ids = self.resolve_alias_chains(receiver_decl_id);
-                                            let Some(namespace) = resolved_ids.iter().find(|id| {
-                                                self.graph.declarations().get(id).unwrap().as_namespace().is_some()
-                                            }) else {
-                                                continue;
-                                            };
-
-                                            receiver_decl_id = *namespace;
-                                        }
-
-                                        receiver_decl_id
-                                    }
-                                };
-
-                                // Instance variable in singleton method - owned by the receiver's singleton class
-                                let Some(owner_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
-                                    continue;
-                                };
-                                {
-                                    debug_assert!(
-                                        matches!(
-                                            self.graph.declarations().get(&owner_id),
-                                            Some(Declaration::Namespace(Namespace::SingletonClass(_)))
-                                        ),
-                                        "Instance variable in singleton method should be owned by a SingletonClass"
-                                    );
-                                }
-                                self.create_declaration(str_id, id, owner_id, |name| {
-                                    Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                        name, owner_id,
-                                    )))
-                                });
-                                continue;
-                            }
-
-                            // If the method has no explicit receiver, we resolve the owner based on the lexical nesting
-                            let method_owner_id = self.resolve_lexical_owner(*method.lexical_nesting_id());
-
-                            // If the method is in a singleton class, the instance variable belongs to the class object
-                            // Like `class << Foo; def bar; @bar = 1; end; end`, where `@bar` is owned by `Foo::<Foo>`
-                            if let Some(decl) = self.graph.declarations().get(&method_owner_id)
-                                && matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)))
-                            {
-                                // Method in singleton class - owner is the singleton class itself
-                                self.create_declaration(str_id, id, method_owner_id, |name| {
-                                    Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                        name,
-                                        method_owner_id,
-                                    )))
-                                });
-                            } else {
-                                // Regular instance method
-                                // Create an instance variable declaration for the method's owner
-                                self.create_declaration(str_id, id, method_owner_id, |name| {
-                                    Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                        name,
-                                        method_owner_id,
-                                    )))
-                                });
-                            }
-                        }
-                        // If the instance variable is directly in a class/module body, it belongs to the class object
-                        // and is owned by the singleton class of that class/module
-                        Definition::Class(_) | Definition::Module(_) => {
-                            let nesting_decl_id = self
-                                .graph
-                                .definition_id_to_declaration_id(nesting_id)
-                                .copied()
-                                .unwrap_or(*OBJECT_ID);
-                            let owner_id = self
-                                .get_or_create_singleton_class(nesting_decl_id)
-                                .expect("class/module nesting should always be a namespace");
-                            {
-                                debug_assert!(
-                                    matches!(
-                                        self.graph.declarations().get(&owner_id),
-                                        Some(Declaration::Namespace(Namespace::SingletonClass(_)))
-                                    ),
-                                    "Instance variable in class/module body should be owned by a SingletonClass"
-                                );
-                            }
-                            self.create_declaration(str_id, id, owner_id, |name| {
-                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                    name, owner_id,
-                                )))
-                            });
-                        }
-                        // If in a singleton class body directly, the owner is the singleton class's singleton class
-                        // Like `class << Foo; @bar = 1; end`, where `@bar` is owned by `Foo::<Foo>::<<Foo>>`
-                        Definition::SingletonClass(_) => {
-                            let singleton_class_decl_id = self
-                                .graph
-                                .definition_id_to_declaration_id(nesting_id)
-                                .copied()
-                                .unwrap_or(*OBJECT_ID);
-                            let owner_id = self
-                                .get_or_create_singleton_class(singleton_class_decl_id)
-                                .expect("singleton class nesting should always be a namespace");
-                            {
-                                debug_assert!(
-                                    matches!(
-                                        self.graph.declarations().get(&owner_id),
-                                        Some(Declaration::Namespace(Namespace::SingletonClass(_)))
-                                    ),
-                                    "Instance variable in singleton class body should be owned by a SingletonClass"
-                                );
-                            }
-                            self.create_declaration(str_id, id, owner_id, |name| {
-                                Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
-                                    name, owner_id,
-                                )))
-                            });
-                        }
-                        _ => {
-                            panic!("Unexpected lexical nesting for instance variable: {nesting_def:?}");
-                        }
-                    }
-                }
-                Definition::ClassVariable(var) => {
-                    // TODO: add diagnostic on the else branch. Defining class variables at the top level crashes
-                    if let Some(owner_id) = self.resolve_class_variable_owner(*var.lexical_nesting_id()) {
-                        self.create_declaration(*var.str_id(), id, owner_id, |name| {
-                            Declaration::ClassVariable(Box::new(ClassVariableDeclaration::new(name, owner_id)))
-                        });
-                    }
-                }
-                Definition::MethodAlias(alias) => {
-                    let owner_id = self.resolve_lexical_owner(*alias.lexical_nesting_id());
-
-                    self.create_declaration(*alias.new_name_str_id(), id, owner_id, |name| {
-                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                    });
-                }
-                Definition::GlobalVariableAlias(alias) => {
-                    self.create_declaration(*alias.new_name_str_id(), id, *OBJECT_ID, |name| {
-                        Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, *OBJECT_ID)))
-                    });
-                }
-                Definition::Class(_)
-                | Definition::SingletonClass(_)
-                | Definition::Module(_)
-                | Definition::Constant(_)
-                | Definition::ConstantAlias(_) => {
-                    panic!("Unexpected definition type in non-constant resolution. This shouldn't happen")
-                }
-            }
+        for pending_decl in pending {
+            apply_pending_declaration(self.graph, pending_decl);
         }
     }
 
-    fn create_declaration<F>(
-        &mut self,
-        str_id: StringId,
-        definition_id: DefinitionId,
-        owner_id: DeclarationId,
-        declaration_builder: F,
-    ) where
-        F: FnOnce(String) -> Declaration,
-    {
-        let fully_qualified_name = {
-            let owner = self.graph.declarations().get(&owner_id).unwrap();
-            let name_str = self.graph.strings().get(&str_id).unwrap();
-            format!("{}#{}", owner.name(), name_str.as_str())
-        };
-
-        let declaration_id = self
+    /// Pre-create singleton classes for all namespace and constant declarations so Phase 1 of
+    /// `handle_remaining_definitions` can look them up with a read-only `&Graph`.
+    ///
+    /// Two passes handle nested singleton patterns (e.g., `Foo::<Foo>::<<Foo>>`):
+    /// - Pass 1: Create singletons for all existing namespace + promotable constant declarations
+    /// - Pass 2: Create singletons for singleton classes created in pass 1
+    fn pre_create_singleton_classes(&mut self) {
+        // Pass 1: singletons for all existing namespace and constant declarations
+        let candidate_ids: Vec<DeclarationId> = self
             .graph
-            .add_declaration(definition_id, fully_qualified_name, declaration_builder);
-        self.graph.add_member(&owner_id, declaration_id, str_id);
-    }
+            .declarations()
+            .iter()
+            .filter_map(|(&id, decl)| {
+                matches!(decl, Declaration::Namespace(_) | Declaration::Constant(_)).then_some(id)
+            })
+            .collect();
 
-    /// Resolves owner for class variables, bypassing singleton classes.
-    fn resolve_class_variable_owner(&self, lexical_nesting_id: Option<DefinitionId>) -> Option<DeclarationId> {
-        let mut current_nesting = lexical_nesting_id;
-        while let Some(nesting_id) = current_nesting {
-            if let Some(nesting_def) = self.graph.definitions().get(&nesting_id)
-                && matches!(nesting_def, Definition::SingletonClass(_))
-            {
-                current_nesting = *nesting_def.lexical_nesting_id();
-            } else {
-                break;
-            }
+        for &decl_id in &candidate_ids {
+            self.get_or_create_singleton_class(decl_id);
         }
-        current_nesting.and_then(|id| self.graph.definition_id_to_declaration_id(id).copied())
-    }
 
-    /// Resolves owner from lexical nesting.
-    fn resolve_lexical_owner(&self, lexical_nesting_id: Option<DefinitionId>) -> DeclarationId {
-        let Some(id) = lexical_nesting_id else {
-            return *OBJECT_ID;
-        };
+        // Pass 2: singletons for any singleton class declarations created in pass 1
+        let original_ids: std::collections::HashSet<DeclarationId> = candidate_ids.into_iter().collect();
+        let new_singleton_ids: Vec<DeclarationId> = self
+            .graph
+            .declarations()
+            .iter()
+            .filter_map(|(&id, decl)| {
+                (!original_ids.contains(&id)
+                    && matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_))))
+                .then_some(id)
+            })
+            .collect();
 
-        // If no declaration exists yet for this definition, walk up the lexical chain.
-        // This handles the case where attr_* definitions inside methods are processed
-        // before the method definition itself.
-        let Some(declaration_id) = self.graph.definition_id_to_declaration_id(id) else {
-            let definition = self.graph.definitions().get(&id).unwrap();
-            return self.resolve_lexical_owner(*definition.lexical_nesting_id());
-        };
-
-        let declarations = self.graph.declarations();
-
-        // If the associated declaration is a namespace that can own things, we found the right owner. Otherwise, we might
-        // have found something nested inside something else (like a method), in which case we have to recurse until we find
-        // the appropriate owner
-        if matches!(
-            declarations.get(declaration_id).unwrap(),
-            Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_) | Namespace::SingletonClass(_))
-        ) {
-            *declaration_id
-        } else {
-            let definition = self.graph.definitions().get(&id).unwrap();
-            self.resolve_lexical_owner(*definition.lexical_nesting_id())
+        for decl_id in new_singleton_ids {
+            self.get_or_create_singleton_class(decl_id);
         }
     }
 
@@ -983,16 +1035,22 @@ impl<'a> Resolver<'a> {
         // depending on whether the name has a parent scope
         match self.name_owner_id(name_id) {
             Outcome::Resolved(owner_id, id_needing_linearization) => {
-                let mut fully_qualified_name = self.graph.strings().get(&str_id).unwrap().to_string();
-
+                let name_str = self.graph.strings().get(&str_id).unwrap().as_str();
                 let owner = self.graph.declarations().get(&owner_id).unwrap();
                 let owner_is_namespace = owner.as_namespace().is_some();
 
                 // We don't prefix declarations with `Object::`
-                if owner_id != *OBJECT_ID {
-                    fully_qualified_name.insert_str(0, "::");
-                    fully_qualified_name.insert_str(0, owner.name());
-                }
+                // Build FQN with a single allocation (pre-sized) instead of insert_str which shifts bytes
+                let fully_qualified_name = if owner_id != *OBJECT_ID {
+                    let owner_name = owner.name();
+                    let mut fqn = String::with_capacity(owner_name.len() + 2 + name_str.len());
+                    fqn.push_str(owner_name);
+                    fqn.push_str("::");
+                    fqn.push_str(name_str);
+                    fqn
+                } else {
+                    name_str.to_string()
+                };
 
                 let declaration_id =
                     self.graph
@@ -1063,6 +1121,14 @@ impl<'a> Resolver<'a> {
         declaration_id: DeclarationId,
         linearization: Option<DeclarationId>,
     ) -> Outcome {
+        // Fast path: direct namespace — no alias chain to traverse (vast majority of cases)
+        if matches!(
+            self.graph.declarations().get(&declaration_id),
+            Some(Declaration::Namespace(_))
+        ) {
+            return Outcome::Resolved(declaration_id, linearization);
+        }
+
         let resolved_ids = self.resolve_alias_chains(declaration_id);
 
         // Get the primary (first) resolved target
@@ -1085,118 +1151,141 @@ impl<'a> Resolver<'a> {
     /// reference is related to or `None`. This method mutates the graph to remember which constants have already been
     /// resolved
     fn resolve_constant_internal(&mut self, name_id: NameId) -> Outcome {
-        let name_ref = self.graph.names().get(&name_id).unwrap().clone();
+        // Extract only Copy fields — avoids cloning Box<Name> on every call
+        let name_ref = self.graph.names().get(&name_id).unwrap();
+        let (parent_scope, str_id, nesting) = match name_ref {
+            NameRef::Resolved(resolved) => return Outcome::Resolved(*resolved.declaration_id(), None),
+            NameRef::Unresolved(name) => (*name.parent_scope(), *name.str(), *name.nesting()),
+        };
+        // name_ref borrow ends here; self.graph can now be borrowed mutably below
 
-        match name_ref {
-            NameRef::Unresolved(name) => {
-                match name.parent_scope() {
-                    ParentScope::TopLevel => {
-                        let result = self.search_top_level(*name.str());
+        match parent_scope {
+            ParentScope::TopLevel => {
+                let result = self.search_top_level(str_id);
 
-                        if let Outcome::Resolved(declaration_id, _) = result {
+                if let Outcome::Resolved(declaration_id, _) = result {
+                    self.graph.record_resolved_name(name_id, declaration_id);
+                }
+
+                result
+            }
+            ParentScope::Attached(parent_scope_id) => {
+                let NameRef::Resolved(parent_scope) = self.graph.names().get(&parent_scope_id).unwrap() else {
+                    return Outcome::Retry(None);
+                };
+
+                let mut target_decl_id = *parent_scope.declaration_id();
+                let target_decl = self.graph.declarations().get(&target_decl_id).unwrap();
+
+                // If the attached object is a constant alias, resolve it to the target namespace
+                // (e.g., ALIAS.bar where ALIAS = Foo should create the singleton class on Foo, not ALIAS)
+                if matches!(target_decl, Declaration::ConstantAlias(_)) {
+                    let resolved_ids = self.resolve_alias_chains(target_decl_id);
+
+                    if resolved_ids.iter().any(|id| {
+                        matches!(self.graph.declarations().get(id), Some(Declaration::ConstantAlias(_)))
+                    }) {
+                        return Outcome::Retry(None);
+                    }
+
+                    let Some(&namespace_id) = resolved_ids.iter().find(|id| {
+                        matches!(self.graph.declarations().get(id), Some(Declaration::Namespace(_)))
+                    }) else {
+                        return Outcome::Unresolved(None);
+                    };
+
+                    target_decl_id = namespace_id;
+                }
+
+                // If we found a singleton reference with a resolved attached object parent scope, we
+                // automatically create the singleton class
+                let Some(singleton_id) = self.get_or_create_singleton_class(target_decl_id) else {
+                    return Outcome::Unresolved(None);
+                };
+                self.graph.record_resolved_name(name_id, singleton_id);
+                Outcome::Resolved(singleton_id, Some(singleton_id))
+            }
+            ParentScope::None => {
+                // Otherwise, it's a simple constant read and we can resolve it directly
+                let result = self.run_resolution(str_id, nesting);
+
+                if let Outcome::Resolved(declaration_id, _) = result {
+                    self.graph.record_resolved_name(name_id, declaration_id);
+                }
+
+                result
+            }
+            ParentScope::Some(parent_scope_id) => {
+                let NameRef::Resolved(parent_scope) = self.graph.names().get(&parent_scope_id).unwrap() else {
+                    return Outcome::Retry(None);
+                };
+
+                let decl_id = *parent_scope.declaration_id();
+
+                // Fast path: direct namespace — skip alias chain allocation (vast majority of cases)
+                if matches!(self.graph.declarations().get(&decl_id), Some(Declaration::Namespace(_))) {
+                    let mut missing_linearization_id = None;
+
+                    match self.search_ancestors(decl_id, str_id) {
+                        Outcome::Resolved(declaration_id, lin_id) => {
                             self.graph.record_resolved_name(name_id, declaration_id);
+                            return Outcome::Resolved(declaration_id, lin_id);
                         }
-
-                        result
+                        Outcome::Retry(Some(id)) | Outcome::Unresolved(Some(id)) => {
+                            missing_linearization_id = Some(id);
+                        }
+                        Outcome::Unresolved(None) => {}
+                        Outcome::Retry(_) => unreachable!("search_ancestors never returns Retry"),
                     }
-                    ParentScope::Attached(parent_scope_id) => {
-                        let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() else {
+
+                    return missing_linearization_id
+                        .map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)));
+                }
+
+                // Slow path: resolve alias chain (ALIAS::CONST where ALIAS = Foo)
+                // An alias can have multiple targets, so we try all of them in order.
+                let resolved_ids = self.resolve_alias_chains(decl_id);
+
+                // Search each resolved target for the constant. Return early if found.
+                let mut missing_linearization_id = None;
+                let mut found_namespace = false;
+
+                for &id in &resolved_ids {
+                    match self.graph.declarations().get(&id) {
+                        Some(Declaration::ConstantAlias(_)) => {
+                            // Alias not fully resolved yet
                             return Outcome::Retry(None);
-                        };
-
-                        let mut target_decl_id = *parent_scope.declaration_id();
-                        let target_decl = self.graph.declarations().get(&target_decl_id).unwrap();
-
-                        // If the attached object is a constant alias, resolve it to the target namespace
-                        // (e.g., ALIAS.bar where ALIAS = Foo should create the singleton class on Foo, not ALIAS)
-                        if matches!(target_decl, Declaration::ConstantAlias(_)) {
-                            let resolved_ids = self.resolve_alias_chains(target_decl_id);
-
-                            if resolved_ids.iter().any(|id| {
-                                matches!(self.graph.declarations().get(id), Some(Declaration::ConstantAlias(_)))
-                            }) {
-                                return Outcome::Retry(None);
-                            }
-
-                            let Some(&namespace_id) = resolved_ids.iter().find(|id| {
-                                matches!(self.graph.declarations().get(id), Some(Declaration::Namespace(_)))
-                            }) else {
-                                return Outcome::Unresolved(None);
-                            };
-
-                            target_decl_id = namespace_id;
                         }
+                        Some(Declaration::Namespace(_)) => {
+                            found_namespace = true;
 
-                        // If we found a singleton reference with a resolved attached object parent scope, we
-                        // automatically create the singleton class
-                        let Some(singleton_id) = self.get_or_create_singleton_class(target_decl_id) else {
-                            return Outcome::Unresolved(None);
-                        };
-                        self.graph.record_resolved_name(name_id, singleton_id);
-                        Outcome::Resolved(singleton_id, Some(singleton_id))
-                    }
-                    ParentScope::None => {
-                        // Otherwise, it's a simple constant read and we can resolve it directly
-                        let result = self.run_resolution(&name);
-
-                        if let Outcome::Resolved(declaration_id, _) = result {
-                            self.graph.record_resolved_name(name_id, declaration_id);
-                        }
-
-                        result
-                    }
-                    ParentScope::Some(parent_scope_id) => {
-                        let NameRef::Resolved(parent_scope) = self.graph.names().get(parent_scope_id).unwrap() else {
-                            return Outcome::Retry(None);
-                        };
-
-                        // Resolve the namespace in case it's an alias (e.g., ALIAS::CONST where ALIAS = Foo)
-                        // An alias can have multiple targets, so we try all of them in order.
-                        let resolved_ids = self.resolve_alias_chains(*parent_scope.declaration_id());
-
-                        // Search each resolved target for the constant. Return early if found.
-                        let mut missing_linearization_id = None;
-                        let mut found_namespace = false;
-
-                        for &id in &resolved_ids {
-                            match self.graph.declarations().get(&id) {
-                                Some(Declaration::ConstantAlias(_)) => {
-                                    // Alias not fully resolved yet
-                                    return Outcome::Retry(None);
+                            match self.search_ancestors(id, str_id) {
+                                Outcome::Resolved(declaration_id, missing_linearization_id) => {
+                                    self.graph.record_resolved_name(name_id, declaration_id);
+                                    return Outcome::Resolved(declaration_id, missing_linearization_id);
                                 }
-                                Some(Declaration::Namespace(_)) => {
-                                    found_namespace = true;
-
-                                    match self.search_ancestors(id, *name.str()) {
-                                        Outcome::Resolved(declaration_id, missing_linearization_id) => {
-                                            self.graph.record_resolved_name(name_id, declaration_id);
-                                            return Outcome::Resolved(declaration_id, missing_linearization_id);
-                                        }
-                                        Outcome::Retry(Some(needs_linearization_id))
-                                        | Outcome::Unresolved(Some(needs_linearization_id)) => {
-                                            missing_linearization_id.get_or_insert(needs_linearization_id);
-                                        }
-                                        Outcome::Unresolved(None) => {}
-                                        Outcome::Retry(_) => unreachable!("search_ancestors never returns Retry"),
-                                    }
+                                Outcome::Retry(Some(needs_linearization_id))
+                                | Outcome::Unresolved(Some(needs_linearization_id)) => {
+                                    missing_linearization_id.get_or_insert(needs_linearization_id);
                                 }
-                                _ => {
-                                    // Not a namespace (e.g., a constant) - skip
-                                }
+                                Outcome::Unresolved(None) => {}
+                                Outcome::Retry(_) => unreachable!("search_ancestors never returns Retry"),
                             }
                         }
-
-                        // If no namespaces were found, this constant path can never resolve.
-                        if !found_namespace {
-                            return Outcome::Unresolved(None);
+                        _ => {
+                            // Not a namespace (e.g., a constant) - skip
                         }
-
-                        // Member not found in any namespace yet - retry in case it's added later
-                        missing_linearization_id.map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)))
                     }
                 }
+
+                // If no namespaces were found, this constant path can never resolve.
+                if !found_namespace {
+                    return Outcome::Unresolved(None);
+                }
+
+                // Member not found in any namespace yet - retry in case it's added later
+                missing_linearization_id.map_or(Outcome::Retry(None), |id| Outcome::Unresolved(Some(id)))
             }
-            NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
         }
     }
 
@@ -1241,22 +1330,25 @@ impl<'a> Resolver<'a> {
         results
     }
 
-    fn run_resolution(&mut self, name: &Name) -> Outcome {
-        let str_id = *name.str();
+    fn run_resolution(&mut self, str_id: StringId, nesting: Option<NameId>) -> Outcome {
         let mut missing_linearization_id = None;
 
-        if let Some(nesting) = name.nesting() {
-            let scope_outcome = self.search_lexical_scopes(name, str_id);
+        if let Some(nesting_id) = nesting {
+            let scope_outcome = self.search_lexical_scopes(nesting, str_id);
 
             // If we already resolved or need to retry, return early
             if scope_outcome.is_resolved_or_retry() {
                 return scope_outcome;
             }
 
-            // Search inheritance chain
-            let ancestor_outcome = match self.graph.names().get(nesting).unwrap() {
+            // Search inheritance chain — only for namespace nestings (classes/modules have ancestors; plain constants don't)
+            let ancestor_outcome = match self.graph.names().get(&nesting_id).unwrap() {
                 NameRef::Resolved(nesting_name_ref) => {
-                    self.search_ancestors(*nesting_name_ref.declaration_id(), str_id)
+                    let decl_id = *nesting_name_ref.declaration_id();
+                    match self.graph.declarations().get(&decl_id) {
+                        Some(Declaration::Namespace(_)) => self.search_ancestors(decl_id, str_id),
+                        _ => Outcome::Unresolved(None),
+                    }
                 }
                 NameRef::Unresolved(_) => Outcome::Retry(None),
             };
@@ -1288,6 +1380,30 @@ impl<'a> Resolver<'a> {
 
     /// Search for a member in a declaration's ancestor chain.
     fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        // Fast path: if ancestors are already cached, iterate directly without allocation.
+        // Skips LinearizationContext allocation (two IdentityHashSets), ancestors Vec clone,
+        // and propagate_descendants calls — all idempotent overhead for cached ancestors.
+        {
+            let decls = self.graph.declarations();
+            if let Some(Declaration::Namespace(ns)) = decls.get(&declaration_id) {
+                if ns.has_complete_ancestors() {
+                    for ancestor in ns.ancestors() {
+                        if let Ancestor::Complete(ancestor_id) = ancestor {
+                            if let Some(member_id) = decls
+                                .get(ancestor_id)
+                                .and_then(|d| d.as_namespace())
+                                .and_then(|ns| ns.member(&str_id))
+                            {
+                                return Outcome::Resolved(*member_id, None);
+                            }
+                        }
+                    }
+                    return Outcome::Unresolved(None);
+                }
+            }
+        } // decls borrow ends here
+
+        // Slow path: compute ancestors (allocates LinearizationContext + clones ancestors Vec)
         match self.ancestors_of(declaration_id) {
             Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
                 .iter()
@@ -1337,12 +1453,12 @@ impl<'a> Resolver<'a> {
     }
 
     /// Look for the constant in the lexical scopes that are a part of its nesting
-    fn search_lexical_scopes(&self, name: &Name, str_id: StringId) -> Outcome {
-        let mut current_name = name;
-
-        while let Some(nesting_id) = current_name.nesting() {
-            if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(nesting_id).unwrap() {
+    fn search_lexical_scopes(&self, mut nesting: Option<NameId>, str_id: StringId) -> Outcome {
+        while let Some(nesting_id) = nesting {
+            let name_ref = self.graph.names().get(&nesting_id).unwrap();
+            if let NameRef::Resolved(nesting_name_ref) = name_ref {
                 let declaration_id = *nesting_name_ref.declaration_id();
+                let next_nesting = *nesting_name_ref.nesting();
 
                 match self.graph.declarations().get(&declaration_id) {
                     Some(Declaration::Namespace(namespace)) => {
@@ -1363,7 +1479,7 @@ impl<'a> Resolver<'a> {
                     _ => {}
                 }
 
-                current_name = nesting_name_ref.name();
+                nesting = next_nesting;
             } else {
                 return Outcome::Retry(None);
             }
@@ -1420,6 +1536,7 @@ impl<'a> Resolver<'a> {
     /// # Panics
     ///
     /// Will panic if there is inconsistent data in the graph
+    #[cfg(test)]
     fn name_depth(name: &NameRef, names: &IdentityHashMap<NameId, NameRef>) -> u32 {
         if name.parent_scope().is_top_level() {
             return 1;
@@ -1444,39 +1561,28 @@ impl<'a> Resolver<'a> {
         let mut others = Vec::with_capacity(estimated_length);
         let names = self.graph.names();
 
+        // Precompute all name depths once — O(n) — so the sort uses O(1) lookups instead of
+        // re-running the recursive name_depth on every comparison (which was O(n log n * depth))
+        let depths = compute_all_name_depths(names);
+
         for (id, definition) in self.graph.definitions() {
             let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
 
             match definition {
                 Definition::Class(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 Definition::Module(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 Definition::Constant(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 Definition::ConstantAlias(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 Definition::SingletonClass(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 _ => {
                     others.push(*id);
@@ -1486,27 +1592,28 @@ impl<'a> Resolver<'a> {
 
         // Sort namespaces based on their name complexity so that simpler names are always first
         // When the depth is the same, sort by URI and offset to maintain determinism
-        definitions.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        definitions.par_sort_unstable_by(|(_, (name_id_a, uri_a, offset_a)), (_, (name_id_b, uri_b, offset_b))| {
+            let depth_a = *depths.get(name_id_a).unwrap_or(&0);
+            let depth_b = *depths.get(name_id_b).unwrap_or(&0);
+            (depth_a, uri_a, offset_a).cmp(&(depth_b, uri_b, offset_b))
         });
 
+        let documents = self.graph.documents();
         let mut const_refs = self
             .graph
             .constant_references()
-            .iter()
+            .par_iter()
             .map(|(id, constant_ref)| {
-                let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
-
-                (
-                    Unit::ConstantRef(*id),
-                    (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
-                )
+                let uri = documents.get(&constant_ref.uri_id()).unwrap().uri();
+                (Unit::ConstantRef(*id), (*constant_ref.name_id(), uri, constant_ref.offset()))
             })
             .collect::<Vec<_>>();
 
         // Sort constant references based on their name complexity so that simpler names are always first
-        const_refs.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        const_refs.par_sort_unstable_by(|(_, (name_id_a, uri_a, offset_a)), (_, (name_id_b, uri_b, offset_b))| {
+            let depth_a = *depths.get(name_id_a).unwrap_or(&0);
+            let depth_b = *depths.get(name_id_b).unwrap_or(&0);
+            (depth_a, uri_a, offset_a).cmp(&(depth_b, uri_b, offset_b))
         });
 
         self.unit_queue
