@@ -212,7 +212,7 @@ class DefinitionTest < Minitest::Test
     loc = comment.location.to_display
     return loc unless Gem.win_platform?
 
-    Rubydex::Location.new(
+    Rubydex::DisplayLocation.new(
       uri: loc.uri,
       start_line: loc.start_line,
       start_column: loc.start_column,
