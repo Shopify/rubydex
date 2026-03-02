@@ -4,8 +4,10 @@ up:
   - ruby
   - bundler
   - rust
+  # met? checks: 1) binary exists, 2) no file under rust/ (excluding rust/target/) is newer than the binary
   - custom:
       name: Install rubydex MCP server
+      met?: test -x ~/.cargo/bin/rubydex_mcp && ! find rust -path rust/target -prune -o -newer ~/.cargo/bin/rubydex_mcp -print -quit | grep -q .
       meet: cargo install --force --path rust/rubydex-mcp
 
 commands:
