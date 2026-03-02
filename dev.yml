@@ -6,8 +6,7 @@ up:
   - rust
   - custom:
       name: Install rubydex MCP server
-      met?: test -x ~/.cargo/bin/rubydex_mcp
-      meet: cargo install --path rust/rubydex-mcp
+      meet: cargo install --force --path rust/rubydex-mcp
 
 commands:
   test:
