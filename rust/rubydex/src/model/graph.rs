@@ -494,6 +494,43 @@ impl Graph {
         &self.names
     }
 
+    /// Converts a `Resolved` `NameRef` back to `Unresolved`, preserving the original `Name` data.
+    /// Returns the `DeclarationId` it was previously resolved to, if any.
+    fn unresolve_name(&mut self, name_id: NameId) -> Option<DeclarationId> {
+        let name_ref = self.names.get(&name_id)?;
+
+        match name_ref {
+            NameRef::Resolved(resolved) => {
+                let declaration_id = *resolved.declaration_id();
+                let name = resolved.name().clone();
+                self.names.insert(name_id, NameRef::Unresolved(Box::new(name)));
+                Some(declaration_id)
+            }
+            NameRef::Unresolved(_) => None,
+        }
+    }
+
+    /// Unresolves a constant reference: removes it from the target declaration's reference set
+    /// and unresolves its underlying name.
+    fn unresolve_reference(&mut self, reference_id: ReferenceId) -> Option<DeclarationId> {
+        let constant_ref = self.constant_references.get(&reference_id)?;
+        let name_id = *constant_ref.name_id();
+
+        if let Some(old_decl_id) = self.unresolve_name(name_id) {
+            if let Some(declaration) = self.declarations.get_mut(&old_decl_id) {
+                declaration.remove_reference(&reference_id);
+            }
+            Some(old_decl_id)
+        } else {
+            None
+        }
+    }
+
+    /// Removes a name from the graph entirely.
+    fn remove_name(&mut self, name_id: NameId) {
+        self.names.remove(&name_id);
+    }
+
     /// Decrements the ref count for a name and removes it if the count reaches zero.
     ///
     /// This does not recursively untrack `parent_scope` or `nesting` names.
@@ -501,7 +538,7 @@ impl Graph {
         if let Some(name_ref) = self.names.get_mut(&name_id) {
             let string_id = *name_ref.str();
             if !name_ref.decrement_ref_count() {
-                self.names.remove(&name_id);
+                self.remove_name(name_id);
             }
             self.untrack_string(string_id);
         }
@@ -714,12 +751,9 @@ impl Graph {
         }
 
         for ref_id in document.constant_references() {
+            self.unresolve_reference(*ref_id);
+
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
-                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
-                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
-                {
-                    declaration.remove_reference(ref_id);
-                }
                 self.untrack_name(*constant_ref.name_id());
             }
         }
@@ -1742,5 +1776,46 @@ mod tests {
         context.resolve();
 
         assert!(context.graph().resolve_alias(&DeclarationId::from("Foo")).is_none());
+    }
+
+    #[test]
+    fn deleting_sole_definition_removes_the_name_entirely() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; end\nBar");
+        context.index_uri("file:///bar.rb", "module Bar; end");
+        context.resolve();
+
+        // Bar declaration should have 1 reference (from foo.rb)
+        let bar_decl = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
+        assert_eq!(bar_decl.references().len(), 1);
+
+        // Update foo.rb to remove the Bar reference
+        context.index_uri("file:///foo.rb", "module Foo; end");
+        context.resolve();
+
+        let bar_decl = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
+        assert!(
+            bar_decl.references().is_empty(),
+            "Reference to Bar should be detached from declaration"
+        );
+
+        // Delete bar.rb — the Bar name should be fully removed
+        let bar_name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        context.index_uri("file:///bar.rb", "");
+        context.resolve();
+
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Bar"))
+                .is_none(),
+            "Bar declaration should be removed"
+        );
+        assert!(
+            context.graph().names().get(&bar_name_id).is_none(),
+            "Bar name should be removed from the names map"
+        );
     }
 }
