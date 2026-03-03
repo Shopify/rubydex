@@ -881,11 +881,26 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
-        assert_completion_eq!(
-            context,
-            CompletionReceiver::Expression(name_id),
-            ["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"]
-        );
+        let mut candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression(name_id)),
+        )
+        .unwrap()
+        .iter()
+        .map(|candidate| match candidate {
+            CompletionCandidate::Declaration(id) => {
+                context.graph().declarations().get(id).unwrap().name().to_string()
+            }
+            CompletionCandidate::KeywordArgument(str_id) => {
+                format!("{}:", context.graph().strings().get(str_id).unwrap().as_str())
+            }
+        })
+        .collect::<Vec<_>>();
+        candidates.sort();
+
+        let mut expected = vec!["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"];
+        expected.sort();
+        assert_eq!(expected, candidates);
     }
 
     #[test]

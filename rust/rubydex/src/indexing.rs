@@ -99,6 +99,7 @@ pub fn index_source(graph: &mut Graph, uri: &str, source: &str, language_id: &La
 }
 
 /// Indexes the given paths, reading the content from disk and populating the given `Graph` instance.
+/// Pending work is accumulated on the graph; drained by the resolver.
 ///
 /// # Panics
 ///
