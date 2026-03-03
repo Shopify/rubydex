@@ -22,6 +22,7 @@ Gem::Specification.new do |spec|
 
   spec.files = ["README.md", "LICENSE.txt"] +
     Dir.glob("lib/**/*.rb") +
+    Dir.glob("rbi/**/*.rbi") +
     Dir.glob("ext/rubydex/**/*.{c,h}") +
     Dir.glob("rust/**/*.{rs,toml,lock,hbs}").reject { |f| f.start_with?("rust/target") }
 
