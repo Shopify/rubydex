@@ -1,5 +1,6 @@
 #include "utils.h"
 #include "declaration.h"
+#include "reference.h"
 #include "rustbindings.h"
 
 // Convert a Ruby array of strings into a double char pointer so that we can pass that to Rust.
@@ -48,5 +49,30 @@ VALUE rdxi_declarations_yield(VALUE args) {
 VALUE rdxi_declarations_ensure(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
     rdx_graph_declarations_iter_free(iter);
+    return Qnil;
+}
+
+// Yield body for iterating over references
+VALUE rdxi_references_yield(VALUE args) {
+    VALUE graph_obj = rb_ary_entry(args, 0);
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+
+    uint64_t id = 0;
+    ReferenceKind kind;
+
+    while (rdx_references_iter_next(iter, &id, &kind)) {
+        VALUE ref_class = rdxi_reference_class_for_kind(kind);
+        VALUE argv[] = {graph_obj, ULL2NUM(id)};
+        VALUE obj = rb_class_new_instance(2, argv, ref_class);
+        rb_yield(obj);
+    }
+
+    return Qnil;
+}
+
+// Ensure function for iterating over references to always free the iterator
+VALUE rdxi_references_ensure(VALUE args) {
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    rdx_references_iter_free(iter);
     return Qnil;
 }

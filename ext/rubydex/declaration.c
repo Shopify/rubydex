@@ -2,6 +2,7 @@
 #include "definition.h"
 #include "graph.h"
 #include "handle.h"
+#include "reference.h"
 #include "rustbindings.h"
 #include "utils.h"
 
@@ -291,6 +292,42 @@ static VALUE rdxr_declaration_descendants(VALUE self) {
     return self;
 }
 
+// Size function for the Declaration#references enumerator
+static VALUE declaration_references_size(VALUE self, VALUE _args, VALUE _eobj) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    struct ReferencesIter *iter = rdx_declaration_references_iter_new(graph, data->id);
+    size_t len = rdx_references_iter_len(iter);
+    rdx_references_iter_free(iter);
+
+    return SIZET2NUM(len);
+}
+
+// Returns an enumerator for all references to this declaration
+//
+// Declaration#references: () -> Enumerator[Reference]
+static VALUE rdxr_declaration_references(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize_with_size(self, rb_str_new2("references"), 0, NULL, declaration_references_size);
+    }
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    void *iter = rdx_declaration_references_iter_new(graph, data->id);
+    VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
+    rb_ensure(rdxi_references_yield, args, rdxi_references_ensure, args);
+
+    return self;
+}
+
 void rdxi_initialize_declaration(VALUE mRubydex) {
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
     cNamespace = rb_define_class_under(mRubydex, "Namespace", cDeclaration);
@@ -309,6 +346,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     rb_define_method(cDeclaration, "name", rdxr_declaration_name, 0);
     rb_define_method(cDeclaration, "unqualified_name", rdxr_declaration_unqualified_name, 0);
     rb_define_method(cDeclaration, "definitions", rdxr_declaration_definitions, 0);
+    rb_define_method(cDeclaration, "references", rdxr_declaration_references, 0);
     rb_define_method(cDeclaration, "owner", rdxr_declaration_owner, 0);
 
     // Namespace only methods

@@ -380,6 +380,76 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_references_enumerator
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A; end
+        class B < A; end
+        A.new
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      declaration = graph["A"]
+      enumerator = declaration.references
+      assert_equal(2, enumerator.size)
+      assert_equal(2, enumerator.count)
+      assert_equal(2, enumerator.to_a.size)
+    end
+  end
+
+  def test_references_with_block
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A; end
+        class B < A; end
+        A.new
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      declaration = graph["A"]
+      references = []
+      declaration.references do |ref|
+        references << ref
+      end
+
+      assert_equal(2, references.size)
+
+      references.each do |ref|
+        assert_instance_of(Rubydex::ConstantReference, ref)
+        assert_equal("A", ref.name)
+        refute_nil(ref.location)
+      end
+    end
+  end
+
+  def test_method_references_are_not_associated_with_declaration
+    # This test documents current behavior. We can only determine all method references with type inference, so we
+    # currently do not try to make the connection
+
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class A
+          def self.foo; end
+        end
+
+        A.foo
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      declaration = graph["A::<A>#foo()"]
+      assert_empty(declaration.references.to_a)
+    end
+  end
+
   def test_find_member_returns_inherited_members
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

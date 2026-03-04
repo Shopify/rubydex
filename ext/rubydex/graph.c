@@ -227,31 +227,6 @@ static VALUE rdxr_graph_aref(VALUE self, VALUE key) {
     return rb_class_new_instance(2, argv, decl_class);
 }
 
-// Body function for rb_ensure for the reference enumerators
-static VALUE graph_references_yield(VALUE args) {
-    VALUE self = rb_ary_entry(args, 0);
-    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-
-    uint64_t id = 0;
-    ReferenceKind kind;
-    while (rdx_references_iter_next(iter, &id, &kind)) {
-        VALUE ref_class = rdxi_reference_class_for_kind(kind);
-        VALUE argv[] = {self, ULL2NUM(id)};
-        VALUE obj = rb_class_new_instance(2, argv, ref_class);
-        rb_yield(obj);
-    }
-
-    return Qnil;
-}
-
-// Ensure function for rb_ensure for the reference enumerators to always free the iterator
-static VALUE graph_references_ensure(VALUE args) {
-    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    rdx_references_iter_free(iter);
-
-    return Qnil;
-}
-
 // Size function for the constant_references enumerator
 static VALUE graph_constant_references_size(VALUE self, VALUE _args, VALUE _eobj) {
     void *graph;
@@ -277,7 +252,7 @@ static VALUE rdxr_graph_constant_references(VALUE self) {
 
     void *iter = rdx_graph_constant_references_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
-    rb_ensure(graph_references_yield, args, graph_references_ensure, args);
+    rb_ensure(rdxi_references_yield, args, rdxi_references_ensure, args);
 
     return self;
 }
@@ -307,7 +282,7 @@ static VALUE rdxr_graph_method_references(VALUE self) {
 
     void *iter = rdx_graph_method_references_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
-    rb_ensure(graph_references_yield, args, graph_references_ensure, args);
+    rb_ensure(rdxi_references_yield, args, rdxi_references_ensure, args);
 
     return self;
 }
