@@ -1071,10 +1071,20 @@ impl<'a> Resolver<'a> {
                 Outcome::Unresolved(None) => {
                     let parent_name = self.graph.names().get(&parent_scope).unwrap();
                     let parent_str_id = *parent_name.str();
+                    let parent_has_explicit_prefix = parent_name.parent_scope().as_ref().is_some();
+                    // NLL: borrow of parent_name ends here
 
-                    let parent_owner_id = match self.name_owner_id(parent_scope) {
-                        Outcome::Resolved(id, _) => id,
-                        _ => *OBJECT_ID,
+                    // For bare names (no explicit `::` prefix), always use OBJECT_ID as the owner.
+                    // Using nesting here would create "Nesting::Bar" instead of "Bar" for a bare `Bar`
+                    // reference, which is incorrect: if `Bar` can't be found anywhere, the placeholder
+                    // should live at the top level so it can be promoted when `module Bar` appears later.
+                    let parent_owner_id = if parent_has_explicit_prefix {
+                        match self.name_owner_id(parent_scope) {
+                            Outcome::Resolved(id, _) => id,
+                            _ => *OBJECT_ID,
+                        }
+                    } else {
+                        *OBJECT_ID
                     };
 
                     let fully_qualified_name = if parent_owner_id == *OBJECT_ID {
@@ -1718,8 +1728,8 @@ mod tests {
         assert_constant_reference_to, assert_declaration_definitions_count_eq, assert_declaration_does_not_exist,
         assert_declaration_exists, assert_declaration_kind_eq, assert_declaration_references_count_eq,
         assert_descendants, assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq,
-        assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members,
-        assert_owner_eq, assert_singleton_class_eq,
+        assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members, assert_owner_eq,
+        assert_singleton_class_eq,
     };
 
     #[test]
@@ -5412,6 +5422,40 @@ mod tests {
         assert_declaration_kind_eq!(context, "Bar", "Module");
         assert_members_eq!(context, "Bar", vec!["Baz"]);
         assert_declaration_exists!(context, "Bar::Baz");
+        assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+    }
+
+    #[test]
+    fn qualified_name_inside_nesting_resolves_when_discovered_incrementally() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///baz.rb", {
+            r"
+            module Foo
+              class Bar::Baz
+                def qux; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Bar is unknown — a Todo is created at the top level, not "Foo::Bar"
+        assert_declaration_kind_eq!(context, "Bar", "<TODO>");
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+
+        context.index_uri("file:///bar.rb", {
+            r"
+            module Bar
+            end
+            "
+        });
+        context.resolve();
+
+        // After discovering top-level Bar, the Todo should be promoted and Baz re-homed.
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_members_eq!(context, "Bar", vec!["Baz"]);
         assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
         assert_declaration_does_not_exist!(context, "Foo::Bar");
     }
