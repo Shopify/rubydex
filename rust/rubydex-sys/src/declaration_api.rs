@@ -7,7 +7,7 @@ use std::ptr;
 
 use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
-use crate::reference_api::{ReferenceKind, ReferencesIter};
+use crate::reference_api::{CReference, ReferenceKind, ReferencesIter};
 use crate::utils;
 use rubydex::model::ids::{DeclarationId, StringId};
 
@@ -429,7 +429,11 @@ pub unsafe extern "C" fn rdx_declaration_references_iter_new(
             }
         };
 
-        let entries: Vec<_> = decl.references().iter().map(|ref_id| (**ref_id, kind)).collect();
+        let entries: Vec<_> = decl
+            .references()
+            .iter()
+            .map(|ref_id| CReference::new(**ref_id, kind))
+            .collect();
         ReferencesIter::new(entries.into_boxed_slice())
     })
 }
