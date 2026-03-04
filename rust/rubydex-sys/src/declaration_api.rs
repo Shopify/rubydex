@@ -22,6 +22,7 @@ pub enum CDeclarationKind {
     GlobalVariable = 6,
     InstanceVariable = 7,
     ClassVariable = 8,
+    Todo = 9,
 }
 
 #[repr(C)]
@@ -51,6 +52,7 @@ impl CDeclaration {
             Declaration::Namespace(Namespace::Class(_)) => CDeclarationKind::Class,
             Declaration::Namespace(Namespace::Module(_)) => CDeclarationKind::Module,
             Declaration::Namespace(Namespace::SingletonClass(_)) => CDeclarationKind::SingletonClass,
+            Declaration::Namespace(Namespace::Todo(_)) => CDeclarationKind::Todo,
             Declaration::Constant(_) => CDeclarationKind::Constant,
             Declaration::ConstantAlias(_) => CDeclarationKind::ConstantAlias,
             Declaration::Method(_) => CDeclarationKind::Method,
