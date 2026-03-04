@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashSet, VecDeque, hash_map::Entry},
     hash::BuildHasher,
 };
 
@@ -7,7 +7,7 @@ use crate::model::{
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        Namespace, SingletonClassDeclaration,
+        Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
     definitions::{Definition, Mixin, Receiver},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
@@ -211,6 +211,7 @@ impl<'a> Resolver<'a> {
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
+                self.unit_queue.push_back(unit_id);
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
                 self.unit_queue.push_back(unit_id);
@@ -1057,12 +1058,50 @@ impl<'a> Resolver<'a> {
     fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap();
 
-        if let Some(parent_scope) = name_ref.parent_scope().as_ref() {
+        if let Some(&parent_scope) = name_ref.parent_scope().as_ref() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
-            match self.resolve_constant_internal(*parent_scope) {
+            // On `Retry`, we don't create a Todo: the parent may still resolve through inheritance once ancestors are
+            // linearized. We only create Todos for `Unresolved` outcomes where the parent is genuinely unknown.
+            match self.resolve_constant_internal(parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
-                other => other,
+                // Retry or Unresolved(Some(_)) means we might find it later through ancestor linearization
+                Outcome::Retry(id) => Outcome::Retry(id),
+                Outcome::Unresolved(Some(id)) => Outcome::Unresolved(Some(id)),
+                // Only create a Todo when genuinely unresolvable (no pending linearizations)
+                Outcome::Unresolved(None) => {
+                    let parent_name = self.graph.names().get(&parent_scope).unwrap();
+                    let parent_str_id = *parent_name.str();
+
+                    let parent_owner_id = match self.name_owner_id(parent_scope) {
+                        Outcome::Resolved(id, _) => id,
+                        _ => *OBJECT_ID,
+                    };
+
+                    let fully_qualified_name = if parent_owner_id == *OBJECT_ID {
+                        self.graph.strings().get(&parent_str_id).unwrap().to_string()
+                    } else {
+                        format!(
+                            "{}::{}",
+                            self.graph.declarations().get(&parent_owner_id).unwrap().name(),
+                            self.graph.strings().get(&parent_str_id).unwrap().as_str()
+                        )
+                    };
+
+                    let declaration_id = DeclarationId::from(&fully_qualified_name);
+
+                    if let Entry::Vacant(e) =
+                        self.graph.declarations_mut().entry(declaration_id)
+                    {
+                        e.insert(Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(
+                            fully_qualified_name,
+                            parent_owner_id,
+                        )))));
+                        self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+                    }
+
+                    Outcome::Resolved(declaration_id, None)
+                }
             }
         } else if let Some(nesting_id) = name_ref.nesting()
             && !name_ref.parent_scope().is_top_level()
@@ -1680,8 +1719,8 @@ mod tests {
         assert_constant_reference_to, assert_declaration_definitions_count_eq, assert_declaration_does_not_exist,
         assert_declaration_exists, assert_declaration_kind_eq, assert_declaration_references_count_eq,
         assert_descendants, assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq,
-        assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members, assert_owner_eq,
-        assert_singleton_class_eq,
+        assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members,
+        assert_owner_eq, assert_singleton_class_eq,
     };
 
     #[test]
@@ -1916,9 +1955,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_declaration_does_not_exist!(context, "Foo");
-        assert_declaration_does_not_exist!(context, "Foo::Bar");
-        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz");
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["Baz"]);
+        assert_no_members!(context, "Foo::Bar::Baz");
     }
 
     #[test]
@@ -5260,5 +5302,33 @@ mod tests {
         assert_declaration_kind_eq!(context, "Foo", "Constant");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+    }
+
+    #[test]
+    fn resolve_missing_declaration_to_todo() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo::Bar
+              include Foo::Baz
+
+              def bar; end
+            end
+
+            module Foo::Baz
+              def baz; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "Baz"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+        assert_members_eq!(context, "Foo::Baz", vec!["baz()"]);
     }
 }
