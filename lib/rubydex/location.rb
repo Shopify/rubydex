@@ -4,6 +4,8 @@ module Rubydex
   # A zero based internal location. Intended to be used for tool-to-tool communication, such as a language server
   # communicating with an editor.
   class Location
+    class NotFileUriError < StandardError; end
+
     include Comparable
 
     #: String
@@ -22,9 +24,9 @@ module Rubydex
     end
 
     #: () -> String
-    def path
+    def to_file_path
       uri = URI(@uri)
-      raise Rubydex::Error, "URI is not a file:// URI: #{@uri}" unless uri.scheme == "file"
+      raise NotFileUriError, "URI is not a file:// URI: #{@uri}" unless uri.scheme == "file"
 
       path = uri.path
       # TODO: This has to go away once we have a proper URI abstraction
@@ -59,7 +61,7 @@ module Rubydex
 
     #: -> String
     def to_s
-      "#{path}:#{@start_line + 1}:#{@start_column + 1}-#{@end_line + 1}:#{@end_column + 1}"
+      "#{to_file_path}:#{@start_line + 1}:#{@start_column + 1}-#{@end_line + 1}:#{@end_column + 1}"
     end
   end
 
@@ -82,7 +84,7 @@ module Rubydex
 
     #: -> String
     def to_s
-      "#{path}:#{@start_line}:#{@start_column}-#{@end_line}:#{@end_column}"
+      "#{to_file_path}:#{@start_line}:#{@start_column}-#{@end_line}:#{@end_column}"
     end
   end
 end

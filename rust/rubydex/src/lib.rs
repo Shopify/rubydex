@@ -2,6 +2,7 @@ pub mod compile_assertions;
 pub mod diagnostic;
 pub mod errors;
 pub mod indexing;
+pub mod integrity;
 pub mod job_queue;
 pub mod listing;
 pub mod model;

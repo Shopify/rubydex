@@ -204,6 +204,9 @@ module Rubydex
     sig { returns(T::Array[String]) }
     def workspace_paths; end
 
+    sig { returns(T::Array[Failure]) }
+    def check_integrity; end
+
     private
 
     # Gathers the paths we have to index for all workspace dependencies
@@ -235,7 +238,7 @@ module Rubydex
     def end_line; end
 
     sig { returns(String) }
-    def path; end
+    def to_file_path; end
 
     sig { returns(Integer) }
     def start_column; end

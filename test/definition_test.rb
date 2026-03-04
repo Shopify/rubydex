@@ -87,7 +87,7 @@ class DefinitionTest < Minitest::Test
       location = def_a.location.to_display
       refute_nil(location)
       assert_equal(context.uri_to("file1.rb"), location.uri)
-      assert_equal(context.absolute_path_to("file1.rb"), location.path)
+      assert_equal(context.absolute_path_to("file1.rb"), location.to_file_path)
       assert_equal(1, location.start_line)
       assert_equal(1, location.start_column)
       assert_equal(3, location.end_line)
@@ -98,7 +98,7 @@ class DefinitionTest < Minitest::Test
       location = def_foo.location.to_display
       refute_nil(location)
       assert_equal(context.uri_to("file1.rb"), location.uri)
-      assert_equal(context.absolute_path_to("file1.rb"), location.path)
+      assert_equal(context.absolute_path_to("file1.rb"), location.to_file_path)
       assert_equal(2, location.start_line)
       assert_equal(3, location.start_column)
       assert_equal(2, location.end_line)
