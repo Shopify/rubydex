@@ -1011,6 +1011,13 @@ impl<'a> Resolver<'a> {
                 let owner = self.graph.declarations().get(&owner_id).unwrap();
                 let owner_is_namespace = owner.as_namespace().is_some();
 
+                // Skip creating singletons when the target is a not a namespace or not promotable. For example:
+                // Foo = 1
+                // class << Foo; end
+                if singleton && !owner_is_namespace {
+                    return Outcome::Unresolved(None);
+                }
+
                 // We don't prefix declarations with `Object::`
                 if owner_id != *OBJECT_ID {
                     fully_qualified_name.insert_str(0, "::");
@@ -5216,5 +5223,42 @@ mod tests {
         assert_declaration_kind_eq!(context, "Foo", "Module");
         assert_declaration_kind_eq!(context, "Foo::Bar", "Module");
         assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "Constant");
+    }
+
+    #[test]
+    fn singleton_class_block_for_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            Foo = dynamic
+
+            class << Foo
+              def bar; end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+    }
+
+    #[test]
+    fn singleton_class_block_for_non_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            Foo = 1
+
+            class << Foo
+              def bar; end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_declaration_kind_eq!(context, "Foo", "Constant");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
     }
 }
