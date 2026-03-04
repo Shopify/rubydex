@@ -993,6 +993,21 @@ impl<'a> Resolver<'a> {
             Outcome::Resolved(owner_id, id_needing_linearization) => {
                 let mut fully_qualified_name = self.graph.strings().get(&str_id).unwrap().to_string();
 
+                // If the owner is a promotable constant and something is being defined inside it, promote it to a
+                // module
+                {
+                    let owner = self.graph.declarations().get(&owner_id).unwrap();
+                    let is_promotable_constant =
+                        matches!(owner, Declaration::Constant(_)) && self.graph.all_definitions_promotable(owner);
+
+                    if is_promotable_constant {
+                        self.graph.promote_constant_to_namespace(owner_id, |name, owner_id| {
+                            Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
+                        });
+                        self.unit_queue.push_back(Unit::Ancestors(owner_id));
+                    }
+                }
+
                 let owner = self.graph.declarations().get(&owner_id).unwrap();
                 let owner_is_namespace = owner.as_namespace().is_some();
 
@@ -5184,5 +5199,22 @@ mod tests {
         assert_declaration_exists!(context, "Foo#some_attr()");
         assert_declaration_exists!(context, "Foo::<Foo>#class_method()");
         assert_declaration_exists!(context, "Foo#initialize()");
+    }
+
+    #[test]
+    fn defining_constant_in_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            Foo = dynamic
+            Foo::Bar = dynamic
+            Foo::Bar::Baz = 123
+            "
+        });
+
+        context.resolve();
+        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_kind_eq!(context, "Foo::Bar", "Module");
+        assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "Constant");
     }
 }
