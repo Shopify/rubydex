@@ -477,7 +477,15 @@ impl<'a> Resolver<'a> {
                             NameRef::Resolved(resolved) => *resolved.declaration_id(),
                             NameRef::Unresolved(_) => continue,
                         },
-                        Some(Receiver::SelfReceiver(_)) | None => {
+                        // RBS `alias self.x self.y` creates singleton aliases
+                        Some(Receiver::SelfReceiver(_)) => {
+                            let Some(owner_id) = self.resolve_singleton_owner(receiver.as_ref(), lexical_nesting_id)
+                            else {
+                                continue;
+                            };
+                            owner_id
+                        }
+                        None => {
                             let Some(resolved) = self.resolve_lexical_owner(lexical_nesting_id) else {
                                 continue;
                             };
@@ -4708,6 +4716,42 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object"]);
+    }
+
+    #[test]
+    fn rbs_method_alias_resolution() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              def self.class_method; end
+            end
+
+            module Baz
+              def original; end
+            end
+            "
+        });
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            class Foo
+              alias qux bar
+              alias self.class_alias self.class_method
+            end
+
+            module Baz
+              alias copy original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["bar()", "qux()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["class_alias()", "class_method()"]);
+        assert_members_eq!(context, "Baz", ["copy()", "original()"]);
     }
 
     #[test]
