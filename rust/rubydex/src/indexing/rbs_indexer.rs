@@ -1,8 +1,8 @@
 //! Visit the RBS AST and create type definitions.
 
 use ruby_rbs::node::{
-    self, ClassNode, CommentNode, ConstantNode, ExtendNode, GlobalNode, IncludeNode, ModuleNode, Node, NodeList,
-    PrependNode, TypeNameNode, Visit,
+    self, AliasKind, ClassNode, CommentNode, ConstantNode, ExtendNode, GlobalNode, IncludeNode, ModuleNode, Node,
+    NodeList, PrependNode, TypeNameNode, Visit,
 };
 
 use crate::diagnostic::Rule;
@@ -10,7 +10,7 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition, GlobalVariableDefinition,
-    IncludeDefinition, Mixin, ModuleDefinition, PrependDefinition,
+    IncludeDefinition, MethodAliasDefinition, Mixin, ModuleDefinition, PrependDefinition, Receiver,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, UriId};
@@ -325,6 +325,37 @@ impl Visit for RBSIndexer<'_> {
             Mixin::Extend(ExtendDefinition::new(ref_id))
         });
     }
+
+    fn visit_alias_node(&mut self, alias_node: &node::AliasNode) {
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+
+        let receiver = match alias_node.kind() {
+            AliasKind::Instance => None,
+            AliasKind::Singleton => lexical_nesting_id.map(Receiver::SelfReceiver),
+        };
+
+        let new_name = Self::bytes_to_string(alias_node.new_name().name());
+        let old_name = Self::bytes_to_string(alias_node.old_name().name());
+
+        let new_name_str_id = self.local_graph.intern_string(format!("{new_name}()"));
+        let old_name_str_id = self.local_graph.intern_string(format!("{old_name}()"));
+
+        let offset = Offset::from_rbs_location(&alias_node.location());
+        let comments = Self::collect_comments(alias_node.comment());
+
+        let definition = Definition::MethodAlias(Box::new(MethodAliasDefinition::new(
+            new_name_str_id,
+            old_name_str_id,
+            self.uri_id,
+            offset,
+            comments,
+            Self::flags(&alias_node.annotations()),
+            lexical_nesting_id,
+            receiver,
+        )));
+
+        self.register_definition(definition, lexical_nesting_id);
+    }
 }
 
 #[cfg(test)]
@@ -332,11 +363,12 @@ mod tests {
     use ruby_rbs::node::{self, Node, NodeList};
 
     use crate::indexing::rbs_indexer::RBSIndexer;
-    use crate::model::definitions::DefinitionFlags;
+    use crate::model::definitions::{Definition, DefinitionFlags};
     use crate::test_utils::LocalGraphTest;
     use crate::{
         assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
         assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_no_local_diagnostics,
+        assert_string_eq,
     };
 
     fn index_source(source: &str) -> LocalGraphTest {
@@ -714,5 +746,94 @@ mod tests {
             assert_def_str_eq!(&context, def, "$BAR");
             assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
         });
+    }
+
+    #[test]
+    fn index_alias_node() {
+        let context = index_source({
+            "
+            class Foo
+              # Some documentation
+              alias bar baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
+            assert_eq!(1, class_def.members().len());
+
+            assert_definition_at!(&context, "3:3-3:16", MethodAlias, |def| {
+                assert_string_eq!(&context, def.new_name_str_id(), "bar()");
+                assert_string_eq!(&context, def.old_name_str_id(), "baz()");
+                assert_def_comments_eq!(&context, def, ["Some documentation\n"]);
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_node_with_deprecation() {
+        let context = index_source({
+            "
+            class Foo
+              %a{deprecated}
+              alias bar baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:3-3:16", MethodAlias, |def| {
+            assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+    }
+
+    #[test]
+    fn index_alias_node_singleton() {
+        let context = index_source({
+            "
+            class Foo
+              alias self.bar self.baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 2);
+
+        assert_definition_at!(&context, "2:3-2:26", MethodAlias, |def| {
+            assert_string_eq!(&context, def.new_name_str_id(), "bar()");
+            assert_string_eq!(&context, def.old_name_str_id(), "baz()");
+            assert!(def.receiver().is_some());
+        });
+    }
+
+    #[test]
+    fn mixed_singleton_instance_alias_is_not_indexed() {
+        // Mixed aliases (`alias self.x y` and `alias x self.y`) are not valid RBS.
+        // Verify that no alias definitions are produced for these inputs.
+        for source in [
+            "
+            class Foo
+              alias self.bar baz
+            end
+            ",
+            "
+            class Foo
+              alias bar self.baz
+            end
+            ",
+        ] {
+            let context = index_source(source);
+            let has_alias = context
+                .graph()
+                .definitions()
+                .values()
+                .any(|d| matches!(d, Definition::MethodAlias(_)));
+            assert!(!has_alias, "Expected no alias definitions for: {source}");
+        }
     }
 }
