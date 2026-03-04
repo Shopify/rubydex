@@ -91,7 +91,7 @@ fn main() {
 
     time_it!(resolution, {
         let mut resolver = Resolver::new(&mut graph);
-        resolver.resolve_all();
+        resolver.resolve();
     });
 
     if let Some(StopAfter::Resolution) = args.stop_after {
