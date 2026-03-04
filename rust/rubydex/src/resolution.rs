@@ -286,31 +286,21 @@ impl<'a> Resolver<'a> {
                                 // `Foo` is undefined). The method is orphaned as a consequence.
                                 continue;
                             };
-                            self.get_or_create_singleton_class(owner_decl_id)
-                                .expect("Methods with self receiver should always be inside a namespace")
+                            let Some(singleton_id) = self.get_or_create_singleton_class(owner_decl_id) else {
+                                // The enclosing declaration is a constant that can't be promoted to a namespace
+                                // (e.g., `CONST = 1; module CONST; def self.bar; end; end`). The method is
+                                // orphaned as a consequence.
+                                continue;
+                            };
+                            singleton_id
                         }
                         Some(Receiver::ConstantReceiver(name_id)) => {
-                            let mut receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
+                            let receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
                                 NameRef::Resolved(resolved) => *resolved.declaration_id(),
                                 NameRef::Unresolved(_) => {
                                     continue;
                                 }
                             };
-
-                            let receiver_decl = self.graph.declarations().get(&receiver_decl_id).unwrap();
-
-                            // If the method receiver is a constant alias, it needs to point to a namespace or else we don't have a place to declare the method
-                            if matches!(receiver_decl, Declaration::ConstantAlias(_)) {
-                                let resolved_ids = self.resolve_alias_chains(receiver_decl_id);
-                                let Some(namespace) = resolved_ids
-                                    .iter()
-                                    .find(|id| self.graph.declarations().get(id).unwrap().as_namespace().is_some())
-                                else {
-                                    continue;
-                                };
-
-                                receiver_decl_id = *namespace;
-                            }
 
                             let Some(singleton_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
                                 continue;
@@ -387,22 +377,7 @@ impl<'a> Resolver<'a> {
                                             continue;
                                         };
 
-                                        let mut receiver_decl_id = *resolved.declaration_id();
-                                        let receiver_decl = self.graph.declarations().get(&receiver_decl_id).unwrap();
-
-                                        // If the method receiver is a constant alias, it needs to point to a namespace or else we don't have a place to declare the method
-                                        if matches!(receiver_decl, Declaration::ConstantAlias(_)) {
-                                            let resolved_ids = self.resolve_alias_chains(receiver_decl_id);
-                                            let Some(namespace) = resolved_ids.iter().find(|id| {
-                                                self.graph.declarations().get(id).unwrap().as_namespace().is_some()
-                                            }) else {
-                                                continue;
-                                            };
-
-                                            receiver_decl_id = *namespace;
-                                        }
-
-                                        receiver_decl_id
+                                        *resolved.declaration_id()
                                     }
                                 };
 
@@ -615,6 +590,14 @@ impl<'a> Resolver<'a> {
     /// promoted (e.g., `FOO = 42`).
     fn get_or_create_singleton_class(&mut self, attached_id: DeclarationId) -> Option<DeclarationId> {
         let attached_decl = self.graph.declarations().get(&attached_id).unwrap();
+
+        // If the attached object is a constant alias, follow the alias chain to find the actual namespace
+        if matches!(attached_decl, Declaration::ConstantAlias(_)) {
+            return match self.resolve_to_namespace(attached_id) {
+                Some(id) => self.get_or_create_singleton_class(id),
+                None => None,
+            };
+        }
 
         if matches!(attached_decl, Declaration::Constant(_)) {
             if self.graph.all_definitions_promotable(attached_decl) {
@@ -852,15 +835,11 @@ impl<'a> Resolver<'a> {
                 Mixin::Prepend(_) => {
                     match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
-                            let declaration_id = resolved.declaration_id();
-
-                            // Skip if the mixin is not a namespace (e.g.: dynamically defined class or module that we
-                            // misidentified as a constant)
-                            if !self.graph.is_namespace(declaration_id) {
+                            let Some(module_id) = self.resolve_to_namespace(*resolved.declaration_id()) else {
                                 continue;
-                            }
+                            };
 
-                            let ids = match self.linearize_ancestors(*declaration_id, context) {
+                            let ids = match self.linearize_ancestors(module_id, context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
                                     context.cyclic = true;
@@ -895,15 +874,11 @@ impl<'a> Resolver<'a> {
                 Mixin::Include(_) | Mixin::Extend(_) => {
                     match self.graph.names().get(constant_reference.name_id()).unwrap() {
                         NameRef::Resolved(resolved) => {
-                            let declaration_id = resolved.declaration_id();
-
-                            // Skip if the mixin is not a namespace (e.g.: dynamically defined class or module that we
-                            // misidentified as a constant)
-                            if !self.graph.is_namespace(declaration_id) {
+                            let Some(module_id) = self.resolve_to_namespace(*resolved.declaration_id()) else {
                                 continue;
-                            }
+                            };
 
-                            let mut ids = match self.linearize_ancestors(*declaration_id, context) {
+                            let mut ids = match self.linearize_ancestors(module_id, context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
                                     context.cyclic = true;
@@ -1200,6 +1175,20 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// If `declaration_id` is already a namespace, returns it directly. If it's a `ConstantAlias`, follows the alias
+    /// chain and returns the first namespace found. Returns `None` for all other declaration types or unresolved alias
+    /// chains.
+    fn resolve_to_namespace(&self, declaration_id: DeclarationId) -> Option<DeclarationId> {
+        match self.graph.declarations().get(&declaration_id)? {
+            Declaration::Namespace(_) => Some(declaration_id),
+            Declaration::ConstantAlias(_) => self
+                .resolve_alias_chains(declaration_id)
+                .into_iter()
+                .find(|id| self.graph.is_namespace(id)),
+            _ => None,
+        }
+    }
+
     /// Resolves an alias chain to get all possible final target declarations.
     /// Returns the original ID if it's not an alias or if the target hasn't been resolved yet.
     ///
@@ -1253,10 +1242,27 @@ impl<'a> Resolver<'a> {
                 return scope_outcome;
             }
 
-            // Search inheritance chain
+            // Search inheritance chain, following alias chains to find the actual namespace
             let ancestor_outcome = match self.graph.names().get(nesting).unwrap() {
                 NameRef::Resolved(nesting_name_ref) => {
-                    self.search_ancestors(*nesting_name_ref.declaration_id(), str_id)
+                    let resolved_ids = self.resolve_alias_chains(*nesting_name_ref.declaration_id());
+                    let mut result = Outcome::Unresolved(None);
+
+                    for &id in &resolved_ids {
+                        match self.graph.declarations().get(&id) {
+                            Some(Declaration::ConstantAlias(_)) => {
+                                result = Outcome::Retry(None);
+                                break;
+                            }
+                            Some(Declaration::Namespace(_)) => {
+                                result = self.search_ancestors(id, str_id);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    result
                 }
                 NameRef::Unresolved(_) => Outcome::Retry(None),
             };
@@ -1344,23 +1350,11 @@ impl<'a> Resolver<'a> {
             if let NameRef::Resolved(nesting_name_ref) = self.graph.names().get(nesting_id).unwrap() {
                 let declaration_id = *nesting_name_ref.declaration_id();
 
-                match self.graph.declarations().get(&declaration_id) {
-                    Some(Declaration::Namespace(namespace)) => {
-                        if let Some(member) = namespace.member(&str_id) {
-                            return Outcome::Resolved(*member, None);
-                        }
-                    }
-                    Some(Declaration::ConstantAlias(_)) => {
-                        for id in &self.resolve_alias_chains(declaration_id) {
-                            if let Some(declaration) = self.graph.declarations().get(id)
-                                && let Some(namespace) = declaration.as_namespace()
-                                && let Some(member) = namespace.member(&str_id)
-                            {
-                                return Outcome::Resolved(*member, None);
-                            }
-                        }
-                    }
-                    _ => {}
+                if let Some(namespace_id) = self.resolve_to_namespace(declaration_id)
+                    && let Some(namespace) = self.graph.declarations().get(&namespace_id).unwrap().as_namespace()
+                    && let Some(member) = namespace.member(&str_id)
+                {
+                    return Outcome::Resolved(*member, None);
                 }
 
                 current_name = nesting_name_ref.name();
@@ -1583,10 +1577,8 @@ impl<'a> Resolver<'a> {
 
                 match name {
                     NameRef::Resolved(resolved) => {
-                        let declaration_id = resolved.declaration_id();
-
-                        if self.graph.is_namespace(declaration_id) {
-                            explicit_parents.push(*declaration_id);
+                        if let Some(parent_id) = self.resolve_to_namespace(*resolved.declaration_id()) {
+                            explicit_parents.push(parent_id);
                         }
                     }
                     NameRef::Unresolved(_) => {
@@ -4966,5 +4958,77 @@ mod tests {
         assert_no_diagnostics!(&context);
         assert_declaration_exists!(context, "Baz");
         assert_constant_reference_to!(context, "CONST", "file:///reopen.rb:5:5-5:10");
+    }
+
+    #[test]
+    fn constant_alias_reopened_as_class_with_nested_inheritance() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo
+              Bar = ::Object
+            end
+
+            module Foo
+              class Bar
+                class Baz < Something
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::Bar");
+    }
+
+    #[test]
+    fn superclass_through_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class Base; end
+            AliasedBase = Base
+            class Foo < AliasedBase; end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Base", "Object"]);
+    }
+
+    #[test]
+    fn mixin_through_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module M; end
+            AliasM = M
+            class Foo
+              include AliasM
+            end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object"]);
+    }
+
+    #[test]
+    fn self_method_inside_non_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            CONST = 1
+            module CONST
+              def self.bar
+              end
+            end
+            "
+        });
+        // Should not panic when a `def self.` method is inside a constant that can't be promoted to a namespace (e.g.,
+        // `CONST = 1` is non-promotable).
+        context.resolve();
+        assert_declaration_exists!(context, "CONST");
     }
 }
