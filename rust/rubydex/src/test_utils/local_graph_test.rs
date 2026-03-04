@@ -41,6 +41,14 @@ impl LocalGraphTest {
     }
 
     #[must_use]
+    pub fn from_local_graph(uri: &str, graph: LocalGraph) -> Self {
+        Self {
+            uri: uri.to_string(),
+            graph,
+        }
+    }
+
+    #[must_use]
     pub fn uri(&self) -> &str {
         &self.uri
     }
