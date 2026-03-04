@@ -10,8 +10,9 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition, GlobalVariableDefinition,
-    IncludeDefinition, Mixin, ModuleDefinition, PrependDefinition,
+    IncludeDefinition, MethodDefinition, Mixin, ModuleDefinition, PrependDefinition,
 };
+use crate::model::visibility::Visibility;
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, UriId};
 use crate::model::name::{Name, ParentScope};
@@ -359,6 +360,42 @@ impl Visit for RBSIndexer<'_> {
             Mixin::Extend(ExtendDefinition::new(ref_id))
         });
     }
+
+    fn visit_method_definition_node(&mut self, def_node: &node::MethodDefinitionNode) {
+        // Singleton and singleton_instance methods are not indexed for now.
+        if matches!(
+            def_node.kind(),
+            node::MethodDefinitionKind::Singleton | node::MethodDefinitionKind::SingletonInstance
+        ) {
+            return;
+        }
+
+        let str_id = self.local_graph.intern_string(format!("{}()", Self::bytes_to_string(def_node.name().name())));
+        let offset = Offset::from_rbs_location(&def_node.location());
+        let comments = self.collect_comments(def_node.comment());
+        let flags = Self::flags(&def_node.annotations());
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+
+        // RBS carries visibility directly on the node; Unspecified defaults to Public.
+        let visibility = match def_node.visibility() {
+            node::MethodDefinitionVisibility::Private => Visibility::Private,
+            node::MethodDefinitionVisibility::Public | node::MethodDefinitionVisibility::Unspecified => Visibility::Public,
+        };
+
+        let definition = Definition::Method(Box::new(MethodDefinition::new(
+            str_id,
+            self.uri_id,
+            offset,
+            comments,
+            flags,
+            lexical_nesting_id,
+            Vec::new(),
+            visibility,
+            None,
+        )));
+
+        self.register_definition(definition, lexical_nesting_id);
+    }
 }
 
 #[cfg(test)]
@@ -367,6 +404,7 @@ mod tests {
 
     use crate::indexing::rbs_indexer::RBSIndexer;
     use crate::model::definitions::DefinitionFlags;
+    use crate::model::visibility::Visibility;
     use crate::offset::Offset;
     use crate::test_utils::LocalGraphTest;
     use crate::{
@@ -770,5 +808,31 @@ mod tests {
         assert_eq!(comments[1].offset(), &Offset::new(13, 26));
         assert_eq!(comments[2].string(), "# Third line");
         assert_eq!(comments[2].offset(), &Offset::new(27, 39));
+    }
+
+    #[test]
+    fn index_method_definition() {
+        let context = index_source({
+            "
+            class Foo
+              def bar: () -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+            assert_def_name_eq!(&context, class_def, "Foo");
+            assert_eq!(1, class_def.members().len());
+
+            assert_definition_at!(&context, "2:3-2:22", Method, |def| {
+                assert_def_str_eq!(&context, def, "bar()");
+                assert!(def.receiver().is_none());
+                assert_eq!(def.visibility(), &Visibility::Public);
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(class_def.members()[0], def.id());
+            });
+        });
     }
 }
