@@ -724,7 +724,7 @@ pub struct MethodDefinition {
 assert_mem_size!(MethodDefinition, 112);
 
 /// The receiver of a singleton method definition.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Receiver {
     /// `def self.foo` - receiver is the enclosing definition (class, module, singleton class or DSL)
     SelfReceiver(DefinitionId),
