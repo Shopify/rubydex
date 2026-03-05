@@ -60,6 +60,7 @@ macro_rules! all_declarations {
             Declaration::Namespace(Namespace::Class($var)) => $expr,
             Declaration::Namespace(Namespace::Module($var)) => $expr,
             Declaration::Namespace(Namespace::SingletonClass($var)) => $expr,
+            Declaration::Namespace(Namespace::Todo($var)) => $expr,
             Declaration::Constant($var) => $expr,
             Declaration::ConstantAlias($var) => $expr,
             Declaration::Method($var) => $expr,
@@ -76,6 +77,7 @@ macro_rules! all_namespaces {
             Namespace::Class($var) => $expr,
             Namespace::Module($var) => $expr,
             Namespace::SingletonClass($var) => $expr,
+            Namespace::Todo($var) => $expr,
         }
     };
 }
@@ -378,6 +380,7 @@ pub enum Namespace {
     Class(Box<ClassDeclaration>),
     SingletonClass(Box<SingletonClassDeclaration>),
     Module(Box<ModuleDeclaration>),
+    Todo(Box<TodoDeclaration>),
 }
 assert_mem_size!(Namespace, 16);
 
@@ -388,6 +391,7 @@ impl Namespace {
             Namespace::Class(_) => "Class",
             Namespace::SingletonClass(_) => "SingletonClass",
             Namespace::Module(_) => "Module",
+            Namespace::Todo(_) => "<TODO>",
         }
     }
 
@@ -504,7 +508,8 @@ namespace_declaration!(Module, ModuleDeclaration);
 assert_mem_size!(ModuleDeclaration, 224);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
 assert_mem_size!(SingletonClassDeclaration, 224);
-
+namespace_declaration!(Todo, TodoDeclaration);
+assert_mem_size!(TodoDeclaration, 224);
 simple_declaration!(ConstantDeclaration);
 assert_mem_size!(ConstantDeclaration, 112);
 simple_declaration!(MethodDeclaration);

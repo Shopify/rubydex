@@ -11,6 +11,7 @@ VALUE cNamespace;
 VALUE cClass;
 VALUE cModule;
 VALUE cSingletonClass;
+VALUE cTodo;
 VALUE cConstant;
 VALUE cConstantAlias;
 VALUE cMethod;
@@ -27,6 +28,8 @@ VALUE rdxi_declaration_class_for_kind(CDeclarationKind kind) {
         return cModule;
     case CDeclarationKind_SingletonClass:
         return cSingletonClass;
+    case CDeclarationKind_Todo:
+        return cTodo;
     case CDeclarationKind_Constant:
         return cConstant;
     case CDeclarationKind_ConstantAlias:
@@ -334,6 +337,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     cClass = rb_define_class_under(mRubydex, "Class", cNamespace);
     cModule = rb_define_class_under(mRubydex, "Module", cNamespace);
     cSingletonClass = rb_define_class_under(mRubydex, "SingletonClass", cNamespace);
+    cTodo = rb_define_class_under(mRubydex, "Todo", cNamespace);
     cConstant = rb_define_class_under(mRubydex, "Constant", cDeclaration);
     cConstantAlias = rb_define_class_under(mRubydex, "ConstantAlias", cDeclaration);
     cMethod = rb_define_class_under(mRubydex, "Method", cDeclaration);

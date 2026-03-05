@@ -9,6 +9,7 @@ extern VALUE cNamespace;
 extern VALUE cClass;
 extern VALUE cModule;
 extern VALUE cSingletonClass;
+extern VALUE cTodo;
 extern VALUE cConstant;
 extern VALUE cConstantAlias;
 extern VALUE cMethod;

@@ -84,14 +84,20 @@ impl Graph {
     {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
-        let should_promote = self.declarations.get(&declaration_id).is_some_and(|existing| {
-            matches!(existing, Declaration::Constant(_))
-                && matches!(
-                    self.definitions.get(&definition_id),
-                    Some(Definition::Class(_) | Definition::Module(_) | Definition::SingletonClass(_))
-                )
-                && self.all_definitions_promotable(existing)
-        });
+        let is_namespace_definition = matches!(
+            self.definitions.get(&definition_id),
+            Some(Definition::Class(_) | Definition::Module(_) | Definition::SingletonClass(_))
+        );
+
+        let should_promote = is_namespace_definition
+            && self
+                .declarations
+                .get(&declaration_id)
+                .is_some_and(|existing| match existing {
+                    Declaration::Constant(_) => self.all_definitions_promotable(existing),
+                    Declaration::Namespace(Namespace::Todo(_)) => true,
+                    _ => false,
+                });
 
         match self.declarations.entry(declaration_id) {
             Entry::Occupied(mut occupied_entry) => {
@@ -632,6 +638,10 @@ impl Graph {
                 Declaration::Namespace(Namespace::Module(it)) => it.add_member(member_str_id, member_declaration_id),
                 Declaration::Namespace(Namespace::SingletonClass(it)) => {
                     it.add_member(member_str_id, member_declaration_id);
+                }
+                Declaration::Namespace(Namespace::Todo(it)) => it.add_member(member_str_id, member_declaration_id),
+                Declaration::Constant(_) => {
+                    // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
                 }
                 _ => panic!("Tried to add member to a declaration that isn't a namespace"),
             }

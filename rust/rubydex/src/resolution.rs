@@ -7,7 +7,7 @@ use crate::model::{
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
-        Namespace, SingletonClassDeclaration,
+        Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
     definitions::{Definition, Mixin, Receiver},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
@@ -1057,12 +1057,60 @@ impl<'a> Resolver<'a> {
     fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap();
 
-        if let Some(parent_scope) = name_ref.parent_scope().as_ref() {
+        if let Some(&parent_scope) = name_ref.parent_scope().as_ref() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
-            match self.resolve_constant_internal(*parent_scope) {
+            // On `Retry`, we don't create a Todo: the parent may still resolve through inheritance once ancestors are
+            // linearized. We only create Todos for `Unresolved` outcomes where the parent is genuinely unknown.
+            match self.resolve_constant_internal(parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
-                other => other,
+                // Retry or Unresolved(Some(_)) means we might find it later through ancestor linearization
+                Outcome::Retry(id) => Outcome::Retry(id),
+                Outcome::Unresolved(Some(id)) => Outcome::Unresolved(Some(id)),
+                // Only create a Todo when genuinely unresolvable (no pending linearizations)
+                Outcome::Unresolved(None) => {
+                    let parent_name = self.graph.names().get(&parent_scope).unwrap();
+                    let parent_str_id = *parent_name.str();
+                    let parent_has_explicit_prefix = parent_name.parent_scope().as_ref().is_some();
+                    // NLL: borrow of parent_name ends here
+
+                    // For bare names (no explicit `::` prefix), always use OBJECT_ID as the owner.
+                    // Using nesting here would create "Nesting::Bar" instead of "Bar" for a bare `Bar`
+                    // reference, which is incorrect: if `Bar` can't be found anywhere, the placeholder
+                    // should live at the top level so it can be promoted when `module Bar` appears later.
+                    let parent_owner_id = if parent_has_explicit_prefix {
+                        match self.name_owner_id(parent_scope) {
+                            Outcome::Resolved(id, _) => id,
+                            _ => *OBJECT_ID,
+                        }
+                    } else {
+                        *OBJECT_ID
+                    };
+
+                    let fully_qualified_name = if parent_owner_id == *OBJECT_ID {
+                        self.graph.strings().get(&parent_str_id).unwrap().to_string()
+                    } else {
+                        format!(
+                            "{}::{}",
+                            self.graph.declarations().get(&parent_owner_id).unwrap().name(),
+                            self.graph.strings().get(&parent_str_id).unwrap().as_str()
+                        )
+                    };
+
+                    let declaration_id = DeclarationId::from(&fully_qualified_name);
+
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        self.graph.declarations_mut().entry(declaration_id)
+                    {
+                        e.insert(Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(
+                            fully_qualified_name,
+                            parent_owner_id,
+                        )))));
+                        self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+                    }
+
+                    Outcome::Resolved(declaration_id, None)
+                }
             }
         } else if let Some(nesting_id) = name_ref.nesting()
             && !name_ref.parent_scope().is_top_level()
@@ -1916,9 +1964,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_declaration_does_not_exist!(context, "Foo");
-        assert_declaration_does_not_exist!(context, "Foo::Bar");
-        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz");
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["Baz"]);
+        assert_no_members!(context, "Foo::Bar::Baz");
     }
 
     #[test]
@@ -5260,5 +5311,152 @@ mod tests {
         assert_declaration_kind_eq!(context, "Foo", "Constant");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+    }
+
+    #[test]
+    fn resolve_missing_declaration_to_todo() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo::Bar
+              include Foo::Baz
+
+              def bar; end
+            end
+
+            module Foo::Baz
+              def baz; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "Baz"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+        assert_members_eq!(context, "Foo::Baz", vec!["baz()"]);
+    }
+
+    #[test]
+    fn todo_declaration_promoted_to_real_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo::Bar
+              def bar; end
+            end
+
+            class Foo
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Foo was initially created as a Todo (from class Foo::Bar), then promoted to Class
+        assert_declaration_kind_eq!(context, "Foo", "Class");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+    }
+
+    #[test]
+    fn todo_declaration_promoted_to_real_namespace_incrementally() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Foo::Bar
+              def bar; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Foo was promoted from Todo to Class after the second resolution
+        assert_declaration_kind_eq!(context, "Foo", "Class");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+    }
+
+    #[test]
+    fn qualified_name_inside_nesting_resolves_to_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar::Baz
+                def qux; end
+              end
+            end
+
+            module Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_declaration_exists!(context, "Bar::Baz");
+        assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+    }
+
+    #[test]
+    fn qualified_name_inside_nesting_resolves_when_discovered_incrementally() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///baz.rb", {
+            r"
+            module Foo
+              class Bar::Baz
+                def qux; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Bar is unknown — a Todo is created at the top level, not "Foo::Bar"
+        assert_declaration_kind_eq!(context, "Bar", "<TODO>");
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+
+        context.index_uri("file:///bar.rb", {
+            r"
+            module Bar
+            end
+            "
+        });
+        context.resolve();
+
+        // After discovering top-level Bar, the Todo should be promoted and Baz re-homed.
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
     }
 }
