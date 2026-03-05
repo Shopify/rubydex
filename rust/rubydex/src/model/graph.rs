@@ -14,6 +14,18 @@ use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::stats;
 
+/// An entity whose validity depends on a particular `NameId`.
+/// Used as the value type in the `name_dependents` reverse index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameDependent {
+    Definition(DefinitionId),
+    Reference(ReferenceId),
+    /// This name's `parent_scope` is the key name — structural dependency.
+    ChildName(NameId),
+    /// This name's `nesting` is the key name — reference-only dependency.
+    NestedName(NameId),
+}
+
 pub static BASIC_OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("BasicObject"));
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
@@ -41,6 +53,10 @@ pub struct Graph {
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
+
+    /// Reverse index: for each `NameId`, which definitions, references, and child/nested names depend on it.
+    /// Used during invalidation to efficiently find affected entities without scanning the full graph.
+    name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
 }
 
 impl Graph {
@@ -55,6 +71,7 @@ impl Graph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
+            name_dependents: IdentityHashMap::default(),
         }
     }
 
@@ -501,6 +518,11 @@ impl Graph {
         &self.names
     }
 
+    #[must_use]
+    pub fn name_dependents(&self) -> &IdentityHashMap<NameId, Vec<NameDependent>> {
+        &self.name_dependents
+    }
+
     /// Converts a `Resolved` `NameRef` back to `Unresolved`, preserving the original `Name` data.
     /// Returns the `DeclarationId` it was previously resolved to, if any.
     fn unresolve_name(&mut self, name_id: NameId) -> Option<DeclarationId> {
@@ -533,9 +555,32 @@ impl Graph {
         }
     }
 
-    /// Removes a name from the graph entirely.
+    /// Removes a name from the graph and cleans up its name-to-name edges from parent names.
     fn remove_name(&mut self, name_id: NameId) {
+        if let Some(name_ref) = self.names.get(&name_id) {
+            let parent_scope = name_ref.parent_scope().as_ref().copied();
+            let nesting = name_ref.nesting().as_ref().copied();
+
+            if let Some(ps_id) = parent_scope {
+                self.remove_name_dependent(ps_id, NameDependent::ChildName(name_id));
+            }
+            if let Some(nesting_id) = nesting {
+                self.remove_name_dependent(nesting_id, NameDependent::NestedName(name_id));
+            }
+        }
+        self.name_dependents.remove(&name_id);
         self.names.remove(&name_id);
+    }
+
+    /// Removes a specific dependent from the `name_dependents` entry for `name_id`,
+    /// cleaning up the entry if no dependents remain.
+    fn remove_name_dependent(&mut self, name_id: NameId, dependent: NameDependent) {
+        if let Some(deps) = self.name_dependents.get_mut(&name_id) {
+            deps.retain(|d| *d != dependent);
+            if deps.is_empty() {
+                self.name_dependents.remove(&name_id);
+            }
+        }
     }
 
     /// Decrements the ref count for a name and removes it if the count reaches zero.
@@ -687,7 +732,7 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references) =
+        let (uri_id, document, definitions, strings, names, constant_references, method_references, name_dependents) =
             local_graph.into_parts();
 
         if self.documents.insert(uri_id, document).is_some() {
@@ -735,6 +780,15 @@ impl Graph {
                 debug_assert!(false, "Method ReferenceId collision in global graph");
             }
         }
+
+        for (name_id, deps) in name_dependents {
+            let global_deps = self.name_dependents.entry(name_id).or_default();
+            for dep in deps {
+                if !global_deps.contains(&dep) {
+                    global_deps.push(dep);
+                }
+            }
+        }
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
@@ -765,6 +819,7 @@ impl Graph {
             self.unresolve_reference(*ref_id);
 
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
+                self.remove_name_dependent(*constant_ref.name_id(), NameDependent::Reference(*ref_id));
                 self.untrack_name(*constant_ref.name_id());
             }
         }
@@ -800,8 +855,9 @@ impl Graph {
                 }
             }
 
-            if let Some(name_id) = self.definitions.get(def_id).unwrap().name_id() {
-                self.untrack_name(*name_id);
+            if let Some(name_id) = self.definitions.get(def_id).unwrap().name_id().copied() {
+                self.remove_name_dependent(name_id, NameDependent::Definition(*def_id));
+                self.untrack_name(name_id);
             }
         }
 
@@ -999,7 +1055,7 @@ mod tests {
     use crate::model::comment::Comment;
     use crate::model::declaration::Ancestors;
     use crate::test_utils::GraphTest;
-    use crate::{assert_descendants, assert_members_eq, assert_no_diagnostics, assert_no_members};
+    use crate::{assert_dependents, assert_descendants, assert_members_eq, assert_no_diagnostics, assert_no_members};
 
     #[test]
     fn deleting_a_uri() {
@@ -1019,6 +1075,55 @@ mod tests {
                 .get(&DeclarationId::from("Foo"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn deleting_file_triggers_name_dependent_cleanup() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo
+              CONST
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            "
+            module Foo
+              class Bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_dependents!(
+            &context,
+            "Foo",
+            [
+                Definition("Foo"),
+                Definition("Foo"),
+                NestedName("Bar"),
+                NestedName("CONST"),
+            ]
+        );
+
+        // Deleting bar.rb removes Bar's name (and its NestedName edge from Foo)
+        // and one Definition dependent (bar.rb's `module Foo` definition).
+        context.delete_uri("file:///bar.rb");
+        assert_dependents!(&context, "Foo", [Definition("Foo"), NestedName("CONST")]);
+
+        // Deleting foo.rb cleans up everything
+        context.delete_uri("file:///foo.rb");
+        let foo_ids = context
+            .graph()
+            .names()
+            .iter()
+            .filter(|(_, n)| *n.str() == StringId::from("Foo"))
+            .count();
+        assert_eq!(foo_ids, 0, "Foo name should be removed after deleting both files");
     }
 
     #[test]

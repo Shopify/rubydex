@@ -2,7 +2,8 @@ use super::normalize_indentation;
 #[cfg(test)]
 use crate::diagnostic::Rule;
 use crate::indexing::{self, LanguageId};
-use crate::model::graph::Graph;
+use crate::model::graph::{Graph, NameDependent};
+use crate::model::ids::{NameId, StringId};
 use crate::resolution::Resolver;
 
 #[derive(Default)]
@@ -40,6 +41,79 @@ impl GraphTest {
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
         resolver.resolve_all();
+    }
+
+    // Name dependents helpers (shared with LocalGraphTest for assert_dependents! macro)
+
+    /// # Panics
+    ///
+    /// Panics if no names match the given path.
+    #[must_use]
+    pub fn find_name_ids(&self, path: &str) -> Vec<NameId> {
+        let (parent, name) = match path.rsplit_once("::") {
+            Some((p, n)) => (Some(p), n),
+            None => (None, path),
+        };
+        let target_str_id = StringId::from(name);
+        let ids: Vec<NameId> = self
+            .graph()
+            .names()
+            .iter()
+            .filter(|(_, name_ref)| {
+                if *name_ref.str() != target_str_id {
+                    return false;
+                }
+                match parent {
+                    None => name_ref.parent_scope().as_ref().is_none(),
+                    Some(p) => name_ref.parent_scope().as_ref().is_some_and(|ps_id| {
+                        let ps = self.graph().names().get(ps_id).unwrap();
+                        *ps.str() == StringId::from(p)
+                    }),
+                }
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        assert!(!ids.is_empty(), "could not find name `{path}`");
+        ids
+    }
+
+    #[must_use]
+    pub fn name_dependents_for(&self, name_id: NameId) -> Vec<NameDependent> {
+        self.graph()
+            .name_dependents()
+            .get(&name_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the name's string is not in the strings map.
+    #[must_use]
+    pub fn name_str(&self, name_id: &NameId) -> Option<&str> {
+        self.graph()
+            .names()
+            .get(name_id)
+            .map(|n| self.graph().strings().get(n.str()).unwrap().as_str())
+    }
+
+    /// Returns the unqualified name string for a `NameDependent`, if available.
+    #[must_use]
+    pub fn dependent_name_str(&self, dep: &NameDependent) -> Option<&str> {
+        match dep {
+            NameDependent::ChildName(id) | NameDependent::NestedName(id) => self.name_str(id),
+            NameDependent::Definition(id) => self
+                .graph()
+                .definitions()
+                .get(id)
+                .and_then(|d| d.name_id())
+                .and_then(|name_id| self.name_str(name_id)),
+            NameDependent::Reference(id) => self
+                .graph()
+                .constant_references()
+                .get(id)
+                .and_then(|r| self.name_str(r.name_id())),
+        }
     }
 
     /// # Panics

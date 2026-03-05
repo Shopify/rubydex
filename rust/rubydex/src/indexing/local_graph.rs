@@ -3,6 +3,7 @@ use std::collections::hash_map::Entry;
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
+use crate::model::graph::NameDependent;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef};
@@ -18,6 +19,7 @@ type LocalGraphParts = (
     IdentityHashMap<NameId, NameRef>,
     IdentityHashMap<ReferenceId, ConstantReference>,
     IdentityHashMap<ReferenceId, MethodRef>,
+    IdentityHashMap<NameId, Vec<NameDependent>>,
 );
 
 #[derive(Debug)]
@@ -29,6 +31,7 @@ pub struct LocalGraph {
     names: IdentityHashMap<NameId, NameRef>,
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
+    name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
 }
 
 impl LocalGraph {
@@ -42,6 +45,7 @@ impl LocalGraph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
+            name_dependents: IdentityHashMap::default(),
         }
     }
 
@@ -69,6 +73,13 @@ impl LocalGraph {
 
     pub fn add_definition(&mut self, definition: Definition) -> DefinitionId {
         let definition_id = definition.id();
+
+        if let Some(name_id) = definition.name_id() {
+            self.name_dependents
+                .entry(*name_id)
+                .or_default()
+                .push(NameDependent::Definition(definition_id));
+        }
 
         if self.definitions.insert(definition_id, definition).is_some() {
             debug_assert!(false, "DefinitionId collision in local graph");
@@ -117,6 +128,18 @@ impl LocalGraph {
                 entry.get_mut().increment_ref_count(1);
             }
             Entry::Vacant(entry) => {
+                if let Some(&parent_scope) = name.parent_scope().as_ref() {
+                    self.name_dependents
+                        .entry(parent_scope)
+                        .or_default()
+                        .push(NameDependent::ChildName(name_id));
+                }
+                if let Some(&nesting_id) = name.nesting().as_ref() {
+                    self.name_dependents
+                        .entry(nesting_id)
+                        .or_default()
+                        .push(NameDependent::NestedName(name_id));
+                }
                 entry.insert(NameRef::Unresolved(Box::new(name)));
             }
         }
@@ -133,6 +156,10 @@ impl LocalGraph {
 
     pub fn add_constant_reference(&mut self, reference: ConstantReference) -> ReferenceId {
         let reference_id = reference.id();
+        self.name_dependents
+            .entry(*reference.name_id())
+            .or_default()
+            .push(NameDependent::Reference(reference_id));
 
         if self.constant_references.insert(reference_id, reference).is_some() {
             debug_assert!(false, "ReferenceId collision in local graph");
@@ -172,6 +199,13 @@ impl LocalGraph {
         self.document.add_diagnostic(diagnostic);
     }
 
+    // Name dependents
+
+    #[must_use]
+    pub fn name_dependents(&self) -> &IdentityHashMap<NameId, Vec<NameDependent>> {
+        &self.name_dependents
+    }
+
     // Into parts
 
     #[must_use]
@@ -184,6 +218,7 @@ impl LocalGraph {
             self.names,
             self.constant_references,
             self.method_references,
+            self.name_dependents,
         )
     }
 }
