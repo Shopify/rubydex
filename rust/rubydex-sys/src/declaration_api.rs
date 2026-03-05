@@ -7,6 +7,7 @@ use std::ptr;
 
 use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
+use crate::reference_api::{ReferenceKind, ReferencesIter};
 use crate::utils;
 use rubydex::model::ids::{DeclarationId, StringId};
 
@@ -398,4 +399,37 @@ pub unsafe extern "C" fn rdx_declaration_descendants(pointer: GraphPointer, decl
     });
 
     Box::into_raw(Box::new(DeclarationsIter::new(declarations.into_boxed_slice())))
+}
+
+/// Creates a new iterator over references for a given declaration by snapshotting the current set of IDs.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - The returned pointer must be freed with `rdx_references_iter_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_declaration_references_iter_new(
+    pointer: GraphPointer,
+    decl_id: u64,
+) -> *mut ReferencesIter {
+    with_graph(pointer, |graph| {
+        let decl_id = DeclarationId::new(decl_id);
+
+        let Some(decl) = graph.declarations().get(&decl_id) else {
+            return ReferencesIter::new(Vec::new().into_boxed_slice());
+        };
+
+        let kind = match decl {
+            Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_) => {
+                ReferenceKind::Constant
+            }
+            Declaration::Method(_) => ReferenceKind::Method,
+            Declaration::GlobalVariable(_) | Declaration::InstanceVariable(_) | Declaration::ClassVariable(_) => {
+                return ReferencesIter::new(Vec::new().into_boxed_slice());
+            }
+        };
+
+        let entries: Vec<_> = decl.references().iter().map(|ref_id| (**ref_id, kind)).collect();
+        ReferencesIter::new(entries.into_boxed_slice())
+    })
 }

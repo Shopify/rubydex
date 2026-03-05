@@ -16,4 +16,10 @@ VALUE rdxi_declarations_yield(VALUE args);
 // Ensure function for iterating over declarations to always free the iterator
 VALUE rdxi_declarations_ensure(VALUE args);
 
+// Yield body for iterating over references
+VALUE rdxi_references_yield(VALUE args);
+
+// Ensure function for iterating over references to always free the iterator
+VALUE rdxi_references_ensure(VALUE args);
+
 #endif // RUBYDEX_UTILS_H
