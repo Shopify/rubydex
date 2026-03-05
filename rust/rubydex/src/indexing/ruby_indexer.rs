@@ -361,34 +361,31 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
-    // Runs the given closure if the given call `node` is invoked directly on `self` for each one of its string or
-    // symbol arguments
+    // Runs the given closure for each string or symbol argument in the given call `node`
     fn each_string_or_symbol_arg<F>(node: &ruby_prism::CallNode, mut f: F)
     where
         F: FnMut(String, ruby_prism::Location),
     {
-        let receiver = node.receiver();
+        let Some(arguments) = node.arguments() else {
+            return;
+        };
 
-        if (receiver.is_none() || receiver.unwrap().as_self_node().is_some())
-            && let Some(arguments) = node.arguments()
-        {
-            for argument in &arguments.arguments() {
-                match argument {
-                    ruby_prism::Node::SymbolNode { .. } => {
-                        let symbol = argument.as_symbol_node().unwrap();
+        for argument in &arguments.arguments() {
+            match argument {
+                ruby_prism::Node::SymbolNode { .. } => {
+                    let symbol = argument.as_symbol_node().unwrap();
 
-                        if let Some(value_loc) = symbol.value_loc() {
-                            let name = Self::location_to_string(&value_loc);
-                            f(name, value_loc);
-                        }
+                    if let Some(value_loc) = symbol.value_loc() {
+                        let name = Self::location_to_string(&value_loc);
+                        f(name, value_loc);
                     }
-                    ruby_prism::Node::StringNode { .. } => {
-                        let string = argument.as_string_node().unwrap();
-                        let name = String::from_utf8_lossy(string.unescaped()).to_string();
-                        f(name, argument.location());
-                    }
-                    _ => {}
                 }
+                ruby_prism::Node::StringNode { .. } => {
+                    let string = argument.as_string_node().unwrap();
+                    let name = String::from_utf8_lossy(string.unescaped()).to_string();
+                    f(name, argument.location());
+                }
+                _ => {}
             }
         }
     }
@@ -1104,11 +1101,22 @@ impl<'a> RubyIndexer<'a> {
             return Some(name_id);
         }
 
+        let new_name_id = self.create_singleton_name_id(name_id);
+
+        let location = receiver.map_or(fallback_location, ruby_prism::Node::location);
+        let offset = Offset::from_prism_location(&location);
+        self.local_graph
+            .add_constant_reference(ConstantReference::new(new_name_id, self.uri_id, offset));
+        Some(new_name_id)
+    }
+
+    /// Creates a singleton class `NameId` (`<ClassName>`) attached to the given constant `NameId`.
+    fn create_singleton_name_id(&mut self, attached_name_id: NameId) -> NameId {
         let singleton_class_name = {
             let name = self
                 .local_graph
                 .names()
-                .get(&name_id)
+                .get(&attached_name_id)
                 .expect("Indexed constant name should exist");
 
             let target_str = self
@@ -1121,15 +1129,8 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let string_id = self.local_graph.intern_string(singleton_class_name);
-        let new_name_id = self
-            .local_graph
-            .add_name(Name::new(string_id, ParentScope::Attached(name_id), None));
-
-        let location = receiver.map_or(fallback_location, ruby_prism::Node::location);
-        let offset = Offset::from_prism_location(&location);
         self.local_graph
-            .add_constant_reference(ConstantReference::new(new_name_id, self.uri_id, offset));
-        Some(new_name_id)
+            .add_name(Name::new(string_id, ParentScope::Attached(attached_name_id), None))
     }
 }
 
@@ -1540,6 +1541,11 @@ impl Visit<'_> for RubyIndexer<'_> {
         }
 
         let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
+            let receiver = call.receiver();
+            if receiver.as_ref().is_some_and(|r| r.as_self_node().is_none()) {
+                return;
+            }
+
             let call_offset = Offset::from_prism_location(&call.location());
 
             Self::each_string_or_symbol_arg(call, |name, location| {
@@ -1653,8 +1659,23 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let new_name_str_id = self.local_graph.intern_string(format!("{new_name}()"));
                 let old_name_str_id = self.local_graph.intern_string(format!("{old_name}()"));
 
-                let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
-                let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone(), method_receiver);
+                let receiver_node = node.receiver();
+                let receiver = receiver_node.as_ref().and_then(|node| match node {
+                    ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => self
+                        .index_constant_reference(node, true)
+                        .map(Receiver::ConstantReceiver),
+                    _ => None,
+                });
+
+                // alias_method references instance methods, so we use the class NameId directly
+                let method_ref_receiver = match &receiver {
+                    Some(Receiver::ConstantReceiver(name_id)) => Some(*name_id),
+                    Some(Receiver::SelfReceiver(_)) | None => {
+                        self.method_receiver(receiver_node.as_ref(), node.location())
+                    }
+                };
+
+                let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone(), method_ref_receiver);
                 self.local_graph.add_method_reference(reference);
 
                 let offset = Offset::from_prism_location(&node.location());
@@ -1668,6 +1689,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     comments,
                     flags,
                     self.current_nesting_definition_id(),
+                    receiver,
                 )));
 
                 let definition_id = self.local_graph.add_definition(definition);
@@ -1978,6 +2000,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             comments,
             flags,
             self.current_nesting_definition_id(),
+            None,
         )));
 
         let definition_id = self.local_graph.add_definition(definition);
@@ -4904,6 +4927,79 @@ mod tests {
                 assert_eq!(new_name.as_str(), "baz()");
                 assert_eq!(old_name.as_str(), "qux()");
 
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_method_with_constant_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def bar; end
+            end
+
+            Foo.alias_method :baz, :bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:1-5:28", MethodAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name.as_str(), "baz()");
+            assert_eq!(old_name.as_str(), "bar()");
+            assert_method_has_receiver!(&context, def, "Foo");
+        });
+    }
+
+    #[test]
+    fn index_alias_method_with_constant_path_receiver() {
+        let context = index_source({
+            "
+            module Outer
+              class Inner
+                def bar; end
+              end
+            end
+
+            Outer::Inner.alias_method :baz, :bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "7:1-7:37", MethodAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name.as_str(), "baz()");
+            assert_eq!(old_name.as_str(), "bar()");
+            assert_method_has_receiver!(&context, def, "Inner");
+        });
+    }
+
+    #[test]
+    fn index_alias_method_with_self_receiver_has_no_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              self.alias_method :baz, :bar
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "2:3-2:31", MethodAlias, |def| {
+                let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+                let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+                assert_eq!(new_name.as_str(), "baz()");
+                assert_eq!(old_name.as_str(), "bar()");
+
+                assert!(def.receiver().is_none());
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });
         });
