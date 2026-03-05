@@ -32,6 +32,9 @@ class Rubydex::Declaration
   sig { returns(Rubydex::Declaration) }
   def owner; end
 
+  sig { returns(T::Enumerable[Rubydex::Reference]) }
+  def references; end
+
   sig { returns(String) }
   def unqualified_name; end
 
@@ -217,9 +220,22 @@ class Rubydex::Graph
 
   private
 
-  # Gathers the paths we have to index for all workspace dependencies
+  sig { params(paths: T::Array[String]).void }
+  def add_core_rbs_definition_paths(paths); end
+
   sig { params(paths: T::Array[String]).void }
   def add_workspace_dependency_paths(paths); end
+end
+
+class Rubydex::DisplayLocation < Rubydex::Location
+  sig { returns([String, Integer, Integer, Integer, Integer]) }
+  def comparable_values; end
+
+  sig { returns(Rubydex::DisplayLocation) }
+  def to_display; end
+
+  sig { returns(String) }
+  def to_s; end
 end
 
 class Rubydex::Location
@@ -239,6 +255,9 @@ class Rubydex::Location
   sig { params(other: T.untyped).returns(T.nilable(Integer)) }
   def <=>(other); end
 
+  sig { returns([String, Integer, Integer, Integer, Integer]) }
+  def comparable_values; end
+
   sig { returns(Integer) }
   def end_column; end
 
@@ -254,11 +273,16 @@ class Rubydex::Location
   sig { returns(Integer) }
   def start_line; end
 
+  sig { returns(Rubydex::DisplayLocation) }
+  def to_display; end
+
   sig { returns(String) }
   def to_s; end
 
   sig { returns(String) }
   def uri; end
+
+  class NotFileUriError < StandardError; end
 end
 
 class Rubydex::MethodReference < Rubydex::Reference
