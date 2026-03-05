@@ -367,7 +367,6 @@ mod tests {
 
     use crate::indexing::rbs_indexer::RBSIndexer;
     use crate::model::definitions::DefinitionFlags;
-    use crate::offset::Offset;
     use crate::test_utils::LocalGraphTest;
     use crate::{
         assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
@@ -753,22 +752,38 @@ mod tests {
 
     #[test]
     fn split_multiline_comments() {
-        let source = "# First line\n# Second line\n# Third line\nclass Foo\nend";
-        let signature = node::parse(source.as_bytes()).expect("Failed to parse RBS source");
-        let decl = signature.declarations().iter().next().expect("Expected a declaration");
-        let Node::Class(class_node) = decl else {
-            panic!("Expected a class declaration");
-        };
+        let context = index_source({
+            "
+            # First line
+            # Second line
+            # Third line
+            class Foo
+              # A comment for Bar
+              # Another line for Bar
+              module Bar
+              end
+            end
 
-        let indexer = RBSIndexer::new("file:///foo.rbs".to_string(), source);
-        let comments = indexer.collect_comments(class_node.comment());
+            # splits strings at the \\n char
+            BAZ: Integer
+            "
+        });
 
-        assert_eq!(comments.len(), 3);
-        assert_eq!(comments[0].string(), "# First line");
-        assert_eq!(comments[0].offset(), &Offset::new(0, 12));
-        assert_eq!(comments[1].string(), "# Second line");
-        assert_eq!(comments[1].offset(), &Offset::new(13, 26));
-        assert_eq!(comments[2].string(), "# Third line");
-        assert_eq!(comments[2].offset(), &Offset::new(27, 39));
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:1-9:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+            assert_def_comments_eq!(&context, def, ["# First line", "# Second line", "# Third line"]);
+        });
+
+        assert_definition_at!(&context, "7:3-8:6", Module, |def| {
+            assert_def_name_eq!(&context, def, "Bar");
+            assert_def_comments_eq!(&context, def, ["# A comment for Bar", "# Another line for Bar"]);
+        });
+
+        assert_definition_at!(&context, "12:1-12:13", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+            assert_def_comments_eq!(&context, def, ["# splits strings at the \\n char"]);
+        });
     }
 }
