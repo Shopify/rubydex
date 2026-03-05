@@ -2,7 +2,7 @@
 
 use crate::declaration_api::CDeclaration;
 use crate::declaration_api::DeclarationsIter;
-use crate::reference_api::{ReferenceKind, ReferencesIter};
+use crate::reference_api::{CReference, ReferenceKind, ReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
 use rubydex::indexing::LanguageId;
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPo
         let refs: Vec<_> = graph
             .constant_references()
             .keys()
-            .map(|id| (**id, ReferenceKind::Constant))
+            .map(|id| CReference::new(**id, ReferenceKind::Constant))
             .collect();
 
         ReferencesIter::new(refs.into_boxed_slice())
@@ -469,7 +469,7 @@ pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPoin
         let refs: Vec<_> = graph
             .method_references()
             .keys()
-            .map(|id| (**id, ReferenceKind::Method))
+            .map(|id| CReference::new(**id, ReferenceKind::Method))
             .collect();
 
         ReferencesIter::new(refs.into_boxed_slice())

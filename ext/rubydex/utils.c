@@ -57,12 +57,10 @@ VALUE rdxi_references_yield(VALUE args) {
     VALUE graph_obj = rb_ary_entry(args, 0);
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    uint64_t id = 0;
-    ReferenceKind kind;
-
-    while (rdx_references_iter_next(iter, &id, &kind)) {
-        VALUE ref_class = rdxi_reference_class_for_kind(kind);
-        VALUE argv[] = {graph_obj, ULL2NUM(id)};
+    CReference cref;
+    while (rdx_references_iter_next(iter, &cref)) {
+        VALUE ref_class = rdxi_reference_class_for_kind(cref.kind);
+        VALUE argv[] = {graph_obj, ULL2NUM(cref.id)};
         VALUE obj = rb_class_new_instance(2, argv, ref_class);
         rb_yield(obj);
     }

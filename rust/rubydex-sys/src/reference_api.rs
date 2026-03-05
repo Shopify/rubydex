@@ -15,16 +15,29 @@ pub enum ReferenceKind {
     Method = 1,
 }
 
-/// Shared iterator over reference (id, kind) pairs
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CReference {
+    id: u64,
+    kind: ReferenceKind,
+}
+
+impl CReference {
+    #[must_use]
+    pub fn new(id: u64, kind: ReferenceKind) -> Self {
+        Self { id, kind }
+    }
+}
+
 #[derive(Debug)]
 pub struct ReferencesIter {
-    pub entries: Box<[(u64, ReferenceKind)]>,
+    pub entries: Box<[CReference]>,
     pub index: usize,
 }
 
 impl ReferencesIter {
     #[must_use]
-    pub fn new(entries: Box<[(u64, ReferenceKind)]>) -> *mut ReferencesIter {
+    pub fn new(entries: Box<[CReference]>) -> *mut ReferencesIter {
         Box::into_raw(Box::new(ReferencesIter { entries, index: 0 }))
     }
 }
@@ -41,23 +54,15 @@ pub unsafe extern "C" fn rdx_references_iter_len(iter: *const ReferencesIter) ->
     unsafe { (&*iter).entries.len() }
 }
 
-/// Advances the iterator and writes the next entry into the provided out params.
+/// Advances the iterator and writes the next entry into `out_ref`.
 /// Returns `true` if an entry was written, or `false` if the iterator is exhausted or inputs are invalid.
 ///
 /// # Safety
 /// - `iter` must be a valid pointer previously returned by `ReferencesIter::new`.
-/// - `out_id` and `out_kind` must be valid, writable pointers.
-///
-/// # Panics
-/// - If the iterator is exhausted or inputs are invalid.
-/// - If the name, URI, start, or end pointers are invalid.
+/// - `out_ref` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_references_iter_next(
-    iter: *mut ReferencesIter,
-    out_id: *mut u64,
-    out_kind: *mut ReferenceKind,
-) -> bool {
-    if iter.is_null() || out_id.is_null() || out_kind.is_null() {
+pub unsafe extern "C" fn rdx_references_iter_next(iter: *mut ReferencesIter, out_ref: *mut CReference) -> bool {
+    if iter.is_null() || out_ref.is_null() {
         return false;
     }
 
@@ -66,11 +71,10 @@ pub unsafe extern "C" fn rdx_references_iter_next(
         return false;
     }
 
-    let (id, kind) = it.entries[it.index];
+    let entry = it.entries[it.index];
     it.index += 1;
     unsafe {
-        *out_id = id;
-        *out_kind = kind;
+        *out_ref = entry;
     }
     true
 }
