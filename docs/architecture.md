@@ -108,6 +108,29 @@ Connections between nodes use hashed IDs defined in `ids.rs`:
 - `StringId`: ID for interned string values
 - `ReferenceId`: ID for constant or method reference occurrences (combines reference kind, URI, and offset)
 
+## MCP Server
+
+The `rubydex-mcp` crate exposes rubydex's code intelligence as MCP tools over stdio JSON-RPC. The server indexes the codebase on startup, then serves tool requests against the immutable graph.
+
+### Pagination
+
+Tools that may return a high number of results accept `offset` and `limit` parameters and return a `total` count to support pagination.
+
+Pagination uses a two-pass approach: first collect all entries that pass filtering into a `Vec`, then apply `skip(offset).take(limit)`. This ensures `total` accurately reflects the number of results the caller can page through.
+
+### Result Ordering
+
+All collection-returning tools iterate over `IdentityHashMap` or `IdentityHashSet` structures. These use a deterministic hasher, so iteration order is fixed for a given map state.
+
+- **Within a server session**: Order is consistent between requests as long as the graph has not been re-indexed. Incremental re-indexing (e.g., after a file save) may change the graph between paginated requests, causing items to shift, appear, or disappear. Callers should not assume pagination stability across graph changes.
+- **Across server restarts**: Order may change. Indexing is parallelized, so thread scheduling affects insertion order into the graph, which determines HashMap/HashSet bucket layout.
+
+### Key Files
+
+- `rubydex-mcp/src/server.rs`: Tool handler implementations and pagination logic
+- `rubydex-mcp/src/tools.rs`: Parameter struct definitions with JSON Schema annotations
+- `rubydex-mcp/tests/mcp.rs`: Integration tests (full MCP protocol over stdio)
+
 ## FFI Layer
 
 The Rust crate exposes a C-compatible FFI API through `rubydex-sys`. The C extension in `ext/rubydex/` wraps this API for Ruby.
