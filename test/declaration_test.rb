@@ -413,4 +413,59 @@ class DeclarationTest < Minitest::Test
       assert_equal("Parent#initialize()", decl.name)
     end
   end
+
+  def test_find_member_returns_prepended_members
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Prepended
+          def initialize
+            @name = "John"
+          end
+        end
+
+        class Foo
+          prepend Prepended
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      foo = graph["Foo"]
+      decl = foo.find_member("@name")
+      assert_equal("Prepended\#@name", decl.name)
+
+      decl = foo.find_member("initialize()")
+      assert_equal("Prepended#initialize()", decl.name)
+    end
+  end
+
+  def test_find_member_returns_members_in_main_namespace
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          @@class_var = 1
+
+          def initialize
+            @name = "John"
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      foo = graph["Foo"]
+      decl = foo.find_member("@name")
+      assert_equal("Foo\#@name", decl.name)
+
+      decl = foo.find_member("@@class_var")
+      assert_equal("Foo\#@@class_var", decl.name)
+
+      decl = foo.find_member("initialize()")
+      assert_equal("Foo#initialize()", decl.name)
+    end
+  end
 end

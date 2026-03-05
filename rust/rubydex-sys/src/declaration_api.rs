@@ -194,13 +194,15 @@ pub unsafe extern "C" fn rdx_declaration_find_member(
             .iter()
             .find_map(|ancestor| match ancestor {
                 Ancestor::Complete(ancestor_id) => {
-                    if *ancestor_id == id {
-                        found_main_namespace = true;
-                        return None;
-                    }
-
-                    if only_inherited && !found_main_namespace {
-                        return None;
+                    // When only_inherited, skip self and prepended modules
+                    if only_inherited {
+                        let is_self = *ancestor_id == id;
+                        if is_self {
+                            found_main_namespace = true;
+                        }
+                        if is_self || !found_main_namespace {
+                            return None;
+                        }
                     }
 
                     let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
