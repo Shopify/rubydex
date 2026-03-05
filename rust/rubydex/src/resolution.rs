@@ -5245,6 +5245,9 @@ mod tests {
               def initialize
                 @instance_ivar = 456
               end
+
+              def bar; end
+              alias new_bar bar
             end
             "
         });
@@ -5257,6 +5260,7 @@ mod tests {
         assert_declaration_exists!(context, "Foo#some_attr()");
         assert_declaration_exists!(context, "Foo::<Foo>#class_method()");
         assert_declaration_exists!(context, "Foo#initialize()");
+        assert_declaration_exists!(context, "Foo#new_bar()");
     }
 
     #[test]
