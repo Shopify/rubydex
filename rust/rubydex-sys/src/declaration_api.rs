@@ -9,9 +9,9 @@ use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::reference_api::{CReference, ReferenceKind, ReferencesIter};
 use crate::utils;
+use rubydex::model::graph::Graph;
 use rubydex::model::ids::{DeclarationId, NameId, StringId};
 use rubydex::model::name::ParentScope;
-use rubydex::model::graph::Graph;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
