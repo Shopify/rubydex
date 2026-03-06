@@ -1704,7 +1704,11 @@ impl<'a> Resolver<'a> {
         match resolved_parent {
             Some(parent_id) => {
                 let result = self.linearize_ancestors(parent_id, context);
-                if unresolved_parent.is_some() { result.to_partial() } else { result }
+                if unresolved_parent.is_some() {
+                    result.to_partial()
+                } else {
+                    result
+                }
             }
             None => match unresolved_parent {
                 Some(name_id) => {
