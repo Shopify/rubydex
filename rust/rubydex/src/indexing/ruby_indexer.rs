@@ -5917,3 +5917,82 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod name_dependent_tests {
+    use crate::assert_dependents;
+    use crate::test_utils::LocalGraphTest;
+
+    fn index_source(source: &str) -> LocalGraphTest {
+        LocalGraphTest::new("file:///foo.rb", source)
+    }
+
+    #[test]
+    fn track_dependency_chain() {
+        let context = index_source(
+            "
+            module Bar; end
+            CONST = 1
+            CONST2 = CONST
+
+            module Foo
+              class Bar::Baz
+                CONST
+              end
+
+              CONST2
+            end
+            ",
+        );
+
+        assert_dependents!(&context, "Bar", [ChildName("Baz")]);
+        assert_dependents!(&context, "Foo", [NestedName("Baz"), NestedName("CONST2")]);
+        assert_dependents!(&context, "Bar::Baz", [Definition("Baz"), NestedName("CONST")]);
+    }
+
+    #[test]
+    fn multi_level_chain() {
+        let context = index_source(
+            "
+            module Foo
+              module Bar
+                module Baz
+                end
+              end
+            end
+            ",
+        );
+
+        assert_dependents!(&context, "Foo", [NestedName("Bar")]);
+        assert_dependents!(&context, "Bar", [NestedName("Baz")]);
+    }
+
+    #[test]
+    fn singleton_class() {
+        let context = index_source(
+            "
+            class Foo
+              class << self
+                def bar; end
+              end
+            end
+            ",
+        );
+
+        assert_dependents!(&context, "Foo", [ChildName("<Foo>")]);
+    }
+
+    #[test]
+    fn nested_vs_compact() {
+        let context = index_source(
+            "
+            module Foo
+              class Bar; end
+              class Foo::Baz; end
+            end
+            ",
+        );
+
+        assert_dependents!(&context, "Foo", [NestedName("Bar"), ChildName("Baz")]);
+    }
+}

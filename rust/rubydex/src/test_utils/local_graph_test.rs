@@ -3,7 +3,8 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::indexing::rbs_indexer::RBSIndexer;
 use crate::indexing::ruby_indexer::RubyIndexer;
 use crate::model::definitions::Definition;
-use crate::model::ids::UriId;
+use crate::model::graph::NameDependent;
+use crate::model::ids::{NameId, StringId, UriId};
 use crate::offset::Offset;
 use crate::position::Position;
 
@@ -160,6 +161,83 @@ impl LocalGraphTest {
         value
             .parse()
             .unwrap_or_else(|_| panic!("Invalid {field} '{value}' in location {location}"))
+    }
+
+    // Name dependents helpers
+
+    /// Finds all `NameId`s matching a path. `"Foo"` matches names with str="Foo" and no
+    /// `parent_scope`. `"Bar::Baz"` matches names with str="Baz" and `parent_scope` str="Bar".
+    /// Multiple matches are possible when the same constant appears at different nestings.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no names match the given path.
+    #[must_use]
+    pub fn find_name_ids(&self, path: &str) -> Vec<NameId> {
+        let (parent, name) = match path.rsplit_once("::") {
+            Some((p, n)) => (Some(p), n),
+            None => (None, path),
+        };
+        let target_str_id = StringId::from(name);
+        let ids: Vec<NameId> = self
+            .graph()
+            .names()
+            .iter()
+            .filter(|(_, name_ref)| {
+                if *name_ref.str() != target_str_id {
+                    return false;
+                }
+                match parent {
+                    None => name_ref.parent_scope().as_ref().is_none(),
+                    Some(p) => name_ref.parent_scope().as_ref().is_some_and(|ps_id| {
+                        let ps = self.graph().names().get(ps_id).unwrap();
+                        *ps.str() == StringId::from(p)
+                    }),
+                }
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        assert!(!ids.is_empty(), "could not find name `{path}`");
+        ids
+    }
+
+    #[must_use]
+    pub fn name_dependents_for(&self, name_id: NameId) -> Vec<NameDependent> {
+        self.graph()
+            .name_dependents()
+            .get(&name_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// # Panics
+    ///
+    /// Panics if the name's string is not in the strings map.
+    #[must_use]
+    pub fn name_str(&self, name_id: &NameId) -> Option<&str> {
+        self.graph()
+            .names()
+            .get(name_id)
+            .map(|n| self.graph().strings().get(n.str()).unwrap().as_str())
+    }
+
+    /// Returns the unqualified name string for a `NameDependent`, if available.
+    #[must_use]
+    pub fn dependent_name_str(&self, dep: &NameDependent) -> Option<&str> {
+        match dep {
+            NameDependent::ChildName(id) | NameDependent::NestedName(id) => self.name_str(id),
+            NameDependent::Definition(id) => self
+                .graph()
+                .definitions()
+                .get(id)
+                .and_then(|d| d.name_id())
+                .and_then(|name_id| self.name_str(name_id)),
+            NameDependent::Reference(id) => self
+                .graph()
+                .constant_references()
+                .get(id)
+                .and_then(|r| self.name_str(r.name_id())),
+        }
     }
 }
 
@@ -364,6 +442,40 @@ macro_rules! assert_def_mixins_eq {
             $expected_names,
             actual_names
         );
+    }};
+}
+
+// Name dependent assertions
+
+/// Asserts that `owner` has dependents matching the given list.
+/// Each entry uses `Variant("name")` syntax. When multiple names match the owner path
+/// (different nestings), any match suffices for each expected dependent.
+///
+/// Usage:
+/// ```ignore
+/// assert_dependents!(ctx, "Bar", [ChildName("Baz"), Definition("Bar")]);
+/// assert_dependents!(ctx, "Bar::Baz", [NestedName("CONST"), Definition("Baz")]);
+/// ```
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_dependents {
+    ($ctx:expr, $owner:expr, [$($variant:ident($dep:expr)),* $(,)?]) => {{
+        let owner_ids = $ctx.find_name_ids($owner);
+        $(
+            let found = owner_ids.iter().any(|owner_id| {
+                $ctx.name_dependents_for(*owner_id).iter().any(|d| {
+                    matches!(d, $crate::model::graph::NameDependent::$variant(_))
+                        && $ctx.dependent_name_str(d) == Some($dep)
+                })
+            });
+            assert!(
+                found,
+                "expected {}({}) in {}'s dependents",
+                stringify!($variant),
+                $dep,
+                $owner
+            );
+        )*
     }};
 }
 
