@@ -359,6 +359,32 @@ macro_rules! assert_declaration_references_count_eq {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_constant_reference_unresolved {
+    ($context:expr, $unqualified_name:expr) => {
+        let reference_name = $context
+            .graph()
+            .constant_references()
+            .values()
+            .find_map(|r| {
+                let name = $context.graph().names().get(r.name_id()).unwrap();
+                if $context.graph().strings().get(name.str()).unwrap().as_str() == $unqualified_name {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("No constant reference with unqualified name `{}`", $unqualified_name));
+
+        assert!(
+            matches!(reference_name, $crate::model::name::NameRef::Unresolved(_)),
+            "Expected constant reference `{}` to be unresolved, but it was resolved",
+            $unqualified_name
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_ancestors_eq {
     ($context:expr, $name:expr, $expected:expr) => {
         let declaration = $context
@@ -393,8 +419,24 @@ macro_rules! assert_ancestors_eq {
                         .join(", ")
                 );
             }
-            $crate::model::declaration::Ancestors::Partial(_) => {
-                panic!("Expected ancestors to be resolved for {}", declaration.name());
+            $crate::model::declaration::Ancestors::Partial(ancestors) => {
+                let expected_ancestors: Vec<$crate::model::declaration::Ancestor> = $expected
+                    .iter()
+                    .map(|n| {
+                        $crate::model::declaration::Ancestor::Complete($crate::model::ids::DeclarationId::from(*n))
+                    })
+                    .collect();
+
+                // Allow Partial ancestors when both expected and actual are empty (invalidation cleared them)
+                if expected_ancestors.is_empty() && ancestors.is_empty() {
+                    // OK - both empty
+                } else {
+                    panic!(
+                        "Expected ancestors to be resolved for {}, got Partial({:?})",
+                        declaration.name(),
+                        ancestors
+                    );
+                }
             }
         }
     };
