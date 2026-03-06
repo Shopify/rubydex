@@ -272,6 +272,26 @@ static VALUE rdxr_declaration_ancestors(VALUE self) {
     return self;
 }
 
+// Class#superclass_name: () -> String?
+// Returns the unresolved superclass name as written in source, or nil if the superclass is
+// resolved (i.e. it exists in the indexed workspace) or there is no superclass.
+static VALUE rdxr_class_superclass_name(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const char *name = rdx_class_superclass_name(graph, data->id);
+    if (name == NULL) {
+        return Qnil;
+    }
+
+    VALUE result = rb_utf8_str_new_cstr(name);
+    free_c_string(name);
+    return result;
+}
+
 // Declaration#descendants: () -> Enumerator[Declaration]
 static VALUE rdxr_declaration_descendants(VALUE self) {
     if (!rb_block_given_p()) {
@@ -359,6 +379,9 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     rb_define_method(cNamespace, "singleton_class", rdxr_declaration_singleton_class, 0);
     rb_define_method(cNamespace, "ancestors", rdxr_declaration_ancestors, 0);
     rb_define_method(cNamespace, "descendants", rdxr_declaration_descendants, 0);
+
+    // Class only methods
+    rb_define_method(cClass, "superclass_name", rdxr_class_superclass_name, 0);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }

@@ -9,7 +9,9 @@ use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::reference_api::{CReference, ReferenceKind, ReferencesIter};
 use crate::utils;
-use rubydex::model::ids::{DeclarationId, StringId};
+use rubydex::model::ids::{DeclarationId, NameId, StringId};
+use rubydex::model::name::ParentScope;
+use rubydex::model::graph::Graph;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -373,6 +375,54 @@ pub unsafe extern "C" fn rdx_declaration_ancestors(pointer: GraphPointer, decl_i
     });
 
     Box::into_raw(Box::new(DeclarationsIter::new(declarations.into_boxed_slice())))
+}
+
+/// Returns the unresolved superclass name for a Class declaration, or NULL if the superclass
+/// is resolved (i.e. it exists in the indexed workspace) or the declaration has no superclass.
+/// Caller must free the returned string with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes that the graph pointer is valid
+///
+/// # Panics
+///
+/// Will panic if there's inconsistent graph data
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_class_superclass_name(pointer: GraphPointer, decl_id: u64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let declaration_id = DeclarationId::new(decl_id);
+
+        let Some(Declaration::Namespace(declaration)) = graph.declarations().get(&declaration_id) else {
+            return ptr::null();
+        };
+
+        for ancestor in declaration.ancestors() {
+            if let Ancestor::Partial(name_id) = ancestor {
+                let name = reconstruct_name(graph, *name_id);
+                return CString::new(name).unwrap().into_raw().cast_const();
+            }
+        }
+
+        ptr::null()
+    })
+}
+
+fn reconstruct_name(graph: &Graph, name_id: NameId) -> String {
+    let name_ref = graph.names().get(&name_id).expect("Name ID should exist");
+    let unqualified = graph
+        .strings()
+        .get(name_ref.str())
+        .expect("String ID should exist")
+        .to_string();
+
+    match name_ref.parent_scope() {
+        ParentScope::None => unqualified,
+        ParentScope::TopLevel => format!("::{unqualified}"),
+        ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) => {
+            format!("{}::{unqualified}", reconstruct_name(graph, *parent_id))
+        }
+    }
 }
 
 /// Returns an iterator over the descendant declarations of a given declaration
