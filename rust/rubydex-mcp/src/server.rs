@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -13,12 +12,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
     transport::io::stdio,
 };
-use rubydex::model::ids::{DeclarationId, UriId};
-use rubydex::model::{
-    declaration::{Ancestor, Ancestors},
-    graph::Graph,
-};
-use url::Url;
+use rubydex::model::graph::Graph;
 
 struct ServerState {
     graph: Option<Graph>,
@@ -128,132 +122,26 @@ macro_rules! ensure_graph_ready {
     }};
 }
 
-/// Looks up a declaration by name, returning an error JSON string from the caller if not found.
-macro_rules! lookup_declaration {
-    ($graph:expr, $name:expr) => {{
-        let declaration_id = DeclarationId::from($name);
-        match $graph.declarations().get(&declaration_id) {
-            Some(decl) => (declaration_id, decl),
-            None => {
-                return error_json(
-                    "not_found",
-                    &format!("Declaration '{}' not found", $name),
-                    "Try search_declarations with a partial name to find the correct FQN",
-                );
-            }
-        }
-    }};
-}
-
-/// Narrows a declaration to a namespace, returning an error JSON string if it's not a class or module.
-macro_rules! require_namespace {
-    ($decl:expr, $name:expr, $tool_name:literal) => {
-        match $decl.as_namespace() {
-            Some(ns) => ns,
-            None => {
-                return error_json(
-                    "invalid_kind",
-                    &format!("'{}' is not a class or module (it is a {})", $name, $decl.kind()),
-                    concat!(
-                        $tool_name,
-                        " only works on classes and modules, not methods or constants"
-                    ),
-                );
-            }
-        }
-    };
-}
-
-/// Parses a file URI into a platform-native absolute path.
-fn uri_to_path(uri: &str) -> Option<PathBuf> {
-    Url::parse(uri).ok()?.to_file_path().ok()
-}
-
-/// Converts a file URI to a path relative to `root` when possible.
-/// Falls back to an absolute display path if it cannot be relativized.
-fn format_path(uri: &str, root: &Path) -> String {
-    let Some(path) = uri_to_path(uri) else {
-        return uri.to_string();
-    };
-
-    path.strip_prefix(root)
-        .map_or_else(|_| path.display().to_string(), |rel| rel.display().to_string())
-}
-
-/// Formats an ancestor chain into a JSON array of `{"name": ..., "kind": ...}` objects.
-fn format_ancestors(graph: &Graph, ancestors: &Ancestors) -> Vec<serde_json::Value> {
-    ancestors
-        .iter()
-        .filter_map(|ancestor| match ancestor {
-            Ancestor::Complete(id) => {
-                let ancestor_decl = graph.declarations().get(id)?;
-                Some(serde_json::json!({
-                    "name": ancestor_decl.name(),
-                    "kind": ancestor_decl.kind(),
-                }))
-            }
-            Ancestor::Partial(name_id) => {
-                let name_ref = graph.names().get(name_id)?;
-                Some(serde_json::json!({
-                    "name": format!("{name_ref:?}"),
-                    "kind": "Unresolved",
-                }))
-            }
-        })
-        .collect()
-}
 
 #[tool_router]
 impl RubydexServer {
     #[tool(
-        description = "Search for Ruby classes, modules, methods, or constants by name. Use this INSTEAD OF Grep when you know part of a Ruby identifier name and want to find its definition. Returns fully qualified names, kinds, and file locations. Use the `kind` filter (\"Class\", \"Module\", \"Method\", \"Constant\") to narrow results."
+        description = "Search for Ruby classes, modules, methods, or constants by name. Use this INSTEAD OF Grep when you know part of a Ruby identifier name and want to find its definition. Returns fully qualified names, kinds, and file locations. Use the `kind` filter (\"Class\", \"Module\", \"Method\", \"Constant\") to narrow results. Results are paginated: the response includes `total` (the full count of matches). If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
     )]
     fn search_declarations(&self, Parameters(params): Parameters<SearchDeclarationsParams>) -> String {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
-        let ids = rubydex::query::declaration_search(graph, &params.query);
-
-        let limit = params.limit.unwrap_or(25).min(100);
-        let kind_filter = params.kind.as_deref();
-
-        let mut results: Vec<serde_json::Value> = Vec::new();
-        for id in ids {
-            if results.len() >= limit {
-                break;
-            }
-
-            let Some(decl) = graph.declarations().get(&id) else {
-                continue;
-            };
-
-            if let Some(kind) = kind_filter
-                && !decl.kind().eq_ignore_ascii_case(kind)
-            {
-                continue;
-            }
-
-            let locations: Vec<serde_json::Value> = decl
-                .definitions()
-                .iter()
-                .filter_map(|def_id| {
-                    let def = graph.definitions().get(def_id)?;
-                    let doc = graph.documents().get(def.uri_id())?;
-                    let loc = def.offset().to_location(doc).to_presentation();
-                    Some(serde_json::json!({
-                        "path": format_path(doc.uri(), &self.root_path),
-                        "line": loc.start_line(),
-                    }))
-                })
-                .collect();
-
-            results.push(serde_json::json!({
-                "name": decl.name(),
-                "kind": decl.kind(),
-                "locations": locations,
-            }));
-        }
-
-        serde_json::to_string(&results).unwrap_or_else(|_| "[]".to_string())
+        let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(100);
+        let offset = params.offset.unwrap_or(0);
+        let result = crate::queries::query_search_declarations(
+            graph,
+            &self.root_path,
+            &params.query,
+            params.kind.as_deref(),
+            limit,
+            offset,
+        );
+        serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
     }
 
     #[tool(
@@ -262,155 +150,38 @@ impl RubydexServer {
     fn get_declaration(&self, Parameters(params): Parameters<GetDeclarationParams>) -> String {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
-        let (_, decl) = lookup_declaration!(graph, &params.name);
-
-        let definitions: Vec<serde_json::Value> = decl
-            .definitions()
-            .iter()
-            .filter_map(|def_id| {
-                let def = graph.definitions().get(def_id)?;
-                let doc = graph.documents().get(def.uri_id())?;
-                let loc = def.offset().to_location(doc).to_presentation();
-                let path = format_path(doc.uri(), &self.root_path);
-                let comments: Vec<String> = def
-                    .comments()
-                    .iter()
-                    .map(|c| {
-                        c.string()
-                            .as_str()
-                            .strip_prefix("# ")
-                            .unwrap_or(c.string().as_str())
-                            .to_string()
-                    })
-                    .collect();
-
-                Some(serde_json::json!({
-                    "path": path,
-                    "line": loc.start_line(),
-                    "comments": comments,
-                }))
-            })
-            .collect();
-
-        let namespace = decl.as_namespace();
-        let ancestors = namespace
-            .map(|ns| format_ancestors(graph, ns.ancestors()))
-            .unwrap_or_default();
-
-        let members: Vec<serde_json::Value> = namespace
-            .map(|ns| {
-                ns.members()
-                    .iter()
-                    .filter_map(|(_, member_id)| {
-                        let member_decl = graph.declarations().get(member_id)?;
-                        let member_def = member_decl
-                            .definitions()
-                            .first()
-                            .and_then(|def_id| graph.definitions().get(def_id));
-
-                        let mut member = serde_json::json!({
-                            "name": member_decl.name(),
-                            "kind": member_decl.kind(),
-                        });
-
-                        if let Some(def) = member_def
-                            && let Some(doc) = graph.documents().get(def.uri_id())
-                        {
-                            let loc = def.offset().to_location(doc).to_presentation();
-                            member["location"] = serde_json::json!({
-                                "path": format_path(doc.uri(), &self.root_path),
-                                "line": loc.start_line(),
-                            });
-                        }
-
-                        Some(member)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let result = serde_json::json!({
-            "name": decl.name(),
-            "kind": decl.kind(),
-            "definitions": definitions,
-            "ancestors": ancestors,
-            "members": members,
-        });
-
-        serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
+        match crate::queries::query_get_declaration(graph, &self.root_path, &params.name) {
+            Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
+            Err(e) => e.to_json_string(),
+        }
     }
 
     #[tool(
-        description = "Find all classes and modules that inherit from or include a given class/module. Returns known descendants, including transitive relationships, for impact analysis before modifying a base class or module."
+        description = "Returns all known descendants for the given namespace including itself and all transitive descendants. Can be used to understand how a module/class is used across the codebase. Results are paginated: the response includes `total`. If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
     )]
     fn get_descendants(&self, Parameters(params): Parameters<GetDescendantsParams>) -> String {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
-        let (_, decl) = lookup_declaration!(graph, &params.name);
-        let namespace = require_namespace!(decl, &params.name, "get_descendants");
-
-        let descendants: Vec<serde_json::Value> = namespace
-            .descendants()
-            .iter()
-            .filter_map(|desc_id| {
-                let desc_decl = graph.declarations().get(desc_id)?;
-                Some(serde_json::json!({
-                    "name": desc_decl.name(),
-                    "kind": desc_decl.kind(),
-                }))
-            })
-            .collect();
-
-        let result = serde_json::json!({
-            "name": decl.name(),
-            "descendants": descendants,
-        });
-
-        serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
+        let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(500);
+        let offset = params.offset.unwrap_or(0);
+        match crate::queries::query_get_descendants(graph, &params.name, limit, offset) {
+            Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
+            Err(e) => e.to_json_string(),
+        }
     }
 
     #[tool(
-        description = "Find all resolved references to a Ruby class, module, or constant across the codebase. Returns file paths, line numbers, and columns for each usage."
+        description = "Find all resolved references to a Ruby class, module, or constant across the codebase. Returns file paths, line numbers, and columns for each usage. Results are paginated: the response includes `total`. If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
     )]
     fn find_constant_references(&self, Parameters(params): Parameters<FindConstantReferencesParams>) -> String {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
-        let (_, decl) = lookup_declaration!(graph, &params.name);
-
-        let limit = params.limit.unwrap_or(50).min(200);
-        let mut references: Vec<serde_json::Value> = Vec::with_capacity(limit.min(decl.references().len()));
-        let mut truncated = false;
-
-        for ref_id in decl.references() {
-            if references.len() >= limit {
-                truncated = true;
-                break;
-            }
-
-            let Some(const_ref) = graph.constant_references().get(ref_id) else {
-                continue;
-            };
-
-            let Some(doc) = graph.documents().get(&const_ref.uri_id()) else {
-                continue;
-            };
-            let loc = const_ref.offset().to_location(doc).to_presentation();
-            references.push(serde_json::json!({
-                "path": format_path(doc.uri(), &self.root_path),
-                "line": loc.start_line(),
-                "column": loc.start_col(),
-            }));
+        let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(200);
+        let offset = params.offset.unwrap_or(0);
+        match crate::queries::query_find_constant_references(graph, &self.root_path, &params.name, limit, offset) {
+            Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
+            Err(e) => e.to_json_string(),
         }
-
-        let mut result = serde_json::json!({
-            "name": params.name,
-            "references": references,
-        });
-        if truncated {
-            result["truncated"] = serde_json::Value::Bool(true);
-        }
-
-        serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
     }
 
     #[tool(
@@ -419,60 +190,16 @@ impl RubydexServer {
     fn get_file_declarations(&self, Parameters(params): Parameters<GetFileDeclarationsParams>) -> String {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
-
         let absolute_target = if Path::new(&params.file_path).is_absolute() {
             PathBuf::from(&params.file_path)
         } else {
             self.root_path.join(&params.file_path)
         };
         let canonical_target = std::fs::canonicalize(&absolute_target).unwrap_or(absolute_target);
-
-        let Ok(uri) = Url::from_file_path(&canonical_target) else {
-            return error_json(
-                "invalid_path",
-                &format!("Cannot convert '{}' to a file URI", params.file_path),
-                "Use a relative path like 'app/models/user.rb' or an absolute path",
-            );
-        };
-
-        let uri_id = UriId::from(uri.as_str());
-        let Some(doc) = graph.documents().get(&uri_id) else {
-            return error_json(
-                "not_found",
-                &format!("File '{}' not found in the index", params.file_path),
-                "Use a relative path like 'app/models/user.rb' or an absolute path matching the indexed project",
-            );
-        };
-
-        let mut declarations: Vec<serde_json::Value> = Vec::new();
-
-        for def_id in doc.definitions() {
-            let Some(def) = graph.definitions().get(def_id) else {
-                continue;
-            };
-
-            let loc = def.offset().to_location(doc).to_presentation();
-
-            let decl_name = graph
-                .definition_id_to_declaration_id(*def_id)
-                .and_then(|decl_id| graph.declarations().get(decl_id))
-                .map(|decl| (decl.name().to_string(), decl.kind()));
-
-            if let Some((name, kind)) = decl_name {
-                declarations.push(serde_json::json!({
-                    "name": name,
-                    "kind": kind,
-                    "line": loc.start_line(),
-                }));
-            }
+        match crate::queries::query_get_file_declarations(graph, &self.root_path, &canonical_target) {
+            Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
+            Err(e) => e.to_json_string(),
         }
-
-        let result = serde_json::json!({
-            "file": format_path(doc.uri(), &self.root_path),
-            "declarations": declarations,
-        });
-
-        serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
     }
 
     #[tool(
@@ -481,31 +208,16 @@ impl RubydexServer {
     fn codebase_stats(&self) -> String {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
-
-        let mut breakdown: HashMap<&str, usize> = HashMap::new();
-        for decl in graph.declarations().values() {
-            *breakdown.entry(decl.kind()).or_default() += 1;
-        }
-
-        let breakdown_json: serde_json::Value = breakdown
-            .iter()
-            .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
-            .collect();
-
-        let result = serde_json::json!({
-            "files": graph.documents().len(),
-            "declarations": graph.declarations().len(),
-            "definitions": graph.definitions().len(),
-            "constant_references": graph.constant_references().len(),
-            "method_references": graph.method_references().len(),
-            "breakdown_by_kind": breakdown_json,
-        });
-
+        let result = crate::queries::query_codebase_stats(graph);
         serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
     }
 }
 
-const SERVER_INSTRUCTIONS: &str = r#"Rubydex provides semantic Ruby code intelligence. Use these tools INSTEAD OF Grep when working with Ruby code structure.
+const SERVER_INSTRUCTIONS: &str = r#"Rubydex provides semantic Ruby code intelligence.
+
+ONLY use these tools for Ruby files (.rb, .rbi, .rbs) — never for Rust, JavaScript, or other languages.
+
+Use these tools INSTEAD OF Grep when working with Ruby code structure.
 
 Decision guide:
 - Know a name? -> search_declarations (fuzzy search by name)
@@ -519,6 +231,8 @@ Typical workflow: search_declarations -> get_declaration -> find_constant_refere
 
 Fully qualified name format: "Foo::Bar" for classes/modules/constants, "Foo::Bar#method_name" for instance methods.
 
+Pagination: tools that may return a high number of results include `total` for pagination. When `total` exceeds the number of returned items, use `offset` to fetch the next page.
+
 Use Grep instead for: literal string search, log messages, comments, non-Ruby files, or content search rather than structural queries."#;
 
 #[tool_handler]
@@ -529,5 +243,320 @@ impl ServerHandler for RubydexServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rubydex::test_utils::GraphTest;
+    use serde_json::Value;
+
+    fn parse(json_str: &str) -> Value {
+        serde_json::from_str(json_str).unwrap()
+    }
+
+    /// Assert a JSON array field contains an entry with the given "name".
+    macro_rules! assert_includes {
+        ($json:expr, $field:literal, $name:expr) => {{
+            let json = &$json;
+            let entries = json[$field]
+                .as_array()
+                .expect(concat!("expected '", $field, "' to be an array"));
+            assert!(
+                entries.iter().any(|e| e["name"].as_str() == Some($name)),
+                "Expected '{}' in '{}', got: {:?}",
+                $name,
+                $field,
+                entries.iter().filter_map(|e| e["name"].as_str()).collect::<Vec<_>>()
+            );
+        }};
+    }
+
+    /// Extract a JSON field as an array, panicking if not an array.
+    macro_rules! array {
+        ($json:expr, $field:literal) => {
+            $json[$field]
+                .as_array()
+                .expect(concat!("expected '", $field, "' to be an array"))
+        };
+    }
+
+    /// Assert a JSON field equals the expected u64 value.
+    macro_rules! assert_json_int {
+        ($json:expr, $field:literal, $val:expr) => {
+            assert_eq!(
+                $json[$field]
+                    .as_u64()
+                    .expect(concat!("expected '", $field, "' to be a number")),
+                $val
+            );
+        };
+    }
+
+    fn assert_error(json_str: &str, expected_type: &str) {
+        let res = parse(json_str);
+        assert_eq!(
+            res["error"].as_str(),
+            Some(expected_type),
+            "Expected error '{expected_type}', got: {res}"
+        );
+        assert!(res["message"].as_str().is_some());
+        assert!(res["suggestion"].as_str().is_some());
+    }
+
+    /// Returns a platform-appropriate test root path and its file URI prefix.
+    fn test_root() -> (&'static str, &'static str) {
+        if cfg!(windows) {
+            ("C:\\test", "file:///C:/test")
+        } else {
+            ("/test", "file:///test")
+        }
+    }
+
+    fn test_uri(filename: &str) -> String {
+        let (_, uri_prefix) = test_root();
+        format!("{uri_prefix}/{filename}")
+    }
+
+    /// Build a server from a single Ruby source.
+    fn server_with_source(source: &str) -> RubydexServer {
+        server_with_sources(&[(&test_uri("test.rb"), source)])
+    }
+
+    /// Build a server from multiple `(uri, source)` pairs.
+    fn server_with_sources(sources: &[(&str, &str)]) -> RubydexServer {
+        let mut gt = GraphTest::new();
+        for (uri, source) in sources {
+            gt.index_uri(uri, source);
+        }
+        gt.resolve();
+
+        let (root, _) = test_root();
+        let server = RubydexServer::new(root.to_string());
+        {
+            let mut state = server.state.write().unwrap();
+            state.graph = Some(gt.into_graph());
+        }
+        server
+    }
+
+    macro_rules! search_declarations {
+        ($server:expr, $($field:ident: $val:expr),* $(,)?) => {
+            parse(&$server.search_declarations(Parameters(SearchDeclarationsParams {
+                $($field: $val,)*
+            })))
+        };
+    }
+
+    macro_rules! get_descendants {
+        ($server:expr, $($field:ident: $val:expr),* $(,)?) => {
+            parse(&$server.get_descendants(Parameters(GetDescendantsParams {
+                $($field: $val,)*
+            })))
+        };
+    }
+
+    macro_rules! find_constant_references {
+        ($server:expr, $($field:ident: $val:expr),* $(,)?) => {
+            parse(&$server.find_constant_references(Parameters(FindConstantReferencesParams {
+                $($field: $val,)*
+            })))
+        };
+    }
+
+    fn get_declaration(server: &RubydexServer, name: &str) -> Value {
+        parse(&server.get_declaration(Parameters(GetDeclarationParams { name: name.to_string() })))
+    }
+
+    fn get_file_declarations(server: &RubydexServer, file_path: &str) -> Value {
+        parse(&server.get_file_declarations(Parameters(GetFileDeclarationsParams {
+            file_path: file_path.to_string(),
+        })))
+    }
+
+    // -- JSON shape tests (one per handler) --
+
+    #[test]
+    fn search_declarations_json_shape() {
+        let s = server_with_source("class Dog; end");
+        let res = search_declarations!(s, query: "Dog".into(), kind: None, limit: None, offset: None);
+
+        assert_includes!(res, "results", "Dog");
+        assert_json_int!(res, "total", 1);
+
+        let first = &array!(res, "results")[0];
+        assert_eq!(first["name"], "Dog");
+        assert_eq!(first["kind"], "Class");
+        assert!(first["locations"][0]["path"].as_str().unwrap().ends_with("test.rb"));
+        assert_json_int!(first["locations"][0], "line", 1);
+    }
+
+    #[test]
+    fn get_declaration_json_shape() {
+        let s = server_with_source(
+            "
+            class Animal; end
+            class Dog < Animal
+              def speak; end
+            end
+            ",
+        );
+        let res = get_declaration(&s, "Dog");
+
+        assert_eq!(res["name"], "Dog");
+        assert_eq!(res["kind"], "Class");
+        assert!(!array!(res, "definitions").is_empty());
+        assert_includes!(res, "ancestors", "Animal");
+        assert_includes!(res, "members", "Dog#speak()");
+
+        let member = array!(res, "members")
+            .iter()
+            .find(|m| m["name"].as_str() == Some("Dog#speak()"))
+            .unwrap();
+        assert_eq!(member["kind"], "Method");
+        assert!(member["location"]["path"].as_str().unwrap().ends_with("test.rb"));
+    }
+
+    #[test]
+    fn get_descendants_json_shape() {
+        let s = server_with_source(
+            "
+            class Animal; end
+            class Dog < Animal; end
+            ",
+        );
+        let res = get_descendants!(s, name: "Animal".into(), limit: None, offset: None);
+        assert_eq!(res["name"], "Animal");
+        assert_includes!(res, "descendants", "Dog");
+        assert!(res["total"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn find_constant_references_json_shape() {
+        let s = server_with_source(
+            "
+            class Animal; end
+            class Dog < Animal; end
+            ",
+        );
+        let res = find_constant_references!(s, name: "Animal".into(), limit: None, offset: None);
+
+        assert_eq!(res["name"], "Animal");
+        assert!(res["total"].as_u64().unwrap() > 0);
+        let first_ref = &array!(res, "references")[0];
+        assert!(first_ref["path"].as_str().is_some());
+        assert!(first_ref["line"].as_u64().is_some());
+        assert!(first_ref["column"].as_u64().is_some());
+    }
+
+    #[test]
+    fn get_file_declarations_json_shape() {
+        let s = server_with_source("class Animal; end");
+        let res = get_file_declarations(&s, "test.rb");
+
+        assert_includes!(res, "declarations", "Animal");
+        assert_eq!(array!(res, "declarations")[0]["kind"], "Class");
+        assert!(array!(res, "declarations")[0]["line"].as_u64().is_some());
+    }
+
+    #[test]
+    fn codebase_stats_json_shape() {
+        let a = test_uri("a.rb");
+        let b = test_uri("b.rb");
+        let s = server_with_sources(&[(&a, "class Animal; end"), (&b, "module Greetable; end")]);
+        let res = parse(&s.codebase_stats());
+
+        assert_eq!(res["files"], 2);
+        assert!(res["declarations"].as_u64().is_some());
+        assert!(res["definitions"].as_u64().is_some());
+        assert!(res["breakdown_by_kind"]["Class"].as_u64().is_some());
+    }
+
+    // -- error tests --
+
+    #[test]
+    fn get_declaration_not_found() {
+        let s = server_with_source("class Dog; end");
+        assert_error(
+            &s.get_declaration(Parameters(GetDeclarationParams {
+                name: "DoesNotExist".into(),
+            })),
+            "not_found",
+        );
+    }
+
+    #[test]
+    fn get_descendants_not_found() {
+        let s = server_with_source("class Dog; end");
+        assert_error(
+            &s.get_descendants(Parameters(GetDescendantsParams {
+                name: "DoesNotExist".into(),
+                limit: None,
+                offset: None,
+            })),
+            "not_found",
+        );
+    }
+
+    #[test]
+    fn get_descendants_invalid_kind() {
+        let s = server_with_source(
+            "
+            class Animal
+              KINGDOM = 'Animalia'
+            end
+            ",
+        );
+        assert_error(
+            &s.get_descendants(Parameters(GetDescendantsParams {
+                name: "Animal::KINGDOM".into(),
+                limit: None,
+                offset: None,
+            })),
+            "invalid_kind",
+        );
+    }
+
+    #[test]
+    fn find_constant_references_not_found() {
+        let s = server_with_source("class Dog; end");
+        assert_error(
+            &s.find_constant_references(Parameters(FindConstantReferencesParams {
+                name: "DoesNotExist".into(),
+                limit: None,
+                offset: None,
+            })),
+            "not_found",
+        );
+    }
+
+    #[test]
+    fn get_file_declarations_not_found() {
+        let s = server_with_source("class Dog; end");
+        assert_error(
+            &s.get_file_declarations(Parameters(GetFileDeclarationsParams {
+                file_path: "nonexistent.rb".into(),
+            })),
+            "not_found",
+        );
+    }
+
+    // -- server state errors --
+
+    #[test]
+    fn returns_indexing_error_when_graph_not_ready() {
+        let server = RubydexServer::new("/test".to_string());
+        assert_error(&server.codebase_stats(), "indexing");
+    }
+
+    #[test]
+    fn returns_indexing_failed_error() {
+        let server = RubydexServer::new("/test".to_string());
+        {
+            let mut state = server.state.write().unwrap();
+            state.error = Some("something went wrong".into());
+        }
+        assert_error(&server.codebase_stats(), "indexing_failed");
     }
 }

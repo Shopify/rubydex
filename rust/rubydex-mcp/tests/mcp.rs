@@ -214,16 +214,17 @@ fn mcp_server_e2e() {
         assert!(stats["declarations"].as_u64().unwrap() > 0);
 
         // Semantic query: search declarations.
-        let results: Vec<Value> = serde_json::from_value(call_next_tool(
+        let search_response = call_next_tool(
             &mut stdin,
             &mut reader,
             &mut request_id,
             "search_declarations",
             &json!({ "query": "Dog" }),
-        ))
-        .unwrap();
-        let result_names = names_from_entries(&results);
+        );
+        let results = search_response["results"].as_array().unwrap();
+        let result_names = names_from_entries(results);
         assert_has_name(&result_names, "Dog", "search results");
+        assert!(search_response["total"].as_u64().unwrap() > 0);
 
         // Semantic query: inspect declaration details.
         let decl = call_next_tool(
@@ -253,6 +254,7 @@ fn mcp_server_e2e() {
         let descendant_entries = descendants["descendants"].as_array().unwrap();
         let descendant_names = names_from_entries(descendant_entries);
         assert_has_name(&descendant_names, "Dog", "Animal descendants");
+        assert!(descendants["total"].as_u64().unwrap() > 0);
 
         // Semantic query: resolved constant references.
         let references = call_next_tool(
@@ -271,6 +273,7 @@ fn mcp_server_e2e() {
             refs.iter().all(|entry| entry["path"].as_str().is_some()),
             "Expected references to include file paths, got: {references}"
         );
+        assert!(references["total"].as_u64().unwrap() > 0);
 
         // Semantic query: file declarations.
         let file_declarations = call_next_tool(
