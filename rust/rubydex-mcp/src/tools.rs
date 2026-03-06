@@ -6,8 +6,10 @@ pub struct SearchDeclarationsParams {
     pub query: String,
     #[schemars(description = "Filter by declaration kind: Class, Module, Method, Constant, etc.")]
     pub kind: Option<String>,
-    #[schemars(description = "Maximum number of results to return (default 25, max 100)")]
+    #[schemars(description = "Maximum number of results to return (default 50, max 100)")]
     pub limit: Option<usize>,
+    #[schemars(description = "Number of results to skip for pagination (default 0)")]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, JsonSchema)]
@@ -20,6 +22,10 @@ pub struct GetDeclarationParams {
 pub struct GetDescendantsParams {
     #[schemars(description = "Fully qualified name of the class or module")]
     pub name: String,
+    #[schemars(description = "Maximum number of descendants to return (default 50, max 500)")]
+    pub limit: Option<usize>,
+    #[schemars(description = "Number of descendants to skip for pagination (default 0)")]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, JsonSchema)]
@@ -28,6 +34,8 @@ pub struct FindConstantReferencesParams {
     pub name: String,
     #[schemars(description = "Maximum number of references to return (default 50, max 200)")]
     pub limit: Option<usize>,
+    #[schemars(description = "Number of references to skip for pagination (default 0)")]
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, JsonSchema)]
