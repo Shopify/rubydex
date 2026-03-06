@@ -95,7 +95,7 @@ impl Job for IndexingJob {
 /// Indexes a single source string in memory, dispatching to the appropriate indexer based on `language_id`.
 pub fn index_source(graph: &mut Graph, uri: &str, source: &str, language_id: &LanguageId) {
     let local_graph = build_local_graph(uri.to_string(), source, language_id);
-    graph.update(local_graph);
+    graph.consume_document_changes(local_graph);
 }
 
 /// Indexes the given paths, reading the content from disk and populating the given `Graph` instance.
@@ -122,7 +122,7 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
     JobQueue::run(&queue);
 
     while let Ok(local_graph) = local_graphs_rx.recv() {
-        graph.update(local_graph);
+        graph.consume_document_changes(local_graph);
     }
 
     errors_rx.iter().collect()
