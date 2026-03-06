@@ -15,6 +15,11 @@ on:
 jobs:
   memleak:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [memory, leak, thread]
+    name: memleak (${{ matrix.sanitizer }})
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -31,11 +36,5 @@ jobs:
           rustup default stable
           rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
 
-      - name: Run tests capturing leaks with `memory` sanitizer
-        run: SANITIZER=memory bundle exec rake ruby_test:valgrind
-
-      - name: Run tests capturing leaks with `leak` sanitizer
-        run: SANITIZER=leak bundle exec rake ruby_test:valgrind
-
-      - name: Run tests capturing leaks with `thread` sanitizer
-        run: SANITIZER=thread bundle exec rake ruby_test:valgrind
+      - name: Run tests capturing leaks with `${{ matrix.sanitizer }}` sanitizer
+        run: SANITIZER=${{ matrix.sanitizer }} bundle exec rake ruby_test:valgrind
