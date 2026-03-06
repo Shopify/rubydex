@@ -1697,11 +1697,12 @@ impl<'a> Resolver<'a> {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
 
-                let (picked_parent, partial) = self.get_parent_class(&definition_ids);
+                let (resolved_parent, unresolved_parent) = self.get_parent_class(&definition_ids);
+                let picked_parent = resolved_parent.unwrap_or(*OBJECT_ID);
                 (
                     self.get_or_create_singleton_class(picked_parent)
                         .expect("parent class should always be a namespace"),
-                    partial,
+                    unresolved_parent.is_some(),
                 )
             }
             _ => {
@@ -1712,9 +1713,9 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (DeclarationId, bool) {
+    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (Option<DeclarationId>, Option<NameId>) {
         let mut explicit_parents = Vec::new();
-        let mut partial = false;
+        let mut unresolved_name: Option<NameId> = None;
 
         for definition_id in definition_ids {
             let definition = self.graph.definitions().get(definition_id).unwrap();
@@ -1722,11 +1723,8 @@ impl<'a> Resolver<'a> {
             if let Definition::Class(class) = definition
                 && let Some(superclass) = class.superclass_ref()
             {
-                let name = self
-                    .graph
-                    .names()
-                    .get(self.graph.constant_references().get(superclass).unwrap().name_id())
-                    .unwrap();
+                let name_id = *self.graph.constant_references().get(superclass).unwrap().name_id();
+                let name = self.graph.names().get(&name_id).unwrap();
 
                 match name {
                     NameRef::Resolved(resolved) => {
@@ -1735,7 +1733,7 @@ impl<'a> Resolver<'a> {
                         }
                     }
                     NameRef::Unresolved(_) => {
-                        partial = true;
+                        unresolved_name.get_or_insert(name_id);
                     }
                 }
             }
@@ -1743,7 +1741,7 @@ impl<'a> Resolver<'a> {
 
         // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
         // mismatch error. TODO: We should add a diagnostic here
-        (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), partial)
+        (explicit_parents.first().copied(), unresolved_name)
     }
 
     fn linearize_parent_class(
@@ -1751,9 +1749,27 @@ impl<'a> Resolver<'a> {
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Ancestors {
-        let (picked_parent, partial) = self.get_parent_class(definition_ids);
-        let result = self.linearize_ancestors(picked_parent, context);
-        if partial { result.to_partial() } else { result }
+        let (resolved_parent, unresolved_parent) = self.get_parent_class(definition_ids);
+
+        match resolved_parent {
+            Some(parent_id) => {
+                let result = self.linearize_ancestors(parent_id, context);
+                if unresolved_parent.is_some() { result.to_partial() } else { result }
+            }
+            None => match unresolved_parent {
+                Some(name_id) => {
+                    // The superclass reference exists but hasn't been resolved yet (or is genuinely unresolvable).
+                    // Use Ancestor::Partial to represent the unknown parent in the chain, consistent with how
+                    // unresolved mixins are handled.
+                    context.partial = true;
+                    Ancestors::Partial(vec![Ancestor::Partial(name_id)])
+                }
+                None => {
+                    // No explicit superclass — inherit from Object
+                    self.linearize_ancestors(*OBJECT_ID, context)
+                }
+            },
+        }
     }
 
     fn mixins_of(&self, definition_id: DefinitionId) -> Option<Vec<Mixin>> {
@@ -2282,6 +2298,21 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_ancestors_eq!(context, "Qux", ["Qux", "Baz", "Bar", "Foo", "Object"]);
+    }
+
+    #[test]
+    fn unresolved_superclass_is_represented_as_partial_ancestor() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo < Bar
+            end
+            "
+        });
+        context.resolve();
+
+        // Bar is unresolved — Foo's chain should contain a Partial entry for Bar, not fall back to Object
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar"]);
     }
 
     #[test]
