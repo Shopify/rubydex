@@ -10,8 +10,9 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition, GlobalVariableDefinition,
-    IncludeDefinition, Mixin, ModuleDefinition, PrependDefinition,
+    IncludeDefinition, MethodDefinition, Mixin, ModuleDefinition, PrependDefinition,
 };
+use crate::model::visibility::Visibility;
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, UriId};
 use crate::model::name::{Name, ParentScope};
@@ -147,14 +148,49 @@ impl<'a> RBSIndexer<'a> {
         }
     }
 
-    fn collect_comments(comment_node: Option<CommentNode>) -> Vec<Comment> {
-        comment_node
-            .into_iter()
-            .map(|comment| {
-                let text = Self::bytes_to_string(comment.string().as_bytes());
-                Comment::new(Offset::from_rbs_location(&comment.location()), text)
-            })
-            .collect()
+    #[allow(clippy::cast_possible_truncation)]
+    fn collect_comments(&self, comment_node: Option<CommentNode>) -> Vec<Comment> {
+        let Some(comment_node) = comment_node else {
+            return Vec::new();
+        };
+
+        let location = comment_node.location();
+        let start = location.start().cast_unsigned() as usize;
+        let end = location.end().cast_unsigned() as usize;
+
+        let source_bytes = self.source.as_bytes();
+
+        // Find the indentation level by scanning backwards from start to the line beginning
+        let mut indent_start = start;
+        while indent_start > 0 && source_bytes[indent_start - 1] == b' ' {
+            indent_start -= 1;
+        }
+        let indent_len = start - indent_start;
+
+        let comment_block = &self.source[start..end];
+        let lines: Vec<&str> = comment_block.split('\n').collect();
+
+        let mut comments = Vec::with_capacity(lines.len());
+        let mut current_offset = start as u32;
+
+        for (i, line) in lines.iter().enumerate() {
+            let line_text = if i == 0 {
+                line.to_string()
+            } else {
+                line[indent_len..].to_string()
+            };
+
+            let line_bytes = line_text.len() as u32;
+            let offset = Offset::new(current_offset, current_offset + line_bytes);
+            comments.push(Comment::new(offset, line_text));
+
+            // Advance past current line + newline + indentation for the next line
+            if i < lines.len() - 1 {
+                current_offset += line_bytes + 1 + indent_len as u32;
+            }
+        }
+
+        comments
     }
 
     fn register_definition(
@@ -201,7 +237,7 @@ impl Visit for RBSIndexer<'_> {
         let offset = Offset::from_rbs_location(&class_node.location());
         let name_offset = Offset::from_rbs_location(&type_name.name().location());
 
-        let comments = Self::collect_comments(class_node.comment());
+        let comments = self.collect_comments(class_node.comment());
 
         let superclass_ref = class_node.super_class().as_ref().map(|super_node| {
             let type_name = super_node.name();
@@ -241,7 +277,7 @@ impl Visit for RBSIndexer<'_> {
         let offset = Offset::from_rbs_location(&module_node.location());
         let name_offset = Offset::from_rbs_location(&type_name.name().location());
 
-        let comments = Self::collect_comments(module_node.comment());
+        let comments = self.collect_comments(module_node.comment());
 
         let definition = Definition::Module(Box::new(ModuleDefinition::new(
             name_id,
@@ -271,7 +307,7 @@ impl Visit for RBSIndexer<'_> {
         let name_id = self.index_type_name(&type_name, nesting_name_id);
         let offset = Offset::from_rbs_location(&constant_node.location());
 
-        let comments = Self::collect_comments(constant_node.comment());
+        let comments = self.collect_comments(constant_node.comment());
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
             name_id,
@@ -293,7 +329,7 @@ impl Visit for RBSIndexer<'_> {
             .intern_string(Self::bytes_to_string(global_node.name().name()));
         let offset = Offset::from_rbs_location(&global_node.location());
 
-        let comments = Self::collect_comments(global_node.comment());
+        let comments = self.collect_comments(global_node.comment());
 
         let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
             str_id,
@@ -324,6 +360,42 @@ impl Visit for RBSIndexer<'_> {
             Mixin::Extend(ExtendDefinition::new(ref_id))
         });
     }
+
+    fn visit_method_definition_node(&mut self, def_node: &node::MethodDefinitionNode) {
+        // Singleton and singleton_instance methods are not indexed for now.
+        if matches!(
+            def_node.kind(),
+            node::MethodDefinitionKind::Singleton | node::MethodDefinitionKind::SingletonInstance
+        ) {
+            return;
+        }
+
+        let str_id = self.local_graph.intern_string(format!("{}()", Self::bytes_to_string(def_node.name().name())));
+        let offset = Offset::from_rbs_location(&def_node.location());
+        let comments = self.collect_comments(def_node.comment());
+        let flags = Self::flags(&def_node.annotations());
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+
+        // RBS carries visibility directly on the node; Unspecified defaults to Public.
+        let visibility = match def_node.visibility() {
+            node::MethodDefinitionVisibility::Private => Visibility::Private,
+            node::MethodDefinitionVisibility::Public | node::MethodDefinitionVisibility::Unspecified => Visibility::Public,
+        };
+
+        let definition = Definition::Method(Box::new(MethodDefinition::new(
+            str_id,
+            self.uri_id,
+            offset,
+            comments,
+            flags,
+            lexical_nesting_id,
+            Vec::new(),
+            visibility,
+            None,
+        )));
+
+        self.register_definition(definition, lexical_nesting_id);
+    }
 }
 
 #[cfg(test)]
@@ -332,6 +404,8 @@ mod tests {
 
     use crate::indexing::rbs_indexer::RBSIndexer;
     use crate::model::definitions::DefinitionFlags;
+    use crate::model::visibility::Visibility;
+    use crate::offset::Offset;
     use crate::test_utils::LocalGraphTest;
     use crate::{
         assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
@@ -526,7 +600,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-2:12", Constant, |def| {
             assert_def_name_eq!(&context, def, "FOO");
-            assert_def_comments_eq!(&context, def, ["Some documentation\n"]);
+            assert_def_comments_eq!(&context, def, ["# Some documentation"]);
         });
     }
 
@@ -551,7 +625,7 @@ mod tests {
 
         assert_definition_at!(&context, "4:1-4:14", GlobalVariable, |def| {
             assert_def_str_eq!(&context, def, "$bar");
-            assert_def_comments_eq!(&context, def, ["A global variable\n"]);
+            assert_def_comments_eq!(&context, def, ["# A global variable"]);
         });
     }
 
@@ -712,6 +786,53 @@ mod tests {
         assert_definition_at!(&context, "13:1-13:13", GlobalVariable, |def| {
             assert_def_str_eq!(&context, def, "$BAR");
             assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+    }
+
+    #[test]
+    fn split_multiline_comments() {
+        let source = "# First line\n# Second line\n# Third line\nclass Foo\nend";
+        let signature = node::parse(source.as_bytes()).expect("Failed to parse RBS source");
+        let decl = signature.declarations().iter().next().expect("Expected a declaration");
+        let Node::Class(class_node) = decl else {
+            panic!("Expected a class declaration");
+        };
+
+        let indexer = RBSIndexer::new("file:///foo.rbs".to_string(), source);
+        let comments = indexer.collect_comments(class_node.comment());
+
+        assert_eq!(comments.len(), 3);
+        assert_eq!(comments[0].string(), "# First line");
+        assert_eq!(comments[0].offset(), &Offset::new(0, 12));
+        assert_eq!(comments[1].string(), "# Second line");
+        assert_eq!(comments[1].offset(), &Offset::new(13, 26));
+        assert_eq!(comments[2].string(), "# Third line");
+        assert_eq!(comments[2].offset(), &Offset::new(27, 39));
+    }
+
+    #[test]
+    fn index_method_definition() {
+        let context = index_source({
+            "
+            class Foo
+              def bar: () -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+            assert_def_name_eq!(&context, class_def, "Foo");
+            assert_eq!(1, class_def.members().len());
+
+            assert_definition_at!(&context, "2:3-2:22", Method, |def| {
+                assert_def_str_eq!(&context, def, "bar()");
+                assert!(def.receiver().is_none());
+                assert_eq!(def.visibility(), &Visibility::Public);
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(class_def.members()[0], def.id());
+            });
         });
     }
 }
