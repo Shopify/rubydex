@@ -45,6 +45,32 @@ impl Nesting {
     }
 }
 
+/// Classifies how a receiver was resolved, so consumers can decide whether to apply
+/// singleton wrapping. Each variant carries the resolved `NameId`.
+///
+/// Not to be confused with [`Receiver`](crate::model::definitions::Receiver), which is
+/// the persisted receiver stored in definitions. `ReceiverKind` is transient — it exists
+/// only during indexing to classify the AST node before deciding what (if any) `Receiver`
+/// to store.
+enum ReceiverKind {
+    /// `self` or no receiver — resolved from the lexical nesting.
+    Implicit(NameId),
+    /// Explicit constant (e.g. `Foo`, `Foo::Bar`). Singleton-wrapped for method
+    /// definitions (`def Foo.bar`), but used directly for `alias_method`.
+    Constant(NameId),
+    /// `singleton_class` call or method nested inside a singleton method.
+    SingletonClass(NameId),
+}
+
+impl ReceiverKind {
+    /// Returns the inner `NameId` regardless of variant.
+    const fn name_id(&self) -> NameId {
+        match *self {
+            Self::Implicit(id) | Self::Constant(id) | Self::SingletonClass(id) => id,
+        }
+    }
+}
+
 struct VisibilityModifier {
     visibility: Visibility,
     is_inline: bool,
@@ -1026,14 +1052,11 @@ impl<'a> RubyIndexer<'a> {
             .expect("visibility stack should not be empty")
     }
 
-    fn method_receiver(
-        &mut self,
-        receiver: Option<&ruby_prism::Node>,
-        fallback_location: ruby_prism::Location,
-    ) -> Option<NameId> {
-        let mut is_singleton_name = false;
-
-        let name_id = match receiver {
+    /// Resolves a receiver AST node into a [`ReceiverKind`] that classifies its
+    /// provenance (lexical scope, explicit constant, or singleton class call) without
+    /// applying singleton wrapping. Callers decide how to interpret the result.
+    fn resolve_receiver(&mut self, receiver: Option<&ruby_prism::Node>) -> Option<ReceiverKind> {
+        match receiver {
             Some(ruby_prism::Node::SelfNode { .. }) | None => {
                 // Implicit or explicit self receiver
 
@@ -1046,9 +1069,11 @@ impl<'a> RubyIndexer<'a> {
                             .expect("Nesting definition should exist");
 
                         match definition {
-                            Definition::Class(class_def) => Some(*class_def.name_id()),
-                            Definition::Module(module_def) => Some(*module_def.name_id()),
-                            Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
+                            Definition::Class(class_def) => Some(ReceiverKind::Implicit(*class_def.name_id())),
+                            Definition::Module(module_def) => Some(ReceiverKind::Implicit(*module_def.name_id())),
+                            Definition::SingletonClass(singleton_class_def) => {
+                                Some(ReceiverKind::Implicit(*singleton_class_def.name_id()))
+                            }
                             Definition::Method(_) => None,
                             _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
                         }
@@ -1060,8 +1085,7 @@ impl<'a> RubyIndexer<'a> {
                         };
 
                         if let Some(receiver) = definition.receiver() {
-                            is_singleton_name = true;
-                            match receiver {
+                            let name_id = match receiver {
                                 Receiver::SelfReceiver(def_id) => self
                                     .local_graph
                                     .definitions()
@@ -1069,45 +1093,60 @@ impl<'a> RubyIndexer<'a> {
                                     .and_then(Definition::name_id)
                                     .copied(),
                                 Receiver::ConstantReceiver(name_id) => Some(*name_id),
-                            }
+                            };
+                            name_id.map(ReceiverKind::SingletonClass)
                         } else {
-                            self.current_owner_name_id()
+                            self.current_owner_name_id().map(ReceiverKind::Implicit)
                         }
                     }
                     None => {
                         let str_id = self.local_graph.intern_string("Object".into());
-                        Some(self.local_graph.add_name(Name::new(str_id, ParentScope::None, None)))
+                        let name_id = self.local_graph.add_name(Name::new(str_id, ParentScope::None, None));
+                        Some(ReceiverKind::Implicit(name_id))
                     }
                 }
             }
             Some(ruby_prism::Node::CallNode { .. }) => {
-                // Check if the receiver is `singleton_class`
+                // For `Foo.singleton_class.bar`, we need the inner receiver (`Foo`) fully
+                // resolved with singleton wrapping and constant reference registration.
+                // This calls method_receiver() rather than resolve_receiver() for those
+                // side effects. The mutual recursion terminates because each call peels
+                // one `.singleton_class` layer off a finite AST.
                 let call_node = receiver.unwrap().as_call_node().unwrap();
 
                 if call_node.name().as_slice() == b"singleton_class" {
-                    is_singleton_name = true;
                     self.method_receiver(call_node.receiver().as_ref(), call_node.location())
+                        .map(ReceiverKind::SingletonClass)
                 } else {
                     None
                 }
             }
-            Some(node) => {
-                is_singleton_name = true;
-                self.index_constant_reference(node, true)
-            }
-        }?;
-
-        if !is_singleton_name {
-            return Some(name_id);
+            Some(node) => self.index_constant_reference(node, true).map(ReceiverKind::Constant),
         }
+    }
 
-        let new_name_id = self.create_singleton_name_id(name_id);
+    /// Resolves a receiver AST node to the `NameId` used for method references. For
+    /// `Constant` and `SingletonClass` receivers, wraps the raw name in a singleton class
+    /// name and registers a constant reference. `Implicit` receivers are returned as-is.
+    fn method_receiver(
+        &mut self,
+        receiver: Option<&ruby_prism::Node>,
+        fallback_location: ruby_prism::Location,
+    ) -> Option<NameId> {
+        let resolved = self.resolve_receiver(receiver)?;
 
-        let location = receiver.map_or(fallback_location, ruby_prism::Node::location);
-        let offset = Offset::from_prism_location(&location);
-        self.local_graph
-            .add_constant_reference(ConstantReference::new(new_name_id, self.uri_id, offset));
-        Some(new_name_id)
+        match resolved {
+            ReceiverKind::Implicit(name_id) => Some(name_id),
+            ReceiverKind::Constant(name_id) | ReceiverKind::SingletonClass(name_id) => {
+                let new_name_id = self.create_singleton_name_id(name_id);
+
+                let location = receiver.map_or(fallback_location, ruby_prism::Node::location);
+                let offset = Offset::from_prism_location(&location);
+                self.local_graph
+                    .add_constant_reference(ConstantReference::new(new_name_id, self.uri_id, offset));
+                Some(new_name_id)
+            }
+        }
     }
 
     /// Creates a singleton class `NameId` (`<ClassName>`) attached to the given constant `NameId`.
@@ -1660,20 +1699,17 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let old_name_str_id = self.local_graph.intern_string(format!("{old_name}()"));
 
                 let receiver_node = node.receiver();
-                let receiver = receiver_node.as_ref().and_then(|node| match node {
-                    ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => self
-                        .index_constant_reference(node, true)
-                        .map(Receiver::ConstantReceiver),
-                    _ => None,
-                });
+                let receiver_kind = self.resolve_receiver(receiver_node.as_ref());
 
-                // alias_method references instance methods, so we use the class NameId directly
-                let method_ref_receiver = match &receiver {
-                    Some(Receiver::ConstantReceiver(name_id)) => Some(*name_id),
-                    Some(Receiver::SelfReceiver(_)) | None => {
-                        self.method_receiver(receiver_node.as_ref(), node.location())
-                    }
+                // alias_method creates instance aliases, so we use the class NameId directly
+                // (no singleton wrapping). Only constant receivers (e.g. Foo.alias_method)
+                // are stored — implicit receivers fall back to the lexical nesting during resolution.
+                let receiver = if let Some(ReceiverKind::Constant(name_id)) = &receiver_kind {
+                    Some(Receiver::ConstantReceiver(*name_id))
+                } else {
+                    None
                 };
+                let method_ref_receiver = receiver_kind.as_ref().map(ReceiverKind::name_id);
 
                 let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone(), method_ref_receiver);
                 self.local_graph.add_method_reference(reference);
