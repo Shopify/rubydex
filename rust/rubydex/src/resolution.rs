@@ -279,42 +279,11 @@ impl<'a> Resolver<'a> {
             match self.graph.definitions().get(&id).unwrap() {
                 Definition::Method(method_definition) => {
                     let str_id = *method_definition.str_id();
-                    let owner_id = match method_definition.receiver() {
-                        Some(Receiver::SelfReceiver(def_id)) => {
-                            let Some(&owner_decl_id) = self.graph.definition_id_to_declaration_id(*def_id) else {
-                                // The enclosing class/module couldn't be resolved (e.g., `class Foo::Bar` where
-                                // `Foo` is undefined). The method is orphaned as a consequence.
-                                continue;
-                            };
-                            let Some(singleton_id) = self.get_or_create_singleton_class(owner_decl_id) else {
-                                // The enclosing declaration is a constant that can't be promoted to a namespace
-                                // (e.g., `CONST = 1; module CONST; def self.bar; end; end`). The method is
-                                // orphaned as a consequence.
-                                continue;
-                            };
-                            singleton_id
-                        }
-                        Some(Receiver::ConstantReceiver(name_id)) => {
-                            let receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
-                                NameRef::Resolved(resolved) => *resolved.declaration_id(),
-                                NameRef::Unresolved(_) => {
-                                    continue;
-                                }
-                            };
+                    let receiver = *method_definition.receiver();
+                    let lexical_nesting_id = *method_definition.lexical_nesting_id();
 
-                            let Some(singleton_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
-                                continue;
-                            };
-
-                            singleton_id
-                        }
-                        None => {
-                            let Some(resolved) = self.resolve_lexical_owner(*method_definition.lexical_nesting_id())
-                            else {
-                                continue;
-                            };
-                            resolved
-                        }
+                    let Some(owner_id) = self.resolve_singleton_owner(receiver.as_ref(), lexical_nesting_id) else {
+                        continue;
                     };
 
                     self.create_declaration(str_id, id, owner_id, |name| {
@@ -378,34 +347,22 @@ impl<'a> Resolver<'a> {
                     match nesting_def {
                         // When the instance variable is inside a method body, we determine the owner based on the method's receiver
                         Definition::Method(method) => {
-                            if let Some(receiver) = method.receiver() {
-                                let receiver_decl_id = match receiver {
-                                    Receiver::SelfReceiver(def_id) => *self
-                                        .graph
-                                        .definition_id_to_declaration_id(*def_id)
-                                        .expect("SelfReceiver definition should have a declaration"),
-                                    Receiver::ConstantReceiver(name_id) => {
-                                        let Some(NameRef::Resolved(resolved)) = self.graph.names().get(name_id) else {
-                                            continue;
-                                        };
+                            let method_receiver = *method.receiver();
+                            let method_nesting_id = *method.lexical_nesting_id();
 
-                                        *resolved.declaration_id()
-                                    }
-                                };
-
-                                // Instance variable in singleton method - owned by the receiver's singleton class
-                                let Some(owner_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
+                            if method_receiver.is_some() {
+                                let Some(owner_id) =
+                                    self.resolve_singleton_owner(method_receiver.as_ref(), method_nesting_id)
+                                else {
                                     continue;
                                 };
-                                {
-                                    debug_assert!(
-                                        matches!(
-                                            self.graph.declarations().get(&owner_id),
-                                            Some(Declaration::Namespace(Namespace::SingletonClass(_)))
-                                        ),
-                                        "Instance variable in singleton method should be owned by a SingletonClass"
-                                    );
-                                }
+                                debug_assert!(
+                                    matches!(
+                                        self.graph.declarations().get(&owner_id),
+                                        Some(Declaration::Namespace(Namespace::SingletonClass(_)))
+                                    ),
+                                    "Instance variable in singleton method should be owned by a SingletonClass"
+                                );
                                 self.create_declaration(str_id, id, owner_id, |name| {
                                     Declaration::InstanceVariable(Box::new(InstanceVariableDeclaration::new(
                                         name, owner_id,
@@ -415,7 +372,7 @@ impl<'a> Resolver<'a> {
                             }
 
                             // If the method has no explicit receiver, we resolve the owner based on the lexical nesting
-                            let Some(method_owner_id) = self.resolve_lexical_owner(*method.lexical_nesting_id()) else {
+                            let Some(method_owner_id) = self.resolve_lexical_owner(method_nesting_id) else {
                                 continue;
                             };
 
@@ -509,11 +466,26 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 Definition::MethodAlias(alias) => {
-                    let Some(owner_id) = self.resolve_lexical_owner(*alias.lexical_nesting_id()) else {
-                        continue;
+                    let new_name_str_id = *alias.new_name_str_id();
+                    let receiver = *alias.receiver();
+                    let lexical_nesting_id = *alias.lexical_nesting_id();
+
+                    let owner_id = match receiver {
+                        // `Foo.alias_method(:bar, :baz)` creates instance aliases on Foo,
+                        // not singleton methods. So we resolve to the class itself.
+                        Some(Receiver::ConstantReceiver(name_id)) => match self.graph.names().get(&name_id).unwrap() {
+                            NameRef::Resolved(resolved) => *resolved.declaration_id(),
+                            NameRef::Unresolved(_) => continue,
+                        },
+                        Some(Receiver::SelfReceiver(_)) | None => {
+                            let Some(resolved) = self.resolve_lexical_owner(lexical_nesting_id) else {
+                                continue;
+                            };
+                            resolved
+                        }
                     };
 
-                    self.create_declaration(*alias.new_name_str_id(), id, owner_id, |name| {
+                    self.create_declaration(new_name_str_id, id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
@@ -578,6 +550,36 @@ impl<'a> Resolver<'a> {
             self.resolve_to_namespace(declaration_id)
         } else {
             Some(declaration_id)
+        }
+    }
+
+    /// Resolves the singleton owner for a method definition with an explicit receiver.
+    ///
+    /// For `def self.foo` or `def Foo.bar`, resolves to the receiver's singleton class.
+    /// For no receiver (instance methods), falls back to lexical nesting resolution.
+    /// Not suitable for `alias_method`, which always creates instance aliases.
+    ///
+    /// Returns `None` (orphaning the method) when:
+    /// - The enclosing class/module couldn't be resolved (e.g., `class Foo::Bar` where `Foo` is undefined)
+    /// - The enclosing declaration can't be promoted to a namespace (e.g., `CONST = 1; def CONST.foo; end`)
+    fn resolve_singleton_owner(
+        &mut self,
+        receiver: Option<&Receiver>,
+        lexical_nesting_id: Option<DefinitionId>,
+    ) -> Option<DeclarationId> {
+        match receiver {
+            Some(Receiver::SelfReceiver(def_id)) => {
+                let &owner_decl_id = self.graph.definition_id_to_declaration_id(*def_id)?;
+                self.get_or_create_singleton_class(owner_decl_id)
+            }
+            Some(Receiver::ConstantReceiver(name_id)) => {
+                let receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
+                    NameRef::Resolved(resolved) => Some(*resolved.declaration_id()),
+                    NameRef::Unresolved(_) => None,
+                }?;
+                self.get_or_create_singleton_class(receiver_decl_id)
+            }
+            None => self.resolve_lexical_owner(lexical_nesting_id),
         }
     }
 
@@ -2538,6 +2540,66 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_members_eq!(context, "Foo", ["bar()", "foo()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_with_constant_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              def qux; end
+              Foo.alias_method :baz, :bar
+            end
+
+            Foo.alias_method :quux, :qux
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["bar()", "baz()", "quux()", "qux()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_with_constant_path_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Outer
+              class Inner
+                def bar; end
+              end
+            end
+
+            Outer::Inner.alias_method :baz, :bar
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Outer::Inner", ["bar()", "baz()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_with_self_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              self.alias_method :baz, :bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["bar()", "baz()"]);
     }
 
     #[test]

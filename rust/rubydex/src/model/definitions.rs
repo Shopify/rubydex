@@ -724,7 +724,7 @@ pub struct MethodDefinition {
 assert_mem_size!(MethodDefinition, 112);
 
 /// The receiver of a singleton method definition.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Receiver {
     /// `def self.foo` - receiver is the enclosing definition (class, module, singleton class or DSL)
     SelfReceiver(DefinitionId),
@@ -733,6 +733,15 @@ pub enum Receiver {
 }
 
 assert_mem_size!(Receiver, 16);
+
+impl std::fmt::Display for Receiver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Receiver::SelfReceiver(def_id) => write!(f, "{def_id}"),
+            Receiver::ConstantReceiver(name_id) => write!(f, "{name_id}"),
+        }
+    }
+}
 
 impl MethodDefinition {
     #[allow(clippy::too_many_arguments)]
@@ -766,12 +775,7 @@ impl MethodDefinition {
         let mut formatted_id = format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id);
 
         if let Some(receiver) = &self.receiver {
-            match receiver {
-                Receiver::SelfReceiver(def_id) => formatted_id.push_str(&def_id.to_string()),
-                Receiver::ConstantReceiver(name_id) => {
-                    formatted_id.push_str(&name_id.to_string());
-                }
-            }
+            formatted_id.push_str(&receiver.to_string());
         }
 
         DefinitionId::from(&formatted_id)
@@ -1332,11 +1336,13 @@ pub struct MethodAliasDefinition {
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
+    receiver: Option<Receiver>,
 }
-assert_mem_size!(MethodAliasDefinition, 80);
+assert_mem_size!(MethodAliasDefinition, 96);
 
 impl MethodAliasDefinition {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         new_name_str_id: StringId,
         old_name_str_id: StringId,
@@ -1345,6 +1351,7 @@ impl MethodAliasDefinition {
         comments: Vec<Comment>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
+        receiver: Option<Receiver>,
     ) -> Self {
         Self {
             new_name_str_id,
@@ -1354,18 +1361,25 @@ impl MethodAliasDefinition {
             flags,
             comments,
             lexical_nesting_id,
+            receiver,
         }
     }
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!(
+        let mut formatted_id = format!(
             "{}{}{}{}",
             *self.uri_id,
             self.offset.start(),
             *self.new_name_str_id,
             *self.old_name_str_id,
-        ))
+        );
+
+        if let Some(receiver) = &self.receiver {
+            formatted_id.push_str(&receiver.to_string());
+        }
+
+        DefinitionId::from(&formatted_id)
     }
 
     #[must_use]
@@ -1401,6 +1415,11 @@ impl MethodAliasDefinition {
     #[must_use]
     pub fn flags(&self) -> &DefinitionFlags {
         &self.flags
+    }
+
+    #[must_use]
+    pub fn receiver(&self) -> &Option<Receiver> {
+        &self.receiver
     }
 }
 
