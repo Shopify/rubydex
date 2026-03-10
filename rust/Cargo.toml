@@ -12,6 +12,11 @@ lto = true
 opt-level = 3
 codegen-units = 1
 
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
 [workspace.lints.clippy]
 # See: https://doc.rust-lang.org/clippy/lints.html
 correctness = "deny"
