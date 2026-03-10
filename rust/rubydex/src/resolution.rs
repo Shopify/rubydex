@@ -11,7 +11,7 @@ use crate::model::{
     },
     definitions::{Definition, Mixin, Receiver},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
-    identity_maps::{IdentityHashMap, IdentityHashSet},
+    identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
     name::{Name, NameRef, ParentScope},
 };
@@ -1514,25 +1514,53 @@ impl<'a> Resolver<'a> {
     /// name, but it's nested under a complex name so we have to sort it last. This is why we consider the number of
     /// parent scopes in the entire nesting, not just for the name itself
     ///
+    /// Compute the depth of a name in the graph by recursively summing the depths of its
+    /// `parent_scope` and `nesting` chains. Results are memoized in `cache` (`NameId` → depth)
+    /// so each name is computed at most once across all calls.
+    ///
+    /// Depth represents the total complexity of a name's position in the namespace hierarchy.
+    /// For example, in `module Foo; module Bar; class Baz; end; end; end`, Foo has depth 1
+    /// (top-level), Bar has depth 2, and Baz has depth 3.
+    ///
     /// # Panics
     ///
     /// Will panic if there is inconsistent data in the graph
-    fn name_depth(name: &NameRef, names: &IdentityHashMap<NameId, NameRef>) -> u32 {
-        if name.parent_scope().is_top_level() {
-            return 1;
+    fn name_depth(
+        name_id: NameId,
+        names: &IdentityHashMap<NameId, NameRef>,
+        cache: &mut IdentityHashMap<NameId, u32>,
+    ) -> u32 {
+        if let Some(&depth) = cache.get(&name_id) {
+            return depth;
         }
 
-        let parent_depth = name.parent_scope().map_or(0, |id| {
-            let name_ref = names.get(id).unwrap();
-            Self::name_depth(name_ref, names)
-        });
+        let name = names.get(&name_id).unwrap();
 
-        let nesting_depth = name.nesting().map_or(0, |id| {
-            let name_ref = names.get(&id).unwrap();
-            Self::name_depth(name_ref, names)
-        });
+        let depth = if name.parent_scope().is_top_level() {
+            1
+        } else {
+            let parent_depth = name.parent_scope().map_or(0, |id| Self::name_depth(*id, names, cache));
 
-        parent_depth + nesting_depth + 1
+            let nesting_depth = name.nesting().map_or(0, |id| Self::name_depth(id, names, cache));
+
+            parent_depth + nesting_depth + 1
+        };
+
+        cache.insert(name_id, depth);
+        depth
+    }
+
+    /// Pre-compute name depths for all names into a `NameId → depth` map. Each name's depth is
+    /// computed once via memoized recursion, then used as an O(1) lookup key during sorting in
+    /// `prepare_units`.
+    fn compute_name_depths(names: &IdentityHashMap<NameId, NameRef>) -> IdentityHashMap<NameId, u32> {
+        let mut cache = IdentityHashMap::with_capacity_and_hasher(names.len(), IdentityHashBuilder);
+
+        for &name_id in names.keys() {
+            Self::name_depth(name_id, names, &mut cache);
+        }
+
+        cache
     }
 
     fn prepare_units(&mut self) -> Vec<DefinitionId> {
@@ -1540,40 +1568,26 @@ impl<'a> Resolver<'a> {
         let mut definitions = Vec::with_capacity(estimated_length);
         let mut others = Vec::with_capacity(estimated_length);
         let names = self.graph.names();
+        let depths = Self::compute_name_depths(names);
 
         for (id, definition) in self.graph.definitions() {
             let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
 
             match definition {
                 Definition::Class(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 Definition::Module(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 Definition::Constant(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 Definition::ConstantAlias(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 Definition::SingletonClass(def) => {
-                    definitions.push((
-                        Unit::Definition(*id),
-                        (names.get(def.name_id()).unwrap(), uri, definition.offset()),
-                    ));
+                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
                 }
                 _ => {
                     others.push(*id);
@@ -1583,8 +1597,8 @@ impl<'a> Resolver<'a> {
 
         // Sort namespaces based on their name complexity so that simpler names are always first
         // When the depth is the same, sort by URI and offset to maintain determinism
-        definitions.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        definitions.sort_unstable_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+            (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
         });
 
         let mut const_refs = self
@@ -1596,14 +1610,14 @@ impl<'a> Resolver<'a> {
 
                 (
                     Unit::ConstantRef(*id),
-                    (names.get(constant_ref.name_id()).unwrap(), uri, constant_ref.offset()),
+                    (*constant_ref.name_id(), uri, constant_ref.offset()),
                 )
             })
             .collect::<Vec<_>>();
 
         // Sort constant references based on their name complexity so that simpler names are always first
-        const_refs.sort_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (Self::name_depth(name_a, names), uri_a, offset_a).cmp(&(Self::name_depth(name_b, names), uri_b, offset_b))
+        const_refs.sort_unstable_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
+            (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
         });
 
         self.unit_queue
@@ -1998,10 +2012,11 @@ mod tests {
             "
         });
 
-        let mut names = context.graph().names().values().collect::<Vec<_>>();
+        let depths = Resolver::compute_name_depths(context.graph().names());
+        let mut names = context.graph().names().iter().collect::<Vec<_>>();
         assert_eq!(10, names.len());
 
-        names.sort_by_key(|a| Resolver::name_depth(a, context.graph().names()));
+        names.sort_by_key(|(id, _)| depths.get(id).unwrap());
 
         assert_eq!(
             [
@@ -2009,7 +2024,7 @@ mod tests {
             ],
             names
                 .iter()
-                .map(|n| context.graph().strings().get(n.str()).unwrap().as_str())
+                .map(|(_, n)| context.graph().strings().get(n.str()).unwrap().as_str())
                 .collect::<Vec<_>>()
                 .as_slice()
         );
