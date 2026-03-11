@@ -22,6 +22,11 @@ impl GraphTest {
         &self.graph
     }
 
+    #[must_use]
+    pub fn into_graph(self) -> Graph {
+        self.graph
+    }
+
     /// Indexes a Ruby source
     pub fn index_uri(&mut self, uri: &str, source: &str) {
         let source = normalize_indentation(source);
