@@ -361,17 +361,12 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
-    // Runs the given closure if the given call `node` is invoked directly on `self` for each one of its string or
-    // symbol arguments
+    // Runs the given closure for each string or symbol argument of a call node.
     fn each_string_or_symbol_arg<F>(node: &ruby_prism::CallNode, mut f: F)
     where
         F: FnMut(String, ruby_prism::Location),
     {
-        let receiver = node.receiver();
-
-        if (receiver.is_none() || receiver.unwrap().as_self_node().is_some())
-            && let Some(arguments) = node.arguments()
-        {
+        if let Some(arguments) = node.arguments() {
             for argument in &arguments.arguments() {
                 match argument {
                     ruby_prism::Node::SymbolNode { .. } => {
@@ -1549,6 +1544,11 @@ impl Visit<'_> for RubyIndexer<'_> {
         }
 
         let mut index_attr = |kind: AttrKind, call: &ruby_prism::CallNode| {
+            let receiver = call.receiver();
+            if receiver.is_some() && receiver.unwrap().as_self_node().is_none() {
+                return;
+            }
+
             let call_offset = Offset::from_prism_location(&call.location());
 
             Self::each_string_or_symbol_arg(call, |name, location| {
@@ -1645,6 +1645,19 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
             "alias_method" => {
+                let recv_node = node.receiver();
+                if recv_node.as_ref().is_some_and(|recv| {
+                    !matches!(
+                        recv,
+                        ruby_prism::Node::SelfNode { .. }
+                            | ruby_prism::Node::ConstantReadNode { .. }
+                            | ruby_prism::Node::ConstantPathNode { .. }
+                    )
+                }) {
+                    self.visit_call_node_parts(node);
+                    return;
+                }
+
                 let mut names: Vec<(String, Offset)> = Vec::new();
 
                 Self::each_string_or_symbol_arg(node, |name, location| {
@@ -1662,19 +1675,17 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let new_name_str_id = self.local_graph.intern_string(format!("{new_name}()"));
                 let old_name_str_id = self.local_graph.intern_string(format!("{old_name}()"));
 
-                let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+                let (receiver, method_receiver) = match &recv_node {
+                    Some(
+                        recv @ (ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }),
+                    ) => {
+                        let name_id = self.index_constant_reference(recv, true);
+                        (name_id.map(Receiver::ConstantReceiver), name_id)
+                    }
+                    _ => (None, self.method_receiver(recv_node.as_ref(), node.location())),
+                };
                 let reference = MethodRef::new(old_name_str_id, self.uri_id, old_offset.clone(), method_receiver);
                 self.local_graph.add_method_reference(reference);
-
-                // `self.alias_method` is semantically identical to bare `alias_method` —
-                // both alias instance methods on the current class. We map self to None so
-                // that SelfReceiver is only produced by the RBS indexer for `alias self.x self.y`.
-                let receiver = node.receiver().as_ref().and_then(|recv_node| match recv_node {
-                    ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. } => self
-                        .index_constant_reference(recv_node, true)
-                        .map(Receiver::ConstantReceiver),
-                    _ => None,
-                });
 
                 let offset = Offset::from_prism_location(&node.location());
                 let (comments, flags) = self.find_comments_for(offset.start());
@@ -5039,9 +5050,7 @@ mod tests {
     }
 
     #[test]
-    fn index_alias_method_with_constant_receiver_is_ignored() {
-        // `each_string_or_symbol_arg` skips constant receivers, so `Foo.alias_method(...)`
-        // does not produce a MethodAliasDefinition.
+    fn index_alias_method_with_constant_receiver() {
         let context = index_source({
             "
             class Foo; end
@@ -5051,13 +5060,11 @@ mod tests {
 
         assert_no_local_diagnostics!(&context);
 
-        let alias_count = context
-            .graph()
-            .definitions()
-            .values()
-            .filter(|d| matches!(d, Definition::MethodAlias(_)))
-            .count();
-        assert_eq!(0, alias_count);
+        assert_definition_at!(&context, "2:1-2:28", MethodAlias, |def| {
+            assert_string_eq!(&context, def.new_name_str_id(), "bar()");
+            assert_string_eq!(&context, def.old_name_str_id(), "baz()");
+            assert_method_has_receiver!(&context, def, "Foo");
+        });
     }
 
     #[test]
@@ -5110,6 +5117,29 @@ mod tests {
                 assert!(def.receiver().is_none());
                 assert_eq!(singleton.id(), def.lexical_nesting_id().unwrap());
             });
+        });
+    }
+
+    #[test]
+    fn index_alias_method_with_nested_constant_receiver() {
+        let context = index_source({
+            "
+            module A
+              class B
+                def original; end
+              end
+            end
+
+            A::B.alias_method :new_name, :original
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "7:1-7:39", MethodAlias, |def| {
+            assert_string_eq!(&context, def.new_name_str_id(), "new_name()");
+            assert_method_has_receiver!(&context, def, "B");
+            assert!(def.lexical_nesting_id().is_none());
         });
     }
 
