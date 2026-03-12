@@ -2628,6 +2628,29 @@ mod tests {
     }
 
     #[test]
+    fn resolving_method_alias_with_constant_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar
+              def to_s; end
+            end
+
+            class Foo
+              Bar.alias_method(:new_to_s, :to_s)
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Bar.alias_method places the alias on Bar's instance methods
+        assert_no_members!(context, "Foo");
+        assert_members_eq!(context, "Bar", ["new_to_s()", "to_s()"]);
+    }
+
+    #[test]
     fn resolving_global_variable_alias() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
