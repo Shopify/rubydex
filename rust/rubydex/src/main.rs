@@ -86,6 +86,9 @@ fn main() {
         eprintln!("{error}");
     }
 
+    // Sort method references after bulk loading for efficient lookup
+    graph.sort_method_references();
+
     if let Some(StopAfter::Indexing) = args.stop_after {
         return exit(args.stats);
     }
