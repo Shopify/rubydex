@@ -5463,4 +5463,21 @@ mod tests {
         assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
         assert_declaration_does_not_exist!(context, "Foo::Bar");
     }
+
+    #[test]
+    fn rbs_method_definition_instance() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///foo.rbs", {
+            r"
+            class Foo
+                def foo: () -> void
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["foo()"]);
+    }
 }
