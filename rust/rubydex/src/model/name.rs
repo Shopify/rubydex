@@ -97,7 +97,7 @@ impl PartialEq for Name {
         self.str == other.str && self.parent_scope == other.parent_scope && self.nesting == other.nesting
     }
 }
-assert_mem_size!(Name, 48);
+assert_mem_size!(Name, 40);
 
 impl Name {
     #[must_use]
