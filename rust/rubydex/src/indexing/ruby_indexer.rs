@@ -1049,9 +1049,18 @@ impl<'a> RubyIndexer<'a> {
                             .expect("Nesting definition should exist");
 
                         match definition {
-                            Definition::Class(class_def) => Some(*class_def.name_id()),
-                            Definition::Module(module_def) => Some(*module_def.name_id()),
-                            Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
+                            Definition::Class(class_def) => {
+                                is_singleton_name = true;
+                                Some(*class_def.name_id())
+                            }
+                            Definition::Module(module_def) => {
+                                is_singleton_name = true;
+                                Some(*module_def.name_id())
+                            }
+                            Definition::SingletonClass(singleton_class_def) => {
+                                is_singleton_name = true;
+                                Some(*singleton_class_def.name_id())
+                            }
                             Definition::Method(_) => None,
                             _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
                         }
@@ -4117,6 +4126,103 @@ mod tests {
         assert_eq!(StringId::from("Foo"), *parent_scope.str());
         assert!(parent_scope.nesting().is_none());
         assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_receiver_at_class_level() {
+        let context = index_source({
+            "
+            class Foo
+              self.bar
+              baz
+            end
+            Foo.qux
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let find_ref = |name: &str| {
+            context
+                .graph()
+                .method_references()
+                .values()
+                .find(|method_ref| *method_ref.str() == StringId::from(name))
+                .unwrap_or_else(|| panic!("should have a method reference for {name}"))
+        };
+
+        for name in ["bar", "baz", "qux"] {
+            let method_ref = find_ref(name);
+            let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+            assert_eq!(StringId::from("<Foo>"), *receiver.str(), "receiver mismatch for {name}");
+        }
+    }
+
+    #[test]
+    fn index_method_receiver_self_at_module_level() {
+        let context = index_source({
+            "
+            module Foo
+              self.bar
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let bar_ref = context.graph().method_references().values().next().unwrap();
+        let receiver = context.graph().names().get(&bar_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+    }
+
+    #[test]
+    fn index_method_receiver_inside_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                self.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let find_ref = |name: &str| {
+            context
+                .graph()
+                .method_references()
+                .values()
+                .find(|method_ref| *method_ref.str() == StringId::from(name))
+                .unwrap_or_else(|| panic!("should have a method reference for {name}"))
+        };
+
+        for name in ["bar", "baz"] {
+            let method_ref = find_ref(name);
+            let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+            assert_eq!(
+                StringId::from("<<Foo>>"),
+                *receiver.str(),
+                "receiver mismatch for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn index_method_receiver_at_top_level() {
+        let context = index_source({
+            "
+            self.bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let bar_ref = context.graph().method_references().values().next().unwrap();
+        let receiver = context.graph().names().get(&bar_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("Object"), *receiver.str());
     }
 
     #[test]
