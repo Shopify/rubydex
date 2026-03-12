@@ -451,14 +451,11 @@ impl Visit for RBSIndexer<'_> {
                     overload.method_type()
                 );
             };
-            let Node::FunctionType(function_type) = method_type.type_() else {
-                panic!(
-                    "Expected FunctionType node in overloads, found {:?}",
-                    method_type.type_()
-                );
+            let params = match method_type.type_() {
+                Node::FunctionType(function_type) => self.collect_parameters(&function_type),
+                Node::UntypedFunctionType(_) => Vec::new(),
+                other => panic!("Expected FunctionType node in overloads, found {other:?}"),
             };
-
-            let params = self.collect_parameters(&function_type);
 
             let definition = Definition::Method(Box::new(MethodDefinition::new(
                 str_id,
@@ -886,23 +883,33 @@ mod tests {
         let context = index_source({
             "
             class Foo
-              def bar: () -> void
+              def foo: () -> void
+
+              def bar: (?) -> void
             end
             "
         });
 
         assert_no_local_diagnostics!(&context);
 
-        assert_definition_at!(&context, "1:1-3:4", Class, |class_def| {
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
             assert_def_name_eq!(&context, class_def, "Foo");
-            assert_eq!(1, class_def.members().len());
+            assert_eq!(2, class_def.members().len());
 
             assert_definition_at!(&context, "2:3-2:22", Method, |def| {
-                assert_def_str_eq!(&context, def, "bar()");
+                assert_def_str_eq!(&context, def, "foo()");
                 assert!(def.receiver().is_none());
                 assert_eq!(def.visibility(), &Visibility::Public);
                 assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "4:3-4:23", Method, |def| {
+                assert_def_str_eq!(&context, def, "bar()");
+                assert!(def.receiver().is_none());
+                assert_eq!(def.visibility(), &Visibility::Public);
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(class_def.members()[1], def.id());
             });
         });
     }
