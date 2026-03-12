@@ -157,15 +157,6 @@ impl<'a> RBSIndexer<'a> {
         let start = location.start().cast_unsigned() as usize;
         let end = location.end().cast_unsigned() as usize;
 
-        let source_bytes = self.source.as_bytes();
-
-        // Find the indentation level by scanning backwards from start to the line beginning
-        let mut indent_start = start;
-        while indent_start > 0 && source_bytes[indent_start - 1] == b' ' {
-            indent_start -= 1;
-        }
-        let indent_len = start - indent_start;
-
         let comment_block = &self.source[start..end];
         let lines: Vec<&str> = comment_block.split('\n').collect();
 
@@ -173,19 +164,23 @@ impl<'a> RBSIndexer<'a> {
         let mut current_offset = start as u32;
 
         for (i, line) in lines.iter().enumerate() {
-            let line_text = if i == 0 {
-                line.to_string()
+            let line_indent = if i == 0 {
+                0
             } else {
-                line[indent_len..].to_string()
+                line.len() - line.trim_start().len()
             };
 
+            // Skip past indentation to the comment text
+            current_offset += line_indent as u32;
+
+            let line_text = line[line_indent..].to_string();
             let line_bytes = line_text.len() as u32;
             let offset = Offset::new(current_offset, current_offset + line_bytes);
             comments.push(Comment::new(offset, line_text));
 
-            // Advance past current line + newline + indentation for the next line
+            // Advance past current line text + newline for the next line
             if i < lines.len() - 1 {
-                current_offset += line_bytes + 1 + indent_len as u32;
+                current_offset += line_bytes + 1;
             }
         }
 
@@ -759,7 +754,8 @@ mod tests {
             # Third line
             class Foo
               # A comment for Bar
-              # Another line for Bar
+                # Another line for Bar
+            # One more line for Bar
               module Bar
               end
             end
@@ -771,17 +767,25 @@ mod tests {
 
         assert_no_local_diagnostics!(&context);
 
-        assert_definition_at!(&context, "4:1-9:4", Class, |def| {
+        assert_definition_at!(&context, "4:1-10:4", Class, |def| {
             assert_def_name_eq!(&context, def, "Foo");
             assert_def_comments_eq!(&context, def, ["# First line", "# Second line", "# Third line"]);
         });
 
-        assert_definition_at!(&context, "7:3-8:6", Module, |def| {
+        assert_definition_at!(&context, "8:3-9:6", Module, |def| {
             assert_def_name_eq!(&context, def, "Bar");
-            assert_def_comments_eq!(&context, def, ["# A comment for Bar", "# Another line for Bar"]);
+            assert_def_comments_eq!(
+                &context,
+                def,
+                [
+                    "# A comment for Bar",
+                    "# Another line for Bar",
+                    "# One more line for Bar"
+                ]
+            );
         });
 
-        assert_definition_at!(&context, "12:1-12:13", Constant, |def| {
+        assert_definition_at!(&context, "13:1-13:13", Constant, |def| {
             assert_def_name_eq!(&context, def, "BAZ");
             assert_def_comments_eq!(&context, def, ["# splits strings at the \\n char"]);
         });
