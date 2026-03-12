@@ -119,11 +119,24 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
     drop(local_graphs_tx);
     drop(errors_tx);
 
-    JobQueue::run(&queue);
+    // Run workers and merge loop concurrently. The scoped thread can borrow
+    // `graph` because `std::thread::scope` guarantees all threads join before
+    // the scope exits.
+    std::thread::scope(|s| {
+        // Merge local graphs on a dedicated thread as workers produce them.
+        // This avoids buffering all LocalGraphs in the channel at once.
+        let merge_handle = s.spawn(|| {
+            while let Ok(local_graph) = local_graphs_rx.recv() {
+                graph.update(local_graph);
+            }
+        });
 
-    while let Ok(local_graph) = local_graphs_rx.recv() {
-        graph.update(local_graph);
-    }
+        // Run the worker pool (blocks until all jobs complete, then senders drop)
+        JobQueue::run(&queue);
+
+        // Wait for merge thread to finish consuming remaining buffered graphs
+        merge_handle.join().expect("Merge thread panicked");
+    });
 
     errors_rx.iter().collect()
 }
