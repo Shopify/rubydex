@@ -1,14 +1,24 @@
-use std::{
-    hash::{Hash, Hasher},
-    marker::PhantomData,
-    ops::Deref,
-};
+use std::{marker::PhantomData, num::NonZeroU64, ops::Deref};
 use xxhash_rust::xxh3;
 
-/// A deterministic type-safe ID representation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Maps a u64 hash to a `NonZeroU64` by replacing 0 with `u64::MAX`.
+/// The probability of a 64-bit hash being exactly 0 is 2^-64 (~5.4e-20),
+/// and remapping 0 → MAX just means those two inputs collide — the same
+/// risk as any other hash collision, which the system already handles.
+const MAX_NONZERO: NonZeroU64 = NonZeroU64::new(u64::MAX).unwrap();
+
+#[inline]
+fn to_non_zero(value: u64) -> NonZeroU64 {
+    NonZeroU64::new(value).unwrap_or(MAX_NONZERO)
+}
+
+/// A deterministic type-safe ID representation.
+///
+/// Uses `NonZeroU64` internally so that `Option<Id<T>>` is 8 bytes (same as `Id<T>`)
+/// via niche optimization, instead of 16 bytes with a plain `u64`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Id<T> {
-    value: u64,
+    value: NonZeroU64,
     _marker: PhantomData<T>,
 }
 
@@ -16,9 +26,15 @@ impl<T> Id<T> {
     #[must_use]
     pub fn new(value: u64) -> Self {
         Self {
-            value,
+            value: to_non_zero(value),
             _marker: PhantomData,
         }
+    }
+
+    /// Returns the underlying `u64` value.
+    #[must_use]
+    pub fn get(&self) -> u64 {
+        self.value.get()
     }
 }
 
@@ -26,19 +42,17 @@ impl<T> Deref for Id<T> {
     type Target = u64;
 
     fn deref(&self) -> &Self::Target {
-        &self.value
+        // SAFETY: NonZeroU64 is #[repr(transparent)] over u64.
+        // Deref requires returning &u64, but NonZeroU64::get() returns by value,
+        // so the pointer cast is unavoidable here. Prefer Id::get() when a u64
+        // value (not a reference) is sufficient.
+        unsafe { &*std::ptr::from_ref(&self.value).cast::<u64>() }
     }
 }
 
 impl<T> std::fmt::Display for Id<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.value)
-    }
-}
-
-impl<T> Hash for Id<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u64(self.value);
     }
 }
 
@@ -60,7 +74,7 @@ impl<T> From<&String> for Id<T> {
 mod tests {
     use super::*;
 
-    #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
     pub struct Marker;
     pub type TestId = Id<Marker>;
 
@@ -77,8 +91,20 @@ mod tests {
     }
 
     #[test]
-    fn deref_unwraps_value() {
+    fn get_returns_value() {
         let id = TestId::new(123);
-        assert_eq!(*id, 123);
+        assert_eq!(id.get(), 123);
+    }
+
+    #[test]
+    fn optional_id_is_still_8_bytes() {
+        assert_eq!(std::mem::size_of::<Option<TestId>>(), 8);
+        assert_eq!(std::mem::size_of::<TestId>(), 8);
+    }
+
+    #[test]
+    fn zero_hash_maps_to_nonzero() {
+        let id = TestId::new(0);
+        assert_eq!(id.get(), u64::MAX);
     }
 }
