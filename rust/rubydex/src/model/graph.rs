@@ -11,6 +11,7 @@ use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::sorted_vec_map::SortedVecMap;
 use crate::model::string_ref::StringRef;
 use crate::stats;
 
@@ -48,8 +49,9 @@ pub struct Graph {
     names: IdentityHashMap<NameId, NameRef>,
     // Map of constant references
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
-    // Map of method references that still need to be resolved
-    method_references: IdentityHashMap<ReferenceId, MethodRef>,
+    // Method references stored as a sorted vec for compact memory usage.
+    // Not used during resolution — only queried and removed during incremental updates.
+    method_references: SortedVecMap<ReferenceId, MethodRef>,
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
@@ -69,7 +71,7 @@ impl Graph {
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
-            method_references: IdentityHashMap::default(),
+            method_references: SortedVecMap::new(),
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
         }
@@ -358,10 +360,16 @@ impl Graph {
         &self.constant_references
     }
 
-    // Returns an immutable reference to the method references map
+    // Returns an immutable reference to the method references
     #[must_use]
-    pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
+    pub fn method_references(&self) -> &SortedVecMap<ReferenceId, MethodRef> {
         &self.method_references
+    }
+
+    /// Sort method references for efficient lookup.
+    /// Must be called after bulk loading (indexing) is complete.
+    pub fn sort_method_references(&mut self) {
+        self.method_references.sort();
     }
 
     #[must_use]
@@ -776,9 +784,7 @@ impl Graph {
         }
 
         for (method_ref_id, method_ref) in method_references {
-            if self.method_references.insert(method_ref_id, method_ref).is_some() {
-                debug_assert!(false, "Method ReferenceId collision in global graph");
-            }
+            self.method_references.push(method_ref_id, method_ref);
         }
 
         for (name_id, deps) in name_dependents {
