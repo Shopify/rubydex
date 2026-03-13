@@ -2715,6 +2715,30 @@ mod tests {
     }
 
     #[test]
+    fn resolving_method_alias_cross_file() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class Foo
+              def original; end
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            r"
+            class Foo
+              alias_method :new_name, :original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["new_name()", "original()"]);
+    }
+
+    #[test]
     fn resolving_method_alias_cross_file_constant_receiver() {
         let mut context = GraphTest::new();
         context.index_uri("file:///a.rb", {

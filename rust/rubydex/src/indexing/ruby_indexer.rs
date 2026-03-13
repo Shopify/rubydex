@@ -4551,6 +4551,7 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
             assert_definition_at!(&context, "3:5-3:24", MethodAlias, |alias_method| {
+                assert!(alias_method.receiver().is_none());
                 assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
             });
         });
@@ -4969,7 +4970,7 @@ mod tests {
             let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
             assert_eq!(new_name.as_str(), "foo()");
             assert_eq!(old_name.as_str(), "bar()");
-
+            assert!(def.receiver().is_none());
             assert!(def.lexical_nesting_id().is_none());
         });
 
@@ -5141,6 +5142,29 @@ mod tests {
             assert_method_has_receiver!(&context, def, "B");
             assert!(def.lexical_nesting_id().is_none());
         });
+    }
+
+    #[test]
+    fn index_alias_method_with_dynamic_receiver_not_indexed() {
+        let context = index_source({
+            "
+            class Foo
+              def original; end
+            end
+
+            foo.alias_method :new_name, :original
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let alias_count = context
+            .graph()
+            .definitions()
+            .values()
+            .filter(|def| matches!(def, Definition::MethodAlias(_)))
+            .count();
+        assert_eq!(0, alias_count);
     }
 
     #[test]
