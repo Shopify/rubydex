@@ -1,8 +1,10 @@
 //! Visit the RBS AST and create type definitions.
 
+use core::panic;
+
 use ruby_rbs::node::{
-    self, ClassNode, CommentNode, ConstantNode, ExtendNode, GlobalNode, IncludeNode, ModuleNode, Node, NodeList,
-    PrependNode, TypeNameNode, Visit,
+    self, ClassNode, CommentNode, ConstantNode, ExtendNode, FunctionTypeNode, GlobalNode, IncludeNode, ModuleNode,
+    Node, NodeList, PrependNode, TypeNameNode, Visit,
 };
 
 use crate::diagnostic::Rule;
@@ -10,12 +12,13 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition, GlobalVariableDefinition,
-    IncludeDefinition, Mixin, ModuleDefinition, PrependDefinition,
+    IncludeDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct, PrependDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, ReferenceId, UriId};
 use crate::model::name::{Name, ParentScope};
 use crate::model::references::ConstantReference;
+use crate::model::visibility::Visibility;
 use crate::offset::Offset;
 
 pub struct RBSIndexer<'a> {
@@ -167,6 +170,93 @@ impl<'a> RBSIndexer<'a> {
             self.add_member_to_current_lexical_scope(id, definition_id);
         }
         definition_id
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn source_at(&self, location: &node::RBSLocationRange) -> String {
+        let start = location.start() as usize;
+        let end = location.end() as usize;
+        self.source[start..end].to_string()
+    }
+
+    fn intern_param(&mut self, param: &node::FunctionParamNode) -> ParameterStruct {
+        let location = param.location();
+        let str_id = self.local_graph.intern_string(self.source_at(&location));
+        ParameterStruct::new(Offset::from_rbs_location(&location), str_id)
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn collect_parameters(&mut self, function_node: &FunctionTypeNode) -> Vec<Parameter> {
+        let mut parameters = Vec::new();
+
+        for node in function_node.required_positionals().iter() {
+            let Node::FunctionParam(param) = node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            parameters.push(Parameter::RequiredPositional(self.intern_param(&param)));
+        }
+
+        for node in function_node.optional_positionals().iter() {
+            let Node::FunctionParam(param) = node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            parameters.push(Parameter::OptionalPositional(self.intern_param(&param)));
+        }
+
+        if let Some(node) = function_node.rest_positionals() {
+            let Node::FunctionParam(param) = node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            parameters.push(Parameter::RestPositional(self.intern_param(&param)));
+        }
+
+        for node in function_node.trailing_positionals().iter() {
+            let Node::FunctionParam(param) = node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            parameters.push(Parameter::Post(self.intern_param(&param)));
+        }
+
+        for (key, value) in function_node.required_keywords().iter() {
+            let name = format!(
+                "{}: {}",
+                self.source_at(&key.location()),
+                self.source_at(&value.location())
+            );
+            let offset = Offset::new(
+                Offset::from_rbs_location(&key.location()).start(),
+                Offset::from_rbs_location(&value.location()).end(),
+            );
+            let str_id = self.local_graph.intern_string(name);
+            parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(offset, str_id)));
+        }
+
+        for (key, value) in function_node.optional_keywords().iter() {
+            let name = format!(
+                "{}: {}",
+                self.source_at(&key.location()),
+                self.source_at(&value.location())
+            );
+            let offset = Offset::new(
+                Offset::from_rbs_location(&key.location()).start(),
+                Offset::from_rbs_location(&value.location()).end(),
+            );
+            let str_id = self.local_graph.intern_string(name);
+            parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(offset, str_id)));
+        }
+
+        if let Some(node) = function_node.rest_keywords() {
+            let location = node.location();
+            // Include the ** prefix (2 bytes before the node location)
+            let start = location.start() - 2;
+            let end = location.end();
+            let name = &self.source[start as usize..end as usize];
+            let str_id = self.local_graph.intern_string(name.to_string());
+            let offset = Offset::new(start as u32, end as u32);
+            parameters.push(Parameter::RestKeyword(ParameterStruct::new(offset, str_id)));
+        }
+
+        parameters
     }
 
     /// Extracts definition flags from the list of RBS annotations.
@@ -324,6 +414,64 @@ impl Visit for RBSIndexer<'_> {
             Mixin::Extend(ExtendDefinition::new(ref_id))
         });
     }
+
+    fn visit_method_definition_node(&mut self, def_node: &node::MethodDefinitionNode) {
+        // Singleton and singleton_instance methods are not indexed for now.
+        if matches!(
+            def_node.kind(),
+            node::MethodDefinitionKind::Singleton | node::MethodDefinitionKind::SingletonInstance
+        ) {
+            return;
+        }
+
+        let str_id = self
+            .local_graph
+            .intern_string(format!("{}()", Self::bytes_to_string(def_node.name().name())));
+        let offset = Offset::from_rbs_location(&def_node.location());
+        let comments = Self::collect_comments(def_node.comment());
+        let flags = Self::flags(&def_node.annotations());
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+
+        // RBS carries visibility directly on the node; Unspecified defaults to Public.
+        let visibility = match def_node.visibility() {
+            node::MethodDefinitionVisibility::Private => Visibility::Private,
+            node::MethodDefinitionVisibility::Public | node::MethodDefinitionVisibility::Unspecified => {
+                Visibility::Public
+            }
+        };
+
+        // TODO: Import the first overload only.
+        if let Some(overload_node) = def_node.overloads().iter().next() {
+            let Node::MethodDefinitionOverload(overload) = overload_node else {
+                panic!("Expected FunctionType node in overloads, found {overload_node:?}");
+            };
+            let Node::MethodType(method_type) = overload.method_type() else {
+                panic!(
+                    "Expected MethodType node in overloads, found {:?}",
+                    overload.method_type()
+                );
+            };
+            let params = match method_type.type_() {
+                Node::FunctionType(function_type) => self.collect_parameters(&function_type),
+                Node::UntypedFunctionType(_) => Vec::new(),
+                other => panic!("Expected FunctionType node in overloads, found {other:?}"),
+            };
+
+            let definition = Definition::Method(Box::new(MethodDefinition::new(
+                str_id,
+                self.uri_id,
+                offset.clone(),
+                comments.clone(),
+                flags.clone(),
+                lexical_nesting_id,
+                params,
+                visibility,
+                None,
+            )));
+
+            self.register_definition(definition, lexical_nesting_id);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -331,12 +479,27 @@ mod tests {
     use ruby_rbs::node::{self, Node, NodeList};
 
     use crate::indexing::rbs_indexer::RBSIndexer;
-    use crate::model::definitions::DefinitionFlags;
+    use crate::model::definitions::{DefinitionFlags, Parameter};
+    use crate::model::visibility::Visibility;
     use crate::test_utils::LocalGraphTest;
     use crate::{
         assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
         assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_no_local_diagnostics,
+        assert_string_eq,
     };
+
+    macro_rules! assert_parameter {
+        ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
+            match $expr {
+                Parameter::$variant($param) => $body,
+                _ => panic!(
+                    "parameter kind mismatch: expected `{}`, got `{:?}`",
+                    stringify!($variant),
+                    $expr
+                ),
+            }
+        };
+    }
 
     fn index_source(source: &str) -> LocalGraphTest {
         LocalGraphTest::new_rbs("file:///foo.rbs", source)
@@ -712,6 +875,125 @@ mod tests {
         assert_definition_at!(&context, "13:1-13:13", GlobalVariable, |def| {
             assert_def_str_eq!(&context, def, "$BAR");
             assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+    }
+
+    #[test]
+    fn index_method_definition() {
+        let context = index_source({
+            "
+            class Foo
+              def foo: () -> void
+
+              def bar: (?) -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_def_name_eq!(&context, class_def, "Foo");
+            assert_eq!(2, class_def.members().len());
+
+            assert_definition_at!(&context, "2:3-2:22", Method, |def| {
+                assert_def_str_eq!(&context, def, "foo()");
+                assert!(def.receiver().is_none());
+                assert_eq!(def.visibility(), &Visibility::Public);
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "4:3-4:23", Method, |def| {
+                assert_def_str_eq!(&context, def, "bar()");
+                assert!(def.receiver().is_none());
+                assert_eq!(def.visibility(), &Visibility::Public);
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(class_def.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_method_definition_with_parameters() {
+        let context = index_source({
+            "
+            class Foo
+              def foo: (String, ?Integer, *String, Symbol, name: String, ?age: Integer, **untyped) -> void
+
+              def bar: (String a, ?Integer b, *String c, Symbol d, name: String e, ?age: Integer f, **untyped rest) -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // Method without parameter names
+        assert_definition_at!(&context, "2:3-2:95", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.parameters().len(), 7);
+
+            assert_parameter!(&def.parameters()[0], RequiredPositional, |param| {
+                assert_string_eq!(context, param.str(), "String");
+            });
+
+            assert_parameter!(&def.parameters()[1], OptionalPositional, |param| {
+                assert_string_eq!(context, param.str(), "Integer");
+            });
+
+            assert_parameter!(&def.parameters()[2], RestPositional, |param| {
+                assert_string_eq!(context, param.str(), "String");
+            });
+
+            assert_parameter!(&def.parameters()[3], Post, |param| {
+                assert_string_eq!(context, param.str(), "Symbol");
+            });
+
+            assert_parameter!(&def.parameters()[4], RequiredKeyword, |param| {
+                assert_string_eq!(context, param.str(), "name: String");
+            });
+
+            assert_parameter!(&def.parameters()[5], OptionalKeyword, |param| {
+                assert_string_eq!(context, param.str(), "age: Integer");
+            });
+
+            assert_parameter!(&def.parameters()[6], RestKeyword, |param| {
+                assert_string_eq!(context, param.str(), "**untyped");
+            });
+        });
+
+        // Method with parameter names
+        assert_definition_at!(&context, "4:3-4:112", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.parameters().len(), 7);
+
+            assert_parameter!(&def.parameters()[0], RequiredPositional, |param| {
+                assert_string_eq!(context, param.str(), "String a");
+            });
+
+            assert_parameter!(&def.parameters()[1], OptionalPositional, |param| {
+                assert_string_eq!(context, param.str(), "Integer b");
+            });
+
+            assert_parameter!(&def.parameters()[2], RestPositional, |param| {
+                assert_string_eq!(context, param.str(), "String c");
+            });
+
+            assert_parameter!(&def.parameters()[3], Post, |param| {
+                assert_string_eq!(context, param.str(), "Symbol d");
+            });
+
+            assert_parameter!(&def.parameters()[4], RequiredKeyword, |param| {
+                assert_string_eq!(context, param.str(), "name: String e");
+            });
+
+            assert_parameter!(&def.parameters()[5], OptionalKeyword, |param| {
+                assert_string_eq!(context, param.str(), "age: Integer f");
+            });
+
+            assert_parameter!(&def.parameters()[6], RestKeyword, |param| {
+                assert_string_eq!(context, param.str(), "**untyped rest");
+            });
         });
     }
 }
