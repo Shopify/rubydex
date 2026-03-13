@@ -633,13 +633,28 @@ impl<'a> RubyIndexer<'a> {
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
         let superclass = superclass_node.as_ref().and_then(|n| {
-            self.index_constant_reference(n, false).map(|id| {
-                self.local_graph.add_constant_reference(ConstantReference::new(
+            // Try direct constant reference first
+            if let Some(id) = self.index_constant_reference(n, false) {
+                return Some(self.local_graph.add_constant_reference(ConstantReference::new(
                     id,
                     self.uri_id,
                     Offset::from_prism_location(&n.location()),
-                ))
-            })
+                )));
+            }
+            // For call nodes (e.g. `ActiveRecord::Migration[7.0]`), try the receiver constant
+            if let ruby_prism::Node::CallNode { .. } = n {
+                let call = n.as_call_node().unwrap();
+                if let Some(receiver) = call.receiver()
+                    && let Some(id) = self.index_constant_reference(&receiver, false)
+                {
+                    return Some(self.local_graph.add_constant_reference(ConstantReference::new(
+                        id,
+                        self.uri_id,
+                        Offset::from_prism_location(&receiver.location()),
+                    )));
+                }
+            }
+            None
         });
 
         if let Some(superclass_node) = superclass_node
@@ -4583,7 +4598,6 @@ mod tests {
             [
                 "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
                 "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
-                "dynamic-ancestor: Dynamic superclass (3:21-3:49)",
                 "dynamic-constant-reference: Dynamic constant reference (4:13-4:16)",
                 "dynamic-ancestor: Dynamic superclass (4:13-4:21)",
             ]
@@ -4598,7 +4612,7 @@ mod tests {
         });
 
         assert_definition_at!(&context, "3:1-3:54", Class, |def| {
-            assert!(def.superclass_ref().is_none(),);
+            assert!(def.superclass_ref().is_some(),);
         });
 
         assert_definition_at!(&context, "4:1-4:26", Class, |def| {
