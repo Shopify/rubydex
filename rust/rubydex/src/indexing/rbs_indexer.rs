@@ -147,14 +147,44 @@ impl<'a> RBSIndexer<'a> {
         }
     }
 
-    fn collect_comments(comment_node: Option<CommentNode>) -> Vec<Comment> {
-        comment_node
-            .into_iter()
-            .map(|comment| {
-                let text = Self::bytes_to_string(comment.string().as_bytes());
-                Comment::new(Offset::from_rbs_location(&comment.location()), text)
-            })
-            .collect()
+    #[allow(clippy::cast_possible_truncation)]
+    fn collect_comments(&self, comment_node: Option<CommentNode>) -> Vec<Comment> {
+        let Some(comment_node) = comment_node else {
+            return Vec::new();
+        };
+
+        let location = comment_node.location();
+        let start = location.start().cast_unsigned() as usize;
+        let end = location.end().cast_unsigned() as usize;
+
+        let comment_block = &self.source[start..end];
+        let lines: Vec<&str> = comment_block.split('\n').collect();
+
+        let mut comments = Vec::with_capacity(lines.len());
+        let mut current_offset = start as u32;
+
+        for (i, line) in lines.iter().enumerate() {
+            let line_indent = if i == 0 {
+                0
+            } else {
+                line.len() - line.trim_start().len()
+            };
+
+            // Skip past indentation to the comment text
+            current_offset += line_indent as u32;
+
+            let line_text = line[line_indent..].to_string();
+            let line_bytes = line_text.len() as u32;
+            let offset = Offset::new(current_offset, current_offset + line_bytes);
+            comments.push(Comment::new(offset, line_text));
+
+            // Advance past current line text + newline for the next line
+            if i < lines.len() - 1 {
+                current_offset += line_bytes + 1;
+            }
+        }
+
+        comments
     }
 
     fn register_definition(
@@ -201,7 +231,7 @@ impl Visit for RBSIndexer<'_> {
         let offset = Offset::from_rbs_location(&class_node.location());
         let name_offset = Offset::from_rbs_location(&type_name.name().location());
 
-        let comments = Self::collect_comments(class_node.comment());
+        let comments = self.collect_comments(class_node.comment());
 
         let superclass_ref = class_node.super_class().as_ref().map(|super_node| {
             let type_name = super_node.name();
@@ -241,7 +271,7 @@ impl Visit for RBSIndexer<'_> {
         let offset = Offset::from_rbs_location(&module_node.location());
         let name_offset = Offset::from_rbs_location(&type_name.name().location());
 
-        let comments = Self::collect_comments(module_node.comment());
+        let comments = self.collect_comments(module_node.comment());
 
         let definition = Definition::Module(Box::new(ModuleDefinition::new(
             name_id,
@@ -271,7 +301,7 @@ impl Visit for RBSIndexer<'_> {
         let name_id = self.index_type_name(&type_name, nesting_name_id);
         let offset = Offset::from_rbs_location(&constant_node.location());
 
-        let comments = Self::collect_comments(constant_node.comment());
+        let comments = self.collect_comments(constant_node.comment());
 
         let definition = Definition::Constant(Box::new(ConstantDefinition::new(
             name_id,
@@ -293,7 +323,7 @@ impl Visit for RBSIndexer<'_> {
             .intern_string(Self::bytes_to_string(global_node.name().name()));
         let offset = Offset::from_rbs_location(&global_node.location());
 
-        let comments = Self::collect_comments(global_node.comment());
+        let comments = self.collect_comments(global_node.comment());
 
         let definition = Definition::GlobalVariable(Box::new(GlobalVariableDefinition::new(
             str_id,
@@ -526,7 +556,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:1-2:12", Constant, |def| {
             assert_def_name_eq!(&context, def, "FOO");
-            assert_def_comments_eq!(&context, def, ["Some documentation\n"]);
+            assert_def_comments_eq!(&context, def, ["# Some documentation"]);
         });
     }
 
@@ -551,7 +581,7 @@ mod tests {
 
         assert_definition_at!(&context, "4:1-4:14", GlobalVariable, |def| {
             assert_def_str_eq!(&context, def, "$bar");
-            assert_def_comments_eq!(&context, def, ["A global variable\n"]);
+            assert_def_comments_eq!(&context, def, ["# A global variable"]);
         });
     }
 
@@ -712,6 +742,52 @@ mod tests {
         assert_definition_at!(&context, "13:1-13:13", GlobalVariable, |def| {
             assert_def_str_eq!(&context, def, "$BAR");
             assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
+        });
+    }
+
+    #[test]
+    fn split_multiline_comments() {
+        let context = index_source({
+            "
+            # First line
+            # Second line
+            # Third line
+            class Foo
+              # A comment for Bar
+                # Another line for Bar
+            # One more line for Bar
+              module Bar
+              end
+            end
+
+            # splits strings at the \\n char
+            BAZ: Integer
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:1-10:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+            assert_def_comments_eq!(&context, def, ["# First line", "# Second line", "# Third line"]);
+        });
+
+        assert_definition_at!(&context, "8:3-9:6", Module, |def| {
+            assert_def_name_eq!(&context, def, "Bar");
+            assert_def_comments_eq!(
+                &context,
+                def,
+                [
+                    "# A comment for Bar",
+                    "# Another line for Bar",
+                    "# One more line for Bar"
+                ]
+            );
+        });
+
+        assert_definition_at!(&context, "13:1-13:13", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+            assert_def_comments_eq!(&context, def, ["# splits strings at the \\n char"]);
         });
     }
 }
