@@ -2168,6 +2168,34 @@ mod tests {
         }};
     }
 
+    /// Asserts that a method reference has the expected receiver.
+    ///
+    /// Finds a `MethodRef` by name and checks its receiver's string representation.
+    ///
+    /// Usage:
+    /// - `assert_method_ref_receiver!(context, "bar", "<Foo>")`
+    macro_rules! assert_method_ref_receiver {
+        ($context:expr, $method_name:expr, $expected_receiver:expr) => {{
+            let method_ref = $context
+                .graph()
+                .method_references()
+                .values()
+                .find(|method_ref| *method_ref.str() == StringId::from($method_name))
+                .unwrap_or_else(|| panic!("should have a method reference for {}", $method_name));
+
+            let receiver = $context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+
+            assert_eq!(
+                StringId::from($expected_receiver),
+                *receiver.str(),
+                "receiver mismatch for `{}`: expected `{}`, got `{}`",
+                $method_name,
+                $expected_receiver,
+                $context.graph().strings().get(receiver.str()).unwrap().as_str()
+            );
+        }};
+    }
+
     macro_rules! assert_promotable {
         ($def:expr) => {{
             assert!(
@@ -4142,20 +4170,9 @@ mod tests {
 
         assert_no_local_diagnostics!(&context);
 
-        let find_ref = |name: &str| {
-            context
-                .graph()
-                .method_references()
-                .values()
-                .find(|method_ref| *method_ref.str() == StringId::from(name))
-                .unwrap_or_else(|| panic!("should have a method reference for {name}"))
-        };
-
-        for name in ["bar", "baz", "qux"] {
-            let method_ref = find_ref(name);
-            let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-            assert_eq!(StringId::from("<Foo>"), *receiver.str(), "receiver mismatch for {name}");
-        }
+        assert_method_ref_receiver!(context, "bar", "<Foo>");
+        assert_method_ref_receiver!(context, "baz", "<Foo>");
+        assert_method_ref_receiver!(context, "qux", "<Foo>");
     }
 
     #[test]
@@ -4169,10 +4186,7 @@ mod tests {
         });
 
         assert_no_local_diagnostics!(&context);
-
-        let bar_ref = context.graph().method_references().values().next().unwrap();
-        let receiver = context.graph().names().get(&bar_ref.receiver().unwrap()).unwrap();
-        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert_method_ref_receiver!(context, "bar", "<Foo>");
     }
 
     #[test]
@@ -4189,25 +4203,8 @@ mod tests {
         });
 
         assert_no_local_diagnostics!(&context);
-
-        let find_ref = |name: &str| {
-            context
-                .graph()
-                .method_references()
-                .values()
-                .find(|method_ref| *method_ref.str() == StringId::from(name))
-                .unwrap_or_else(|| panic!("should have a method reference for {name}"))
-        };
-
-        for name in ["bar", "baz"] {
-            let method_ref = find_ref(name);
-            let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-            assert_eq!(
-                StringId::from("<<Foo>>"),
-                *receiver.str(),
-                "receiver mismatch for {name}"
-            );
-        }
+        assert_method_ref_receiver!(context, "bar", "<<Foo>>");
+        assert_method_ref_receiver!(context, "baz", "<<Foo>>");
     }
 
     #[test]
@@ -4219,10 +4216,7 @@ mod tests {
         });
 
         assert_no_local_diagnostics!(&context);
-
-        let bar_ref = context.graph().method_references().values().next().unwrap();
-        let receiver = context.graph().names().get(&bar_ref.receiver().unwrap()).unwrap();
-        assert_eq!(StringId::from("Object"), *receiver.str());
+        assert_method_ref_receiver!(context, "bar", "Object");
     }
 
     #[test]
