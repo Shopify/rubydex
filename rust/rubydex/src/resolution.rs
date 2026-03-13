@@ -1060,15 +1060,16 @@ impl<'a> Resolver<'a> {
         if let Some(&parent_scope) = name_ref.parent_scope().as_ref() {
             // If we have `A::B`, the owner of `B` is whatever `A` resolves to.
             // If `A` is an alias, resolve through to get the actual namespace.
-            // On `Retry`, we don't create a Todo: the parent may still resolve through inheritance once ancestors are
-            // linearized. We only create Todos for `Unresolved` outcomes where the parent is genuinely unknown.
             match self.resolve_constant_internal(parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
-                // Retry or Unresolved(Some(_)) means we might find it later through ancestor linearization
-                Outcome::Retry(id) => Outcome::Retry(id),
+                // Retry(Some) or Unresolved(Some) means we might find it later through ancestor linearization
+                Outcome::Retry(Some(id)) => Outcome::Retry(Some(id)),
                 Outcome::Unresolved(Some(id)) => Outcome::Unresolved(Some(id)),
-                // Only create a Todo when genuinely unresolvable (no pending linearizations)
-                Outcome::Unresolved(None) => {
+                // Retry(None) means the parent's own parent scope is unresolved (e.g., B in `A::B::C`
+                // where A is unknown). Rather than retrying indefinitely, treat it the same as
+                // Unresolved(None) and eagerly create Todos for the entire parent chain. If a real
+                // definition appears later, the Todo gets promoted via the existing promotion mechanism.
+                Outcome::Retry(None) | Outcome::Unresolved(None) => {
                     let parent_name = self.graph.names().get(&parent_scope).unwrap();
                     let parent_str_id = *parent_name.str();
                     let parent_has_explicit_prefix = parent_name.parent_scope().as_ref().is_some();
@@ -5462,5 +5463,167 @@ mod tests {
         assert_members_eq!(context, "Bar", vec!["Baz"]);
         assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
         assert_declaration_does_not_exist!(context, "Foo::Bar");
+    }
+
+    #[test]
+    fn todo_chain_two_levels_unknown() {
+        // class A::B::C — neither A nor B exist. Both should become Todos, C is a Class.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class A::B::C
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "A", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B::C", "Class");
+        assert_members_eq!(context, "Object", vec!["A"]);
+        assert_members_eq!(context, "A", vec!["B"]);
+        assert_members_eq!(context, "A::B", vec!["C"]);
+        assert_members_eq!(context, "A::B::C", vec!["foo()"]);
+    }
+
+    #[test]
+    fn todo_chain_three_levels_unknown() {
+        // class A::B::C::D — A, B, C are all unknown. Tests recursion beyond depth 2.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class A::B::C::D
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "A", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B::C", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B::C::D", "Class");
+        assert_members_eq!(context, "Object", vec!["A"]);
+        assert_members_eq!(context, "A", vec!["B"]);
+        assert_members_eq!(context, "A::B", vec!["C"]);
+        assert_members_eq!(context, "A::B::C", vec!["D"]);
+        assert_members_eq!(context, "A::B::C::D", vec!["foo()"]);
+    }
+
+    #[test]
+    fn todo_chain_partially_unresolvable() {
+        // A exists but B doesn't — A resolves to a real Module, B becomes a Todo under A.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module A; end
+            class A::B::C
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "A", "Module");
+        assert_declaration_kind_eq!(context, "A::B", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B::C", "Class");
+        assert_members_eq!(context, "A", vec!["B"]);
+        assert_members_eq!(context, "A::B", vec!["C"]);
+        assert_members_eq!(context, "A::B::C", vec!["foo()"]);
+    }
+
+    #[test]
+    fn todo_chain_shared_by_sibling_classes() {
+        // Two classes share the same unknown parent chain. The Todos for A and B should
+        // be created once and reused, with both C and D as members of B.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class A::B::C
+              def c_method; end
+            end
+
+            class A::B::D
+              def d_method; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "A", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B::C", "Class");
+        assert_declaration_kind_eq!(context, "A::B::D", "Class");
+        assert_members_eq!(context, "Object", vec!["A"]);
+        assert_members_eq!(context, "A", vec!["B"]);
+        assert_members_eq!(context, "A::B", vec!["C", "D"]);
+        assert_members_eq!(context, "A::B::C", vec!["c_method()"]);
+        assert_members_eq!(context, "A::B::D", vec!["d_method()"]);
+    }
+
+    #[test]
+    fn todo_chain_promoted_incrementally() {
+        // Index class A::B::C first (creates Todos), then provide real definitions.
+        // All Todos should be promoted to real namespaces.
+        //
+        // Note: we don't have true incremental resolution yet — each resolve() call
+        // clears all declarations and re-resolves from scratch. This test verifies that
+        // the promotion works when both files are present during the second resolution pass,
+        // not that Todos are surgically updated in place.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///c.rb", {
+            r"
+            class A::B::C
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "A", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B::C", "Class");
+
+        context.index_uri("file:///a.rb", {
+            r"
+            module A
+              module B
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Todos should be promoted
+        assert_declaration_kind_eq!(context, "A", "Module");
+        assert_declaration_kind_eq!(context, "A::B", "Module");
+        assert_declaration_kind_eq!(context, "A::B::C", "Class");
+        assert_members_eq!(context, "A", vec!["B"]);
+        assert_members_eq!(context, "A::B", vec!["C"]);
+        assert_members_eq!(context, "A::B::C", vec!["foo()"]);
+    }
+
+    #[test]
+    fn todo_chain_with_self_method_and_ivar() {
+        // def self.foo with @x inside a multi-level compact class — the SelfReceiver
+        // on the method must find C's declaration to create the singleton class and ivar.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class A::B::C
+              def self.foo
+                @x = 1
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "A", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B", "<TODO>");
+        assert_declaration_kind_eq!(context, "A::B::C", "Class");
+        assert_declaration_exists!(context, "A::B::C::<C>#foo()");
+        assert_declaration_exists!(context, "A::B::C::<C>#@x");
     }
 }
