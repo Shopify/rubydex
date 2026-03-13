@@ -509,8 +509,25 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 Definition::MethodAlias(alias) => {
-                    let Some(owner_id) = self.resolve_lexical_owner(*alias.lexical_nesting_id()) else {
-                        continue;
+                    // Method aliases operate on instance methods. The SelfReceiver arm is for
+                    // RBS `alias self.x self.y`.
+                    let owner_id = match alias.receiver() {
+                        Some(Receiver::SelfReceiver(def_id)) => *self
+                            .graph
+                            .definition_id_to_declaration_id(*def_id)
+                            .expect("SelfReceiver definition should have a declaration"),
+                        Some(Receiver::ConstantReceiver(name_id)) => match self.graph.names().get(name_id).unwrap() {
+                            NameRef::Resolved(resolved) => *resolved.declaration_id(),
+                            NameRef::Unresolved(_) => {
+                                continue;
+                            }
+                        },
+                        None => {
+                            let Some(resolved) = self.resolve_lexical_owner(*alias.lexical_nesting_id()) else {
+                                continue;
+                            };
+                            resolved
+                        }
                     };
 
                     self.create_declaration(*alias.new_name_str_id(), id, owner_id, |name| {
@@ -2538,6 +2555,209 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_members_eq!(context, "Foo", ["bar()", "foo()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_with_self_receiver() {
+        // SelfReceiver resolves to instance methods (the class directly), not the singleton
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def original; end
+              self.alias_method :aliased, :original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["aliased()", "original()"]);
+    }
+
+    #[test]
+    fn resolving_alias_method_in_singleton_class_lands_on_singleton() {
+        // `class << self; alias_method ...; end` — alias lands on singleton via lexical nesting
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.find; end
+
+              class << self
+                alias_method :find_old, :find
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::<Foo>", ["find()", "find_old()"]);
+    }
+
+    #[test]
+    fn resolving_self_alias_method_is_equivalent_to_bare_alias_method() {
+        // `self.alias_method` and bare `alias_method` resolve identically (instance methods)
+        let mut context = GraphTest::new();
+        context.index_uri("file:///with_self.rb", {
+            r"
+            class WithSelf
+              def original; end
+              self.alias_method :aliased, :original
+            end
+            "
+        });
+        context.index_uri("file:///without_self.rb", {
+            r"
+            class WithoutSelf
+              def original; end
+              alias_method :aliased, :original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Both resolve identically: alias lands on instance methods
+        assert_members_eq!(context, "WithSelf", ["aliased()", "original()"]);
+        assert_members_eq!(context, "WithoutSelf", ["aliased()", "original()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_with_constant_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar
+              def to_s; end
+            end
+
+            class Foo
+              Bar.alias_method(:new_to_s, :to_s)
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Bar.alias_method places the alias on Bar's instance methods
+        assert_no_members!(context, "Foo");
+        assert_members_eq!(context, "Bar", ["new_to_s()", "to_s()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_with_nested_constant_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              class B
+                def original; end
+              end
+            end
+
+            A::B.alias_method :new_name, :original
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "A::B", ["new_name()", "original()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_constant_receiver_at_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def original; end
+            end
+
+            Foo.alias_method :new_name, :original
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["new_name()", "original()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_constant_receiver_inside_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar
+              def original; end
+            end
+
+            class Foo
+              class << self
+                Bar.alias_method :new_name, :original
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Constant receiver takes precedence over singleton class context
+        assert_members_eq!(context, "Bar", ["new_name()", "original()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_cross_file() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class Foo
+              def original; end
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            r"
+            class Foo
+              alias_method :new_name, :original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["new_name()", "original()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_cross_file_constant_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class Foo
+              def original; end
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            r"
+            Foo.alias_method :new_name, :original
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["new_name()", "original()"]);
     }
 
     #[test]
