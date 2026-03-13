@@ -1049,9 +1049,18 @@ impl<'a> RubyIndexer<'a> {
                             .expect("Nesting definition should exist");
 
                         match definition {
-                            Definition::Class(class_def) => Some(*class_def.name_id()),
-                            Definition::Module(module_def) => Some(*module_def.name_id()),
-                            Definition::SingletonClass(singleton_class_def) => Some(*singleton_class_def.name_id()),
+                            Definition::Class(class_def) => {
+                                is_singleton_name = true;
+                                Some(*class_def.name_id())
+                            }
+                            Definition::Module(module_def) => {
+                                is_singleton_name = true;
+                                Some(*module_def.name_id())
+                            }
+                            Definition::SingletonClass(singleton_class_def) => {
+                                is_singleton_name = true;
+                                Some(*singleton_class_def.name_id())
+                            }
                             Definition::Method(_) => None,
                             _ => panic!("current nesting is not a class/module/singleton class: {definition:?}"),
                         }
@@ -2155,6 +2164,34 @@ mod tests {
                 "method references mismatch: expected `{:?}`, got `{:?}`",
                 $expected_names,
                 actual_names
+            );
+        }};
+    }
+
+    /// Asserts that a method reference has the expected receiver.
+    ///
+    /// Finds a `MethodRef` by name and checks its receiver's string representation.
+    ///
+    /// Usage:
+    /// - `assert_method_ref_receiver!(context, "bar", "<Foo>")`
+    macro_rules! assert_method_ref_receiver {
+        ($context:expr, $method_name:expr, $expected_receiver:expr) => {{
+            let method_ref = $context
+                .graph()
+                .method_references()
+                .values()
+                .find(|method_ref| *method_ref.str() == StringId::from($method_name))
+                .unwrap_or_else(|| panic!("should have a method reference for {}", $method_name));
+
+            let receiver = $context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+
+            assert_eq!(
+                StringId::from($expected_receiver),
+                *receiver.str(),
+                "receiver mismatch for `{}`: expected `{}`, got `{}`",
+                $method_name,
+                $expected_receiver,
+                $context.graph().strings().get(receiver.str()).unwrap().as_str()
             );
         }};
     }
@@ -4117,6 +4154,69 @@ mod tests {
         assert_eq!(StringId::from("Foo"), *parent_scope.str());
         assert!(parent_scope.nesting().is_none());
         assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_receiver_at_class_level() {
+        let context = index_source({
+            "
+            class Foo
+              self.bar
+              baz
+            end
+            Foo.qux
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_method_ref_receiver!(context, "bar", "<Foo>");
+        assert_method_ref_receiver!(context, "baz", "<Foo>");
+        assert_method_ref_receiver!(context, "qux", "<Foo>");
+    }
+
+    #[test]
+    fn index_method_receiver_self_at_module_level() {
+        let context = index_source({
+            "
+            module Foo
+              self.bar
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "<Foo>");
+    }
+
+    #[test]
+    fn index_method_receiver_inside_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                self.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "<<Foo>>");
+        assert_method_ref_receiver!(context, "baz", "<<Foo>>");
+    }
+
+    #[test]
+    fn index_method_receiver_at_top_level() {
+        let context = index_source({
+            "
+            self.bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "Object");
     }
 
     #[test]

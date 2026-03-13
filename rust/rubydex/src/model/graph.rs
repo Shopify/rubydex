@@ -1833,18 +1833,18 @@ mod tests {
 
         context.index_uri("file:///foo.rb", source);
         assert_eq!(44, context.graph().definitions.len());
-        assert_eq!(7, context.graph().constant_references.len());
+        assert_eq!(9, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
         assert_eq!(1, context.graph().documents.len());
-        assert_eq!(12, context.graph().names.len());
-        assert_eq!(41, context.graph().strings.len());
+        assert_eq!(13, context.graph().names.len());
+        assert_eq!(42, context.graph().strings.len());
         context.index_uri("file:///foo.rb", source);
         assert_eq!(44, context.graph().definitions.len());
-        assert_eq!(7, context.graph().constant_references.len());
+        assert_eq!(9, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
         assert_eq!(1, context.graph().documents.len());
-        assert_eq!(12, context.graph().names.len());
-        assert_eq!(41, context.graph().strings.len());
+        assert_eq!(13, context.graph().names.len());
+        assert_eq!(42, context.graph().strings.len());
     }
 
     #[test]
