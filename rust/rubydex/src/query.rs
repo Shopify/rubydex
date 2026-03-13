@@ -419,12 +419,14 @@ fn method_argument_completion<'a>(
     // Find the first Method definition to extract keyword parameters
     for def_id in method_decl.definitions() {
         if let Some(Definition::Method(method_def)) = graph.definitions().get(def_id) {
-            for param in method_def.parameters() {
-                match param {
-                    Parameter::RequiredKeyword(p) | Parameter::OptionalKeyword(p) => {
-                        candidates.push(CompletionCandidate::KeywordArgument(*p.str()));
+            for signature in method_def.signatures().as_slice() {
+                for param in signature {
+                    match param {
+                        Parameter::RequiredKeyword(p) | Parameter::OptionalKeyword(p) => {
+                            candidates.push(CompletionCandidate::KeywordArgument(*p.str()));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
             break;
