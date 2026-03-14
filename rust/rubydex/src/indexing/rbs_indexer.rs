@@ -366,8 +366,8 @@ mod tests {
     use crate::test_utils::LocalGraphTest;
     use crate::{
         assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
-        assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_no_local_diagnostics,
-        assert_string_eq,
+        assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_method_has_receiver,
+        assert_no_local_diagnostics, assert_string_eq,
     };
 
     fn index_source(source: &str) -> LocalGraphTest {
@@ -812,7 +812,7 @@ mod tests {
         assert_definition_at!(&context, "2:3-2:26", MethodAlias, |def| {
             assert_string_eq!(&context, def.new_name_str_id(), "bar()");
             assert_string_eq!(&context, def.old_name_str_id(), "baz()");
-            assert!(def.receiver().is_some());
+            assert_method_has_receiver!(&context, def, "Foo");
         });
     }
 

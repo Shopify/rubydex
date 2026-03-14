@@ -479,6 +479,41 @@ macro_rules! assert_dependents {
     }};
 }
 
+// Receiver assertions
+
+/// Asserts that a method has the expected receiver.
+///
+/// Usage:
+/// - `assert_method_has_receiver!(ctx, method, "Foo")`
+/// - `assert_method_has_receiver!(ctx, method, "<Bar>")`
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_method_has_receiver {
+    ($context:expr, $method:expr, $expected_receiver:expr) => {{
+        let name_id = match $method.receiver() {
+            Some($crate::model::definitions::Receiver::SelfReceiver(def_id)) => {
+                let def = $context.graph().definitions().get(def_id).unwrap();
+                *def.name_id().expect("SelfReceiver definition should have a name_id")
+            }
+            Some($crate::model::definitions::Receiver::ConstantReceiver(name_id)) => *name_id,
+            None => {
+                panic!(
+                    "Method receiver mismatch: expected `{}`, got `None`",
+                    $expected_receiver
+                );
+            }
+        };
+
+        let name = $context.graph().names().get(&name_id).unwrap();
+        let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
+        assert_eq!(
+            $expected_receiver, actual_name,
+            "method receiver mismatch: expected `{}`, got `{}`",
+            $expected_receiver, actual_name
+        );
+    }};
+}
+
 // Diagnostic assertions
 
 #[cfg(test)]
