@@ -2070,8 +2070,8 @@ impl Visit<'_> for RubyIndexer<'_> {
 mod tests {
     use crate::{
         assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
-        assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_name_path_eq,
-        assert_no_local_diagnostics, assert_string_eq,
+        assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_method_has_receiver,
+        assert_name_path_eq, assert_no_local_diagnostics, assert_string_eq,
         model::{
             definitions::{Definition, Parameter, Receiver, Signatures},
             ids::{StringId, UriId},
@@ -2081,37 +2081,6 @@ mod tests {
     };
 
     // Method assertions
-
-    /// Asserts that a method has the expected receiver.
-    ///
-    /// Usage:
-    /// - `assert_method_has_receiver!(ctx, method, "Foo")`
-    /// - `assert_method_has_receiver!(ctx, method, "<Bar>")`
-    macro_rules! assert_method_has_receiver {
-        ($context:expr, $method:expr, $expected_receiver:expr) => {{
-            let name_id = match $method.receiver() {
-                Some(Receiver::SelfReceiver(def_id)) => {
-                    let def = $context.graph().definitions().get(def_id).unwrap();
-                    *def.name_id().expect("SelfReceiver definition should have a name_id")
-                }
-                Some(Receiver::ConstantReceiver(name_id)) => *name_id,
-                None => {
-                    panic!(
-                        "Method receiver mismatch: expected `{}`, got `None`",
-                        $expected_receiver
-                    );
-                }
-            };
-
-            let name = $context.graph().names().get(&name_id).unwrap();
-            let actual_name = $context.graph().strings().get(name.str()).unwrap().as_str();
-            assert_eq!(
-                $expected_receiver, actual_name,
-                "method receiver mismatch: expected `{}`, got `{}`",
-                $expected_receiver, actual_name
-            );
-        }};
-    }
 
     /// Asserts that a parameter matches the expected kind.
     ///
