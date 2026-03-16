@@ -79,6 +79,15 @@ impl Graph {
         }
     }
 
+    /// Reclaim wasted capacity in internal collections. Call after bulk indexing
+    /// is complete to reduce memory before resolution.
+    pub fn compact(&mut self) {
+        for deps in self.name_dependents.values_mut() {
+            deps.shrink_to_fit();
+        }
+        self.method_references.shrink_to_fit();
+    }
+
     // Returns an immutable reference to the declarations map
     #[must_use]
     pub fn declarations(&self) -> &IdentityHashMap<DeclarationId, Declaration> {
@@ -1264,13 +1273,28 @@ impl Graph {
         let nd_inline = map_bytes(self.name_dependents.len(), self.name_dependents.capacity(),
             std::mem::size_of::<NameId>() + std::mem::size_of::<Vec<NameDependent>>());
         let mut nd_heap: usize = 0;
+        let mut nd_total_deps: usize = 0;
+        let mut nd_wasted: usize = 0;
+        let mut nd_size_1 = 0usize;
+        let mut nd_size_2_4 = 0usize;
+        let mut nd_size_5_plus = 0usize;
         for deps in self.name_dependents.values() {
             nd_heap += deps.capacity() * std::mem::size_of::<NameDependent>();
+            nd_total_deps += deps.len();
+            nd_wasted += (deps.capacity() - deps.len()) * std::mem::size_of::<NameDependent>();
+            match deps.len() {
+                0 | 1 => nd_size_1 += 1,
+                2..=4 => nd_size_2_4 += 1,
+                _ => nd_size_5_plus += 1,
+            }
         }
         println!();
         println!("  {:40} {:>10} {:>10} {:>12.1}", "name_dependents (table)",
             self.name_dependents.len(), self.name_dependents.capacity(), mb(nd_inline));
-        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → dep vecs heap", "", "", mb(nd_heap));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → dep vecs heap", nd_total_deps, "", mb(nd_heap));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → wasted capacity", "", "", mb(nd_wasted));
+        println!("  {:40}   1={}, 2-4={}, 5+={}", "  → size distribution",
+            nd_size_1, nd_size_2_4, nd_size_5_plus);
 
         // 8. documents
         let doc_inline = map_bytes(self.documents.len(), self.documents.capacity(),

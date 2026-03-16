@@ -86,6 +86,8 @@ fn main() {
         eprintln!("{error}");
     }
 
+    graph.compact();
+
     if let Some(StopAfter::Indexing) = args.stop_after {
         return exit(args.stats);
     }
