@@ -65,7 +65,7 @@ pub struct MethodRef {
     /// The receiver of the method call if it's a constant
     receiver: Option<NameId>,
 }
-assert_mem_size!(MethodRef, 32);
+assert_mem_size!(MethodRef, 40);
 
 impl MethodRef {
     #[must_use]

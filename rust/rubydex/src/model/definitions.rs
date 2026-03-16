@@ -244,7 +244,7 @@ pub struct ClassDefinition {
     superclass_ref: Option<ReferenceId>,
     mixins: Vec<Mixin>,
 }
-assert_mem_size!(ClassDefinition, 128);
+assert_mem_size!(ClassDefinition, 144);
 
 impl ClassDefinition {
     #[must_use]
@@ -369,7 +369,7 @@ pub struct SingletonClassDefinition {
     /// Mixins declared in this singleton class
     mixins: Vec<Mixin>,
 }
-assert_mem_size!(SingletonClassDefinition, 120);
+assert_mem_size!(SingletonClassDefinition, 128);
 
 impl SingletonClassDefinition {
     #[must_use]
@@ -473,7 +473,7 @@ pub struct ModuleDefinition {
     members: Vec<DefinitionId>,
     mixins: Vec<Mixin>,
 }
-assert_mem_size!(ModuleDefinition, 120);
+assert_mem_size!(ModuleDefinition, 128);
 
 impl ModuleDefinition {
     #[must_use]
@@ -573,7 +573,7 @@ pub struct ConstantDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(ConstantDefinition, 64);
+assert_mem_size!(ConstantDefinition, 72);
 
 impl ConstantDefinition {
     #[must_use]
@@ -643,7 +643,7 @@ pub struct ConstantAliasDefinition {
     alias_constant: ConstantDefinition,
     target_name_id: NameId,
 }
-assert_mem_size!(ConstantAliasDefinition, 72);
+assert_mem_size!(ConstantAliasDefinition, 80);
 
 impl ConstantAliasDefinition {
     #[must_use]
@@ -721,7 +721,7 @@ pub struct MethodDefinition {
     receiver: Option<Receiver>,
 }
 
-assert_mem_size!(MethodDefinition, 104);
+assert_mem_size!(MethodDefinition, 112);
 
 /// The receiver of a singleton method definition.
 #[derive(Debug)]
@@ -877,7 +877,7 @@ pub struct AttrAccessorDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
-assert_mem_size!(AttrAccessorDefinition, 64);
+assert_mem_size!(AttrAccessorDefinition, 72);
 
 impl AttrAccessorDefinition {
     #[must_use]
@@ -958,7 +958,7 @@ pub struct AttrReaderDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
-assert_mem_size!(AttrReaderDefinition, 64);
+assert_mem_size!(AttrReaderDefinition, 72);
 
 impl AttrReaderDefinition {
     #[must_use]
@@ -1039,7 +1039,7 @@ pub struct AttrWriterDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
-assert_mem_size!(AttrWriterDefinition, 64);
+assert_mem_size!(AttrWriterDefinition, 72);
 
 impl AttrWriterDefinition {
     #[must_use]
@@ -1119,7 +1119,7 @@ pub struct GlobalVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(GlobalVariableDefinition, 64);
+assert_mem_size!(GlobalVariableDefinition, 72);
 
 impl GlobalVariableDefinition {
     #[must_use]
@@ -1192,7 +1192,7 @@ pub struct InstanceVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(InstanceVariableDefinition, 64);
+assert_mem_size!(InstanceVariableDefinition, 72);
 
 impl InstanceVariableDefinition {
     #[must_use]
@@ -1265,7 +1265,7 @@ pub struct ClassVariableDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(ClassVariableDefinition, 64);
+assert_mem_size!(ClassVariableDefinition, 72);
 
 impl ClassVariableDefinition {
     #[must_use]
@@ -1333,7 +1333,7 @@ pub struct MethodAliasDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(MethodAliasDefinition, 72);
+assert_mem_size!(MethodAliasDefinition, 80);
 
 impl MethodAliasDefinition {
     #[must_use]
@@ -1414,7 +1414,7 @@ pub struct GlobalVariableAliasDefinition {
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
 }
-assert_mem_size!(GlobalVariableAliasDefinition, 72);
+assert_mem_size!(GlobalVariableAliasDefinition, 80);
 
 impl GlobalVariableAliasDefinition {
     #[must_use]

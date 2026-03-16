@@ -503,13 +503,13 @@ impl Namespace {
 }
 
 namespace_declaration!(Class, ClassDeclaration);
-assert_mem_size!(ClassDeclaration, 216);
+assert_mem_size!(ClassDeclaration, 224);
 namespace_declaration!(Module, ModuleDeclaration);
-assert_mem_size!(ModuleDeclaration, 216);
+assert_mem_size!(ModuleDeclaration, 224);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
-assert_mem_size!(SingletonClassDeclaration, 216);
+assert_mem_size!(SingletonClassDeclaration, 224);
 namespace_declaration!(Todo, TodoDeclaration);
-assert_mem_size!(TodoDeclaration, 216);
+assert_mem_size!(TodoDeclaration, 224);
 simple_declaration!(ConstantDeclaration);
 assert_mem_size!(ConstantDeclaration, 112);
 simple_declaration!(MethodDeclaration);
