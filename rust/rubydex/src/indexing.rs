@@ -119,10 +119,15 @@ pub fn index_files(graph: &mut Graph, paths: Vec<PathBuf>) -> Vec<Errors> {
     drop(local_graphs_tx);
     drop(errors_tx);
 
-    JobQueue::run(&queue);
+    let handles = JobQueue::run_without_waiting(&queue);
 
+    // Merge graphs as they arrive, overlapping with indexing work on other threads.
     while let Ok(local_graph) = local_graphs_rx.recv() {
         graph.update(local_graph);
+    }
+
+    for handle in handles {
+        handle.join().expect("Worker thread panicked");
     }
 
     errors_rx.iter().collect()

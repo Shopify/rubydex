@@ -53,10 +53,32 @@ impl JobQueue {
         Self::run_with_workers(queue, worker_count);
     }
 
+    /// Spin up worker threads and return their handles without waiting for completion.
+    ///
+    /// The caller is responsible for joining the returned handles. This allows
+    /// overlapping other work (e.g. merging results) with job processing.
+    pub fn run_without_waiting(queue: &Arc<JobQueue>) -> Vec<thread::JoinHandle<()>> {
+        let worker_count = thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(4);
+
+        Self::spawn_workers(queue, worker_count)
+    }
+
     /// Spin up `worker_count` threads, each with its own local queue, and block until all threads finish.
     ///
     /// Workers steal from each other and from the global injector to keep the work balanced.
     fn run_with_workers(queue: &Arc<JobQueue>, worker_count: usize) {
+        let handles = Self::spawn_workers(queue, worker_count);
+
+        // Wait for all worker threads to finish before returning.
+        for handle in handles {
+            handle.join().expect("Worker thread panicked");
+        }
+    }
+
+    /// Spin up `worker_count` threads and return their join handles.
+    fn spawn_workers(queue: &Arc<JobQueue>, worker_count: usize) -> Vec<thread::JoinHandle<()>> {
         let mut handles = Vec::with_capacity(worker_count);
         let mut workers = Vec::with_capacity(worker_count);
         let mut stealers = Vec::with_capacity(worker_count);
@@ -77,10 +99,7 @@ impl JobQueue {
             handles.push(thread::spawn(move || queue.worker_loop(&worker, &stealers)));
         }
 
-        // Wait for all worker threads to finish before returning.
-        for handle in handles {
-            handle.join().expect("Worker thread panicked");
-        }
+        handles
     }
 
     /// Drain work for a single worker.
