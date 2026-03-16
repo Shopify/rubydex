@@ -1047,6 +1047,204 @@ impl Graph {
             stats::percentage(unlinked_count, total_definitions)
         );
     }
+
+    /// Print a breakdown of estimated memory usage per collection in the graph.
+    /// This helps identify which data structures dominate memory.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn print_memory_breakdown(&self) {
+        use crate::model::declaration::{Declaration, Namespace};
+
+        println!();
+        println!("Memory breakdown (estimated heap usage per collection)");
+        println!("  {:40} {:>10} {:>10} {:>12}", "Collection", "Count", "Capacity", "Est. MB");
+        println!("  {:40} {:>10} {:>10} {:>12}", "----------", "-----", "--------", "------");
+
+        // Helper: estimate HashMap overhead. Each slot is (key_size + value_size) bytes,
+        // and the table allocates capacity slots + 1 byte per slot for control bytes.
+        let map_bytes = |len: usize, cap: usize, entry_size: usize| -> usize {
+            if cap == 0 { return 0; }
+            // hashbrown: capacity * (entry_size + 1 control byte) + 16 group alignment
+            cap * (entry_size + 1) + 16
+        };
+
+        let mb = |bytes: usize| -> f64 { bytes as f64 / 1024.0 / 1024.0 };
+
+        // 1. declarations
+        let decl_inline = map_bytes(self.declarations.len(), self.declarations.capacity(),
+            std::mem::size_of::<DeclarationId>() + std::mem::size_of::<Declaration>());
+        // Estimate heap behind each Declaration (Box<XxxDeclaration>)
+        let mut decl_heap: usize = 0;
+        let mut decl_members_total: usize = 0;
+        let mut decl_references_total: usize = 0;
+        let mut decl_descendants_total: usize = 0;
+        let mut decl_ancestors_total: usize = 0;
+        let mut decl_name_strings: usize = 0;
+        let mut decl_definition_ids_total: usize = 0;
+        for decl in self.declarations.values() {
+            // Box overhead: the actual struct size
+            let struct_size = match decl {
+                Declaration::Namespace(Namespace::Class(_)) |
+                Declaration::Namespace(Namespace::Module(_)) |
+                Declaration::Namespace(Namespace::SingletonClass(_)) |
+                Declaration::Namespace(Namespace::Todo(_)) => 224,
+                _ => 112,
+            };
+            decl_heap += struct_size;
+            // String name
+            decl_name_strings += decl.name().len();
+            // definition_ids Vec heap
+            decl_definition_ids_total += decl.definitions().len() * 8;
+            // references IdentityHashSet heap
+            let refs = decl.references();
+            decl_references_total += map_bytes(refs.len(), refs.capacity(), std::mem::size_of::<ReferenceId>());
+            // Namespace-specific collections
+            if let Some(ns) = decl.as_namespace() {
+                let members = ns.members();
+                decl_members_total += map_bytes(members.len(), members.capacity(),
+                    std::mem::size_of::<StringId>() + std::mem::size_of::<DeclarationId>());
+                let desc = ns.descendants();
+                decl_descendants_total += map_bytes(desc.len(), desc.capacity(), std::mem::size_of::<DeclarationId>());
+                decl_ancestors_total += ns.ancestors().iter().count() * std::mem::size_of::<crate::model::declaration::Ancestor>();
+            }
+        }
+        let decl_total = decl_inline + decl_heap + decl_members_total + decl_references_total
+            + decl_descendants_total + decl_ancestors_total + decl_name_strings + decl_definition_ids_total;
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "declarations (table)",
+            self.declarations.len(), self.declarations.capacity(), mb(decl_inline));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → box structs", "", "", mb(decl_heap));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → name strings", "", "", mb(decl_name_strings));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → definition_ids vecs", "", "", mb(decl_definition_ids_total));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → references sets", "", "", mb(decl_references_total));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → members maps", "", "", mb(decl_members_total));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → descendants sets", "", "", mb(decl_descendants_total));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → ancestors vecs", "", "", mb(decl_ancestors_total));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  SUBTOTAL", "", "", mb(decl_total));
+
+        // 2. definitions
+        let def_inline = map_bytes(self.definitions.len(), self.definitions.capacity(),
+            std::mem::size_of::<DefinitionId>() + std::mem::size_of::<Definition>());
+        let mut def_heap: usize = 0;
+        let mut def_comments_count: usize = 0;
+        let mut def_comments_string_bytes: usize = 0;
+        let mut def_params_total: usize = 0;
+        let mut def_members_total: usize = 0;
+        let mut def_mixins_total: usize = 0;
+        for def in self.definitions.values() {
+            // Box struct size
+            let struct_size = match def {
+                Definition::Class(_) => 144,
+                Definition::SingletonClass(_) | Definition::Module(_) => 128,
+                Definition::Method(_) => 112,
+                Definition::ConstantAlias(_) | Definition::MethodAlias(_) | Definition::GlobalVariableAlias(_) => 80,
+                _ => 72,
+            };
+            def_heap += struct_size;
+            // Comments
+            let comments = def.comments();
+            def_comments_count += comments.len();
+            for c in comments {
+                def_comments_string_bytes += c.string().len();
+            }
+            // Parameters (methods only)
+            if let Definition::Method(m) = def {
+                def_params_total += m.parameters().len() * std::mem::size_of::<crate::model::definitions::Parameter>();
+            }
+            // Members and mixins (namespace definitions)
+            match def {
+                Definition::Class(d) => {
+                    def_members_total += d.members().len() * 8;
+                    def_mixins_total += d.mixins().len() * std::mem::size_of::<crate::model::definitions::Mixin>();
+                }
+                Definition::SingletonClass(d) => {
+                    def_members_total += d.members().len() * 8;
+                    def_mixins_total += d.mixins().len() * std::mem::size_of::<crate::model::definitions::Mixin>();
+                }
+                Definition::Module(d) => {
+                    def_members_total += d.members().len() * 8;
+                    def_mixins_total += d.mixins().len() * std::mem::size_of::<crate::model::definitions::Mixin>();
+                }
+                _ => {}
+            }
+        }
+        let def_total = def_inline + def_heap + def_comments_string_bytes + def_params_total
+            + def_members_total + def_mixins_total;
+        println!();
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "definitions (table)",
+            self.definitions.len(), self.definitions.capacity(), mb(def_inline));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → box structs", "", "", mb(def_heap));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → comments", def_comments_count, "", mb(def_comments_string_bytes));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → parameters", "", "", mb(def_params_total));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → members vecs", "", "", mb(def_members_total));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → mixins vecs", "", "", mb(def_mixins_total));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  SUBTOTAL", "", "", mb(def_total));
+
+        // 3. names
+        let name_inline = map_bytes(self.names.len(), self.names.capacity(),
+            std::mem::size_of::<NameId>() + std::mem::size_of::<NameRef>());
+        let mut name_heap: usize = 0;
+        for name_ref in self.names.values() {
+            match name_ref {
+                NameRef::Unresolved(_) => name_heap += std::mem::size_of::<Name>(),
+                NameRef::Resolved(_) => name_heap += std::mem::size_of::<ResolvedName>(),
+            }
+        }
+        println!();
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "names (table)",
+            self.names.len(), self.names.capacity(), mb(name_inline));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → box heap (Name/ResolvedName)", "", "", mb(name_heap));
+
+        // 4. strings
+        let str_inline = map_bytes(self.strings.len(), self.strings.capacity(),
+            std::mem::size_of::<StringId>() + std::mem::size_of::<StringRef>());
+        let mut str_heap: usize = 0;
+        for s in self.strings.values() {
+            str_heap += s.len(); // actual string data on heap
+        }
+        println!();
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "strings (table)",
+            self.strings.len(), self.strings.capacity(), mb(str_inline));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → string data", "", "", mb(str_heap));
+
+        // 5. constant_references
+        let cref_bytes = map_bytes(self.constant_references.len(), self.constant_references.capacity(),
+            std::mem::size_of::<ReferenceId>() + std::mem::size_of::<ConstantReference>());
+        println!();
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "constant_references",
+            self.constant_references.len(), self.constant_references.capacity(), mb(cref_bytes));
+
+        // 6. method_references
+        let mref_bytes = map_bytes(self.method_references.len(), self.method_references.capacity(),
+            std::mem::size_of::<ReferenceId>() + std::mem::size_of::<MethodRef>());
+        println!();
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "method_references",
+            self.method_references.len(), self.method_references.capacity(), mb(mref_bytes));
+
+        // 7. name_dependents
+        let nd_inline = map_bytes(self.name_dependents.len(), self.name_dependents.capacity(),
+            std::mem::size_of::<NameId>() + std::mem::size_of::<Vec<NameDependent>>());
+        let mut nd_heap: usize = 0;
+        for deps in self.name_dependents.values() {
+            nd_heap += deps.capacity() * std::mem::size_of::<NameDependent>();
+        }
+        println!();
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "name_dependents (table)",
+            self.name_dependents.len(), self.name_dependents.capacity(), mb(nd_inline));
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "  → dep vecs heap", "", "", mb(nd_heap));
+
+        // 8. documents
+        let doc_inline = map_bytes(self.documents.len(), self.documents.capacity(),
+            std::mem::size_of::<UriId>() + std::mem::size_of::<Document>());
+        println!();
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "documents (table)",
+            self.documents.len(), self.documents.capacity(), mb(doc_inline));
+
+        // Grand total
+        let grand = decl_total + def_total + name_inline + name_heap
+            + str_inline + str_heap + cref_bytes + mref_bytes
+            + nd_inline + nd_heap + doc_inline;
+        println!();
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "ESTIMATED GRAND TOTAL", "", "", mb(grand));
+    }
 }
 
 #[cfg(test)]

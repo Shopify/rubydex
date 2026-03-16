@@ -127,6 +127,7 @@ fn main() {
     }
 
     if args.stats {
+        graph.print_memory_breakdown();
         Timer::print_breakdown();
         MemoryStats::print_memory_usage();
     }
