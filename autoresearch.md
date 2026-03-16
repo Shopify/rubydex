@@ -85,19 +85,26 @@ Experiments done on a prior branch. Only #5 is merged into current main:
 - method_references: ~46 MB wasted → 0 MB.
 - ~150 MB total savings.
 
+### Experiment 5: Vec<ReferenceId> in declarations (KEPT)
+- Replaced IdentityHashSet<ReferenceId> with Vec<ReferenceId> in all declarations.
+- No dedup needed (each ref resolves to exactly one declaration).
+- swap_remove for incremental updates.
+- Namespace: 224 → 216, Simple: 112 → 104.
+- References heap: 98 → 58 MB estimated (-40 MB).
+
 ## Current Summary
 | Metric | Baseline | Current | Change |
 |--------|----------|---------|--------|
-| Est. heap total | 2430 MB | 2048 MB | **-382 MB (-16%)** |
-| RSS (single run) | ~3500 MB | ~2700 MB | **~-800 MB (-23%)** |
-| Peak footprint | ~4200 MB | ~3600 MB | **~-600 MB (-14%)** |
+| Est. heap total | 2430 MB | 2009 MB | **-421 MB (-17%)** |
+| RSS (single run) | ~3500 MB | ~2750 MB | **~-750 MB (-21%)** |
+| Peak footprint | ~4200 MB | ~3700 MB | **~-500 MB (-12%)** |
 | Declarations | 945,412 | 945,412 | identical |
 | Definitions | 1,063,171 | 1,063,171 | identical |
 
 ## Next targets (from memory breakdown)
-1. constant_references: 462 MB — hot during resolution, can't use Vec
-2. name_dependents table: 115 MB — 3.67M capacity for 2.08M entries
-3. declarations.references sets: 98 MB — per-declaration IdentityHashSet
-4. declarations.name strings: 62 MB — FQN stored as String
-5. declarations.ancestors: 38 MB
-6. declarations.descendants: 28 MB
+1. constant_references: 462 MB — hot during resolution, can't use Vec easily
+2. method_references: 410 MB — already Vec, near minimum
+3. declarations total: 387 MB (box structs 128 MB, name strings 62 MB, refs 58 MB, ancestors 38 MB, desc 28 MB)
+4. name_dependents: 295 MB (table 115 MB, vecs 179 MB)
+5. names: 196 MB (table 88 MB, box heap 108 MB)
+6. definitions: 182 MB (table 44 MB, box structs 107 MB, comments 13 MB)
