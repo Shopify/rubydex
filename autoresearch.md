@@ -61,4 +61,43 @@ Experiments done on a prior branch. Only #5 is merged into current main:
 7. Pre-allocate HashMap capacity — DISCARDED (no improvement)
 
 ## What's Been Tried (This Session)
-(Updated as experiments accumulate)
+
+### Experiment 1: NonZeroU64 for Id<T> (DISCARDED)
+- Same as previous session's exp 2. On current main (post-#666 concurrent merging),
+  struct shrinkage only saves ~80 MB (2.3%) because peak working set is smaller.
+- Not worth the unsafe transmute in Deref for such modest gain.
+
+### Experiment 2: Memory breakdown instrumentation (KEPT)
+- Added `print_memory_breakdown()` to Graph — reveals per-collection heap usage.
+- Key finding: method_references (686 MB) + constant_references (462 MB) = 1.15 GB = 47% of memory.
+- name_dependents (400 MB), declarations (427 MB) are next largest.
+
+### Experiment 3: Vec for method_references (KEPT)
+- Replaced `IdentityHashMap<ReferenceId, MethodRef>` with `Vec<(ReferenceId, MethodRef)>`.
+- Method references are bulk-loaded during indexing, never used in resolution.
+- Lazy-sorted via `ensure_method_references_sorted()` on first query access.
+- HashMap (14.7M capacity × 49 bytes) → Vec (9.0M × 48 bytes) = ~230 MB saved estimated.
+- RSS dropped ~700-900 MB due to avoiding HashMap growth overhead during merging.
+
+### Experiment 4: Graph::compact() after indexing (KEPT)
+- Calls `shrink_to_fit()` on name_dependents Vecs and method_references Vec.
+- name_dependents: 106 MB wasted capacity → 0 MB.
+- method_references: ~46 MB wasted → 0 MB.
+- ~150 MB total savings.
+
+## Current Summary
+| Metric | Baseline | Current | Change |
+|--------|----------|---------|--------|
+| Est. heap total | 2430 MB | 2048 MB | **-382 MB (-16%)** |
+| RSS (single run) | ~3500 MB | ~2700 MB | **~-800 MB (-23%)** |
+| Peak footprint | ~4200 MB | ~3600 MB | **~-600 MB (-14%)** |
+| Declarations | 945,412 | 945,412 | identical |
+| Definitions | 1,063,171 | 1,063,171 | identical |
+
+## Next targets (from memory breakdown)
+1. constant_references: 462 MB — hot during resolution, can't use Vec
+2. name_dependents table: 115 MB — 3.67M capacity for 2.08M entries
+3. declarations.references sets: 98 MB — per-declaration IdentityHashSet
+4. declarations.name strings: 62 MB — FQN stored as String
+5. declarations.ancestors: 38 MB
+6. declarations.descendants: 28 MB

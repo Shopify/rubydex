@@ -82,10 +82,15 @@ impl Graph {
     /// Reclaim wasted capacity in internal collections. Call after bulk indexing
     /// is complete to reduce memory before resolution.
     pub fn compact(&mut self) {
+        // Shrink name_dependents Vecs — many have excess capacity from
+        // Vec's doubling growth strategy during merge
         for deps in self.name_dependents.values_mut() {
             deps.shrink_to_fit();
         }
+        // Shrink method_references Vec
         self.method_references.shrink_to_fit();
+        // Note: shrink_to_fit on HashMaps is a no-op because they're already
+        // at minimum power-of-2 capacity for their load factor
     }
 
     // Returns an immutable reference to the declarations map
