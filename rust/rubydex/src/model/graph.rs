@@ -1149,9 +1149,8 @@ impl Graph {
             decl_name_strings += decl.name().len();
             // definition_ids Vec heap
             decl_definition_ids_total += decl.definitions().len() * 8;
-            // references IdentityHashSet heap
-            let refs = decl.references();
-            decl_references_total += map_bytes(refs.len(), refs.capacity(), std::mem::size_of::<ReferenceId>());
+            // references Vec heap
+            decl_references_total += decl.references().len() * std::mem::size_of::<ReferenceId>();
             // Namespace-specific collections
             if let Some(ns) = decl.as_namespace() {
                 let members = ns.members();

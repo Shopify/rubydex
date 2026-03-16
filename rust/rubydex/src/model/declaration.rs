@@ -91,8 +91,8 @@ macro_rules! namespace_declaration {
             name: String,
             /// The list of definition IDs that compose this declaration
             definition_ids: Vec<DefinitionId>,
-            /// The set of references that are made to this declaration
-            references: IdentityHashSet<ReferenceId>,
+            /// References that resolve to this declaration
+            references: Vec<ReferenceId>,
             /// The ID of the owner of this declaration. For singleton classes, this is the ID of the attached object
             owner_id: DeclarationId,
             /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
@@ -118,7 +118,7 @@ macro_rules! namespace_declaration {
                     name,
                     definition_ids: Vec::new(),
                     members: IdentityHashMap::default(),
-                    references: IdentityHashSet::default(),
+                    references: Vec::new(),
                     owner_id,
                     ancestors: Ancestors::Partial(Vec::new()),
                     descendants: IdentityHashSet::default(),
@@ -129,7 +129,7 @@ macro_rules! namespace_declaration {
 
             pub fn extend(&mut self, mut other: Declaration) {
                 self.definition_ids.extend(other.definitions());
-                self.references.extend(other.references());
+                self.references.extend(other.references().iter().copied());
                 self.diagnostics.extend(other.take_diagnostics());
 
                 if let Declaration::Namespace(namespace) = other {
@@ -213,8 +213,8 @@ macro_rules! simple_declaration {
             name: String,
             /// The list of definition IDs that compose this declaration
             definition_ids: Vec<DefinitionId>,
-            /// The set of references that are made to this declaration
-            references: IdentityHashSet<ReferenceId>,
+            /// References that resolve to this declaration
+            references: Vec<ReferenceId>,
             /// The ID of the owner of this declaration
             owner_id: DeclarationId,
             /// Diagnostics associated with this declaration
@@ -227,7 +227,7 @@ macro_rules! simple_declaration {
                 Self {
                     name,
                     definition_ids: Vec::new(),
-                    references: IdentityHashSet::default(),
+                    references: Vec::new(),
                     owner_id,
                     diagnostics: Vec::new(),
                 }
@@ -235,7 +235,7 @@ macro_rules! simple_declaration {
 
             pub fn extend(&mut self, mut other: Declaration) {
                 self.definition_ids.extend(other.definitions());
-                self.references.extend(other.references());
+                self.references.extend(other.references().iter().copied());
                 self.diagnostics.extend(other.take_diagnostics());
             }
         }
@@ -293,7 +293,7 @@ impl Declaration {
     }
 
     #[must_use]
-    pub fn references(&self) -> &IdentityHashSet<ReferenceId> {
+    pub fn references(&self) -> &[ReferenceId] {
         all_declarations!(self, it => &it.references)
     }
 
@@ -320,13 +320,15 @@ impl Declaration {
 
     pub fn add_reference(&mut self, id: ReferenceId) {
         all_declarations!(self, it => {
-            it.references.insert(id);
+            it.references.push(id);
         });
     }
 
     pub fn remove_reference(&mut self, reference_id: &ReferenceId) {
         all_declarations!(self, it => {
-            it.references.remove(reference_id);
+            if let Some(pos) = it.references.iter().position(|id| id == reference_id) {
+                it.references.swap_remove(pos);
+            }
         });
     }
 
@@ -396,7 +398,7 @@ impl Namespace {
     }
 
     #[must_use]
-    pub fn references(&self) -> &IdentityHashSet<ReferenceId> {
+    pub fn references(&self) -> &[ReferenceId] {
         all_namespaces!(self, it => &it.references)
     }
 
@@ -503,25 +505,25 @@ impl Namespace {
 }
 
 namespace_declaration!(Class, ClassDeclaration);
-assert_mem_size!(ClassDeclaration, 224);
+assert_mem_size!(ClassDeclaration, 216);
 namespace_declaration!(Module, ModuleDeclaration);
-assert_mem_size!(ModuleDeclaration, 224);
+assert_mem_size!(ModuleDeclaration, 216);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
-assert_mem_size!(SingletonClassDeclaration, 224);
+assert_mem_size!(SingletonClassDeclaration, 216);
 namespace_declaration!(Todo, TodoDeclaration);
-assert_mem_size!(TodoDeclaration, 224);
+assert_mem_size!(TodoDeclaration, 216);
 simple_declaration!(ConstantDeclaration);
-assert_mem_size!(ConstantDeclaration, 112);
+assert_mem_size!(ConstantDeclaration, 104);
 simple_declaration!(MethodDeclaration);
-assert_mem_size!(MethodDeclaration, 112);
+assert_mem_size!(MethodDeclaration, 104);
 simple_declaration!(GlobalVariableDeclaration);
-assert_mem_size!(GlobalVariableDeclaration, 112);
+assert_mem_size!(GlobalVariableDeclaration, 104);
 simple_declaration!(InstanceVariableDeclaration);
-assert_mem_size!(InstanceVariableDeclaration, 112);
+assert_mem_size!(InstanceVariableDeclaration, 104);
 simple_declaration!(ClassVariableDeclaration);
-assert_mem_size!(ClassVariableDeclaration, 112);
+assert_mem_size!(ClassVariableDeclaration, 104);
 simple_declaration!(ConstantAliasDeclaration);
-assert_mem_size!(ConstantAliasDeclaration, 112);
+assert_mem_size!(ConstantAliasDeclaration, 104);
 
 #[cfg(test)]
 mod tests {
