@@ -147,14 +147,15 @@ impl<'a> RBSIndexer<'a> {
         }
     }
 
-    fn collect_comments(comment_node: Option<CommentNode>) -> Vec<Comment> {
+    fn collect_comments(comment_node: Option<CommentNode>) -> Box<[Comment]> {
         comment_node
             .into_iter()
             .map(|comment| {
                 let text = Self::bytes_to_string(comment.string().as_bytes());
                 Comment::new(Offset::from_rbs_location(&comment.location()), text)
             })
-            .collect()
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 
     fn register_definition(
