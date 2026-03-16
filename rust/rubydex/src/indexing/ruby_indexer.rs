@@ -2142,8 +2142,8 @@ mod tests {
             let mut actual_references = $context
                 .graph()
                 .method_references()
-                .values()
-                .map(|m| {
+                .iter()
+                .map(|(_, m)| {
                     (
                         m.offset().start(),
                         $context.graph().strings().get(m.str()).unwrap().as_str(),
@@ -2179,7 +2179,8 @@ mod tests {
             let method_ref = $context
                 .graph()
                 .method_references()
-                .values()
+                .iter()
+                .map(|(_, v)| v)
                 .find(|method_ref| *method_ref.str() == StringId::from($method_name))
                 .unwrap_or_else(|| panic!("should have a method reference for {}", $method_name));
 
@@ -4428,7 +4429,8 @@ mod tests {
         let method_ref = context
             .graph()
             .method_references()
-            .values()
+            .iter()
+            .map(|(_, v)| v)
             .find(|r| *r.str() == StringId::from("&&"))
             .unwrap();
 
@@ -4459,7 +4461,8 @@ mod tests {
         let method_ref = context
             .graph()
             .method_references()
-            .values()
+            .iter()
+            .map(|(_, v)| v)
             .find(|r| *r.str() == StringId::from("||"))
             .unwrap();
 

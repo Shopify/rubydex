@@ -525,7 +525,7 @@ impl RubydexServer {
             "declarations": graph.declarations().len(),
             "definitions": graph.definitions().len(),
             "constant_references": graph.constant_references().len(),
-            "method_references": graph.method_references().len(),
+            "method_references": graph.method_references_len(),
             "breakdown_by_kind": breakdown_json,
         });
 

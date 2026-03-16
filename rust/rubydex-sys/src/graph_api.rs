@@ -41,7 +41,7 @@ where
     result
 }
 
-fn with_mut_graph<F, T>(pointer: GraphPointer, action: F) -> T
+pub fn with_mut_graph<F, T>(pointer: GraphPointer, action: F) -> T
 where
     F: FnOnce(&mut Graph) -> T,
 {
@@ -465,11 +465,11 @@ pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPo
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
-    with_graph(pointer, |graph| {
+    with_mut_graph(pointer, |graph| {
         let refs: Vec<_> = graph
             .method_references()
-            .keys()
-            .map(|id| CReference::new(**id, ReferenceKind::Method))
+            .iter()
+            .map(|(id, _)| CReference::new(**id, ReferenceKind::Method))
             .collect();
 
         ReferencesIter::new(refs.into_boxed_slice())

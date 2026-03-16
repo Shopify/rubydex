@@ -48,8 +48,11 @@ pub struct Graph {
     names: IdentityHashMap<NameId, NameRef>,
     // Map of constant references
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
-    // Map of method references that still need to be resolved
-    method_references: IdentityHashMap<ReferenceId, MethodRef>,
+    // Dense sorted storage for method references. Cheaper than HashMap: no control bytes,
+    // no spare capacity from power-of-2 sizing. Method references are never accessed during
+    // resolution (the hot path), only during indexing (bulk insert) and FFI (lookup by ID).
+    method_references: Vec<(ReferenceId, MethodRef)>,
+    method_references_sorted: bool,
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
@@ -69,7 +72,8 @@ impl Graph {
             strings: IdentityHashMap::default(),
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
-            method_references: IdentityHashMap::default(),
+            method_references: Vec::new(),
+            method_references_sorted: true,
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
         }
@@ -360,8 +364,33 @@ impl Graph {
 
     // Returns an immutable reference to the method references map
     #[must_use]
-    pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
+    /// Returns the method references as a sorted slice of (id, ref) pairs.
+    /// Sorts lazily on first access after mutation.
+    pub fn method_references(&mut self) -> &[(ReferenceId, MethodRef)] {
+        self.ensure_method_references_sorted();
         &self.method_references
+    }
+
+    /// Returns the number of method references (no sort needed).
+    #[must_use]
+    pub fn method_references_len(&self) -> usize {
+        self.method_references.len()
+    }
+
+    /// Lookup a method reference by ID.
+    pub fn get_method_reference(&mut self, ref_id: &ReferenceId) -> Option<&MethodRef> {
+        self.ensure_method_references_sorted();
+        self.method_references
+            .binary_search_by_key(ref_id, |(id, _)| *id)
+            .ok()
+            .map(|idx| &self.method_references[idx].1)
+    }
+
+    fn ensure_method_references_sorted(&mut self) {
+        if !self.method_references_sorted {
+            self.method_references.sort_unstable_by_key(|(id, _)| *id);
+            self.method_references_sorted = true;
+        }
     }
 
     #[must_use]
@@ -775,11 +804,11 @@ impl Graph {
             }
         }
 
+        self.method_references.reserve(method_references.len());
         for (method_ref_id, method_ref) in method_references {
-            if self.method_references.insert(method_ref_id, method_ref).is_some() {
-                debug_assert!(false, "Method ReferenceId collision in global graph");
-            }
+            self.method_references.push((method_ref_id, method_ref));
         }
+        self.method_references_sorted = false;
 
         for (name_id, deps) in name_dependents {
             let global_deps = self.name_dependents.entry(name_id).or_default();
@@ -809,9 +838,21 @@ impl Graph {
     // The document must already have been removed from `self.documents` before calling this.
     fn remove_definitions_for_document(&mut self, document: &Document) {
         // TODO: Remove method references from method declarations once method inference is implemented
-        for ref_id in document.method_references() {
-            if let Some(method_ref) = self.method_references.remove(ref_id) {
-                self.untrack_string(*method_ref.str());
+        // Collect string IDs to untrack from method references being removed
+        {
+            self.ensure_method_references_sorted();
+            let mut str_ids_to_untrack = Vec::new();
+            for ref_id in document.method_references() {
+                if let Ok(idx) = self.method_references.binary_search_by_key(ref_id, |(id, _)| *id) {
+                    str_ids_to_untrack.push(*self.method_references[idx].1.str());
+                }
+            }
+            // Remove all matching method references in one pass using retain
+            let to_remove: std::collections::HashSet<&ReferenceId> = document.method_references().iter().collect();
+            self.method_references.retain(|(id, _)| !to_remove.contains(id));
+            // Retain preserves order, so still sorted
+            for str_id in str_ids_to_untrack {
+                self.untrack_string(str_id);
             }
         }
 
@@ -1212,11 +1253,11 @@ impl Graph {
         println!("  {:40} {:>10} {:>10} {:>12.1}", "constant_references",
             self.constant_references.len(), self.constant_references.capacity(), mb(cref_bytes));
 
-        // 6. method_references
-        let mref_bytes = map_bytes(self.method_references.len(), self.method_references.capacity(),
-            std::mem::size_of::<ReferenceId>() + std::mem::size_of::<MethodRef>());
+        // 6. method_references (Vec-based)
+        let mref_bytes = self.method_references.capacity()
+            * std::mem::size_of::<(ReferenceId, MethodRef)>();
         println!();
-        println!("  {:40} {:>10} {:>10} {:>12.1}", "method_references",
+        println!("  {:40} {:>10} {:>10} {:>12.1}", "method_references (vec)",
             self.method_references.len(), self.method_references.capacity(), mb(mref_bytes));
 
         // 7. name_dependents

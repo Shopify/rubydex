@@ -6,7 +6,7 @@ use std::{
 use xxhash_rust::xxh3;
 
 /// A deterministic type-safe ID representation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Id<T> {
     value: u64,
     _marker: PhantomData<T>,

@@ -2,7 +2,7 @@
 
 use std::ffi::CString;
 
-use crate::graph_api::{GraphPointer, with_graph};
+use crate::graph_api::{GraphPointer, with_graph, with_mut_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
 use rubydex::model::ids::ReferenceId;
@@ -132,12 +132,12 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
 /// This function will panic if the reference cannot be found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, reference_id: u64) -> *const c_char {
-    with_graph(pointer, |graph| {
+    with_mut_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
-        let reference = graph.method_references().get(&ref_id).expect("Reference not found");
+        let str_id = *graph.get_method_reference(&ref_id).expect("Reference not found").str();
         let name = graph
             .strings()
-            .get(reference.str())
+            .get(&str_id)
             .expect("Name ID should exist")
             .to_string();
         CString::new(name).unwrap().into_raw().cast_const()
@@ -182,14 +182,16 @@ pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, 
 /// This function will panic if a reference or document cannot be found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, reference_id: u64) -> *mut Location {
-    with_graph(pointer, |graph| {
+    with_mut_graph(pointer, |graph| {
         let ref_id = ReferenceId::new(reference_id);
-        let reference = graph.method_references().get(&ref_id).expect("Reference not found");
+        let reference = graph.get_method_reference(&ref_id).expect("Reference not found");
+        let uri_id = reference.uri_id();
+        let offset = reference.offset().clone();
         let document = graph
             .documents()
-            .get(&reference.uri_id())
+            .get(&uri_id)
             .expect("Document should exist");
 
-        create_location_for_uri_and_offset(graph, document, reference.offset())
+        create_location_for_uri_and_offset(graph, document, &offset)
     })
 }
