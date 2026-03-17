@@ -611,7 +611,7 @@ mod tests {
         indexer.index();
 
         let mut graph = Graph::new();
-        graph.update(indexer.local_graph());
+        graph.consume_document_changes(indexer.local_graph());
         let mut resolver = Resolver::new(&mut graph);
         resolver.resolve_all();
 

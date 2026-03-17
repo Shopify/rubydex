@@ -364,44 +364,104 @@ macro_rules! assert_declaration_references_count_eq {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_constant_reference_unresolved {
+    ($context:expr, $unqualified_name:expr) => {
+        let reference_name = $context
+            .graph()
+            .constant_references()
+            .values()
+            .find_map(|r| {
+                let name = $context.graph().names().get(r.name_id()).unwrap();
+                if $context.graph().strings().get(name.str()).unwrap().as_str() == $unqualified_name {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("No constant reference with unqualified name `{}`", $unqualified_name));
+
+        assert!(
+            matches!(reference_name, $crate::model::name::NameRef::Unresolved(_)),
+            "Expected constant reference `{}` to be unresolved, but it was resolved",
+            $unqualified_name
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_ancestors_eq {
-    ($context:expr, $name:expr, $expected:expr) => {
+    // Arm with mixed Complete/Partial entries: ["Foo", Partial("M1"), "Object"]
+    ($context:expr, $name:expr, [$($entry:tt $( ($partial_name:expr) )?),* $(,)?]) => {{
         let declaration = $context
             .graph()
             .declarations()
             .get(&$crate::model::ids::DeclarationId::from($name))
             .unwrap();
 
-        match declaration.as_namespace().unwrap().ancestors() {
-            $crate::model::declaration::Ancestors::Cyclic(ancestors)
-            | $crate::model::declaration::Ancestors::Complete(ancestors) => {
-                assert_eq!(
-                    $expected
-                        .iter()
-                        .map(|n| {
-                            $crate::model::declaration::Ancestor::Complete($crate::model::ids::DeclarationId::from(*n))
-                        })
-                        .collect::<Vec<_>>(),
-                    *ancestors,
-                    "Incorrect ancestors {}",
-                    ancestors
-                        .iter()
-                        .filter_map(|id| {
-                            if let $crate::model::declaration::Ancestor::Complete(id) = id {
-                                let name = { $context.graph().declarations().get(id).unwrap().name().to_string() };
-                                Some(name)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+        let actual = match declaration.as_namespace().unwrap().ancestors() {
+            $crate::model::declaration::Ancestors::Complete(a)
+            | $crate::model::declaration::Ancestors::Cyclic(a)
+            | $crate::model::declaration::Ancestors::Partial(a) => a,
+        };
+
+        let actual_strs: Vec<String> = actual.iter().map(|a| match a {
+            $crate::model::declaration::Ancestor::Complete(id) => {
+                $context.graph().declarations().get(id).unwrap().name().to_string()
             }
-            $crate::model::declaration::Ancestors::Partial(_) => {
-                panic!("Expected ancestors to be resolved for {}", declaration.name());
+            $crate::model::declaration::Ancestor::Partial(name_id) => {
+                let name = $context.graph().names().get(name_id).unwrap();
+                format!("Partial({})", $context.graph().strings().get(name.str()).unwrap().as_str())
             }
-        }
+        }).collect();
+
+        let expected_strs: Vec<String> = vec![
+            $($crate::assert_ancestors_eq!(@str $entry $( ($partial_name) )?)),*
+        ];
+
+        assert_eq!(
+            expected_strs, actual_strs,
+            "Incorrect ancestors for {}",
+            $name
+        );
+    }};
+
+    // Arm for variable expressions (e.g., `empty_ancestors`): all entries assumed Complete
+    ($context:expr, $name:expr, $expected:expr) => {{
+        let declaration = $context
+            .graph()
+            .declarations()
+            .get(&$crate::model::ids::DeclarationId::from($name))
+            .unwrap();
+
+        let expected_ancestors: Vec<$crate::model::declaration::Ancestor> = $expected
+            .iter()
+            .map(|n| {
+                $crate::model::declaration::Ancestor::Complete($crate::model::ids::DeclarationId::from(*n))
+            })
+            .collect();
+
+        let actual = match declaration.as_namespace().unwrap().ancestors() {
+            $crate::model::declaration::Ancestors::Complete(a)
+            | $crate::model::declaration::Ancestors::Cyclic(a)
+            | $crate::model::declaration::Ancestors::Partial(a) => a,
+        };
+
+        assert_eq!(
+            expected_ancestors, *actual,
+            "Incorrect ancestors for {}",
+            $name
+        );
+    }};
+
+    // Internal: Partial("name") → "Partial(name)" string
+    (@str Partial ($name:expr)) => {
+        format!("Partial({})", $name)
+    };
+
+    // Internal: "name" → "name" string
+    (@str $name:expr) => {
+        $name.to_string()
     };
 }
 
