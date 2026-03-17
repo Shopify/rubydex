@@ -1361,10 +1361,12 @@ pub struct MethodAliasDefinition {
     flags: DefinitionFlags,
     comments: Box<[Comment]>,
     lexical_nesting_id: Option<DefinitionId>,
+    receiver: Option<Receiver>,
 }
-assert_mem_size!(MethodAliasDefinition, 72);
+assert_mem_size!(MethodAliasDefinition, 88);
 
 impl MethodAliasDefinition {
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub const fn new(
         new_name_str_id: StringId,
@@ -1374,6 +1376,7 @@ impl MethodAliasDefinition {
         comments: Box<[Comment]>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
+        receiver: Option<Receiver>,
     ) -> Self {
         Self {
             new_name_str_id,
@@ -1383,6 +1386,7 @@ impl MethodAliasDefinition {
             flags,
             comments,
             lexical_nesting_id,
+            receiver,
         }
     }
 
@@ -1425,6 +1429,11 @@ impl MethodAliasDefinition {
     #[must_use]
     pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
         &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn receiver(&self) -> &Option<Receiver> {
+        &self.receiver
     }
 
     #[must_use]
