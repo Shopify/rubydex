@@ -158,10 +158,10 @@ impl<'a> RubyIndexer<'a> {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
-    fn find_comments_for(&self, offset: u32) -> (Vec<Comment>, DefinitionFlags) {
+    fn find_comments_for(&self, offset: u32) -> (Box<[Comment]>, DefinitionFlags) {
         let offset_usize = offset as usize;
         if self.comments.is_empty() {
-            return (Vec::new(), DefinitionFlags::empty());
+            return (Box::default(), DefinitionFlags::empty());
         }
 
         let idx = match self.comments.binary_search_by_key(&offset_usize, |g| g.end_offset) {
@@ -169,21 +169,21 @@ impl<'a> RubyIndexer<'a> {
                 // This should never happen in valid Ruby syntax - a comment cannot end exactly
                 // where a definition begins (there must be at least a newline between them)
                 debug_assert!(false, "Comment ends exactly at definition start - this indicates a bug");
-                return (Vec::new(), DefinitionFlags::empty());
+                return (Box::default(), DefinitionFlags::empty());
             }
             Err(i) if i > 0 => i - 1,
-            Err(_) => return (Vec::new(), DefinitionFlags::empty()),
+            Err(_) => return (Box::default(), DefinitionFlags::empty()),
         };
 
         let group = &self.comments[idx];
         let between = &self.source.as_bytes()[group.end_offset..offset_usize];
         if !between.iter().all(|&b| b.is_ascii_whitespace()) {
-            return (Vec::new(), DefinitionFlags::empty());
+            return (Box::default(), DefinitionFlags::empty());
         }
 
         // We allow at most one blank line between the comment and the definition
         if bytecount::count(between, b'\n') > 2 {
-            return (Vec::new(), DefinitionFlags::empty());
+            return (Box::default(), DefinitionFlags::empty());
         }
 
         (group.comments(), group.flags())
@@ -505,7 +505,7 @@ impl<'a> RubyIndexer<'a> {
 
     fn add_definition_from_location<F>(&mut self, location: &ruby_prism::Location, builder: F) -> DefinitionId
     where
-        F: FnOnce(StringId, Offset, Vec<Comment>, DefinitionFlags, Option<DefinitionId>, UriId) -> Definition,
+        F: FnOnce(StringId, Offset, Box<[Comment]>, DefinitionFlags, Option<DefinitionId>, UriId) -> Definition,
     {
         let name = Self::location_to_string(location);
         let str_id = self.local_graph.intern_string(name);
@@ -1190,8 +1190,8 @@ impl CommentGroup {
         ));
     }
 
-    fn comments(&self) -> Vec<Comment> {
-        self.comments.clone()
+    fn comments(&self) -> Box<[Comment]> {
+        self.comments.clone().into_boxed_slice()
     }
 
     fn flags(&self) -> DefinitionFlags {
