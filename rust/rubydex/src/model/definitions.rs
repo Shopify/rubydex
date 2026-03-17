@@ -701,6 +701,35 @@ impl ConstantAliasDefinition {
     }
 }
 
+/// The signature of a method
+///
+/// Currently only supports the parameter names and kinds.
+pub type Signature = Box<[Parameter]>;
+
+#[derive(Debug)]
+pub enum Signatures {
+    /// A single method signature, for definitions without overloads.
+    ///
+    /// Used for Ruby definitions and RBS definitions with one signature.
+    Simple(Signature),
+
+    /// Multiple method signatures, for overloaded definitions.
+    ///
+    /// Used for RBS definitions with more than one overload.
+    Overloaded(Box<[Signature]>),
+}
+
+impl Signatures {
+    /// Returns all signatures as a slice, regardless of variant.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Signature] {
+        match self {
+            Signatures::Simple(sig) => std::slice::from_ref(sig),
+            Signatures::Overloaded(sigs) => sigs,
+        }
+    }
+}
+
 /// A method definition
 ///
 /// # Example
@@ -716,7 +745,7 @@ pub struct MethodDefinition {
     flags: DefinitionFlags,
     comments: Vec<Comment>,
     lexical_nesting_id: Option<DefinitionId>,
-    parameters: Vec<Parameter>,
+    signatures: Signatures,
     visibility: Visibility,
     receiver: Option<Receiver>,
 }
@@ -744,7 +773,7 @@ impl MethodDefinition {
         comments: Vec<Comment>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
-        parameters: Vec<Parameter>,
+        signatures: Signatures,
         visibility: Visibility,
         receiver: Option<Receiver>,
     ) -> Self {
@@ -755,7 +784,7 @@ impl MethodDefinition {
             flags,
             comments,
             lexical_nesting_id,
-            parameters,
+            signatures,
             visibility,
             receiver,
         }
@@ -803,8 +832,8 @@ impl MethodDefinition {
     }
 
     #[must_use]
-    pub fn parameters(&self) -> &Vec<Parameter> {
-        &self.parameters
+    pub fn signatures(&self) -> &Signatures {
+        &self.signatures
     }
 
     #[must_use]

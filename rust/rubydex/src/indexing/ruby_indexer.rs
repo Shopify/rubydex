@@ -8,7 +8,7 @@ use crate::model::definitions::{
     ConstantAliasDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition,
     GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition, InstanceVariableDefinition,
     MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct, PrependDefinition,
-    Receiver, SingletonClassDefinition,
+    Receiver, Signatures, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -1489,7 +1489,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments.clone(),
                 flags.clone(),
                 parent_nesting_id,
-                parameters.clone(),
+                Signatures::Simple(parameters.clone().into_boxed_slice()),
                 Visibility::Public,
                 self.current_nesting_definition_id().map(Receiver::SelfReceiver),
             )));
@@ -1505,7 +1505,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
                 flags,
                 parent_nesting_id,
-                parameters,
+                Signatures::Simple(parameters.into_boxed_slice()),
                 Visibility::Private,
                 receiver,
             )));
@@ -1522,7 +1522,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
                 flags,
                 parent_nesting_id,
-                parameters,
+                Signatures::Simple(parameters.into_boxed_slice()),
                 visibility,
                 receiver,
             )));
@@ -2048,7 +2048,7 @@ mod tests {
         assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_name_path_eq,
         assert_no_local_diagnostics, assert_string_eq,
         model::{
-            definitions::{Definition, Parameter, Receiver},
+            definitions::{Definition, Parameter, Receiver, Signatures},
             ids::{StringId, UriId},
             visibility::Visibility,
         },
@@ -2102,6 +2102,19 @@ mod tests {
                     stringify!($variant),
                     $expr
                 ),
+            }
+        };
+    }
+
+    /// Asserts that a method has a simple (non-overloaded) signature, then runs a closure with it.
+    ///
+    /// Usage:
+    /// - `assert_simple_signature!(def, |params| { assert_eq!(params.len(), 2); })`
+    macro_rules! assert_simple_signature {
+        ($def:expr, |$params:ident| $body:block) => {
+            match $def.signatures() {
+                Signatures::Simple($params) => $body,
+                other => panic!("expected Simple signature, got {:?}", other),
             }
         };
     }
@@ -2689,7 +2702,9 @@ mod tests {
 
         assert_definition_at!(&context, "1:1-1:13", Method, |def| {
             assert_def_str_eq!(&context, def, "foo()");
-            assert_eq!(def.parameters().len(), 0);
+            assert_simple_signature!(def, |params| {
+                assert_eq!(params.len(), 0);
+            });
             assert!(def.receiver().is_none());
             assert!(def.lexical_nesting_id().is_none());
         });
@@ -2697,7 +2712,9 @@ mod tests {
         assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
             assert_definition_at!(&context, "4:3-4:15", Method, |bar_def| {
                 assert_def_str_eq!(&context, bar_def, "bar()");
-                assert_eq!(bar_def.parameters().len(), 0);
+                assert_simple_signature!(bar_def, |params| {
+                    assert_eq!(params.len(), 0);
+                });
                 assert!(bar_def.receiver().is_none());
                 assert_eq!(foo_class_def.id(), bar_def.lexical_nesting_id().unwrap());
                 assert_eq!(foo_class_def.members()[0], bar_def.id());
@@ -2705,7 +2722,9 @@ mod tests {
 
             assert_definition_at!(&context, "5:3-5:20", Method, |baz_def| {
                 assert_def_str_eq!(&context, baz_def, "baz()");
-                assert_eq!(baz_def.parameters().len(), 0);
+                assert_simple_signature!(baz_def, |params| {
+                    assert_eq!(params.len(), 0);
+                });
                 assert_method_has_receiver!(&context, baz_def, "Foo");
                 assert_eq!(foo_class_def.id(), baz_def.lexical_nesting_id().unwrap());
                 assert_eq!(foo_class_def.members()[1], baz_def.id());
@@ -2717,7 +2736,9 @@ mod tests {
 
             assert_definition_at!(&context, "9:3-9:19", Method, |quz_def| {
                 assert_def_str_eq!(&context, quz_def, "quz()");
-                assert_eq!(quz_def.parameters().len(), 0);
+                assert_simple_signature!(quz_def, |params| {
+                    assert_eq!(params.len(), 0);
+                });
                 assert_method_has_receiver!(&context, quz_def, "Foo");
                 assert_eq!(bar_class_def.id(), quz_def.lexical_nesting_id().unwrap());
             });
@@ -2969,38 +2990,40 @@ mod tests {
         assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:51", Method, |def| {
-            assert_eq!(def.parameters().len(), 8);
+            assert_simple_signature!(def, |params| {
+                assert_eq!(params.len(), 8);
 
-            assert_parameter!(&def.parameters()[0], RequiredPositional, |param| {
-                assert_string_eq!(context, param.str(), "a");
-            });
+                assert_parameter!(&params[0], RequiredPositional, |param| {
+                    assert_string_eq!(context, param.str(), "a");
+                });
 
-            assert_parameter!(&def.parameters()[1], OptionalPositional, |param| {
-                assert_string_eq!(context, param.str(), "b");
-            });
+                assert_parameter!(&params[1], OptionalPositional, |param| {
+                    assert_string_eq!(context, param.str(), "b");
+                });
 
-            assert_parameter!(&def.parameters()[2], RestPositional, |param| {
-                assert_string_eq!(context, param.str(), "c");
-            });
+                assert_parameter!(&params[2], RestPositional, |param| {
+                    assert_string_eq!(context, param.str(), "c");
+                });
 
-            assert_parameter!(&def.parameters()[3], Post, |param| {
-                assert_string_eq!(context, param.str(), "d");
-            });
+                assert_parameter!(&params[3], Post, |param| {
+                    assert_string_eq!(context, param.str(), "d");
+                });
 
-            assert_parameter!(&def.parameters()[4], RequiredKeyword, |param| {
-                assert_string_eq!(context, param.str(), "e");
-            });
+                assert_parameter!(&params[4], RequiredKeyword, |param| {
+                    assert_string_eq!(context, param.str(), "e");
+                });
 
-            assert_parameter!(&def.parameters()[5], OptionalKeyword, |param| {
-                assert_string_eq!(context, param.str(), "g");
-            });
+                assert_parameter!(&params[5], OptionalKeyword, |param| {
+                    assert_string_eq!(context, param.str(), "g");
+                });
 
-            assert_parameter!(&def.parameters()[6], RestKeyword, |param| {
-                assert_string_eq!(context, param.str(), "i");
-            });
+                assert_parameter!(&params[6], RestKeyword, |param| {
+                    assert_string_eq!(context, param.str(), "i");
+                });
 
-            assert_parameter!(&def.parameters()[7], Block, |param| {
-                assert_string_eq!(context, param.str(), "j");
+                assert_parameter!(&params[7], Block, |param| {
+                    assert_string_eq!(context, param.str(), "j");
+                });
             });
         });
     }
@@ -3016,9 +3039,11 @@ mod tests {
         assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "1:1-1:18", Method, |def| {
-            assert_eq!(def.parameters().len(), 1);
-            assert_parameter!(&def.parameters()[0], Forward, |param| {
-                assert_string_eq!(context, param.str(), "...");
+            assert_simple_signature!(def, |params| {
+                assert_eq!(params.len(), 1);
+                assert_parameter!(&params[0], Forward, |param| {
+                    assert_string_eq!(context, param.str(), "...");
+                });
             });
         });
     }
