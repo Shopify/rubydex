@@ -1011,9 +1011,18 @@ impl<'a> Resolver<'a> {
         let name_ref = self.graph.names().get(&name_id).unwrap();
         let str_id = *name_ref.str();
 
+        let outcome = match self.name_owner_id(name_id) {
+            // name_owner_id returns Unresolved(None) only when the parent scope is genuinely unknown
+            // (e.g., `class A::B::C` where `A` doesn't exist). This definition needs an owner, so
+            // create Todo placeholders for the missing parent chain. Todos get promoted when real
+            // definitions appear later.
+            Outcome::Unresolved(None) => Outcome::Resolved(self.create_todo_for_parent(name_id), None),
+            other => other,
+        };
+
         // The name of the declaration is determined by the name of its owner, which may or may not require resolution
         // depending on whether the name has a parent scope
-        match self.name_owner_id(name_id) {
+        match outcome {
             Outcome::Resolved(owner_id, id_needing_linearization) => {
                 let mut fully_qualified_name = self.graph.strings().get(&str_id).unwrap().to_string();
 
@@ -1086,56 +1095,10 @@ impl<'a> Resolver<'a> {
             // If `A` is an alias, resolve through to get the actual namespace.
             match self.resolve_constant_internal(parent_scope) {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
-                // Retry(Some) or Unresolved(Some) means we might find it later through ancestor linearization
-                Outcome::Retry(Some(id)) => Outcome::Retry(Some(id)),
-                Outcome::Unresolved(Some(id)) => Outcome::Unresolved(Some(id)),
-                // Retry(None) means the parent's own parent scope is unresolved (e.g., B in `A::B::C`
-                // where A is unknown). Rather than retrying indefinitely, treat it the same as
-                // Unresolved(None) and eagerly create Todos for the entire parent chain. If a real
-                // definition appears later, the Todo gets promoted via the existing promotion mechanism.
-                Outcome::Retry(None) | Outcome::Unresolved(None) => {
-                    let parent_name = self.graph.names().get(&parent_scope).unwrap();
-                    let parent_str_id = *parent_name.str();
-                    let parent_has_explicit_prefix = parent_name.parent_scope().as_ref().is_some();
-                    // NLL: borrow of parent_name ends here
-
-                    // For bare names (no explicit `::` prefix), always use OBJECT_ID as the owner.
-                    // Using nesting here would create "Nesting::Bar" instead of "Bar" for a bare `Bar`
-                    // reference, which is incorrect: if `Bar` can't be found anywhere, the placeholder
-                    // should live at the top level so it can be promoted when `module Bar` appears later.
-                    let parent_owner_id = if parent_has_explicit_prefix {
-                        match self.name_owner_id(parent_scope) {
-                            Outcome::Resolved(id, _) => id,
-                            _ => *OBJECT_ID,
-                        }
-                    } else {
-                        *OBJECT_ID
-                    };
-
-                    let fully_qualified_name = if parent_owner_id == *OBJECT_ID {
-                        self.graph.strings().get(&parent_str_id).unwrap().to_string()
-                    } else {
-                        format!(
-                            "{}::{}",
-                            self.graph.declarations().get(&parent_owner_id).unwrap().name(),
-                            self.graph.strings().get(&parent_str_id).unwrap().as_str()
-                        )
-                    };
-
-                    let declaration_id = DeclarationId::from(&fully_qualified_name);
-
-                    if let std::collections::hash_map::Entry::Vacant(e) =
-                        self.graph.declarations_mut().entry(declaration_id)
-                    {
-                        e.insert(Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(
-                            fully_qualified_name,
-                            parent_owner_id,
-                        )))));
-                        self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
-                    }
-
-                    Outcome::Resolved(declaration_id, None)
-                }
+                // The parent scope is genuinely unknown — not a circular alias or pending
+                // linearization, but a name that doesn't exist anywhere in the graph.
+                Outcome::Retry(None) | Outcome::Unresolved(None) => Outcome::Unresolved(None),
+                other => other,
             }
         } else if let Some(nesting_id) = name_ref.nesting()
             && !name_ref.parent_scope().is_top_level()
@@ -1157,6 +1120,55 @@ impl<'a> Resolver<'a> {
             // Any constants at the top level are owned by Object
             Outcome::Resolved(*OBJECT_ID, None)
         }
+    }
+
+    /// For `class A::B::C` where `A` can't be resolved, creates a Todo declaration for `A`
+    /// so `B::C` can still be placed. Recurses for multi-level cases. Todos get promoted
+    /// when real definitions appear later.
+    fn create_todo_for_parent(&mut self, name_id: NameId) -> DeclarationId {
+        let name_ref = self.graph.names().get(&name_id).unwrap();
+        let parent_scope = *name_ref.parent_scope().as_ref().unwrap();
+
+        let parent_name = self.graph.names().get(&parent_scope).unwrap();
+        let parent_str_id = *parent_name.str();
+        let parent_has_explicit_prefix = parent_name.parent_scope().as_ref().is_some();
+        // NLL: borrow of parent_name ends here
+
+        // For bare names (no explicit `::` prefix), always use OBJECT_ID as the owner.
+        // Using nesting here would create "Nesting::Bar" instead of "Bar" for a bare `Bar`
+        // reference, which is incorrect: if `Bar` can't be found anywhere, the placeholder
+        // should live at the top level so it can be promoted when `module Bar` appears later.
+        let parent_owner_id = if parent_has_explicit_prefix {
+            match self.name_owner_id(parent_scope) {
+                Outcome::Resolved(id, _) => id,
+                Outcome::Unresolved(None) => self.create_todo_for_parent(parent_scope),
+                _ => *OBJECT_ID,
+            }
+        } else {
+            *OBJECT_ID
+        };
+
+        let fully_qualified_name = if parent_owner_id == *OBJECT_ID {
+            self.graph.strings().get(&parent_str_id).unwrap().to_string()
+        } else {
+            format!(
+                "{}::{}",
+                self.graph.declarations().get(&parent_owner_id).unwrap().name(),
+                self.graph.strings().get(&parent_str_id).unwrap().as_str()
+            )
+        };
+
+        let declaration_id = DeclarationId::from(&fully_qualified_name);
+
+        if let std::collections::hash_map::Entry::Vacant(e) = self.graph.declarations_mut().entry(declaration_id) {
+            e.insert(Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(
+                fully_qualified_name,
+                parent_owner_id,
+            )))));
+            self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+        }
+
+        declaration_id
     }
 
     /// Resolves a declaration ID through any alias chain to get the primary (first) namespace.
@@ -5800,5 +5812,30 @@ mod tests {
         assert_declaration_kind_eq!(context, "A::B::C", "Class");
         assert_declaration_exists!(context, "A::B::C::<C>#foo()");
         assert_declaration_exists!(context, "A::B::C::<C>#@x");
+    }
+
+    #[test]
+    fn todo_chain_nested_inside_module_with_separate_intermediate() {
+        // Compact namespace nested inside a module, where the intermediate namespace
+        // is defined separately. Bar::Baz should become a Todo since only Bar exists.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo
+              class Bar::Baz::Qux
+              end
+            end
+
+            module Bar; end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_declaration_kind_eq!(context, "Bar::Baz", "<TODO>");
+        assert_declaration_kind_eq!(context, "Bar::Baz::Qux", "Class");
+        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_members_eq!(context, "Bar::Baz", vec!["Qux"]);
     }
 }
