@@ -1489,7 +1489,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments.clone(),
                 flags.clone(),
                 parent_nesting_id,
-                Signatures::Simple(parameters.clone()),
+                Signatures::Simple(parameters.clone().into_boxed_slice()),
                 Visibility::Public,
                 self.current_nesting_definition_id().map(Receiver::SelfReceiver),
             )));
@@ -1505,7 +1505,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
                 flags,
                 parent_nesting_id,
-                Signatures::Simple(parameters),
+                Signatures::Simple(parameters.into_boxed_slice()),
                 Visibility::Private,
                 receiver,
             )));
@@ -1522,7 +1522,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 comments,
                 flags,
                 parent_nesting_id,
-                Signatures::Simple(parameters),
+                Signatures::Simple(parameters.into_boxed_slice()),
                 visibility,
                 receiver,
             )));

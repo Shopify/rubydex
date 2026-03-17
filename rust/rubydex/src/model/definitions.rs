@@ -704,7 +704,7 @@ impl ConstantAliasDefinition {
 /// The signature of a method
 ///
 /// Currently only supports the parameter names and kinds.
-pub type Signature = Vec<Parameter>;
+pub type Signature = Box<[Parameter]>;
 
 #[derive(Debug)]
 pub enum Signatures {
@@ -716,7 +716,7 @@ pub enum Signatures {
     /// Multiple method signatures, for overloaded definitions.
     ///
     /// Used for RBS definitions with more than one overload.
-    Overloaded(Vec<Signature>),
+    Overloaded(Box<[Signature]>),
 }
 
 impl Signatures {
@@ -750,7 +750,7 @@ pub struct MethodDefinition {
     receiver: Option<Receiver>,
 }
 
-assert_mem_size!(MethodDefinition, 120);
+assert_mem_size!(MethodDefinition, 112);
 
 /// The receiver of a singleton method definition.
 #[derive(Debug)]
