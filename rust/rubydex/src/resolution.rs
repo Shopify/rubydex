@@ -511,11 +511,18 @@ impl<'a> Resolver<'a> {
                 Definition::MethodAlias(alias) => {
                     // Method aliases operate on instance methods. The SelfReceiver arm is for
                     // RBS `alias self.x self.y`.
+                    let new_name_str_id = *alias.new_name_str_id();
                     let owner_id = match alias.receiver() {
-                        Some(Receiver::SelfReceiver(def_id)) => *self
-                            .graph
-                            .definition_id_to_declaration_id(*def_id)
-                            .expect("SelfReceiver definition should have a declaration"),
+                        Some(Receiver::SelfReceiver(def_id)) => {
+                            let decl_id = *self
+                                .graph
+                                .definition_id_to_declaration_id(*def_id)
+                                .expect("SelfReceiver definition should have a declaration");
+                            let Some(owner_id) = self.get_or_create_singleton_class(decl_id) else {
+                                continue;
+                            };
+                            owner_id
+                        }
                         Some(Receiver::ConstantReceiver(name_id)) => match self.graph.names().get(name_id).unwrap() {
                             NameRef::Resolved(resolved) => *resolved.declaration_id(),
                             NameRef::Unresolved(_) => {
@@ -530,7 +537,7 @@ impl<'a> Resolver<'a> {
                         }
                     };
 
-                    self.create_declaration(*alias.new_name_str_id(), id, owner_id, |name| {
+                    self.create_declaration(new_name_str_id, id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
@@ -4756,6 +4763,42 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object"]);
+    }
+
+    #[test]
+    fn rbs_method_alias_resolution() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              def self.class_method; end
+            end
+
+            module Baz
+              def original; end
+            end
+            "
+        });
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            class Foo
+              alias qux bar
+              alias self.class_alias self.class_method
+            end
+
+            module Baz
+              alias copy original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["bar()", "qux()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["class_alias()", "class_method()"]);
+        assert_members_eq!(context, "Baz", ["copy()", "original()"]);
     }
 
     #[test]
