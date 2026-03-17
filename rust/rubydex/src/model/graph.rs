@@ -183,8 +183,16 @@ impl Graph {
             .is_some_and(|decl| decl.as_namespace().is_some())
     }
 
+    // TODO: this method should not exist. Once handling incremental changes is fully implemented, it should be removed
     pub fn clear_declarations(&mut self) {
         self.declarations.clear();
+
+        // Unresolve all names so that we don't end up with constants that are pointing to non-existing declarations
+        // after a second round of resolution
+        let name_ids: Vec<_> = self.names.keys().copied().collect();
+        for id in name_ids {
+            self.unresolve_name(id);
+        }
     }
 
     // Returns an immutable reference to the definitions map

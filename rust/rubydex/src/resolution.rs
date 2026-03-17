@@ -5616,4 +5616,26 @@ mod tests {
         assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
         assert_declaration_does_not_exist!(context, "Foo::Bar");
     }
+
+    #[test]
+    fn double_resolution_does_not_crash() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module ::Foo; end
+            module Bar::Foo; end
+            "
+        });
+        context.resolve();
+
+        context.index_uri("file:///foo2.rb", {
+            r"
+            module Foo; end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Bar::Foo");
+    }
 }
