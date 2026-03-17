@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashSet, VecDeque, hash_map::Entry},
     hash::BuildHasher,
 };
 
@@ -1131,14 +1131,13 @@ impl<'a> Resolver<'a> {
 
         let parent_name = self.graph.names().get(&parent_scope).unwrap();
         let parent_str_id = *parent_name.str();
-        let parent_has_explicit_prefix = parent_name.parent_scope().as_ref().is_some();
-        // NLL: borrow of parent_name ends here
+        let parent_has_parent_scope = parent_name.parent_scope().as_ref().is_some();
+        // Non-Lexical Lifetimes: borrow of parent_name ends here
 
-        // For bare names (no explicit `::` prefix), always use OBJECT_ID as the owner.
-        // Using nesting here would create "Nesting::Bar" instead of "Bar" for a bare `Bar`
-        // reference, which is incorrect: if `Bar` can't be found anywhere, the placeholder
-        // should live at the top level so it can be promoted when `module Bar` appears later.
-        let parent_owner_id = if parent_has_explicit_prefix {
+        // For `class A::B::C` where `A` is bare (no `::` prefix), place the Todo under
+        // Object so it becomes top-level `A`. This way `module A; end` appearing later
+        // promotes it correctly. Using nesting would incorrectly create `SomeModule::A`.
+        let parent_owner_id = if parent_has_parent_scope {
             match self.name_owner_id(parent_scope) {
                 Outcome::Resolved(id, _) => id,
                 Outcome::Unresolved(None) => self.create_todo_for_parent(parent_scope),
@@ -1160,7 +1159,7 @@ impl<'a> Resolver<'a> {
 
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
-        if let std::collections::hash_map::Entry::Vacant(e) = self.graph.declarations_mut().entry(declaration_id) {
+        if let Entry::Vacant(e) = self.graph.declarations_mut().entry(declaration_id) {
             e.insert(Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(
                 fully_qualified_name,
                 parent_owner_id,
@@ -5824,5 +5823,39 @@ mod todo_tests {
         assert_declaration_kind_eq!(context, "Bar::Baz::Qux", "Class");
         assert_members_eq!(context, "Bar", vec!["Baz"]);
         assert_members_eq!(context, "Bar::Baz", vec!["Qux"]);
+    }
+
+    #[test]
+    fn no_todo_when_parent_is_reachable_through_include() {
+        // Baz::Qux inside Foo, where Baz comes from included Bar module.
+        // Baz::Qux should resolve through inheritance to Bar::Baz::Qux, not create
+        // a top-level Baz Todo.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///file1.rb", {
+            r"
+            module Foo
+              include Bar
+
+              class Baz::Qux; end
+            end
+            "
+        });
+        context.index_uri("file:///file2.rb", {
+            r"
+            module Bar
+              module Baz; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::Baz");
+        assert_declaration_exists!(context, "Bar::Baz::Qux");
+        assert_members_eq!(context, "Bar::Baz", vec!["Qux"]);
+        assert_declaration_does_not_exist!(context, "Foo::Baz");
+        // No spurious top-level Baz Todo should be created
+        assert_declaration_does_not_exist!(context, "Baz");
+        // Baz::Qux should NOT exist at top level
+        assert_declaration_does_not_exist!(context, "Baz::Qux");
     }
 }
