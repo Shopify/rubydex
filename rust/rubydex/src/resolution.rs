@@ -1987,29 +1987,6 @@ mod tests {
     }
 
     #[test]
-    fn resolution_does_not_loop_infinitely_on_non_existing_constants() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            class Foo::Bar
-              class Baz
-              end
-            end
-            "
-        });
-        context.resolve();
-
-        assert_no_diagnostics!(&context);
-
-        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
-
-        assert_members_eq!(context, "Object", vec!["Foo"]);
-        assert_members_eq!(context, "Foo", vec!["Bar"]);
-        assert_members_eq!(context, "Foo::Bar", vec!["Baz"]);
-        assert_no_members!(context, "Foo::Bar::Baz");
-    }
-
-    #[test]
     fn expected_name_depth_order() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
@@ -5484,6 +5461,63 @@ mod tests {
     }
 
     #[test]
+    fn qualified_name_inside_nesting_resolves_to_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar::Baz
+                def qux; end
+              end
+            end
+
+            module Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_members_eq!(context, "Bar", vec!["Baz"]);
+        assert_declaration_exists!(context, "Bar::Baz");
+        assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+    }
+}
+
+#[cfg(test)]
+mod todo_tests {
+    use crate::test_utils::GraphTest;
+    use crate::{
+        assert_declaration_does_not_exist, assert_declaration_exists, assert_declaration_kind_eq, assert_members_eq,
+        assert_no_diagnostics, assert_no_members,
+    };
+
+    #[test]
+    fn resolution_does_not_loop_infinitely_on_non_existing_constants() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo::Bar
+              class Baz
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["Baz"]);
+        assert_no_members!(context, "Foo::Bar::Baz");
+    }
+
+    #[test]
     fn resolve_missing_declaration_to_todo() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
@@ -5509,91 +5543,6 @@ mod tests {
         assert_members_eq!(context, "Foo", vec!["Bar", "Baz"]);
         assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
         assert_members_eq!(context, "Foo::Baz", vec!["baz()"]);
-    }
-
-    #[test]
-    fn todo_declaration_promoted_to_real_namespace() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            class Foo::Bar
-              def bar; end
-            end
-
-            class Foo
-              def foo; end
-            end
-            "
-        });
-        context.resolve();
-
-        assert_no_diagnostics!(&context);
-
-        // Foo was initially created as a Todo (from class Foo::Bar), then promoted to Class
-        assert_declaration_kind_eq!(context, "Foo", "Class");
-
-        assert_members_eq!(context, "Object", vec!["Foo"]);
-        assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
-        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
-    }
-
-    #[test]
-    fn todo_declaration_promoted_to_real_namespace_incrementally() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///bar.rb", {
-            r"
-            class Foo::Bar
-              def bar; end
-            end
-            "
-        });
-        context.resolve();
-
-        assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
-
-        context.index_uri("file:///foo.rb", {
-            r"
-            class Foo
-              def foo; end
-            end
-            "
-        });
-        context.resolve();
-
-        assert_no_diagnostics!(&context);
-
-        // Foo was promoted from Todo to Class after the second resolution
-        assert_declaration_kind_eq!(context, "Foo", "Class");
-
-        assert_members_eq!(context, "Object", vec!["Foo"]);
-        assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
-        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
-    }
-
-    #[test]
-    fn qualified_name_inside_nesting_resolves_to_top_level() {
-        let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", {
-            r"
-            module Foo
-              class Bar::Baz
-                def qux; end
-              end
-            end
-
-            module Bar
-            end
-            "
-        });
-        context.resolve();
-
-        assert_no_diagnostics!(&context);
-        assert_declaration_kind_eq!(context, "Bar", "Module");
-        assert_members_eq!(context, "Bar", vec!["Baz"]);
-        assert_declaration_exists!(context, "Bar::Baz");
-        assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
-        assert_declaration_does_not_exist!(context, "Foo::Bar");
     }
 
     #[test]
@@ -5631,29 +5580,67 @@ mod tests {
     }
 
     #[test]
-    fn double_resolution_does_not_crash() {
+    fn promoted_to_real_namespace() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
             r"
-            module ::Foo; end
-            module Bar::Foo; end
+            class Foo::Bar
+              def bar; end
+            end
+
+            class Foo
+              def foo; end
+            end
             "
         });
         context.resolve();
 
-        context.index_uri("file:///foo2.rb", {
-            r"
-            module Foo; end
-            "
-        });
-        context.resolve();
+        assert_no_diagnostics!(&context);
 
-        assert_declaration_exists!(context, "Foo");
-        assert_declaration_exists!(context, "Bar::Foo");
+        // Foo was initially created as a Todo (from class Foo::Bar), then promoted to Class
+        assert_declaration_kind_eq!(context, "Foo", "Class");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
     }
 
     #[test]
-    fn todo_chain_two_levels_unknown() {
+    fn promoted_to_real_namespace_incrementally() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Foo::Bar
+              def bar; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def foo; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Foo was promoted from Todo to Class after the second resolution
+        assert_declaration_kind_eq!(context, "Foo", "Class");
+
+        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
+        assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+    }
+
+    #[test]
+    fn two_levels_unknown() {
         // class A::B::C — neither A nor B exist. Both should become Todos, C is a Class.
         let mut context = GraphTest::new();
         context.index_uri("file:///a.rb", {
@@ -5675,7 +5662,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_chain_three_levels_unknown() {
+    fn three_levels_unknown() {
         // class A::B::C::D — A, B, C are all unknown. Tests recursion beyond depth 2.
         let mut context = GraphTest::new();
         context.index_uri("file:///a.rb", {
@@ -5699,7 +5686,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_chain_partially_unresolvable() {
+    fn partially_unresolvable() {
         // A exists but B doesn't — A resolves to a real Module, B becomes a Todo under A.
         let mut context = GraphTest::new();
         context.index_uri("file:///a.rb", {
@@ -5721,7 +5708,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_chain_shared_by_sibling_classes() {
+    fn shared_by_sibling_classes() {
         // Two classes share the same unknown parent chain. The Todos for A and B should
         // be created once and reused, with both C and D as members of B.
         let mut context = GraphTest::new();
@@ -5750,7 +5737,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_chain_promoted_incrementally() {
+    fn promoted_incrementally() {
         // Index class A::B::C first (creates Todos), then provide real definitions.
         // All Todos should be promoted to real namespaces.
         //
@@ -5792,7 +5779,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_chain_with_self_method_and_ivar() {
+    fn with_self_method_and_ivar() {
         // def self.foo with @x inside a multi-level compact class — the SelfReceiver
         // on the method must find C's declaration to create the singleton class and ivar.
         let mut context = GraphTest::new();
@@ -5815,7 +5802,7 @@ mod tests {
     }
 
     #[test]
-    fn todo_chain_nested_inside_module_with_separate_intermediate() {
+    fn nested_inside_module_with_separate_intermediate() {
         // Compact namespace nested inside a module, where the intermediate namespace
         // is defined separately. Bar::Baz should become a Todo since only Bar exists.
         let mut context = GraphTest::new();
