@@ -206,202 +206,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_constant_write_node() {
-    let context = index_source({
-        "
-        FOO = 1
-
-        class Foo
-          FOO = 2
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 3);
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_constant_path_write_node() {
-    let context = index_source({
-        "
-        FOO::BAR = 1
-
-        class Foo
-          FOO::BAR = 2
-          ::BAZ = 3
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO::BAR");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO::BAR");
-
-        assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-
-        assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_constant_or_write_node() {
-    let context = index_source({
-        "
-        FOO ||= 1
-
-        class Bar
-          BAZ ||= 2
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 3);
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_constant_references_eq!(&context, ["FOO", "BAZ"]);
-}
-
-#[test]
-fn index_constant_path_or_write_node() {
-    let context = index_source({
-        "
-        FOO::BAR ||= 1
-
-        class MyClass
-          FOO::BAR ||= 2
-          ::BAZ ||= 3
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO::BAR");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO::BAR");
-
-        assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-
-        assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-
-    assert_constant_references_eq!(&context, ["FOO", "BAR", "FOO", "BAR", "BAZ"]);
-}
-
-#[test]
-fn index_constant_multi_write_node() {
-    let context = index_source({
-        "
-        FOO, BAR::BAZ = 1, 2
-
-        class Foo
-          FOO, BAR::BAZ, ::BAZ = 3, 4, 5
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 6);
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAR::BAZ");
-    });
-
-    assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAR::BAZ");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[2], def.id());
-        });
-    });
-}
-
-#[test]
 fn index_def_node() {
     let context = index_source({
         "
@@ -4235,6 +4039,206 @@ fn index_private_constant_calls_diagnostics() {
     );
 
     assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+}
+
+mod constant_tests {
+    use super::*;
+
+    #[test]
+    fn index_constant_write_node() {
+        let context = index_source({
+            "
+            FOO = 1
+
+            class Foo
+              FOO = 2
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_constant_path_write_node() {
+        let context = index_source({
+            "
+            FOO::BAR = 1
+
+            class Foo
+              FOO::BAR = 2
+              ::BAZ = 3
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO::BAR");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO::BAR");
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_constant_or_write_node() {
+        let context = index_source({
+            "
+            FOO ||= 1
+
+            class Bar
+              BAZ ||= 2
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_constant_references_eq!(&context, ["FOO", "BAZ"]);
+    }
+
+    #[test]
+    fn index_constant_path_or_write_node() {
+        let context = index_source({
+            "
+            FOO::BAR ||= 1
+
+            class MyClass
+              FOO::BAR ||= 2
+              ::BAZ ||= 3
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO::BAR");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO::BAR");
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_constant_references_eq!(&context, ["FOO", "BAR", "FOO", "BAR", "BAZ"]);
+    }
+
+    #[test]
+    fn index_constant_multi_write_node() {
+        let context = index_source({
+            "
+            FOO, BAR::BAZ = 1, 2
+
+            class Foo
+              FOO, BAR::BAZ, ::BAZ = 3, 4, 5
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 6);
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAR::BAZ");
+        });
+
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAR::BAZ");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
 }
 
 mod class_and_module_tests {
