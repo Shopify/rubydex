@@ -2080,26 +2080,6 @@ mod tests {
         test_utils::LocalGraphTest,
     };
 
-    // Method assertions
-
-    /// Asserts that a parameter matches the expected kind.
-    ///
-    /// Usage:
-    /// - `assert_parameter!(parameter, RequiredPositional, |param| { assert_string_eq!(context, param.str(), "a"); })`
-    /// - `assert_parameter!(parameter, OptionalPositional, |param| { assert_string_eq!(context, param.str(), "b"); })`
-    macro_rules! assert_parameter {
-        ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
-            match $expr {
-                Parameter::$variant($param) => $body,
-                _ => panic!(
-                    "parameter kind mismatch: expected `{}`, got `{:?}`",
-                    stringify!($variant),
-                    $expr
-                ),
-            }
-        };
-    }
-
     /// Asserts that a method has a simple (non-overloaded) signature, then runs a closure with it.
     ///
     /// Usage:
@@ -2682,85 +2662,199 @@ mod tests {
         );
     }
 
-    #[test]
-    fn index_def_node() {
-        let context = index_source({
-            "
-            def foo; end
+    mod method_tests {
+        use super::*;
 
-            class Foo
-              def bar; end
-              def self.baz; end
-            end
+        /// Asserts that a parameter matches the expected kind.
+        ///
+        /// Usage:
+        /// - `assert_parameter!(parameter, RequiredPositional, |param| { assert_string_eq!(context, param.str(), "a"); })`
+        /// - `assert_parameter!(parameter, OptionalPositional, |param| { assert_string_eq!(context, param.str(), "b"); })`
+        macro_rules! assert_parameter {
+            ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
+                match $expr {
+                    Parameter::$variant($param) => $body,
+                    _ => panic!(
+                        "parameter kind mismatch: expected `{}`, got `{:?}`",
+                        stringify!($variant),
+                        $expr
+                    ),
+                }
+            };
+        }
 
-            class Bar
-              def Foo.quz; end
-            end
-            "
-        });
+        #[test]
+        fn index_def_node() {
+            let context = index_source({
+                "
+                def foo; end
 
-        assert_no_local_diagnostics!(&context);
-        assert_eq!(context.graph().definitions().len(), 6);
+                class Foo
+                  def bar; end
+                  def self.baz; end
+                end
 
-        assert_definition_at!(&context, "1:1-1:13", Method, |def| {
-            assert_def_str_eq!(&context, def, "foo()");
-            assert_simple_signature!(def, |params| {
-                assert_eq!(params.len(), 0);
+                class Bar
+                  def Foo.quz; end
+                end
+                "
             });
-            assert!(def.receiver().is_none());
-            assert!(def.lexical_nesting_id().is_none());
-        });
 
-        assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
-            assert_definition_at!(&context, "4:3-4:15", Method, |bar_def| {
-                assert_def_str_eq!(&context, bar_def, "bar()");
-                assert_simple_signature!(bar_def, |params| {
+            assert_no_local_diagnostics!(&context);
+            assert_eq!(context.graph().definitions().len(), 6);
+
+            assert_definition_at!(&context, "1:1-1:13", Method, |def| {
+                assert_def_str_eq!(&context, def, "foo()");
+                assert_simple_signature!(def, |params| {
                     assert_eq!(params.len(), 0);
                 });
-                assert!(bar_def.receiver().is_none());
-                assert_eq!(foo_class_def.id(), bar_def.lexical_nesting_id().unwrap());
-                assert_eq!(foo_class_def.members()[0], bar_def.id());
+                assert!(def.receiver().is_none());
+                assert!(def.lexical_nesting_id().is_none());
             });
 
-            assert_definition_at!(&context, "5:3-5:20", Method, |baz_def| {
-                assert_def_str_eq!(&context, baz_def, "baz()");
-                assert_simple_signature!(baz_def, |params| {
-                    assert_eq!(params.len(), 0);
+            assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
+                assert_definition_at!(&context, "4:3-4:15", Method, |bar_def| {
+                    assert_def_str_eq!(&context, bar_def, "bar()");
+                    assert_simple_signature!(bar_def, |params| {
+                        assert_eq!(params.len(), 0);
+                    });
+                    assert!(bar_def.receiver().is_none());
+                    assert_eq!(foo_class_def.id(), bar_def.lexical_nesting_id().unwrap());
+                    assert_eq!(foo_class_def.members()[0], bar_def.id());
                 });
-                assert_method_has_receiver!(&context, baz_def, "Foo");
-                assert_eq!(foo_class_def.id(), baz_def.lexical_nesting_id().unwrap());
-                assert_eq!(foo_class_def.members()[1], baz_def.id());
-            });
-        });
 
-        assert_definition_at!(&context, "8:1-10:4", Class, |bar_class_def| {
-            assert_def_name_eq!(&context, bar_class_def, "Bar");
-
-            assert_definition_at!(&context, "9:3-9:19", Method, |quz_def| {
-                assert_def_str_eq!(&context, quz_def, "quz()");
-                assert_simple_signature!(quz_def, |params| {
-                    assert_eq!(params.len(), 0);
+                assert_definition_at!(&context, "5:3-5:20", Method, |baz_def| {
+                    assert_def_str_eq!(&context, baz_def, "baz()");
+                    assert_simple_signature!(baz_def, |params| {
+                        assert_eq!(params.len(), 0);
+                    });
+                    assert_method_has_receiver!(&context, baz_def, "Foo");
+                    assert_eq!(foo_class_def.id(), baz_def.lexical_nesting_id().unwrap());
+                    assert_eq!(foo_class_def.members()[1], baz_def.id());
                 });
-                assert_method_has_receiver!(&context, quz_def, "Foo");
-                assert_eq!(bar_class_def.id(), quz_def.lexical_nesting_id().unwrap());
             });
-        });
-    }
 
-    #[test]
-    fn do_not_index_def_node_with_dynamic_receiver() {
-        let context = index_source({
-            "
-            def foo.bar; end
-            "
-        });
+            assert_definition_at!(&context, "8:1-10:4", Class, |bar_class_def| {
+                assert_def_name_eq!(&context, bar_class_def, "Bar");
 
-        assert_local_diagnostics_eq!(
-            &context,
-            ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
-        );
-        assert_eq!(context.graph().definitions().len(), 0);
-        assert_method_references_eq!(&context, ["foo"]);
+                assert_definition_at!(&context, "9:3-9:19", Method, |quz_def| {
+                    assert_def_str_eq!(&context, quz_def, "quz()");
+                    assert_simple_signature!(quz_def, |params| {
+                        assert_eq!(params.len(), 0);
+                    });
+                    assert_method_has_receiver!(&context, quz_def, "Foo");
+                    assert_eq!(bar_class_def.id(), quz_def.lexical_nesting_id().unwrap());
+                });
+            });
+        }
+
+        #[test]
+        fn do_not_index_def_node_with_dynamic_receiver() {
+            let context = index_source({
+                "
+                def foo.bar; end
+                "
+            });
+
+            assert_local_diagnostics_eq!(
+                &context,
+                ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
+            );
+            assert_eq!(context.graph().definitions().len(), 0);
+            assert_method_references_eq!(&context, ["foo"]);
+        }
+
+        #[test]
+        fn index_def_node_with_parameters() {
+            let context = index_source({
+                "
+                def foo(a, b = 42, *c, d, e:, g: 42, **i, &j); end
+                "
+            });
+
+            assert_no_local_diagnostics!(&context);
+
+            assert_definition_at!(&context, "1:1-1:51", Method, |def| {
+                assert_simple_signature!(def, |params| {
+                    assert_eq!(params.len(), 8);
+
+                    assert_parameter!(&params[0], RequiredPositional, |param| {
+                        assert_string_eq!(context, param.str(), "a");
+                    });
+
+                    assert_parameter!(&params[1], OptionalPositional, |param| {
+                        assert_string_eq!(context, param.str(), "b");
+                    });
+
+                    assert_parameter!(&params[2], RestPositional, |param| {
+                        assert_string_eq!(context, param.str(), "c");
+                    });
+
+                    assert_parameter!(&params[3], Post, |param| {
+                        assert_string_eq!(context, param.str(), "d");
+                    });
+
+                    assert_parameter!(&params[4], RequiredKeyword, |param| {
+                        assert_string_eq!(context, param.str(), "e");
+                    });
+
+                    assert_parameter!(&params[5], OptionalKeyword, |param| {
+                        assert_string_eq!(context, param.str(), "g");
+                    });
+
+                    assert_parameter!(&params[6], RestKeyword, |param| {
+                        assert_string_eq!(context, param.str(), "i");
+                    });
+
+                    assert_parameter!(&params[7], Block, |param| {
+                        assert_string_eq!(context, param.str(), "j");
+                    });
+                });
+            });
+        }
+
+        #[test]
+        fn index_def_node_with_forward_parameters() {
+            let context = index_source({
+                "
+                def foo(...); end
+                "
+            });
+
+            assert_no_local_diagnostics!(&context);
+
+            assert_definition_at!(&context, "1:1-1:18", Method, |def| {
+                assert_simple_signature!(def, |params| {
+                    assert_eq!(params.len(), 1);
+                    assert_parameter!(&params[0], Forward, |param| {
+                        assert_string_eq!(context, param.str(), "...");
+                    });
+                });
+            });
+        }
+
+        #[test]
+        fn index_nested_method_definitions() {
+            let context = index_source({
+                "
+                class Foo
+                  def bar
+                    def baz; end
+                  end
+                end
+                "
+            });
+            assert_no_local_diagnostics!(&context);
+
+            assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+                assert_definition_at!(&context, "2:3-4:6", Method, |bar| {
+                    assert_definition_at!(&context, "3:5-3:17", Method, |baz| {
+                        assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                        assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
+                    });
+                });
+            });
+        }
     }
 
     #[test]
@@ -2977,75 +3071,6 @@ mod tests {
             assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
                 assert_def_str_eq!(&context, def, "@@var");
                 assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
-            });
-        });
-    }
-
-    #[test]
-    fn index_def_node_with_parameters() {
-        let context = index_source({
-            "
-            def foo(a, b = 42, *c, d, e:, g: 42, **i, &j); end
-            "
-        });
-
-        assert_no_local_diagnostics!(&context);
-
-        assert_definition_at!(&context, "1:1-1:51", Method, |def| {
-            assert_simple_signature!(def, |params| {
-                assert_eq!(params.len(), 8);
-
-                assert_parameter!(&params[0], RequiredPositional, |param| {
-                    assert_string_eq!(context, param.str(), "a");
-                });
-
-                assert_parameter!(&params[1], OptionalPositional, |param| {
-                    assert_string_eq!(context, param.str(), "b");
-                });
-
-                assert_parameter!(&params[2], RestPositional, |param| {
-                    assert_string_eq!(context, param.str(), "c");
-                });
-
-                assert_parameter!(&params[3], Post, |param| {
-                    assert_string_eq!(context, param.str(), "d");
-                });
-
-                assert_parameter!(&params[4], RequiredKeyword, |param| {
-                    assert_string_eq!(context, param.str(), "e");
-                });
-
-                assert_parameter!(&params[5], OptionalKeyword, |param| {
-                    assert_string_eq!(context, param.str(), "g");
-                });
-
-                assert_parameter!(&params[6], RestKeyword, |param| {
-                    assert_string_eq!(context, param.str(), "i");
-                });
-
-                assert_parameter!(&params[7], Block, |param| {
-                    assert_string_eq!(context, param.str(), "j");
-                });
-            });
-        });
-    }
-
-    #[test]
-    fn index_def_node_with_forward_parameters() {
-        let context = index_source({
-            "
-            def foo(...); end
-            "
-        });
-
-        assert_no_local_diagnostics!(&context);
-
-        assert_definition_at!(&context, "1:1-1:18", Method, |def| {
-            assert_simple_signature!(def, |params| {
-                assert_eq!(params.len(), 1);
-                assert_parameter!(&params[0], Forward, |param| {
-                    assert_string_eq!(context, param.str(), "...");
-                });
             });
         });
     }
@@ -5717,29 +5742,6 @@ mod tests {
             assert_eq!(StringId::from(&format!("{uri_id}:13<anonymous>")), *name_ref.str());
             assert!(name_ref.nesting().is_none());
             assert!(name_ref.parent_scope().is_none());
-        });
-    }
-
-    #[test]
-    fn index_nested_method_definitions() {
-        let context = index_source({
-            "
-            class Foo
-              def bar
-                def baz; end
-              end
-            end
-            "
-        });
-        assert_no_local_diagnostics!(&context);
-
-        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
-            assert_definition_at!(&context, "2:3-4:6", Method, |bar| {
-                assert_definition_at!(&context, "3:5-3:17", Method, |baz| {
-                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                    assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
-                });
-            });
         });
     }
 
