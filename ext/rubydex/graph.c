@@ -124,20 +124,7 @@ static VALUE rdxr_graph_declarations(VALUE self) {
     return self;
 }
 
-// Graph#search: () -> Enumerator[Declaration]
-// Returns an enumerator that yields all declarations lazily
-static VALUE rdxr_graph_search(VALUE self, VALUE query) {
-    if (!rb_block_given_p()) {
-        return rb_enumeratorize(self, rb_str_new2("search"), 1, &query);
-    }
-
-    void *graph;
-    TypedData_Get_Struct(self, void *, &graph_type, graph);
-
-    const char *c_query = StringValueCStr(query);
-
-    void *iter = rdx_graph_declarations_search(graph, c_query);
-
+static VALUE rdxr_graph_yield_search_results(VALUE self, void *iter) {
     if (iter == NULL) {
         // The only case where the iterator will be NULL instead of a list is if the query cannot be converted to a Rust
         // string
@@ -148,6 +135,36 @@ static VALUE rdxr_graph_search(VALUE self, VALUE query) {
     rb_ensure(rdxi_declarations_yield, args, rdxi_declarations_ensure, args);
 
     return self;
+}
+
+// Graph#search: (String query) -> Enumerator[Declaration]
+// Returns an enumerator that yields declarations matching the query exactly (substring match)
+static VALUE rdxr_graph_search(VALUE self, VALUE query) {
+    Check_Type(query, T_STRING);
+
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize(self, rb_str_new2("search"), 1, &query);
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    return rdxr_graph_yield_search_results(self, rdx_graph_declarations_search(graph, StringValueCStr(query)));
+}
+
+// Graph#fuzzy_search: (String query) -> Enumerator[Declaration]
+// Returns an enumerator that yields declarations matching the query fuzzily
+static VALUE rdxr_graph_fuzzy_search(VALUE self, VALUE query) {
+    Check_Type(query, T_STRING);
+
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize(self, rb_str_new2("fuzzy_search"), 1, &query);
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    return rdxr_graph_yield_search_results(self, rdx_graph_declarations_fuzzy_search(graph, StringValueCStr(query)));
 }
 
 // Body function for rb_ensure in Graph#documents
@@ -488,6 +505,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "check_integrity", rdxr_graph_check_integrity, 0);
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
     rb_define_method(cGraph, "search", rdxr_graph_search, 1);
+    rb_define_method(cGraph, "fuzzy_search", rdxr_graph_fuzzy_search, 1);
     rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);
     rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
     rb_define_method(cGraph, "require_paths", rdxr_graph_require_paths, 1);

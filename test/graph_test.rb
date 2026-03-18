@@ -150,7 +150,7 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_graph_search
+  def test_graph_fuzzy_search
     with_context do |context|
       context.write!("foo.rb", "class Foo; end")
       context.write!("bar.rb", "class Bar; end")
@@ -159,8 +159,29 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      results = graph.search("Fo")
+      results = graph.fuzzy_search("Fo")
       assert_equal(["Foo"], results.map(&:name))
+    end
+  end
+
+  def test_graph_search
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        class Foo
+          def is_a_foo?; end
+        end
+
+        class Bar < Foo
+          def is_a?(other); end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      results = graph.search("#is_a?()")
+      assert_equal(["Bar#is_a?()"], results.map(&:name))
     end
   end
 

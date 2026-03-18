@@ -51,7 +51,7 @@ where
     result
 }
 
-/// Searches the graph based on query and returns all declarations that match
+/// Searches the graph using exact substring matching
 ///
 /// # Safety
 ///
@@ -61,22 +61,54 @@ pub unsafe extern "C" fn rdx_graph_declarations_search(
     pointer: GraphPointer,
     c_query: *const c_char,
 ) -> *mut DeclarationsIter {
-    let Ok(query) = (unsafe { utils::convert_char_ptr_to_string(c_query) }) else {
-        return ptr::null_mut();
-    };
+    {
+        let Ok(query) = (unsafe { utils::convert_char_ptr_to_string(c_query) }) else {
+            return ptr::null_mut();
+        };
 
-    let entries = with_graph(pointer, |graph| {
-        query::declaration_search(graph, &query)
-            .into_iter()
-            .filter_map(|id| {
-                let decl = graph.declarations().get(&id)?;
-                Some(CDeclaration::from_declaration(id, decl))
-            })
-            .collect::<Vec<CDeclaration>>()
-            .into_boxed_slice()
-    });
+        let entries = with_graph(pointer, |graph| {
+            query::declaration_search(graph, &query, &query::MatchMode::Exact)
+                .into_iter()
+                .filter_map(|id| {
+                    let decl = graph.declarations().get(&id)?;
+                    Some(CDeclaration::from_declaration(id, decl))
+                })
+                .collect::<Vec<CDeclaration>>()
+                .into_boxed_slice()
+        });
 
-    Box::into_raw(Box::new(DeclarationsIter::new(entries)))
+        Box::into_raw(Box::new(DeclarationsIter::new(entries)))
+    }
+}
+
+/// Searches the graph using fuzzy matching
+///
+/// # Safety
+///
+/// Expects both the graph and the query pointers to be valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_declarations_fuzzy_search(
+    pointer: GraphPointer,
+    c_query: *const c_char,
+) -> *mut DeclarationsIter {
+    {
+        let Ok(query) = (unsafe { utils::convert_char_ptr_to_string(c_query) }) else {
+            return ptr::null_mut();
+        };
+
+        let entries = with_graph(pointer, |graph| {
+            query::declaration_search(graph, &query, &query::MatchMode::Fuzzy)
+                .into_iter()
+                .filter_map(|id| {
+                    let decl = graph.declarations().get(&id)?;
+                    Some(CDeclaration::from_declaration(id, decl))
+                })
+                .collect::<Vec<CDeclaration>>()
+                .into_boxed_slice()
+        });
+
+        Box::into_raw(Box::new(DeclarationsIter::new(entries)))
+    }
 }
 
 /// # Panics
