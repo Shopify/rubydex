@@ -3079,259 +3079,263 @@ mod tests {
         });
     }
 
-    #[test]
-    fn index_def_node_with_visibility_top_level() {
-        let context = index_source({
-            "
-            def m1; end
+    mod visibility_tests {
+        use super::*;
 
-            protected def m2; end
-
-            public
-
-            def m3; end
-            "
-        });
-
-        assert_no_local_diagnostics!(&context);
-
-        assert_definition_at!(&context, "1:1-1:12", Method, |def| {
-            assert_def_str_eq!(&context, def, "m1()");
-            assert_eq!(def.visibility(), &Visibility::Private);
-        });
-
-        assert_definition_at!(&context, "3:11-3:22", Method, |def| {
-            assert_def_str_eq!(&context, def, "m2()");
-            assert_eq!(def.visibility(), &Visibility::Protected);
-        });
-
-        assert_definition_at!(&context, "7:1-7:12", Method, |def| {
-            assert_def_str_eq!(&context, def, "m3()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-    }
-
-    #[test]
-    fn index_module_function() {
-        let context = index_source({
-            "
-            module Foo
-              def bar; end
-
-              module_function
-
-              def baz; end
-              attr_reader :attribute
-
-              public
-
-              def qux; end
-
-              module_function def boop; end
-
-              def zip; end
-            end
-            "
-        });
-
-        assert_no_local_diagnostics!(&context);
-
-        assert_definition_at!(&context, "2:3-2:15", Method, |def| {
-            assert_def_str_eq!(&context, def, "bar()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-
-        let definitions = context.all_definitions_at("6:3-6:15");
-        assert_eq!(
-            definitions.len(),
-            2,
-            "module_function should create two definitions for baz"
-        );
-
-        let instance_method = definitions
-            .iter()
-            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
-            .expect("should have instance method definition");
-        let Definition::Method(instance_method) = instance_method else {
-            panic!()
-        };
-        assert_def_str_eq!(&context, instance_method, "baz()");
-        assert_eq!(instance_method.visibility(), &Visibility::Private);
-
-        let singleton_method = definitions
-            .iter()
-            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
-            .expect("should have singleton method definition");
-        let Definition::Method(singleton_method) = singleton_method else {
-            panic!()
-        };
-        assert_def_str_eq!(&context, singleton_method, "baz()");
-        assert_eq!(singleton_method.visibility(), &Visibility::Public);
-
-        assert_definition_at!(&context, "7:16-7:25", AttrReader, |def| {
-            assert_def_str_eq!(&context, def, "attribute()");
-            assert_eq!(def.visibility(), &Visibility::Private);
-        });
-
-        assert_definition_at!(&context, "11:3-11:15", Method, |def| {
-            assert_def_str_eq!(&context, def, "qux()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-
-        let definitions = context.all_definitions_at("13:19-13:32");
-        assert_eq!(
-            definitions.len(),
-            2,
-            "module_function should create two definitions for boop"
-        );
-
-        let instance_method = definitions
-            .iter()
-            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
-            .expect("boop: should have instance method definition");
-        let Definition::Method(instance_method) = instance_method else {
-            panic!()
-        };
-        assert_def_str_eq!(&context, instance_method, "boop()");
-        assert_eq!(instance_method.visibility(), &Visibility::Private);
-
-        let singleton_method = definitions
-            .iter()
-            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
-            .expect("boop: should have singleton method definition");
-        let Definition::Method(singleton_method) = singleton_method else {
-            panic!()
-        };
-        assert_def_str_eq!(&context, singleton_method, "boop()");
-        assert_eq!(singleton_method.visibility(), &Visibility::Public);
-
-        assert_definition_at!(&context, "15:3-15:15", Method, |def| {
-            assert_def_str_eq!(&context, def, "zip()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-    }
-
-    #[test]
-    fn index_def_node_with_visibility_nested() {
-        let context = index_source({
-            "
-            protected
-
-            class Foo
-              def m1; end
-
-              private
-
-              module Bar
-                def m2; end
-
-                private
-
-                def m3; end
-
-                protected
-              end
-
-              def m4; end
-            end
-            "
-        });
-
-        assert_no_local_diagnostics!(&context);
-
-        assert_definition_at!(&context, "4:3-4:14", Method, |def| {
-            assert_def_str_eq!(&context, def, "m1()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-
-        assert_definition_at!(&context, "9:5-9:16", Method, |def| {
-            assert_def_str_eq!(&context, def, "m2()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-
-        assert_definition_at!(&context, "13:5-13:16", Method, |def| {
-            assert_def_str_eq!(&context, def, "m3()");
-            assert_eq!(def.visibility(), &Visibility::Private);
-        });
-
-        assert_definition_at!(&context, "18:3-18:14", Method, |def| {
-            assert_def_str_eq!(&context, def, "m4()");
-            assert_eq!(def.visibility(), &Visibility::Private);
-        });
-    }
-
-    #[test]
-    fn index_def_node_singleton_visibility() {
-        let context = index_source({
-            "
-            protected
-
-            def self.m1; end
-
-            protected def self.m2; end
-
-            class Foo
-              private
-
-              def self.m3; end
-            end
-            "
-        });
-
-        assert_no_local_diagnostics!(&context);
-
-        assert_definition_at!(&context, "3:1-3:17", Method, |def| {
-            assert_def_str_eq!(&context, def, "m1()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-
-        assert_definition_at!(&context, "5:11-5:27", Method, |def| {
-            assert_def_str_eq!(&context, def, "m2()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-
-        assert_definition_at!(&context, "10:3-10:19", Method, |def| {
-            assert_def_str_eq!(&context, def, "m3()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-    }
-
-    #[test]
-    fn index_visibility_in_singleton_class() {
-        let context = index_source({
-            "
-            class Foo
-              protected
-
-              class << self
+        #[test]
+        fn index_def_node_with_visibility_top_level() {
+            let context = index_source({
+                "
                 def m1; end
 
-                private
+                protected def m2; end
 
-                def m2; end
-              end
+                public
 
-              def m3; end
-            end
-            "
-        });
+                def m3; end
+                "
+            });
 
-        assert_no_local_diagnostics!(&context);
+            assert_no_local_diagnostics!(&context);
 
-        assert_definition_at!(&context, "5:5-5:16", Method, |def| {
-            assert_def_str_eq!(&context, def, "m1()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
+            assert_definition_at!(&context, "1:1-1:12", Method, |def| {
+                assert_def_str_eq!(&context, def, "m1()");
+                assert_eq!(def.visibility(), &Visibility::Private);
+            });
 
-        assert_definition_at!(&context, "9:5-9:16", Method, |def| {
-            assert_def_str_eq!(&context, def, "m2()");
-            assert_eq!(def.visibility(), &Visibility::Private);
-        });
+            assert_definition_at!(&context, "3:11-3:22", Method, |def| {
+                assert_def_str_eq!(&context, def, "m2()");
+                assert_eq!(def.visibility(), &Visibility::Protected);
+            });
 
-        assert_definition_at!(&context, "12:3-12:14", Method, |def| {
-            assert_def_str_eq!(&context, def, "m3()");
-            assert_eq!(def.visibility(), &Visibility::Protected);
-        });
+            assert_definition_at!(&context, "7:1-7:12", Method, |def| {
+                assert_def_str_eq!(&context, def, "m3()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+        }
+
+        #[test]
+        fn index_module_function() {
+            let context = index_source({
+                "
+                module Foo
+                  def bar; end
+
+                  module_function
+
+                  def baz; end
+                  attr_reader :attribute
+
+                  public
+
+                  def qux; end
+
+                  module_function def boop; end
+
+                  def zip; end
+                end
+                "
+            });
+
+            assert_no_local_diagnostics!(&context);
+
+            assert_definition_at!(&context, "2:3-2:15", Method, |def| {
+                assert_def_str_eq!(&context, def, "bar()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+
+            let definitions = context.all_definitions_at("6:3-6:15");
+            assert_eq!(
+                definitions.len(),
+                2,
+                "module_function should create two definitions for baz"
+            );
+
+            let instance_method = definitions
+                .iter()
+                .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
+                .expect("should have instance method definition");
+            let Definition::Method(instance_method) = instance_method else {
+                panic!()
+            };
+            assert_def_str_eq!(&context, instance_method, "baz()");
+            assert_eq!(instance_method.visibility(), &Visibility::Private);
+
+            let singleton_method = definitions
+                .iter()
+                .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
+                .expect("should have singleton method definition");
+            let Definition::Method(singleton_method) = singleton_method else {
+                panic!()
+            };
+            assert_def_str_eq!(&context, singleton_method, "baz()");
+            assert_eq!(singleton_method.visibility(), &Visibility::Public);
+
+            assert_definition_at!(&context, "7:16-7:25", AttrReader, |def| {
+                assert_def_str_eq!(&context, def, "attribute()");
+                assert_eq!(def.visibility(), &Visibility::Private);
+            });
+
+            assert_definition_at!(&context, "11:3-11:15", Method, |def| {
+                assert_def_str_eq!(&context, def, "qux()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+
+            let definitions = context.all_definitions_at("13:19-13:32");
+            assert_eq!(
+                definitions.len(),
+                2,
+                "module_function should create two definitions for boop"
+            );
+
+            let instance_method = definitions
+                .iter()
+                .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
+                .expect("boop: should have instance method definition");
+            let Definition::Method(instance_method) = instance_method else {
+                panic!()
+            };
+            assert_def_str_eq!(&context, instance_method, "boop()");
+            assert_eq!(instance_method.visibility(), &Visibility::Private);
+
+            let singleton_method = definitions
+                .iter()
+                .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
+                .expect("boop: should have singleton method definition");
+            let Definition::Method(singleton_method) = singleton_method else {
+                panic!()
+            };
+            assert_def_str_eq!(&context, singleton_method, "boop()");
+            assert_eq!(singleton_method.visibility(), &Visibility::Public);
+
+            assert_definition_at!(&context, "15:3-15:15", Method, |def| {
+                assert_def_str_eq!(&context, def, "zip()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+        }
+
+        #[test]
+        fn index_def_node_with_visibility_nested() {
+            let context = index_source({
+                "
+                protected
+
+                class Foo
+                  def m1; end
+
+                  private
+
+                  module Bar
+                    def m2; end
+
+                    private
+
+                    def m3; end
+
+                    protected
+                  end
+
+                  def m4; end
+                end
+                "
+            });
+
+            assert_no_local_diagnostics!(&context);
+
+            assert_definition_at!(&context, "4:3-4:14", Method, |def| {
+                assert_def_str_eq!(&context, def, "m1()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+
+            assert_definition_at!(&context, "9:5-9:16", Method, |def| {
+                assert_def_str_eq!(&context, def, "m2()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+
+            assert_definition_at!(&context, "13:5-13:16", Method, |def| {
+                assert_def_str_eq!(&context, def, "m3()");
+                assert_eq!(def.visibility(), &Visibility::Private);
+            });
+
+            assert_definition_at!(&context, "18:3-18:14", Method, |def| {
+                assert_def_str_eq!(&context, def, "m4()");
+                assert_eq!(def.visibility(), &Visibility::Private);
+            });
+        }
+
+        #[test]
+        fn index_def_node_singleton_visibility() {
+            let context = index_source({
+                "
+                protected
+
+                def self.m1; end
+
+                protected def self.m2; end
+
+                class Foo
+                  private
+
+                  def self.m3; end
+                end
+                "
+            });
+
+            assert_no_local_diagnostics!(&context);
+
+            assert_definition_at!(&context, "3:1-3:17", Method, |def| {
+                assert_def_str_eq!(&context, def, "m1()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+
+            assert_definition_at!(&context, "5:11-5:27", Method, |def| {
+                assert_def_str_eq!(&context, def, "m2()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+
+            assert_definition_at!(&context, "10:3-10:19", Method, |def| {
+                assert_def_str_eq!(&context, def, "m3()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+        }
+
+        #[test]
+        fn index_visibility_in_singleton_class() {
+            let context = index_source({
+                "
+                class Foo
+                  protected
+
+                  class << self
+                    def m1; end
+
+                    private
+
+                    def m2; end
+                  end
+
+                  def m3; end
+                end
+                "
+            });
+
+            assert_no_local_diagnostics!(&context);
+
+            assert_definition_at!(&context, "5:5-5:16", Method, |def| {
+                assert_def_str_eq!(&context, def, "m1()");
+                assert_eq!(def.visibility(), &Visibility::Public);
+            });
+
+            assert_definition_at!(&context, "9:5-9:16", Method, |def| {
+                assert_def_str_eq!(&context, def, "m2()");
+                assert_eq!(def.visibility(), &Visibility::Private);
+            });
+
+            assert_definition_at!(&context, "12:3-12:14", Method, |def| {
+                assert_def_str_eq!(&context, def, "m3()");
+                assert_eq!(def.visibility(), &Visibility::Protected);
+            });
+        }
     }
 
     #[test]
