@@ -128,11 +128,31 @@ static VALUE rdxr_graph_declarations(VALUE self) {
     return self;
 }
 
-// Graph#search: () -> Enumerator[Declaration]
+// Graph#search: (String query, mode: :fuzzy) -> Enumerator[Declaration]
 // Returns an enumerator that yields all declarations lazily
-static VALUE rdxr_graph_search(VALUE self, VALUE query) {
+static VALUE rdxr_graph_search(int argc, VALUE *argv, VALUE self) {
+    VALUE query, opts;
+    rb_scan_args(argc, argv, "1:", &query, &opts);
+    Check_Type(query, T_STRING);
+
     if (!rb_block_given_p()) {
-        return rb_enumeratorize(self, rb_str_new2("search"), 1, &query);
+        return rb_enumeratorize(self, rb_str_new2("search"), argc, argv);
+    }
+
+    enum CMatchMode match_mode = CMatchMode_Fuzzy;
+
+    if (!NIL_P(opts)) {
+        ID kwarg_id = rb_intern("mode");
+        VALUE kwarg_val;
+        rb_get_kwargs(opts, &kwarg_id, 0, 1, &kwarg_val);
+
+        if (kwarg_val != Qundef) {
+            if (kwarg_val == ID2SYM(rb_intern("exact"))) {
+                match_mode = CMatchMode_Exact;
+            } else if (kwarg_val != ID2SYM(rb_intern("fuzzy"))) {
+                rb_raise(rb_eArgError, "invalid mode (expected :fuzzy or :exact)");
+            }
+        }
     }
 
     void *graph;
@@ -140,7 +160,7 @@ static VALUE rdxr_graph_search(VALUE self, VALUE query) {
 
     const char *c_query = StringValueCStr(query);
 
-    void *iter = rdx_graph_declarations_search(graph, c_query);
+    void *iter = rdx_graph_declarations_search(graph, c_query, match_mode);
 
     if (iter == NULL) {
         // The only case where the iterator will be NULL instead of a list is if the query cannot be converted to a Rust
@@ -500,7 +520,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "diagnostics", rdxr_graph_diagnostics, 0);
     rb_define_method(cGraph, "check_integrity", rdxr_graph_check_integrity, 0);
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
-    rb_define_method(cGraph, "search", rdxr_graph_search, 1);
+    rb_define_method(cGraph, "search", rdxr_graph_search, -1);
     rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);
     rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
     rb_define_method(cGraph, "require_paths", rdxr_graph_require_paths, 1);

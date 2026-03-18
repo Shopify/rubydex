@@ -164,6 +164,61 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_search_exact_mode
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        class Foo
+          def is_a_foo?; end
+        end
+
+        class Bar < Foo
+          def is_a?(other); end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      results = graph.search("#is_a?()", mode: :exact)
+      assert_equal(["Bar#is_a?()"], results.map(&:name))
+    end
+  end
+
+  def test_graph_search_exact_mode_enumerator
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        class Foo
+          def is_a_foo?; end
+        end
+
+        class Bar < Foo
+          def is_a?(other); end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      # Enumerator must preserve the mode: keyword argument
+      enumerator = graph.search("#is_a?()", mode: :exact)
+      assert_equal(["Bar#is_a?()"], enumerator.map(&:name))
+    end
+  end
+
+  def test_graph_search_invalid_mode_raises
+    with_context do |context|
+      context.write!("foo.rb", "class Foo; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_raises(ArgumentError) { graph.search("Fo", mode: :invalid) {} }
+    end
+  end
+
   def test_graph_encoding_setter
     with_context do |context|
       context.write!("foo.rb", <<~RUBY)
