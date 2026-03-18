@@ -773,14 +773,9 @@ impl<'a> RubyIndexer<'a> {
 
         let receiver_name = receiver.location().as_slice();
 
-        // Handle `Module.new`
-        if receiver_name == b"Module" || receiver_name == b"::Module" {
+        if matches!(receiver_name, b"Module" | b"::Module") {
             self.handle_module_definition(&node.location(), Some(node), call_node.block(), Nesting::Owner);
-            return true;
-        }
-
-        // Handle `Class.new`
-        if receiver_name == b"Class" || receiver_name == b"::Class" {
+        } else if matches!(receiver_name, b"Class" | b"::Class") {
             self.handle_class_definition(
                 &node.location(),
                 Some(node),
@@ -788,10 +783,12 @@ impl<'a> RubyIndexer<'a> {
                 call_node.arguments().and_then(|args| args.arguments().iter().next()),
                 Nesting::Owner,
             );
-            return true;
+        } else {
+            return false;
         }
 
-        false
+        self.index_method_reference_for_call(&call_node);
+        true
     }
 
     /// Returns the definition ID of the current nesting (class, module, or singleton class),
@@ -986,6 +983,20 @@ impl<'a> RubyIndexer<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// Indexes a method reference for a call node, creating constant references for the receiver when applicable.
+    fn index_method_reference_for_call(&mut self, node: &ruby_prism::CallNode) {
+        let method_receiver = self.method_receiver(node.receiver().as_ref(), node.location());
+
+        if method_receiver.is_none()
+            && let Some(receiver) = node.receiver()
+        {
+            self.visit(&receiver);
+        }
+
+        let message = String::from_utf8_lossy(node.name().as_slice()).to_string();
+        self.index_method_reference(message, &node.message_loc().unwrap(), method_receiver);
     }
 
     /// Visits every part of a call node, except for the message itself. Convenient for when we're only interested in
@@ -1767,29 +1778,29 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
             "new" => {
-                if let Some(receiver) = node.receiver() {
-                    {
-                        let receiver_name = receiver.location().as_slice();
+                let receiver_name = node.receiver().map(|r| r.location().as_slice());
 
-                        if receiver_name == b"Class" || receiver_name == b"::Class" {
-                            self.handle_class_definition(
-                                &node.location(),
-                                None,
-                                node.block(),
-                                node.arguments().and_then(|args| args.arguments().iter().next()),
-                                Nesting::Owner,
-                            );
-                            return;
-                        }
+                if matches!(receiver_name, Some(b"Class" | b"::Class")) {
+                    self.handle_class_definition(
+                        &node.location(),
+                        None,
+                        node.block(),
+                        node.arguments().and_then(|args| args.arguments().iter().next()),
+                        Nesting::Owner,
+                    );
+                } else if matches!(receiver_name, Some(b"Module" | b"::Module")) {
+                    self.handle_module_definition(&node.location(), None, node.block(), Nesting::Owner);
+                } else {
+                    if let Some(arguments) = node.arguments() {
+                        self.visit_arguments_node(&arguments);
+                    }
 
-                        if receiver_name == b"Module" || receiver_name == b"::Module" {
-                            self.handle_module_definition(&node.location(), None, node.block(), Nesting::Owner);
-                            return;
-                        }
+                    if let Some(block) = node.block() {
+                        self.visit(&block);
                     }
                 }
 
-                self.visit_call_node_parts(node);
+                self.index_method_reference_for_call(node);
             }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
@@ -3901,7 +3912,9 @@ mod tests {
 
         assert_constant_references_eq!(
             &context,
-            ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"]
+            [
+                "<C1>", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"
+            ]
         );
     }
 
@@ -6124,6 +6137,46 @@ mod tests {
         assert_no_local_diagnostics!(&context);
         // We expect two constant references for `Foo` and `<Foo>` on each singleton method call
         assert_eq!(6, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn invoking_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            class Foo; end
+            Foo.new.bar
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Foo` and `<Foo>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn class_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            CONST = Class.new
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Class` and `<Class>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn module_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            CONST = Module.new
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Module` and `<Module>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
     }
 
     #[test]
