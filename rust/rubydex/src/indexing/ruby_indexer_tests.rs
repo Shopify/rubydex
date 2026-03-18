@@ -186,152 +186,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_class_self_block_creates_singleton_class() {
-    let context = index_source({
-        "
-        class Bar; end
-
-        class Foo
-          class << self
-            def baz; end
-
-            class << Bar
-              def self.qux; end
-            end
-
-            class << self
-              def quz; end
-            end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // class Bar
-    assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
-        assert_def_name_eq!(&context, bar_class, "Bar");
-        assert_def_name_offset_eq!(&context, bar_class, "1:7-1:10");
-    });
-
-    // class Foo
-    assert_definition_at!(&context, "3:1-15:4", Class, |foo_class| {
-        assert_def_name_eq!(&context, foo_class, "Foo");
-        assert_def_name_offset_eq!(&context, foo_class, "3:7-3:10");
-
-        // class << self (inside Foo)
-        assert_definition_at!(&context, "4:3-14:6", SingletonClass, |foo_singleton| {
-            assert_def_name_eq!(&context, foo_singleton, "Foo::<Foo>");
-            // name_offset points to "self"
-            assert_def_name_offset_eq!(&context, foo_singleton, "4:12-4:16");
-            assert_eq!(foo_singleton.lexical_nesting_id(), &Some(foo_class.id()));
-
-            // def baz (inside class << self)
-            assert_definition_at!(&context, "5:5-5:17", Method, |baz_method| {
-                assert_eq!(baz_method.lexical_nesting_id(), &Some(foo_singleton.id()));
-            });
-
-            // class << Bar (inside class << self of Foo)
-            assert_definition_at!(&context, "7:5-9:8", SingletonClass, |bar_singleton| {
-                assert_def_name_eq!(&context, bar_singleton, "Bar::<Bar>");
-                // name_offset points to "Bar"
-                assert_def_name_offset_eq!(&context, bar_singleton, "7:14-7:17");
-                assert_eq!(bar_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
-
-                // def self.qux (inside class << Bar)
-                assert_definition_at!(&context, "8:7-8:24", Method, |qux_method| {
-                    assert_eq!(qux_method.lexical_nesting_id(), &Some(bar_singleton.id()));
-                    assert_method_has_receiver!(&context, qux_method, "<Bar>");
-                });
-            });
-
-            // class << self (nested inside outer class << self)
-            assert_definition_at!(&context, "11:5-13:8", SingletonClass, |nested_singleton| {
-                assert_def_name_eq!(&context, nested_singleton, "Foo::<Foo>::<<Foo>>");
-                // name_offset points to "self"
-                assert_def_name_offset_eq!(&context, nested_singleton, "11:14-11:18");
-                assert_eq!(nested_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
-
-                // def quz (inside nested class << self)
-                assert_definition_at!(&context, "12:7-12:19", Method, |quz_method| {
-                    assert_eq!(quz_method.lexical_nesting_id(), &Some(nested_singleton.id()));
-                });
-            });
-        });
-    });
-}
-
-#[test]
-fn index_singleton_class_definition_in_compact_namespace() {
-    let context = index_source({
-        "
-        class Foo::Bar
-          class << self
-            def baz; end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
-        assert_def_name_eq!(&context, class_def, "Foo::Bar");
-        assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
-            assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
-            assert_definition_at!(&context, "3:5-3:17", Method, |method| {
-                assert_eq!(method.lexical_nesting_id(), &Some(singleton_class.id()));
-            });
-        });
-    });
-
-    assert_constant_references_eq!(&context, ["Foo"]);
-}
-
-#[test]
-fn index_constant_in_singleton_class_definition() {
-    let context = index_source({
-        "
-        class Foo
-          class << self
-            A = 1
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
-        assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
-            assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
-            assert_definition_at!(&context, "3:5-3:6", Constant, |def| {
-                assert_def_name_eq!(&context, def, "A");
-                assert_eq!(Some(singleton_class.id()), def.lexical_nesting_id().clone());
-            });
-        });
-    });
-}
-
-#[test]
-fn do_not_index_singleton_class_with_dynamic_expression() {
-    let context = index_source({
-        "
-        class << foo
-          def bar; end
-        end
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
-    );
-    assert_eq!(context.graph().definitions().len(), 0);
-}
-
-#[test]
 fn index_class_variable_in_singleton_class_definition() {
     let context = index_source({
         "
@@ -4460,6 +4314,156 @@ mod method_tests {
                 });
             });
         });
+    }
+}
+
+mod singleton_class_tests {
+    use super::*;
+
+    #[test]
+    fn index_class_self_block_creates_singleton_class() {
+        let context = index_source({
+            "
+            class Bar; end
+
+            class Foo
+              class << self
+                def baz; end
+
+                class << Bar
+                  def self.qux; end
+                end
+
+                class << self
+                  def quz; end
+                end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // class Bar
+        assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
+            assert_def_name_eq!(&context, bar_class, "Bar");
+            assert_def_name_offset_eq!(&context, bar_class, "1:7-1:10");
+        });
+
+        // class Foo
+        assert_definition_at!(&context, "3:1-15:4", Class, |foo_class| {
+            assert_def_name_eq!(&context, foo_class, "Foo");
+            assert_def_name_offset_eq!(&context, foo_class, "3:7-3:10");
+
+            // class << self (inside Foo)
+            assert_definition_at!(&context, "4:3-14:6", SingletonClass, |foo_singleton| {
+                assert_def_name_eq!(&context, foo_singleton, "Foo::<Foo>");
+                // name_offset points to "self"
+                assert_def_name_offset_eq!(&context, foo_singleton, "4:12-4:16");
+                assert_eq!(foo_singleton.lexical_nesting_id(), &Some(foo_class.id()));
+
+                // def baz (inside class << self)
+                assert_definition_at!(&context, "5:5-5:17", Method, |baz_method| {
+                    assert_eq!(baz_method.lexical_nesting_id(), &Some(foo_singleton.id()));
+                });
+
+                // class << Bar (inside class << self of Foo)
+                assert_definition_at!(&context, "7:5-9:8", SingletonClass, |bar_singleton| {
+                    assert_def_name_eq!(&context, bar_singleton, "Bar::<Bar>");
+                    // name_offset points to "Bar"
+                    assert_def_name_offset_eq!(&context, bar_singleton, "7:14-7:17");
+                    assert_eq!(bar_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
+
+                    // def self.qux (inside class << Bar)
+                    assert_definition_at!(&context, "8:7-8:24", Method, |qux_method| {
+                        assert_eq!(qux_method.lexical_nesting_id(), &Some(bar_singleton.id()));
+                        assert_method_has_receiver!(&context, qux_method, "<Bar>");
+                    });
+                });
+
+                // class << self (nested inside outer class << self)
+                assert_definition_at!(&context, "11:5-13:8", SingletonClass, |nested_singleton| {
+                    assert_def_name_eq!(&context, nested_singleton, "Foo::<Foo>::<<Foo>>");
+                    // name_offset points to "self"
+                    assert_def_name_offset_eq!(&context, nested_singleton, "11:14-11:18");
+                    assert_eq!(nested_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
+
+                    // def quz (inside nested class << self)
+                    assert_definition_at!(&context, "12:7-12:19", Method, |quz_method| {
+                        assert_eq!(quz_method.lexical_nesting_id(), &Some(nested_singleton.id()));
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_singleton_class_definition_in_compact_namespace() {
+        let context = index_source({
+            "
+            class Foo::Bar
+              class << self
+                def baz; end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_def_name_eq!(&context, class_def, "Foo::Bar");
+            assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
+                assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
+                assert_definition_at!(&context, "3:5-3:17", Method, |method| {
+                    assert_eq!(method.lexical_nesting_id(), &Some(singleton_class.id()));
+                });
+            });
+        });
+
+        assert_constant_references_eq!(&context, ["Foo"]);
+    }
+
+    #[test]
+    fn index_constant_in_singleton_class_definition() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                A = 1
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
+                assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
+                assert_definition_at!(&context, "3:5-3:6", Constant, |def| {
+                    assert_def_name_eq!(&context, def, "A");
+                    assert_eq!(Some(singleton_class.id()), def.lexical_nesting_id().clone());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn do_not_index_singleton_class_with_dynamic_expression() {
+        let context = index_source({
+            "
+            class << foo
+                def bar; end
+            end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
+        );
+        assert_eq!(context.graph().definitions().len(), 0);
     }
 }
 
