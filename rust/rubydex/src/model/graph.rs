@@ -970,7 +970,10 @@ impl Graph {
                 let has_docs = definitions.iter().any(|def| !def.comments().is_empty());
                 if has_docs {
                     declarations_with_docs += 1;
-                    let doc_size: usize = definitions.iter().map(|def| def.comments().len()).sum();
+                    let doc_size: usize = definitions
+                        .iter()
+                        .map(|def| def.comments().iter().map(|c| c.string().len()).sum::<usize>())
+                        .sum();
                     total_doc_size += doc_size;
                 }
             }
