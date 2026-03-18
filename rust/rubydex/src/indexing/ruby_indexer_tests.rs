@@ -258,260 +258,6 @@ fn index_class_variable_in_singleton_method_definition() {
 }
 
 #[test]
-fn index_attr_accessor_definition() {
-    let context = index_source({
-        "
-        attr_accessor :foo
-
-        class Foo
-          attr_accessor :bar, :baz
-        end
-
-        foo.attr_accessor :not_indexed
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:24-4:27", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_attr_reader_definition() {
-    let context = index_source({
-        "
-        attr_reader :foo
-
-        class Foo
-          attr_reader :bar, :baz
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_attr_writer_definition() {
-    let context = index_source({
-        "
-        attr_writer :foo
-
-        class Foo
-          attr_writer :bar, :baz
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_attr_definition() {
-    let context = index_source({
-        r#"
-        attr "a1", :a2
-
-        class Foo
-          attr "a3", true
-          attr :a4, false
-          attr :a5, 123
-        end
-        "#
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 6);
-
-    assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "a1()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "1:13-1:15", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "a2()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "a3()");
-
-        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "5:9-5:11", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "a4()");
-
-        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "6:9-6:11", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "a5()");
-        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[2], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_attr_accessor_with_visibility_top_level() {
-    let context = index_source({
-        "
-        attr_accessor :foo
-
-        protected attr_reader :bar
-
-        public
-
-        attr_writer :baz
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-
-    assert_definition_at!(&context, "3:24-3:27", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-        assert_eq!(def.visibility(), &Visibility::Protected);
-    });
-
-    assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-}
-
-#[test]
-fn index_attr_accessor_with_visibility_nested() {
-    let context = index_source({
-        "
-        protected
-
-        class Foo
-          attr_accessor :foo
-
-          private
-
-          module Bar
-            attr_accessor :bar
-
-            private
-
-            attr_reader :baz
-
-            public
-          end
-
-          attr_writer :qux
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "9:20-9:23", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "13:18-13:21", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-
-    assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "qux()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-}
-
-#[test]
 fn index_global_variable_definition() {
     let context = index_source({
         "
@@ -4468,6 +4214,264 @@ mod visibility_tests {
         );
 
         assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+    }
+}
+
+mod attr_accessor_tests {
+    use super::*;
+
+    #[test]
+    fn index_attr_accessor_definition() {
+        let context = index_source({
+            "
+            attr_accessor :foo
+
+            class Foo
+              attr_accessor :bar, :baz
+            end
+
+            foo.attr_accessor :not_indexed
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:24-4:27", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_reader_definition() {
+        let context = index_source({
+            "
+            attr_reader :foo
+
+            class Foo
+              attr_reader :bar, :baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_writer_definition() {
+        let context = index_source({
+            "
+            attr_writer :foo
+
+            class Foo
+              attr_writer :bar, :baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_definition() {
+        let context = index_source({
+            r#"
+            attr "a1", :a2
+
+            class Foo
+              attr "a3", true
+              attr :a4, false
+              attr :a5, 123
+            end
+            "#
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 6);
+
+        assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "a1()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "1:13-1:15", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "a2()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "a3()");
+
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:9-5:11", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "a4()");
+
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "6:9-6:11", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "a5()");
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_accessor_with_visibility_top_level() {
+        let context = index_source({
+            "
+            attr_accessor :foo
+
+            protected attr_reader :bar
+
+            public
+
+            attr_writer :baz
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "3:24-3:27", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+
+        assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_attr_accessor_with_visibility_nested() {
+        let context = index_source({
+            "
+            protected
+
+            class Foo
+              attr_accessor :foo
+
+              private
+
+              module Bar
+                attr_accessor :bar
+
+                private
+
+                attr_reader :baz
+
+                public
+              end
+
+              attr_writer :qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "9:20-9:23", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "13:18-13:21", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "qux()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
     }
 }
 
