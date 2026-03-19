@@ -9,14 +9,15 @@ This document describes various Ruby language behaviors, compiled from observati
 3. [Definitions vs Declarations](#definitions-vs-declarations)
 4. [Method Parameters](#method-parameters)
 5. [Method Visibility](#method-visibility)
-6. [Method Aliasing](#method-aliasing)
-7. [Attribute Methods](#attribute-methods)
-8. [Variable Scoping](#variable-scoping)
-9. [Mixins](#mixins)
-10. [Constant References](#constant-references)
-11. [Constant Aliases](#constant-aliases)
-12. [Singleton Classes](#singleton-classes)
-13. [Anonymous Classes And Modules](#anonymous-classes-and-modules)
+6. [Constant Visibility](#constant-visibility)
+7. [Method Aliasing](#method-aliasing)
+8. [Attribute Methods](#attribute-methods)
+9. [Variable Scoping](#variable-scoping)
+10. [Mixins](#mixins)
+11. [Constant References](#constant-references)
+12. [Constant Aliases](#constant-aliases)
+13. [Singleton Classes](#singleton-classes)
+14. [Anonymous Classes And Modules](#anonymous-classes-and-modules)
 
 ## Namespace Qualification
 
@@ -292,6 +293,96 @@ class Foo
 end
 ```
 
+### Visibility Access Rules
+
+- **`public`**: No restrictions — callable from anywhere with any receiver.
+- **`private`**: A private method defined anywhere in the ancestor chain can be called on `self` — either implicitly or explicitly as `self.method`. Calling it on any other object, even an instance of the same class, raises `NoMethodError`.
+- **`protected`**: Like `private`, but also allows calls on other objects as long as both `self` and the receiver have the defining class or module in their ancestor chain.
+
+The key distinction between `private` and `protected` is cross-instance access:
+
+```ruby
+class Account
+  def initialize(balance)
+    @balance = balance
+  end
+
+  def >(other)
+    balance > other.balance  # works — other is also an Account
+  end
+
+  protected
+  def balance; @balance; end
+end
+
+a = Account.new(100)
+b = Account.new(50)
+a > b  # => true (cross-instance protected call succeeds)
+```
+
+With `private`, the same pattern fails because `other.balance` uses an explicit receiver that isn't `self`:
+
+```ruby
+class Wallet
+  def initialize(amount)
+    @amount = amount
+  end
+
+  def >(other)
+    amount > other.amount  # NoMethodError — private method called on other
+  end
+
+  private
+  def amount; @amount; end
+end
+```
+
+**Protected access extends to subclasses:**
+
+```ruby
+class SavingsAccount < Account
+  def compare(other)
+    balance > other.balance  # works — both are in the Account hierarchy
+  end
+end
+```
+
+An unrelated class cannot call protected methods, even with a reference to the object:
+
+```ruby
+class Auditor
+  def inspect_balance(account)
+    account.balance  # NoMethodError — Auditor is not in Account's hierarchy
+  end
+end
+```
+
+**Protected access also works between unrelated classes that share a module in their ancestors:**
+
+```ruby
+module HasBalance
+  protected
+  def balance; @balance; end
+end
+
+class Account
+  include HasBalance
+  def initialize(balance) = @balance = balance
+  def >(other) = balance > other.balance
+end
+
+class Wallet
+  include HasBalance
+  def initialize(balance) = @balance = balance
+  def >(other) = balance > other.balance
+end
+
+Account.new(100) > Account.new(50)  # => true (same class)
+Wallet.new(100) > Account.new(50)   # => true (unrelated classes, but both include HasBalance)
+```
+
+`Account` and `Wallet` share no inheritance relationship, but both include `HasBalance`. Since the defining module is in both ancestor chains, protected cross-instance calls work between them.
+
 ### Visibility Resets in Nested Scopes
 
 **Important:** Visibility modifiers do NOT propagate into nested class or module definitions:
@@ -339,6 +430,225 @@ class Foo
 end
 
 Foo.bar  # private method 'bar' called for class Foo (NoMethodError)
+```
+
+### Retroactive Visibility (`private :method_name`)
+
+Visibility can be changed retroactively by passing a method name as a symbol to `private`, `protected`, or `public`:
+
+```ruby
+class Foo
+  def foo; end
+  def bar; end
+  private :foo          # retroactively makes foo private
+end
+Foo.public_instance_methods(false)   # => [:bar]
+Foo.private_instance_methods(false)  # => [:foo]
+```
+
+- Accepts multiple symbols: `private :a, :b`
+- Returns the symbol(s): `private :foo` returns `:foo`, `private :a, :b` returns `[:a, :b]`
+- `protected :foo` and `public :foo` work the same way
+
+**`private` is a private method on Module:**
+
+```ruby
+Foo.private(:foo)  # => NoMethodError: private method 'private' called for class Foo
+Foo.send(:private, :foo)  # works (bypasses visibility check)
+```
+
+Unlike `private_constant` and `private_class_method` which are public methods, `private`/`protected`/`public` cannot be called with an explicit receiver from outside.
+
+**Works across reopened classes:**
+
+```ruby
+class Foo; def foo; end; end
+class Foo; private :foo; end  # works — retroactive across reopen
+Foo.private_instance_methods(false)  # => [:foo]
+```
+
+**`private :inherited_method` creates an implicit copy:**
+
+```ruby
+class Parent
+  def inherited_method; "parent"; end
+end
+class Child < Parent
+  private :inherited_method
+end
+Parent.new.respond_to?(:inherited_method)  # => true (parent unaffected)
+Child.new.respond_to?(:inherited_method)   # => false (private on child)
+Child.instance_method(:inherited_method).owner  # => Child (NOT Parent!)
+```
+
+Ruby creates an implicit method entry on the child class. The owner is `Child`, not `Parent`. This means `private :inherited_method` effectively creates a definition, not just modifying one. The parent is unaffected.
+
+### Method Visibility Modifiers Do Not Affect Constants
+
+The `private`/`protected` visibility modifiers have no effect on constants. Only `private_constant` controls constant visibility (see [Constant Visibility](#constant-visibility)):
+
+```ruby
+class Foo
+  private
+  CONST = 42
+end
+Foo::CONST  # => 42 (still public)
+Foo.constants  # => [:CONST]
+```
+
+### `private_class_method` / `public_class_method`
+
+`private_class_method` makes singleton methods (class methods) private:
+
+```ruby
+class Foo
+  def self.hidden; end
+  private_class_method :hidden
+end
+Foo.hidden  # => NoMethodError: private method 'hidden' called for class Foo
+```
+
+**Inline form:**
+
+```ruby
+class Foo
+  private_class_method def self.secret; "secret"; end
+end
+Foo.secret  # => NoMethodError
+```
+
+**Common pattern — `private_class_method :new`:**
+
+```ruby
+class Singleton
+  private_class_method :new
+  def self.create; new; end  # internal access works
+end
+Singleton.new     # => NoMethodError
+Singleton.create  # => #<Singleton:0x...>
+```
+
+`public_class_method` reverses `private_class_method`. Both are public methods on `Module`, callable from anywhere with a receiver.
+
+**Note:** `private_singleton_method` does not exist in Ruby. The correct API is `private_class_method`.
+
+### Retroactive `module_function :method_name`
+
+`module_function` can be called with a method name to retroactively apply the module_function behavior, but only inside module bodies (or via `send` on a module). It is not available at the top level or inside class bodies:
+
+```ruby
+module Foo
+  def foo; "foo"; end
+  module_function :foo
+end
+Foo.foo                               # => "foo" (public singleton)
+Foo.public_instance_methods(false)    # => []
+Foo.private_instance_methods(false)   # => [:foo] (instance becomes private)
+Foo.singleton_methods(false)          # => [:foo]
+```
+
+**Creates a copy, not a reference:**
+
+```ruby
+module Foo
+  def foo; "v1"; end
+  module_function :foo
+  def foo; "v2"; end   # redefines instance method
+end
+Foo.foo  # => "v1" (singleton is an independent copy of v1)
+```
+
+## Constant Visibility
+
+Ruby provides `private_constant` and `public_constant` to control constant visibility.
+
+### `private_constant`
+
+```ruby
+class Foo
+  CONST = 1
+  private_constant :CONST
+  def use_const; CONST; end   # works — internal access OK
+end
+Foo::CONST   # => NameError: private constant Foo::CONST referenced
+Foo.constants  # => [] (private constants hidden from .constants)
+```
+
+- Accepts symbols (`:CONST`) and strings (`"CONST"`)
+- Accepts multiple args: `private_constant :A, :B`
+- Works on classes AND modules, including nested classes: `private_constant :Inner`
+- `Foo.constants` excludes private constants
+- `Foo.const_defined?(:PRIV)` returns **true** even for private constants — visibility doesn't affect `const_defined?`
+- `Foo.const_get(:PRIV)` **bypasses** private constant visibility and returns the value — only the `::` operator enforces `private_constant`
+
+### `public_constant`
+
+Reverses `private_constant`:
+
+```ruby
+class Foo
+  CONST = 1
+  private_constant :CONST
+  public_constant :CONST
+end
+Foo::CONST  # => 1 (accessible again)
+```
+
+### Scoping: Targets the Receiver
+
+`private_constant` is a public method on `Module` — callable from anywhere with a receiver. It targets the receiver, not the lexical scope:
+
+```ruby
+module Bar
+  CONST = 1
+  class Foo
+    CONST = 2
+    private_constant(:CONST)     # targets Foo::CONST (self is Foo)
+    Bar.private_constant(:CONST) # targets Bar::CONST (explicit receiver)
+  end
+end
+Bar::CONST      # => NameError (blocked by explicit receiver call)
+Bar::Foo::CONST # => NameError (blocked by bare call inside Foo)
+```
+
+### NOT Available at Top Level
+
+```ruby
+private_constant :FOO  # => NoMethodError: undefined method 'private_constant' for main
+public_constant :FOO   # => NoMethodError: undefined method 'public_constant' for main
+```
+
+`self` at top level is `main` (an Object instance), not a Module, so neither API is available there.
+
+### Constant Visibility and Inheritance
+
+Private constants block external access but NOT internal or inherited access:
+
+```ruby
+class Parent
+  CONST = 1
+  private_constant :CONST
+  def use_const; CONST; end
+end
+
+class Child < Parent
+  def try_const; CONST; end
+end
+
+Parent.new.use_const    # => 1 (internal access works)
+Child.new.try_const     # => 1 (inherited access through method works)
+Child::CONST            # => NameError (direct external access blocked)
+```
+
+Private constants from included modules are also blocked externally:
+
+```ruby
+module Mod
+  CONST = 1
+  private_constant :CONST
+end
+class Foo; include Mod; end
+Foo::CONST  # => NameError
 ```
 
 ## Method Aliasing
@@ -413,6 +723,42 @@ $foo  # => 456 (they share the same value)
 ```
 
 This is different from simply assigning `$bar = $foo`, which would copy the value rather than create an alias.
+
+### Alias Visibility
+
+Both `alias` and `alias_method` copy the **source method's visibility** at the time of aliasing, regardless of the current visibility stack:
+
+```ruby
+class Foo
+  def pub; end    # public
+  private
+  alias copy pub  # copy is PUBLIC (copies source, ignores stack)
+end
+Foo.public_instance_methods(false)   # => [:copy, :pub]
+Foo.private_instance_methods(false)  # => []
+```
+
+```ruby
+class Foo
+  def foo; end
+  private
+  alias_method :bar, :foo  # bar is PUBLIC (same behavior as alias)
+end
+Foo.public_instance_methods(false)   # => [:bar, :foo]
+Foo.private_instance_methods(false)  # => []
+```
+
+**Aliases don't track later visibility changes:**
+
+```ruby
+class Foo
+  def foo; end
+  alias bar foo       # bar is public (same as foo at this point)
+  private :foo        # foo becomes private
+end
+Foo.public_instance_methods(false)   # => [:bar]
+Foo.private_instance_methods(false)  # => [:foo]
+```
 
 ## Attribute Methods
 
