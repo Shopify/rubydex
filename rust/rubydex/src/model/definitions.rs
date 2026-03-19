@@ -706,7 +706,7 @@ impl ConstantAliasDefinition {
 /// Currently only supports the parameter names and kinds.
 pub type Signature = Box<[Parameter]>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Signatures {
     /// A single method signature, for definitions without overloads.
     ///
