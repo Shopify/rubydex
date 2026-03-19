@@ -7,6 +7,7 @@ pub mod graph;
 pub mod id;
 pub mod identity_maps;
 pub mod ids;
+pub mod keywords;
 pub mod name;
 pub mod references;
 pub mod string_ref;
