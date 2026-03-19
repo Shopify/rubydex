@@ -88,6 +88,7 @@ pub struct RubyIndexer<'a> {
     comments: Vec<CommentGroup>,
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<VisibilityModifier>,
+    pending_decorator_offset: Option<Offset>,
 }
 
 impl<'a> RubyIndexer<'a> {
@@ -103,6 +104,7 @@ impl<'a> RubyIndexer<'a> {
             comments: Vec::new(),
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
+            pending_decorator_offset: None,
         }
     }
 
@@ -187,6 +189,22 @@ impl<'a> RubyIndexer<'a> {
         }
 
         (group.comments(), group.flags())
+    }
+
+    /// We consider comments above a method decorator like Sorbet's sig to be documentation for methods and attributes.
+    /// To find the correct comment offset, we remember the offsets for the sigs we find
+    fn take_decorator_offset(&mut self, definition_start: u32) -> Option<u32> {
+        let decorator_offset = self.pending_decorator_offset.take()?;
+        if decorator_offset.end() > definition_start {
+            return None;
+        }
+
+        let between = &self.source.as_bytes()[decorator_offset.end() as usize..definition_start as usize];
+        if between.iter().all(|&b| b.is_ascii_whitespace()) && bytecount::count(between, b'\n') <= 1 {
+            Some(decorator_offset.start())
+        } else {
+            None
+        }
     }
 
     fn collect_parameters(&mut self, node: &ruby_prism::DefNode) -> Vec<Parameter> {
@@ -1458,7 +1476,10 @@ impl Visit<'_> for RubyIndexer<'_> {
             (*current_visibility.visibility(), offset.clone())
         };
 
-        let (comments, flags) = self.find_comments_for(offset_for_comments.start());
+        let comment_offset = self
+            .take_decorator_offset(offset_for_comments.start())
+            .unwrap_or_else(|| offset_for_comments.start());
+        let (comments, flags) = self.find_comments_for(comment_offset);
 
         let receiver = if let Some(recv_node) = node.receiver() {
             match recv_node {
@@ -1562,20 +1583,23 @@ impl Visit<'_> for RubyIndexer<'_> {
 
             let call_offset = Offset::from_prism_location(&call.location());
 
+            let current_visibility = self.current_visibility();
+            let (visibility, offset_for_comments) = if current_visibility.is_inline() {
+                (*current_visibility.visibility(), current_visibility.offset().clone())
+            } else {
+                (*current_visibility.visibility(), call_offset.clone())
+            };
+
+            let comment_offset = self
+                .take_decorator_offset(offset_for_comments.start())
+                .unwrap_or_else(|| offset_for_comments.start());
+
             Self::each_string_or_symbol_arg(call, |name, location| {
                 let str_id = self.local_graph.intern_string(format!("{name}()"));
                 let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
 
-                let current_visibility = self.current_visibility();
-                let (visibility, offset_for_comments) = if current_visibility.is_inline() {
-                    // If the visibility is inline, we use its offset for the comments
-                    (*current_visibility.visibility(), current_visibility.offset().clone())
-                } else {
-                    (*current_visibility.visibility(), call_offset.clone())
-                };
-
-                let (comments, flags) = self.find_comments_for(offset_for_comments.start());
+                let (comments, flags) = self.find_comments_for(comment_offset);
 
                 // module_function makes attr_* methods private (without creating singleton methods)
                 let visibility = match visibility {
@@ -1798,6 +1822,25 @@ impl Visit<'_> for RubyIndexer<'_> {
                     if let Some(block) = node.block() {
                         self.visit(&block);
                     }
+                }
+
+                self.index_method_reference_for_call(node);
+            }
+            "sig"
+                if node.receiver().is_none()
+                    || matches!(
+                        node.receiver(),
+                        Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. })
+                    ) =>
+            {
+                self.pending_decorator_offset = Some(Offset::from_prism_location(&node.location()));
+
+                if let Some(arguments) = node.arguments() {
+                    self.visit_arguments_node(&arguments);
+                }
+
+                if let Some(block) = node.block() {
+                    self.visit(&block);
                 }
 
                 self.index_method_reference_for_call(node);
@@ -6084,6 +6127,209 @@ mod tests {
 
         assert_definition_at!(&context, "16:9-16:13", AttrAccessor, |def| {
             assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_on_top_of_signature() {
+        let context = index_source({
+            "
+            class Foo
+              # Bar docs
+              # are here
+              sig { returns(Integer) }
+              attr_reader :bar
+
+              # Baz docs
+              # are in this other place
+              sig do
+                params(x: Integer).void
+              end
+              def baz(x); end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:16-5:19", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Bar docs", "# are here"]);
+        });
+
+        assert_definition_at!(&context, "12:3-12:18", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Baz docs", "# are in this other place"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_on_top_of_multiple_attribute_signature() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs
+              sig { returns(Integer) }
+              attr_reader :bar, :baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs"]);
+        });
+
+        assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_on_sig_without_runtime() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs
+              T::Sig::WithoutRuntime.sig { returns(Integer) }
+              def bar; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:3-4:15", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_blank_line_between_annotation_and_def() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs
+              sig { returns(Integer) }
+
+              def bar; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:3-5:15", Method, |def| {
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
+    fn index_double_line_between_comment_and_annotation() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs for bar
+
+
+              sig { params(x: Integer).void }
+              def bar(x); end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "6:3-6:18", Method, |def| {
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
+    fn index_line_between_comment_and_annotation() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs for bar
+
+              sig { params(x: Integer).void }
+              def bar(x); end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:3-5:18", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
+        });
+    }
+
+    #[test]
+    fn index_anything_between_comment_and_annotation() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs for bar
+              sig { params(x: Integer).void }
+              something_else
+              def bar(x); end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:3-5:18", Method, |def| {
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
+    fn index_comments_annotation_does_not_leak_through_other_code() {
+        let context = index_source({
+            "
+            class Foo
+              # Should not leak
+              sig { returns(Integer) }
+              include SomeModule
+
+              # Docs for bar
+              def bar; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "7:3-7:15", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_decorator_above_private_def() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs for foo
+              sig { params(x: Integer).void }
+              private def foo(x); end
+
+              # Docs for bar
+              sig { returns(Integer) }
+              private attr_reader :bar
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:11-4:26", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs for foo"]);
+        });
+
+        assert_definition_at!(&context, "8:24-8:27", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
         });
     }
 
