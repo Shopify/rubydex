@@ -15,7 +15,7 @@ base_branch = branches[current_branch_index + 1]
 
 sanitized_base_branch = if base_branch
   # The branch information looks like this: "* [branch_name^213] Commit message"
-  base_branch.match(/\[([^^]+)/)[1]
+  base_branch.match(/\[([^^\]]+)/)[1]
 else
   "main"
 end
