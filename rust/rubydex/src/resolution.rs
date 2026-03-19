@@ -5873,4 +5873,26 @@ mod todo_tests {
         // Baz::Qux should NOT exist at top level
         assert_declaration_does_not_exist!(context, "Baz::Qux");
     }
+
+    #[test]
+    fn rbs_method_definition() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///foo.rbs", {
+            r"
+            class Foo
+              def foo: () -> void
+
+              def self.bar: () -> void
+
+              def self?.baz: () -> void
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["baz()", "foo()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["bar()", "baz()"]);
+    }
 }

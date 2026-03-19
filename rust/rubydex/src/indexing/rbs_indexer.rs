@@ -1,8 +1,10 @@
 //! Visit the RBS AST and create type definitions.
 
+use core::panic;
+
 use ruby_rbs::node::{
-    self, AliasKind, ClassNode, CommentNode, ConstantNode, ExtendNode, GlobalNode, IncludeNode, ModuleNode, Node,
-    NodeList, PrependNode, TypeNameNode, Visit,
+    self, AliasKind, ClassNode, CommentNode, ConstantNode, ExtendNode, FunctionTypeNode, GlobalNode, IncludeNode,
+    ModuleNode, Node, NodeList, PrependNode, TypeNameNode, Visit,
 };
 
 use crate::diagnostic::Rule;
@@ -10,12 +12,14 @@ use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
     ClassDefinition, ConstantDefinition, Definition, DefinitionFlags, ExtendDefinition, GlobalVariableDefinition,
-    IncludeDefinition, MethodAliasDefinition, Mixin, ModuleDefinition, PrependDefinition, Receiver,
+    IncludeDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter, ParameterStruct,
+    PrependDefinition, Receiver, Signature, Signatures,
 };
 use crate::model::document::Document;
-use crate::model::ids::{DefinitionId, NameId, ReferenceId, UriId};
+use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, ParentScope};
 use crate::model::references::ConstantReference;
+use crate::model::visibility::Visibility;
 use crate::offset::Offset;
 
 pub struct RBSIndexer<'a> {
@@ -23,6 +27,7 @@ pub struct RBSIndexer<'a> {
     local_graph: LocalGraph,
     source: &'a str,
     nesting_stack: Vec<DefinitionId>,
+    current_visibility: Visibility,
 }
 
 impl<'a> RBSIndexer<'a> {
@@ -36,6 +41,7 @@ impl<'a> RBSIndexer<'a> {
             local_graph,
             source,
             nesting_stack: Vec::new(),
+            current_visibility: Visibility::Public,
         }
     }
 
@@ -207,6 +213,162 @@ impl<'a> RBSIndexer<'a> {
         definition_id
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn source_at(&self, location: &node::RBSLocationRange) -> String {
+        let start = location.start() as usize;
+        let end = location.end() as usize;
+        self.source[start..end].to_string()
+    }
+
+    fn intern_param(&mut self, param: &node::FunctionParamNode, default_name: &str) -> ParameterStruct {
+        if let Some(name_loc) = param.name_location() {
+            let str_id = self.local_graph.intern_string(self.source_at(&name_loc));
+            ParameterStruct::new(Offset::from_rbs_location(&name_loc), str_id)
+        } else {
+            let location = param.type_().location();
+            let str_id = self.local_graph.intern_string(default_name.to_string());
+            ParameterStruct::new(Offset::from_rbs_location(&location), str_id)
+        }
+    }
+
+    fn collect_parameters(&mut self, function_node: &FunctionTypeNode) -> Vec<Parameter> {
+        let mut parameters = Vec::new();
+        let mut positional_index: usize = 0;
+
+        for node in function_node.required_positionals().iter() {
+            let Node::FunctionParam(param) = node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            let default_name = format!("arg{positional_index}");
+            parameters.push(Parameter::RequiredPositional(self.intern_param(&param, &default_name)));
+            positional_index += 1;
+        }
+
+        for node in function_node.optional_positionals().iter() {
+            let Node::FunctionParam(param) = node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            let default_name = format!("arg{positional_index}");
+            parameters.push(Parameter::OptionalPositional(self.intern_param(&param, &default_name)));
+            positional_index += 1;
+        }
+
+        if let Some(node) = function_node.rest_positionals() {
+            let Node::FunctionParam(param) = node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            parameters.push(Parameter::RestPositional(self.intern_param(&param, "args")));
+        }
+
+        for node in function_node.trailing_positionals().iter() {
+            let Node::FunctionParam(param) = node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            let default_name = format!("arg{positional_index}");
+            parameters.push(Parameter::Post(self.intern_param(&param, &default_name)));
+            positional_index += 1;
+        }
+
+        for (key, _value) in function_node.required_keywords().iter() {
+            let name = self.source_at(&key.location());
+            let offset = Offset::from_rbs_location(&key.location());
+            let str_id = self.local_graph.intern_string(name);
+            parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(offset, str_id)));
+        }
+
+        for (key, _value) in function_node.optional_keywords().iter() {
+            let name = self.source_at(&key.location());
+            let offset = Offset::from_rbs_location(&key.location());
+            let str_id = self.local_graph.intern_string(name);
+            parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(offset, str_id)));
+        }
+
+        if let Some(node) = function_node.rest_keywords() {
+            let Node::FunctionParam(param) = &node else {
+                panic!("Expected FunctionParam node, found {node:?}")
+            };
+            parameters.push(Parameter::RestKeyword(self.intern_param(param, "kwargs")));
+        }
+
+        parameters
+    }
+
+    fn build_signatures(sigs: &mut Vec<Signature>) -> Signatures {
+        match sigs.len() {
+            0 => Signatures::Simple(Box::new([])),
+            1 => Signatures::Simple(sigs.pop().unwrap()),
+            _ => Signatures::Overloaded(std::mem::take(sigs).into_boxed_slice()),
+        }
+    }
+
+    fn collect_overload_signatures(&mut self, def_node: &node::MethodDefinitionNode) -> Signatures {
+        let mut sigs: Vec<Signature> = Vec::new();
+
+        for overload_node in def_node.overloads().iter() {
+            let Node::MethodDefinitionOverload(overload) = overload_node else {
+                panic!("Expected MethodDefinitionOverload node in overloads, found {overload_node:?}");
+            };
+            let Node::MethodType(method_type) = overload.method_type() else {
+                panic!(
+                    "Expected MethodType node in overloads, found {:?}",
+                    overload.method_type()
+                );
+            };
+            let mut params = match method_type.type_() {
+                Node::FunctionType(function_type) => self.collect_parameters(&function_type),
+                Node::UntypedFunctionType(_) => Vec::new(),
+                other => panic!("Expected FunctionType node in overloads, found {other:?}"),
+            };
+            if let Some(block) = method_type.block() {
+                let str_id = self.local_graph.intern_string("block".to_string());
+                let offset = Offset::from_rbs_location(&block.location());
+                params.push(Parameter::Block(ParameterStruct::new(offset, str_id)));
+            }
+            sigs.push(params.into_boxed_slice());
+        }
+
+        Self::build_signatures(&mut sigs)
+    }
+
+    /// Registers two method definitions for `module_function` (SingletonInstance):
+    /// a public singleton method and a private instance method.
+    #[allow(clippy::too_many_arguments)]
+    fn register_singleton_instance_method(
+        &mut self,
+        str_id: StringId,
+        offset: Offset,
+        comments: Box<[Comment]>,
+        flags: DefinitionFlags,
+        lexical_nesting_id: Option<DefinitionId>,
+        signatures: Signatures,
+    ) {
+        let singleton_def = Definition::Method(Box::new(MethodDefinition::new(
+            str_id,
+            self.uri_id,
+            offset.clone(),
+            comments.clone(),
+            flags.clone(),
+            lexical_nesting_id,
+            signatures.clone(),
+            Visibility::Public,
+            lexical_nesting_id.map(Receiver::SelfReceiver),
+        )));
+        self.register_definition(singleton_def, lexical_nesting_id);
+
+        let instance_def = Definition::Method(Box::new(MethodDefinition::new(
+            str_id,
+            self.uri_id,
+            offset,
+            comments,
+            flags,
+            lexical_nesting_id,
+            signatures,
+            Visibility::Private,
+            None,
+        )));
+        self.register_definition(instance_def, lexical_nesting_id);
+    }
+
     /// Extracts definition flags from the list of RBS annotations.
     ///
     /// panics when a non-annotation node is encountered in the list, since only annotations should be present.
@@ -262,11 +424,13 @@ impl Visit for RBSIndexer<'_> {
 
         let definition_id = self.register_definition(definition, lexical_nesting_id);
         self.nesting_stack.push(definition_id);
+        let saved_visibility = std::mem::replace(&mut self.current_visibility, Visibility::Public);
 
         for member in class_node.members().iter() {
             self.visit(&member);
         }
 
+        self.current_visibility = saved_visibility;
         self.nesting_stack.pop();
     }
 
@@ -293,11 +457,13 @@ impl Visit for RBSIndexer<'_> {
 
         let definition_id = self.register_definition(definition, lexical_nesting_id);
         self.nesting_stack.push(definition_id);
+        let saved_visibility = std::mem::replace(&mut self.current_visibility, Visibility::Public);
 
         for member in module_node.members().iter() {
             self.visit(&member);
         }
 
+        self.current_visibility = saved_visibility;
         self.nesting_stack.pop();
     }
 
@@ -393,6 +559,70 @@ impl Visit for RBSIndexer<'_> {
 
         self.register_definition(definition, lexical_nesting_id);
     }
+
+    fn visit_method_definition_node(&mut self, def_node: &node::MethodDefinitionNode) {
+        let str_id = self
+            .local_graph
+            .intern_string(format!("{}()", Self::bytes_to_string(def_node.name().name())));
+        let offset = Offset::from_rbs_location(&def_node.location());
+        let comments = self.collect_comments(def_node.comment());
+        let flags = Self::flags(&def_node.annotations());
+        let lexical_nesting_id = self.parent_lexical_scope_id();
+        let signatures = self.collect_overload_signatures(def_node);
+
+        if def_node.kind() == node::MethodDefinitionKind::SingletonInstance {
+            self.register_singleton_instance_method(str_id, offset, comments, flags, lexical_nesting_id, signatures);
+            return;
+        }
+
+        let (visibility, receiver) = match def_node.kind() {
+            node::MethodDefinitionKind::Instance => {
+                let vis = match def_node.visibility() {
+                    node::MethodDefinitionVisibility::Private => Visibility::Private,
+                    node::MethodDefinitionVisibility::Public => Visibility::Public,
+                    node::MethodDefinitionVisibility::Unspecified => self.current_visibility,
+                };
+                (vis, None)
+            }
+            node::MethodDefinitionKind::Singleton => {
+                let vis = match def_node.visibility() {
+                    node::MethodDefinitionVisibility::Private => Visibility::Private,
+                    node::MethodDefinitionVisibility::Public | node::MethodDefinitionVisibility::Unspecified => {
+                        Visibility::Public
+                    }
+                };
+                (
+                    vis,
+                    Some(Receiver::SelfReceiver(
+                        lexical_nesting_id.expect("Singleton method must have a lexical enclosing scope"),
+                    )),
+                )
+            }
+            node::MethodDefinitionKind::SingletonInstance => unreachable!("handled above"),
+        };
+
+        let definition = Definition::Method(Box::new(MethodDefinition::new(
+            str_id,
+            self.uri_id,
+            offset,
+            comments,
+            flags,
+            lexical_nesting_id,
+            signatures,
+            visibility,
+            receiver,
+        )));
+
+        self.register_definition(definition, lexical_nesting_id);
+    }
+
+    fn visit_public_node(&mut self, _public_node: &node::PublicNode) {
+        self.current_visibility = Visibility::Public;
+    }
+
+    fn visit_private_node(&mut self, _private_node: &node::PrivateNode) {
+        self.current_visibility = Visibility::Private;
+    }
 }
 
 #[cfg(test)]
@@ -400,13 +630,27 @@ mod tests {
     use ruby_rbs::node::{self, Node, NodeList};
 
     use crate::indexing::rbs_indexer::RBSIndexer;
-    use crate::model::definitions::{Definition, DefinitionFlags};
+    use crate::model::definitions::{Definition, DefinitionFlags, Parameter, Signatures};
+    use crate::model::visibility::Visibility;
     use crate::test_utils::LocalGraphTest;
     use crate::{
         assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
         assert_def_superclass_ref_eq, assert_definition_at, assert_local_diagnostics_eq, assert_method_has_receiver,
-        assert_no_local_diagnostics, assert_string_eq,
+        assert_no_local_diagnostics, assert_offset_string, assert_string_eq,
     };
+
+    macro_rules! assert_parameter {
+        ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
+            match $expr {
+                Parameter::$variant($param) => $body,
+                _ => panic!(
+                    "parameter kind mismatch: expected `{}`, got `{:?}`",
+                    stringify!($variant),
+                    $expr
+                ),
+            }
+        };
+    }
 
     fn index_source(source: &str) -> LocalGraphTest {
         LocalGraphTest::new_rbs("file:///foo.rbs", source)
@@ -926,13 +1170,385 @@ mod tests {
         let source = "# First line\r\n# Second line\r\nclass Foo\r\nend\r\n";
         let mut indexer = RBSIndexer::new("file:///foo.rbs".to_string(), source);
         indexer.index();
-        let context = LocalGraphTest::from_local_graph("file:///foo.rbs", indexer.local_graph());
+        let context = LocalGraphTest::from_local_graph("file:///foo.rbs", source, indexer.local_graph());
 
         assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "3:1-4:4", Class, |def| {
             assert_def_name_eq!(&context, def, "Foo");
             assert_def_comments_eq!(&context, def, ["# First line", "# Second line"]);
+        });
+    }
+
+    #[test]
+    fn index_method_definition() {
+        let context = index_source({
+            "
+            class Foo
+              def foo: () -> void
+
+              def bar: (?) -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_def_name_eq!(&context, class_def, "Foo");
+            assert_eq!(2, class_def.members().len());
+
+            assert_definition_at!(&context, "2:3-2:22", Method, |def| {
+                assert_def_str_eq!(&context, def, "foo()");
+                assert!(def.receiver().is_none());
+                assert_eq!(def.visibility(), &Visibility::Public);
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "4:3-4:23", Method, |def| {
+                assert_def_str_eq!(&context, def, "bar()");
+                assert!(def.receiver().is_none());
+                assert_eq!(def.visibility(), &Visibility::Public);
+                assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(class_def.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_method_definition_with_parameters() {
+        let context = index_source({
+            "
+            class Foo
+              def foo: (String, ?Integer, *String, Symbol, name: String, ?age: Integer, **untyped) -> void
+
+              def bar: (String a, ?Integer b, *String c, Symbol d, name: String e, ?age: Integer f, **untyped rest) -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // Method without parameter names
+        assert_definition_at!(&context, "2:3-2:95", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.signatures().as_slice()[0].len(), 7);
+
+            assert_parameter!(&def.signatures().as_slice()[0][0], RequiredPositional, |param| {
+                assert_string_eq!(context, param.str(), "arg0");
+                assert_offset_string!(context, param.offset(), "String");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][1], OptionalPositional, |param| {
+                assert_string_eq!(context, param.str(), "arg1");
+                assert_offset_string!(context, param.offset(), "Integer");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][2], RestPositional, |param| {
+                assert_string_eq!(context, param.str(), "args");
+                assert_offset_string!(context, param.offset(), "String");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][3], Post, |param| {
+                assert_string_eq!(context, param.str(), "arg2");
+                assert_offset_string!(context, param.offset(), "Symbol");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][4], RequiredKeyword, |param| {
+                assert_string_eq!(context, param.str(), "name");
+                assert_offset_string!(context, param.offset(), "name");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][5], OptionalKeyword, |param| {
+                assert_string_eq!(context, param.str(), "age");
+                assert_offset_string!(context, param.offset(), "age");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][6], RestKeyword, |param| {
+                assert_string_eq!(context, param.str(), "kwargs");
+                assert_offset_string!(context, param.offset(), "untyped");
+            });
+        });
+
+        // Method with parameter names
+        assert_definition_at!(&context, "4:3-4:112", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.signatures().as_slice()[0].len(), 7);
+
+            assert_parameter!(&def.signatures().as_slice()[0][0], RequiredPositional, |param| {
+                assert_string_eq!(context, param.str(), "a");
+                assert_offset_string!(context, param.offset(), "a");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][1], OptionalPositional, |param| {
+                assert_string_eq!(context, param.str(), "b");
+                assert_offset_string!(context, param.offset(), "b");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][2], RestPositional, |param| {
+                assert_string_eq!(context, param.str(), "c");
+                assert_offset_string!(context, param.offset(), "c");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][3], Post, |param| {
+                assert_string_eq!(context, param.str(), "d");
+                assert_offset_string!(context, param.offset(), "d");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][4], RequiredKeyword, |param| {
+                assert_string_eq!(context, param.str(), "name");
+                assert_offset_string!(context, param.offset(), "name");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][5], OptionalKeyword, |param| {
+                assert_string_eq!(context, param.str(), "age");
+                assert_offset_string!(context, param.offset(), "age");
+            });
+
+            assert_parameter!(&def.signatures().as_slice()[0][6], RestKeyword, |param| {
+                assert_string_eq!(context, param.str(), "rest");
+                assert_offset_string!(context, param.offset(), "rest");
+            });
+        });
+    }
+
+    #[test]
+    fn index_method_definition_with_multiple_overloads() {
+        let context = index_source({
+            "
+            class Foo
+              def foo: (String) -> Integer
+                     | (Integer) -> String
+                     | (Symbol, String) -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:3-4:36", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            let sigs = def.signatures().as_slice();
+            assert_eq!(sigs.len(), 3);
+
+            // First overload: (String) -> Integer
+            assert_eq!(sigs[0].len(), 1);
+            assert_parameter!(&sigs[0][0], RequiredPositional, |param| {
+                assert_string_eq!(context, param.str(), "arg0");
+            });
+
+            // Second overload: (Integer) -> String
+            assert_eq!(sigs[1].len(), 1);
+            assert_parameter!(&sigs[1][0], RequiredPositional, |param| {
+                assert_string_eq!(context, param.str(), "arg0");
+            });
+
+            // Third overload: (Symbol, String) -> void
+            assert_eq!(sigs[2].len(), 2);
+            assert_parameter!(&sigs[2][0], RequiredPositional, |param| {
+                assert_string_eq!(context, param.str(), "arg0");
+            });
+            assert_parameter!(&sigs[2][1], RequiredPositional, |param| {
+                assert_string_eq!(context, param.str(), "arg1");
+            });
+
+            assert!(matches!(def.signatures(), Signatures::Overloaded(_)));
+        });
+    }
+
+    #[test]
+    fn index_method_definition_with_dot_dot_dot() {
+        let context = index_source({
+            "
+            class Foo
+              def to_s: ...
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:3-2:16", Method, |def| {
+            assert_def_str_eq!(&context, def, "to_s()");
+            let sigs = def.signatures().as_slice();
+            assert_eq!(sigs.len(), 1);
+            assert_eq!(sigs[0].len(), 0);
+            assert!(matches!(def.signatures(), Signatures::Simple(_)));
+        });
+    }
+
+    #[test]
+    fn index_method_definition_module_function() {
+        let context = index_source({
+            "
+            class Foo
+              def self?.foo: () -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let definitions = context.all_definitions_at("2:3-2:28");
+        assert_eq!(definitions.len(), 2, "module_function should create two definitions");
+
+        let instance_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
+            .expect("should have instance method definition");
+        let Definition::Method(instance_method) = instance_method else {
+            panic!()
+        };
+        assert_def_str_eq!(&context, instance_method, "foo()");
+        assert_eq!(instance_method.visibility(), &Visibility::Private);
+
+        let singleton_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
+            .expect("should have singleton method definition");
+        let Definition::Method(singleton_method) = singleton_method else {
+            panic!()
+        };
+        assert_def_str_eq!(&context, singleton_method, "foo()");
+        assert_eq!(singleton_method.visibility(), &Visibility::Public);
+    }
+
+    #[test]
+    fn index_method_definition_singleton_method() {
+        let context = index_source({
+            "
+            class Foo
+              def self.foo: () -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:3-2:27", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            let sigs = def.signatures().as_slice();
+            assert_eq!(sigs.len(), 1);
+            assert_eq!(sigs[0].len(), 0);
+            assert!(matches!(def.signatures(), Signatures::Simple(_)));
+            assert_method_has_receiver!(&context, def, "Foo");
+        });
+    }
+
+    #[test]
+    fn index_method_definition_public_private_method() {
+        let context = index_source({
+            "
+            class Foo
+              public def foo: () -> void
+
+              private def bar: () -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:3-2:29", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            let sigs = def.signatures().as_slice();
+            assert_eq!(sigs.len(), 1);
+            assert_eq!(sigs[0].len(), 0);
+            assert!(matches!(def.signatures(), Signatures::Simple(_)));
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "4:3-4:30", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            let sigs = def.signatures().as_slice();
+            assert_eq!(sigs.len(), 1);
+            assert_eq!(sigs[0].len(), 0);
+            assert!(matches!(def.signatures(), Signatures::Simple(_)));
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_method_definition_public_private_syntax() {
+        let context = index_source({
+            "
+            class Foo
+              def foo: () -> void
+              def self.foo: () -> void
+
+              public
+
+              def bar: () -> void
+              def self.bar: () -> void
+
+              private
+
+              def baz: () -> void
+              def self.baz: () -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // Instance method: default visibility is public
+        assert_definition_at!(&context, "2:3-2:22", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        // Singleton method: always public regardless of current_visibility
+        assert_definition_at!(&context, "3:3-3:27", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        // Instance method: public due to `public` modifier on line 5
+        assert_definition_at!(&context, "7:3-7:22", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        // Singleton method: always public regardless of current_visibility
+        assert_definition_at!(&context, "8:3-8:27", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        // Instance method: private due to `private` modifier on line 10
+        assert_definition_at!(&context, "12:3-12:22", Method, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        // Singleton method: always public, ignores `private` modifier
+        assert_definition_at!(&context, "13:3-13:27", Method, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_method_definition_with_block() {
+        let context = index_source({
+            "
+            class Foo
+              def foo: () { (String) -> void } -> void
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // Method with block: should have 1 parameter (Block)
+        assert_definition_at!(&context, "2:3-2:43", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.signatures().as_slice()[0].len(), 1);
+
+            assert_parameter!(&def.signatures().as_slice()[0][0], Block, |param| {
+                assert_string_eq!(context, param.str(), "block");
+            });
         });
     }
 }

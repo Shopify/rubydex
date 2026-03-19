@@ -11,6 +11,7 @@ use crate::position::Position;
 #[cfg(any(test, feature = "test_utils"))]
 pub struct LocalGraphTest {
     uri: String,
+    source: String,
     graph: LocalGraph,
 }
 
@@ -25,7 +26,7 @@ impl LocalGraphTest {
         indexer.index();
         let graph = indexer.local_graph();
 
-        Self { uri, graph }
+        Self { uri, source, graph }
     }
 
     #[must_use]
@@ -37,13 +38,14 @@ impl LocalGraphTest {
         indexer.index();
         let graph = indexer.local_graph();
 
-        Self { uri, graph }
+        Self { uri, source, graph }
     }
 
     #[must_use]
-    pub fn from_local_graph(uri: &str, graph: LocalGraph) -> Self {
+    pub fn from_local_graph(uri: &str, source: &str, graph: LocalGraph) -> Self {
         Self {
             uri: uri.to_string(),
+            source: source.to_string(),
             graph,
         }
     }
@@ -51,6 +53,16 @@ impl LocalGraphTest {
     #[must_use]
     pub fn uri(&self) -> &str {
         &self.uri
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    #[must_use]
+    pub fn source_at(&self, offset: &Offset) -> &str {
+        &self.source[offset.start() as usize..offset.end() as usize]
     }
 
     #[must_use]
@@ -293,6 +305,23 @@ macro_rules! assert_string_eq {
             string_name, $expected_str,
             "string mismatch: expected `{}`, got `{}`",
             $expected_str, string_name
+        );
+    }};
+}
+
+/// Asserts that the source text at a given `Offset` matches the expected string.
+///
+/// Usage:
+/// - `assert_offset_string!(ctx, param.offset(), "String")`
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_offset_string {
+    ($context:expr, $offset:expr, $expected:expr) => {{
+        let actual = $context.source_at($offset);
+        assert_eq!(
+            actual, $expected,
+            "offset text mismatch: expected `{}`, got `{}`",
+            $expected, actual
         );
     }};
 }
