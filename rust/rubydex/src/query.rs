@@ -10,6 +10,7 @@ use crate::model::definitions::{Definition, Parameter};
 use crate::model::graph::{Graph, OBJECT_ID};
 use crate::model::identity_maps::IdentityHashSet;
 use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
+use crate::model::keywords::{self, Keyword};
 use crate::model::name::NameRef;
 
 /// # Panics
@@ -138,10 +139,11 @@ pub fn require_paths(graph: &Graph, load_paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
-/// A completion candidate that can be either a declaration or a keyword argument name
+/// A completion candidate
 pub enum CompletionCandidate {
     Declaration(DeclarationId),
     KeywordArgument(StringId),
+    Keyword(&'static Keyword),
 }
 
 /// The context in which completion is being requested
@@ -401,6 +403,8 @@ fn expression_completion<'a>(
         }
     }
 
+    // Keywords are always available in expression contexts
+    candidates.extend(keywords::KEYWORDS.iter().map(CompletionCandidate::Keyword));
     Ok(candidates)
 }
 
@@ -474,7 +478,16 @@ mod tests {
         };
     }
 
-    /// Asserts that the completion candidates match the expected list
+    fn candidate_label(context: &GraphTest, candidate: &CompletionCandidate) -> String {
+        match candidate {
+            CompletionCandidate::Declaration(id) => context.graph().declarations().get(id).unwrap().name().to_string(),
+            CompletionCandidate::KeywordArgument(str_id) => {
+                format!("{}:", context.graph().strings().get(str_id).unwrap().as_str())
+            }
+            CompletionCandidate::Keyword(kw) => kw.name().to_string(),
+        }
+    }
+
     macro_rules! assert_completion_eq {
         ($context:expr, $receiver:expr, $expected:expr) => {
             assert_eq!(
@@ -482,18 +495,23 @@ mod tests {
                 *completion_candidates($context.graph(), CompletionContext::new($receiver))
                     .unwrap()
                     .iter()
-                    .map(|candidate| match candidate {
-                        CompletionCandidate::Declaration(id) => $context
-                            .graph()
-                            .declarations()
-                            .get(id)
-                            .unwrap()
-                            .name()
-                            .to_string(),
-                        CompletionCandidate::KeywordArgument(str_id) => {
-                            format!("{}:", $context.graph().strings().get(str_id).unwrap().as_str())
-                        }
-                    })
+                    .map(|candidate| candidate_label(&$context, candidate))
+                    .collect::<Vec<_>>()
+            );
+        };
+    }
+
+    /// Asserts declaration and keyword argument completion candidates, excluding language keywords.
+    /// Language keywords are always present in expression contexts and tested separately.
+    macro_rules! assert_declaration_completion_eq {
+        ($context:expr, $receiver:expr, $expected:expr) => {
+            assert_eq!(
+                $expected,
+                *completion_candidates($context.graph(), CompletionContext::new($receiver))
+                    .unwrap()
+                    .iter()
+                    .filter(|c| !matches!(c, CompletionCandidate::Keyword(_)))
+                    .map(|candidate| candidate_label(&$context, candidate))
                     .collect::<Vec<_>>()
             );
         };
@@ -653,7 +671,7 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Child"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             [
@@ -694,7 +712,7 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Child"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             ["Child", "Foo", "Parent", "Child#bar()"]
@@ -730,7 +748,7 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             ["Baz", "Foo", "Bar", "Foo#foo_m()", "Baz#baz_m()", "Bar#bar_m()"]
@@ -765,14 +783,14 @@ mod tests {
 
         let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
         let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             ["Foo", "Bar", "Foo::<Foo>#do_something()", "Foo#@@foo_var"]
         );
 
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             ["Foo", "Bar", "Bar#baz()", "Foo#@@foo_var"]
@@ -811,14 +829,14 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             ["Foo::CONST_A", "Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"]
         );
 
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             ["Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"]
@@ -849,7 +867,7 @@ mod tests {
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, Some(foo_id)).id();
         // Foo::CONST is reachable from Foo::Bar through lexical scoping, so it must appear as a completion candidate
         // when the user types the unqualified name CONST
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             ["Foo::CONST", "Foo::Bar", "Foo", "Foo::Bar#baz()"]
@@ -883,7 +901,7 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
             ["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"]
@@ -1362,7 +1380,7 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
                 self_name_id: name_id,
@@ -1387,7 +1405,7 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
                 self_name_id: name_id,
@@ -1412,7 +1430,7 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
                 self_name_id: name_id,
@@ -1445,7 +1463,7 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
-        assert_completion_eq!(
+        assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
                 self_name_id: name_id,
@@ -1453,5 +1471,154 @@ mod tests {
             },
             ["Foo", "Foo#bar()", "first:", "second:"]
         );
+    }
+
+    #[test]
+    fn expression_completion_includes_keywords() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::Expression(name_id),
+            [
+                "Foo",
+                "BEGIN",
+                "END",
+                "__ENCODING__",
+                "__FILE__",
+                "__LINE__",
+                "alias",
+                "and",
+                "begin",
+                "break",
+                "case",
+                "class",
+                "def",
+                "defined?",
+                "do",
+                "else",
+                "elsif",
+                "end",
+                "ensure",
+                "false",
+                "for",
+                "if",
+                "in",
+                "module",
+                "next",
+                "nil",
+                "not",
+                "or",
+                "redo",
+                "rescue",
+                "retry",
+                "return",
+                "self",
+                "super",
+                "then",
+                "true",
+                "undef",
+                "unless",
+                "until",
+                "when",
+                "while",
+                "yield",
+            ]
+        );
+    }
+
+    #[test]
+    fn method_argument_completion_includes_keywords() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; def bar(name:); end; end");
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodArgument {
+                self_name_id: name_id,
+                method_decl_id: DeclarationId::from("Foo#bar()"),
+            },
+            [
+                "Foo",
+                "Foo#bar()",
+                "BEGIN",
+                "END",
+                "__ENCODING__",
+                "__FILE__",
+                "__LINE__",
+                "alias",
+                "and",
+                "begin",
+                "break",
+                "case",
+                "class",
+                "def",
+                "defined?",
+                "do",
+                "else",
+                "elsif",
+                "end",
+                "ensure",
+                "false",
+                "for",
+                "if",
+                "in",
+                "module",
+                "next",
+                "nil",
+                "not",
+                "or",
+                "redo",
+                "rescue",
+                "retry",
+                "return",
+                "self",
+                "super",
+                "then",
+                "true",
+                "undef",
+                "unless",
+                "until",
+                "when",
+                "while",
+                "yield",
+                "name:",
+            ]
+        );
+    }
+
+    #[test]
+    fn namespace_access_completion_excludes_keywords() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; CONST = 1; end");
+        context.resolve();
+
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo"))),
+        )
+        .unwrap();
+
+        assert!(!candidates.iter().any(|c| matches!(c, CompletionCandidate::Keyword(_))));
+    }
+
+    #[test]
+    fn method_call_completion_excludes_keywords() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; def bar; end; end");
+        context.resolve();
+
+        let candidates = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::MethodCall(DeclarationId::from("Foo"))),
+        )
+        .unwrap();
+
+        assert!(!candidates.iter().any(|c| matches!(c, CompletionCandidate::Keyword(_))));
     }
 }
