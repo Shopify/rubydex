@@ -51,6 +51,23 @@ where
     result
 }
 
+/// C-compatible enum representing the search match mode.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum CMatchMode {
+    Fuzzy = 0,
+    Exact = 1,
+}
+
+impl CMatchMode {
+    fn to_match_mode(self) -> query::MatchMode {
+        match self {
+            CMatchMode::Fuzzy => query::MatchMode::Fuzzy,
+            CMatchMode::Exact => query::MatchMode::Exact,
+        }
+    }
+}
+
 /// Searches the graph based on query and returns all declarations that match
 ///
 /// # Safety
@@ -60,13 +77,14 @@ where
 pub unsafe extern "C" fn rdx_graph_declarations_search(
     pointer: GraphPointer,
     c_query: *const c_char,
+    match_mode: CMatchMode,
 ) -> *mut DeclarationsIter {
     let Ok(query) = (unsafe { utils::convert_char_ptr_to_string(c_query) }) else {
         return ptr::null_mut();
     };
 
     let entries = with_graph(pointer, |graph| {
-        query::declaration_search(graph, &query)
+        query::declaration_search(graph, &query, &match_mode.to_match_mode())
             .into_iter()
             .filter_map(|id| {
                 let decl = graph.declarations().get(&id)?;

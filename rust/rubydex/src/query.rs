@@ -12,10 +12,22 @@ use crate::model::identity_maps::IdentityHashSet;
 use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
 use crate::model::name::NameRef;
 
+/// Controls how declaration names are matched against the search query.
+#[derive(Default)]
+pub enum MatchMode {
+    /// Fuzzy matching: query characters must appear in order in the target (case-insensitive). Used for LSP workspace
+    /// symbol.
+    #[default]
+    Fuzzy,
+    /// Exact partial matching: query must appear as a contiguous substring of the target. Used for precise filtering
+    /// (e.g., finding all declarations containing `#is_a?()`).
+    Exact,
+}
+
 /// # Panics
 ///
 /// Will panic if any of the threads panic
-pub fn declaration_search(graph: &Graph, query: &str) -> Vec<DeclarationId> {
+pub fn declaration_search(graph: &Graph, query: &str, match_mode: &MatchMode) -> Vec<DeclarationId> {
     let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
     let declarations = graph.declarations();
     let ids: Vec<DeclarationId> = declarations.keys().copied().collect();
@@ -34,9 +46,15 @@ pub fn declaration_search(graph: &Graph, query: &str) -> Vec<DeclarationId> {
                         .iter()
                         .filter(|id| {
                             let declaration = declarations.get(id).unwrap();
-                            // When the query is empty, we return everything as per the LSP specification.
-                            // Otherwise, we compute the match score and return anything with a score greater than zero
-                            query.is_empty() || match_score(query, declaration.name()) > 0
+                            let name = declaration.name();
+                            match match_mode {
+                                MatchMode::Fuzzy => {
+                                    // When the query is empty, we return everything as per the LSP specification.
+                                    // Otherwise, we compute the match score and return anything with a score greater than zero
+                                    query.is_empty() || match_score(query, name) > 0
+                                }
+                                MatchMode::Exact => name.contains(query),
+                            }
                         })
                         .copied()
                         .collect::<Vec<_>>()
@@ -452,7 +470,10 @@ mod tests {
 
     macro_rules! assert_results_eq {
         ($context:expr, $query:expr, $expected:expr) => {
-            let actual = declaration_search(&$context.graph(), $query);
+            assert_results_eq!($context, $query, &MatchMode::default(), $expected);
+        };
+        ($context:expr, $query:expr, $match_mode:expr, $expected:expr) => {
+            let actual = declaration_search(&$context.graph(), $query, $match_mode);
             assert_eq!(
                 actual,
                 $expected
@@ -510,6 +531,61 @@ mod tests {
         });
         context.resolve();
         assert_results_eq!(context, "Fo", ["Foo"]);
+    }
+
+    #[test]
+    fn exact_partial_match_search() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def is_a_foo?; end
+            end
+
+            class Bar < Foo
+              def is_a?(other); end
+            end
+            "
+        });
+        context.resolve();
+        assert_results_eq!(context, "#is_a?()", &MatchMode::Exact, ["Bar#is_a?()"]);
+    }
+
+    #[test]
+    fn exact_match_empty_query_returns_all() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar; end
+            "
+        });
+        context.resolve();
+        let exact_results = declaration_search(context.graph(), "", &MatchMode::Exact);
+        let fuzzy_results = declaration_search(context.graph(), "", &MatchMode::Fuzzy);
+
+        assert_eq!(exact_results.len(), fuzzy_results.len());
+        assert_eq!(context.graph().declarations().len(), exact_results.len());
+    }
+
+    #[test]
+    fn exact_match_is_case_sensitive() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def is_a_foo?; end
+            end
+
+            class Bar < Foo
+              def is_a?(other); end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_results_eq!(context, "#Is_A?()", &MatchMode::Exact, Vec::<&str>::new());
+        assert_results_eq!(context, "#Is_A?()", ["Foo#is_a_foo?()", "Bar#is_a?()"]);
     }
 
     fn test_root() -> PathBuf {
