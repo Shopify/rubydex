@@ -511,6 +511,35 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_superclass_name_returns_nil_when_superclass_is_resolved
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent; end
+        class Child < Parent; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_nil(graph["Child"].superclass_name)
+    end
+  end
+
+  def test_superclass_name_returns_name_when_superclass_is_unresolved
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo < Bar; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal("Bar", graph["Foo"].superclass_name)
+    end
+  end
+
   def test_find_member_returns_members_in_main_namespace
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
