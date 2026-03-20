@@ -8,7 +8,8 @@ use libc::{c_char, c_void};
 use rubydex::indexing::LanguageId;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
-use rubydex::model::ids::DeclarationId;
+use rubydex::model::ids::{DeclarationId, NameId};
+use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
 use rubydex::resolution::Resolver;
 use rubydex::{indexing, integrity, listing, query};
 use std::ffi::CString;
@@ -621,6 +622,258 @@ pub unsafe extern "C" fn rdx_index_source(
     with_mut_graph(pointer, |graph| {
         indexing::index_source(graph, &uri_str, source_str, &language);
         IndexSourceResult::Success
+    })
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum CCompletionCandidateKind {
+    Declaration = 0,
+    Keyword = 1,
+    KeywordParameter = 2,
+}
+
+#[repr(C)]
+pub struct CCompletionCandidate {
+    pub kind: CCompletionCandidateKind,
+    /// Only valid when `kind == Declaration`; null otherwise.
+    pub declaration: *const CDeclaration,
+    pub name: *const c_char,
+    pub documentation: *const c_char,
+}
+
+#[repr(C)]
+pub struct CompletionCandidateArray {
+    pub items: *mut CCompletionCandidate,
+    pub len: usize,
+}
+
+impl CompletionCandidateArray {
+    fn from_vec(entries: Vec<CCompletionCandidate>) -> *mut CompletionCandidateArray {
+        let mut boxed = entries.into_boxed_slice();
+        let len = boxed.len();
+        let ptr = boxed.as_mut_ptr();
+        mem::forget(boxed);
+        Box::into_raw(Box::new(CompletionCandidateArray { items: ptr, len }))
+    }
+}
+
+/// Frees a completion candidate array previously returned by a completion function.
+///
+/// # Safety
+///
+/// - `ptr` must be a valid pointer previously returned by a completion function.
+/// - `ptr` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_completion_candidates_free(ptr: *mut CompletionCandidateArray) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let array = unsafe { Box::from_raw(ptr) };
+
+    if !array.items.is_null() && array.len > 0 {
+        let slice_ptr = ptr::slice_from_raw_parts_mut(array.items, array.len);
+        let mut boxed_slice: Box<[CCompletionCandidate]> = unsafe { Box::from_raw(slice_ptr) };
+
+        for entry in &mut *boxed_slice {
+            if !entry.declaration.is_null() {
+                let _ = unsafe { Box::from_raw(entry.declaration.cast_mut()) };
+            }
+            if !entry.name.is_null() {
+                let _ = unsafe { CString::from_raw(entry.name.cast_mut()) };
+            }
+            if !entry.documentation.is_null() {
+                let _ = unsafe { CString::from_raw(entry.documentation.cast_mut()) };
+            }
+        }
+    }
+}
+
+/// Converts the nesting stack into a `NameId`.
+/// The last element of the nesting stack is treated as the self type; if the stack is empty, `"Object"` is used.
+///
+/// Returns `Err` if the nesting array contains invalid UTF-8.
+///
+/// # Safety
+///
+/// `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
+unsafe fn completion_nesting_name_id(
+    graph: &mut Graph,
+    nesting: *const *const c_char,
+    nesting_count: usize,
+) -> Result<(NameId, Vec<NameId>), std::str::Utf8Error> {
+    let mut nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, nesting_count)? };
+
+    // When serving completion in a bare script, the self (top level) context is Object
+    let self_name = if nesting.is_empty() {
+        "Object".to_string()
+    } else {
+        nesting.pop().unwrap()
+    };
+
+    Ok(name_api::nesting_stack_to_name_id(graph, &self_name, nesting))
+}
+
+/// Runs completion for the given receiver and returns a structured array of candidates
+fn run_and_finalize_completion(
+    graph: &mut Graph,
+    receiver: CompletionReceiver,
+    names_to_untrack: Vec<NameId>,
+) -> *mut CompletionCandidateArray {
+    let Ok(candidates) = query::completion_candidates(graph, CompletionContext::new(receiver)) else {
+        for name_id in names_to_untrack {
+            graph.untrack_name(name_id);
+        }
+        return ptr::null_mut();
+    };
+
+    let entries: Vec<CCompletionCandidate> = candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            Some(match candidate {
+                CompletionCandidate::Declaration(id) => {
+                    let decl = graph.declarations().get(&id)?;
+                    CCompletionCandidate {
+                        kind: CCompletionCandidateKind::Declaration,
+                        declaration: Box::into_raw(Box::new(CDeclaration::from_declaration(id, decl))),
+                        name: ptr::null(),
+                        documentation: ptr::null(),
+                    }
+                }
+                CompletionCandidate::Keyword(kw) => CCompletionCandidate {
+                    kind: CCompletionCandidateKind::Keyword,
+                    declaration: ptr::null(),
+                    name: CString::new(kw.name()).ok()?.into_raw().cast_const(),
+                    documentation: CString::new(kw.documentation()).ok()?.into_raw().cast_const(),
+                },
+                CompletionCandidate::KeywordArgument(str_id) => {
+                    let name_str = graph.strings().get(&str_id)?;
+                    CCompletionCandidate {
+                        kind: CCompletionCandidateKind::KeywordParameter,
+                        declaration: ptr::null(),
+                        name: CString::new(name_str.as_str()).ok()?.into_raw().cast_const(),
+                        documentation: ptr::null(),
+                    }
+                }
+            })
+        })
+        .collect();
+
+    for name_id in names_to_untrack {
+        graph.untrack_name(name_id);
+    }
+
+    CompletionCandidateArray::from_vec(entries)
+}
+
+/// Returns expression completion candidates.
+/// The caller must free the result with `rdx_completion_candidates_free`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_complete_expression(
+    pointer: GraphPointer,
+    nesting: *const *const c_char,
+    nesting_count: usize,
+) -> *mut CompletionCandidateArray {
+    with_mut_graph(pointer, |graph| {
+        let Ok((name_id, names_to_untrack)) = (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
+        else {
+            return ptr::null_mut();
+        };
+
+        run_and_finalize_completion(graph, CompletionReceiver::Expression(name_id), names_to_untrack)
+    })
+}
+
+/// Returns namespace access completion candidates.
+/// The caller must free the result with `rdx_completion_candidates_free`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `name` must be a valid, null-terminated UTF-8 string (FQN of the namespace).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
+    pointer: GraphPointer,
+    name: *const c_char,
+) -> *mut CompletionCandidateArray {
+    let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
+        return ptr::null_mut();
+    };
+
+    with_mut_graph(pointer, |graph| {
+        run_and_finalize_completion(
+            graph,
+            CompletionReceiver::NamespaceAccess(DeclarationId::from(name_str.as_str())),
+            Vec::new(),
+        )
+    })
+}
+
+/// Returns method call completion candidates.
+/// The caller must free the result with `rdx_completion_candidates_free`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `name` must be a valid, null-terminated UTF-8 string (FQN of the receiver).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_complete_method_call(
+    pointer: GraphPointer,
+    name: *const c_char,
+) -> *mut CompletionCandidateArray {
+    let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
+        return ptr::null_mut();
+    };
+
+    with_mut_graph(pointer, |graph| {
+        run_and_finalize_completion(
+            graph,
+            CompletionReceiver::MethodCall(DeclarationId::from(name_str.as_str())),
+            Vec::new(),
+        )
+    })
+}
+
+/// Returns method argument completion candidates.
+/// The caller must free the result with `rdx_completion_candidates_free`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `name` must be a valid, null-terminated UTF-8 string (FQN of the method).
+/// - `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_complete_method_argument(
+    pointer: GraphPointer,
+    name: *const c_char,
+    nesting: *const *const c_char,
+    nesting_count: usize,
+) -> *mut CompletionCandidateArray {
+    let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
+        return ptr::null_mut();
+    };
+
+    with_mut_graph(pointer, |graph| {
+        let Ok((self_name_id, names_to_untrack)) =
+            (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
+        else {
+            return ptr::null_mut();
+        };
+
+        run_and_finalize_completion(
+            graph,
+            CompletionReceiver::MethodArgument {
+                self_name_id,
+                method_decl_id: DeclarationId::from(name_str.as_str()),
+            },
+            names_to_untrack,
+        )
     })
 }
 
