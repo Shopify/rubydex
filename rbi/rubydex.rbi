@@ -128,6 +128,25 @@ class Rubydex::Diagnostic
   def rule; end
 end
 
+class Rubydex::Keyword
+  sig { params(name: String, documentation: String).void }
+  def initialize(name, documentation); end
+
+  sig { returns(String) }
+  def name; end
+
+  sig { returns(String) }
+  def documentation; end
+end
+
+class Rubydex::KeywordParameter
+  sig { params(name: String).void }
+  def initialize(name); end
+
+  sig { returns(String) }
+  def name; end
+end
+
 class Rubydex::Document
   sig { returns(T::Enumerable[Rubydex::Definition]) }
   def definitions; end
