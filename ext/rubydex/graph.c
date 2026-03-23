@@ -43,11 +43,7 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     size_t error_count = 0;
     const char *const *errors = rdx_index_all(graph, (const char **)converted_file_paths, length, &error_count);
 
-    // Free the converted file paths and allow the GC to collect them
-    for (size_t i = 0; i < length; i++) {
-        free(converted_file_paths[i]);
-    }
-    free(converted_file_paths);
+    rdxi_free_str_array(converted_file_paths, length);
 
     if (errors == NULL) {
         return rb_ary_new();
@@ -348,10 +344,7 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
     const CDeclaration *decl =
         rdx_graph_resolve_constant(graph, StringValueCStr(const_name), (const char **)converted_file_paths, length);
 
-    for (size_t i = 0; i < length; i++) {
-        free(converted_file_paths[i]);
-    }
-    free(converted_file_paths);
+    rdxi_free_str_array(converted_file_paths, length);
 
     if (decl == NULL) {
         return Qnil;
@@ -379,10 +372,7 @@ static VALUE rdxr_graph_resolve_require_path(VALUE self, VALUE require_path, VAL
 
     const uint64_t *uri_id = rdx_resolve_require_path(graph, path_str, (const char **)converted_paths, paths_len);
 
-    for (size_t i = 0; i < paths_len; i++) {
-        free(converted_paths[i]);
-    }
-    free(converted_paths);
+    rdxi_free_str_array(converted_paths, paths_len);
 
     if (uri_id == NULL) {
         return Qnil;
@@ -407,10 +397,7 @@ static VALUE rdxr_graph_require_paths(VALUE self, VALUE load_path) {
     size_t out_count = 0;
     const char *const *results = rdx_require_paths(graph, (const char **)converted_paths, paths_len, &out_count);
 
-    for (size_t i = 0; i < paths_len; i++) {
-        free(converted_paths[i]);
-    }
-    free(converted_paths);
+    rdxi_free_str_array(converted_paths, paths_len);
 
     if (results == NULL) {
         return rb_ary_new();

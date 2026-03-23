@@ -19,6 +19,16 @@ char **rdxi_str_array_to_char(VALUE array, size_t length) {
     return converted_array;
 }
 
+// Free a char** array allocated by rdxi_str_array_to_char
+void rdxi_free_str_array(char **array, size_t length) {
+    if (array != NULL) {
+        for (size_t i = 0; i < length; i++) {
+            free(array[i]);
+        }
+        free(array);
+    }
+}
+
 // Verify that the Ruby object is an array of strings or raise `TypeError`
 void rdxi_check_array_of_strings(VALUE array) {
     Check_Type(array, T_ARRAY);
