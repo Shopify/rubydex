@@ -280,7 +280,10 @@ impl<'a> Resolver<'a> {
                 self.unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
-                // We couldn't resolve this name. It will be picked up by the drain loop
+                // We couldn't resolve this name. It will be picked up by the drain loop.
+                // TODO: this causes unnecessary retries. `Unresolved(None)` means we had all
+                // dependencies but still failed — it should go to a separate list instead of
+                // being re-queued. See https://github.com/Shopify/rubydex/pull/502#discussion_r2732310351
                 self.unit_queue.push_back(unit_id);
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
@@ -808,39 +811,23 @@ impl<'a> Resolver<'a> {
         if let Declaration::Namespace(Namespace::SingletonClass(_)) = declaration {
             let attached_decl = self.graph.declarations().get(declaration.owner_id()).unwrap();
 
-            let attached_mixins = attached_decl
-                .definitions()
-                .iter()
-                .filter_map(|definition_id| {
-                    self.mixins_of(*definition_id)
-                        .map(|mixins| mixins.into_iter().map(|mixin| (mixin, *definition_id)))
-                })
-                .flatten()
-                .collect::<Vec<(Mixin, DefinitionId)>>();
-
             mixins.extend(
-                attached_mixins
-                    .into_iter()
-                    .map(|(mixin, _)| mixin)
+                attached_decl
+                    .definitions()
+                    .iter()
+                    .filter_map(|definition_id| self.mixins_of(*definition_id))
+                    .flatten()
                     .filter(|mixin| matches!(mixin, Mixin::Extend(_))),
             );
         }
 
         // Consider only prepends and includes for the current declaration
-        let decl_mixins = declaration
-            .definitions()
-            .iter()
-            .filter_map(|definition_id| {
-                self.mixins_of(*definition_id)
-                    .map(|mixins| mixins.into_iter().map(|mixin| (mixin, *definition_id)))
-            })
-            .flatten()
-            .collect::<Vec<(Mixin, DefinitionId)>>();
-
         mixins.extend(
-            decl_mixins
-                .into_iter()
-                .map(|(mixin, _)| mixin)
+            declaration
+                .definitions()
+                .iter()
+                .filter_map(|definition_id| self.mixins_of(*definition_id))
+                .flatten()
                 .filter(|mixin| matches!(mixin, Mixin::Prepend(_) | Mixin::Include(_))),
         );
 
