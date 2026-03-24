@@ -251,6 +251,38 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_members
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          MY_CONST = 1
+
+          def bar; end
+
+          module Nested
+            module DoubleNested; end
+          end
+          class Inner; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      foo = graph["Foo"]
+      assert_kind_of(Rubydex::Namespace, foo)
+
+      enumerator = foo.members
+      assert_instance_of(Enumerator, enumerator)
+
+      expected = ["Foo::MY_CONST", "Foo#bar()", "Foo::Nested", "Foo::Inner"].sort
+      assert_equal(expected, enumerator.map(&:name).sort)
+
+      assert_empty(graph["Foo::Inner"].members.to_a)
+    end
+  end
+
   def test_ancestors
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

@@ -59,6 +59,9 @@ class Rubydex::Namespace < Rubydex::Declaration
   sig { returns(T::Enumerable[Rubydex::Namespace]) }
   def descendants; end
 
+  sig { returns(T::Enumerable[Rubydex::Declaration]) }
+  def members; end
+
   sig { params(name: String).returns(T.nilable(Rubydex::Declaration)) }
   def member(name); end
 
