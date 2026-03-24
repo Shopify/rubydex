@@ -433,7 +433,7 @@ pub unsafe extern "C" fn rdx_definition_signatures(pointer: GraphPointer, defini
     })
 }
 
-/// Helper: build signature entries from a MethodDefinition and append them to the output vector.
+/// Helper: build signature entries from a `MethodDefinition` and append them to the output vector.
 pub(crate) fn collect_method_signatures(
     graph: &rubydex::model::graph::Graph,
     method_def: &rubydex::model::definitions::MethodDefinition,
