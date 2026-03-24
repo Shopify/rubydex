@@ -372,36 +372,28 @@ macro_rules! assert_ancestors_eq {
             .get(&$crate::model::ids::DeclarationId::from($name))
             .unwrap();
 
-        match declaration.as_namespace().unwrap().ancestors() {
+        let ancestors = match declaration.as_namespace().unwrap().ancestors() {
             $crate::model::declaration::Ancestors::Cyclic(ancestors)
-            | $crate::model::declaration::Ancestors::Complete(ancestors) => {
-                assert_eq!(
-                    $expected
-                        .iter()
-                        .map(|n| {
-                            $crate::model::declaration::Ancestor::Complete($crate::model::ids::DeclarationId::from(*n))
-                        })
-                        .collect::<Vec<_>>(),
-                    *ancestors,
-                    "Incorrect ancestors {}",
-                    ancestors
-                        .iter()
-                        .filter_map(|id| {
-                            if let $crate::model::declaration::Ancestor::Complete(id) = id {
-                                let name = { $context.graph().declarations().get(id).unwrap().name().to_string() };
-                                Some(name)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-            $crate::model::declaration::Ancestors::Partial(_) => {
-                panic!("Expected ancestors to be resolved for {}", declaration.name());
-            }
-        }
+            | $crate::model::declaration::Ancestors::Complete(ancestors)
+            | $crate::model::declaration::Ancestors::Partial(ancestors) => ancestors,
+        };
+
+        let actual_names = ancestors
+            .iter()
+            .map(|ancestor| match ancestor {
+                $crate::model::declaration::Ancestor::Complete(id) => {
+                    $context.graph().declarations().get(id).unwrap().name().to_string()
+                }
+                $crate::model::declaration::Ancestor::Partial(name_id) => {
+                    let name = $context.graph().names().get(name_id).unwrap();
+                    $context.graph().strings().get(name.str()).unwrap().to_string()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let expected_names = $expected.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(expected_names, actual_names, "Incorrect ancestors for {}", $name);
     };
 }
 
