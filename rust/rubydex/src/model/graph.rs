@@ -856,9 +856,13 @@ impl Graph {
         let uri_id = other.uri_id();
         let old_document = self.documents.remove(&uri_id);
 
-        self.invalidate(old_document.as_ref(), Some(&other));
-        if let Some(doc) = &old_document {
-            self.remove_document_data(doc);
+        // Skip invalidation when the graph has no resolved state yet (boot indexing)
+        // or when the document is brand new (no old data to invalidate against).
+        if old_document.is_some() || !self.declarations.is_empty() {
+            self.invalidate(old_document.as_ref(), Some(&other));
+            if let Some(doc) = &old_document {
+                self.remove_document_data(doc);
+            }
         }
 
         self.extend(other);
