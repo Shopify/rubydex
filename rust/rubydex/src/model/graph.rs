@@ -900,8 +900,10 @@ impl Graph {
             // A new mixin changes the nesting declaration's ancestor chain, so we
             // invalidate the nesting declaration.
             // We can optimize this later by checking where the constant reference is used.
-            for cr in lg.constant_references().values() {
-                if let Some(name_ref) = self.names.get(cr.name_id())
+            for const_ref in lg.constant_references().values() {
+                // The name may not exist in the global graph yet — it's in the local graph
+                // which hasn't been extended yet. Only act on names already known globally.
+                if let Some(name_ref) = self.names.get(const_ref.name_id())
                     && let Some(nesting_id) = name_ref.nesting()
                     && let Some(NameRef::Resolved(resolved)) = self.names.get(nesting_id)
                 {
@@ -928,7 +930,7 @@ impl Graph {
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
                 // Detach from target declaration. References unresolved during invalidation
                 // were already detached; this catches the rest.
-                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
+                if let NameRef::Resolved(resolved) = self.names.get(constant_ref.name_id()).unwrap()
                     && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
                 {
                     declaration.remove_reference(ref_id);
