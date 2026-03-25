@@ -10,20 +10,11 @@ use crate::model::{
         Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
     definitions::{Definition, Mixin, Receiver},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
+    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
     name::{Name, NameRef, ParentScope},
 };
-
-pub enum Unit {
-    /// A definition that defines a constant and might require resolution
-    Definition(DefinitionId),
-    /// A constant reference that needs to be resolved
-    ConstantRef(ReferenceId),
-    /// A list of ancestors that have been partially linearized and need to be retried
-    Ancestors(DeclarationId),
-}
 
 enum Outcome {
     /// The constant was successfully resolved to the given declaration ID. The second optional tuple element is a

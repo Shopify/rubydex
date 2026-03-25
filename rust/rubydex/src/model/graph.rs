@@ -26,10 +26,31 @@ pub enum NameDependent {
     NestedName(NameId),
 }
 
+/// Items processed by the unified invalidation worklist.
+enum InvalidationItem {
+    /// Ancestor chain is stale, or declaration has become empty and needs removal.
+    Declaration(DeclarationId),
+    /// Structural dependency broken — unresolve the name and cascade to all dependents.
+    Name(NameId),
+    /// Ancestor context changed — unresolve references under this name but keep the name resolved.
+    References(NameId),
+}
+
 pub static BASIC_OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("BasicObject"));
 pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
 pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
+
+/// A work item produced by graph mutations (update/delete) that needs resolution.
+#[derive(Debug)]
+pub enum Unit {
+    /// A definition that defines a constant and might require resolution
+    Definition(DefinitionId),
+    /// A constant reference that needs to be resolved
+    ConstantRef(ReferenceId),
+    /// A declaration whose ancestors need re-linearization
+    Ancestors(DeclarationId),
+}
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
@@ -57,6 +78,10 @@ pub struct Graph {
     /// Reverse index: for each `NameId`, which definitions, references, and child/nested names depend on it.
     /// Used during invalidation to efficiently find affected entities without scanning the full graph.
     name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
+
+    /// Accumulated work items from update/delete operations.
+    /// Drained by `take_pending_work()` before resolution.
+    pending_work: Vec<Unit>,
 }
 
 impl Graph {
@@ -72,6 +97,7 @@ impl Graph {
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
+            pending_work: Vec::default(),
         }
     }
 
@@ -531,6 +557,15 @@ impl Graph {
         &self.name_dependents
     }
 
+    /// Drains the accumulated work items, returning them for use by the resolver.
+    pub fn take_pending_work(&mut self) -> Vec<Unit> {
+        std::mem::take(&mut self.pending_work)
+    }
+
+    fn push_work(&mut self, unit: Unit) {
+        self.pending_work.push(unit);
+    }
+
     /// Converts a `Resolved` `NameRef` back to `Unresolved`, preserving the original `Name` data.
     /// Returns the `DeclarationId` it was previously resolved to, if any.
     fn unresolve_name(&mut self, name_id: NameId) -> Option<DeclarationId> {
@@ -730,10 +765,14 @@ impl Graph {
 
     /// Handles the deletion of a document identified by `uri`.
     /// Returns the `UriId` of the removed document, or `None` if it didn't exist.
+    ///
+    /// Runs incremental invalidation to cascade changes through the graph and
+    /// accumulates pending work items for the resolver to process.
     pub fn delete_document(&mut self, uri: &str) -> Option<UriId> {
         let uri_id = UriId::from(uri);
         let document = self.documents.remove(&uri_id)?;
-        self.remove_definitions_for_document(&document);
+        self.invalidate(Some(&document), None);
+        self.remove_document_data(&document);
         Some(uri_id)
     }
 
@@ -775,9 +814,13 @@ impl Graph {
             if self.definitions.insert(definition_id, definition).is_some() {
                 debug_assert!(false, "DefinitionId collision in global graph");
             }
+
+            self.push_work(Unit::Definition(definition_id));
         }
 
         for (constant_ref_id, constant_ref) in constant_references {
+            self.push_work(Unit::ConstantRef(constant_ref_id));
+
             if self.constant_references.insert(constant_ref_id, constant_ref).is_some() {
                 debug_assert!(false, "Constant ReferenceId collision in global graph");
             }
@@ -800,23 +843,87 @@ impl Graph {
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
-    /// updates to existing entries
-    pub fn update(&mut self, other: LocalGraph) {
-        // For each URI that was indexed through `other`, check what was discovered and update our current global
-        // representation
+    /// updates to existing entries.
+    ///
+    /// Runs incremental invalidation to cascade changes through the graph and
+    /// accumulates pending work items for the resolver to process.
+    ///
+    /// The three steps must run in this order:
+    /// 1. `invalidate` -- reads resolved names and declaration state to determine what to invalidate
+    /// 2. `remove_document_data` -- removes old refs/defs/names/strings from maps
+    /// 3. `extend` -- merges the new `LocalGraph` into the now-clean graph
+    pub fn consume_document_changes(&mut self, other: LocalGraph) {
         let uri_id = other.uri_id();
-        if let Some(document) = self.documents.remove(&uri_id) {
-            self.remove_definitions_for_document(&document);
+        let old_document = self.documents.remove(&uri_id);
+
+        // Skip invalidation when the graph has no resolved state yet (boot indexing)
+        // or when the document is brand new (no old data to invalidate against).
+        if old_document.is_some() || !self.declarations.is_empty() {
+            self.invalidate(old_document.as_ref(), Some(&other));
+            if let Some(doc) = &old_document {
+                self.remove_document_data(doc);
+            }
         }
 
         self.extend(other);
     }
 
-    // Removes all nodes and relationships associated to the given document. This is used to clean up stale data when a
-    // document changes or when a document is deleted and we need to clean up the memory.
-    // The document must already have been removed from `self.documents` before calling this.
-    fn remove_definitions_for_document(&mut self, document: &Document) {
-        // TODO: Remove method references from method declarations once method inference is implemented
+    /// Identifies declarations affected by old/new documents and feeds them into `invalidate_graph`.
+    ///
+    /// Does NOT mutate declarations or remove raw data — definition detachment is deferred to
+    /// `invalidate_declaration`, and raw data cleanup to `remove_document_data`.
+    fn invalidate(&mut self, old_document: Option<&Document>, new_local_graph: Option<&LocalGraph>) {
+        let capacity = old_document.map_or(0, |d| d.definitions().len())
+            + new_local_graph.map_or(0, |lg| lg.definitions().len() + lg.constant_references().len());
+        let mut items: Vec<InvalidationItem> = Vec::with_capacity(capacity);
+        let mut pending_detachments: IdentityHashMap<DeclarationId, Vec<DefinitionId>> = IdentityHashMap::default();
+
+        // Identify declarations affected by removed definitions
+        if let Some(document) = old_document {
+            for def_id in document.definitions() {
+                if let Some(declaration_id) = self.definition_id_to_declaration_id(*def_id).copied() {
+                    pending_detachments.entry(declaration_id).or_default().push(*def_id);
+                }
+            }
+            for decl_id in pending_detachments.keys() {
+                items.push(InvalidationItem::Declaration(*decl_id));
+            }
+        }
+
+        // Declarations touched by the new local graph
+        if let Some(lg) = new_local_graph {
+            for def in lg.definitions().values() {
+                if let Some(name_id) = def.name_id()
+                    && let Some(NameRef::Resolved(resolved)) = self.names.get(name_id)
+                {
+                    items.push(InvalidationItem::Declaration(*resolved.declaration_id()));
+                }
+            }
+
+            // Constant references include `include`/`prepend`/`extend` targets.
+            // A new mixin changes the nesting declaration's ancestor chain, so we
+            // invalidate the nesting declaration.
+            // We can optimize this later by checking where the constant reference is used.
+            for const_ref in lg.constant_references().values() {
+                // The name may not exist in the global graph yet — it's in the local graph
+                // which hasn't been extended yet. Only act on names already known globally.
+                if let Some(name_ref) = self.names.get(const_ref.name_id())
+                    && let Some(nesting_id) = name_ref.nesting()
+                    && let Some(NameRef::Resolved(resolved)) = self.names.get(nesting_id)
+                {
+                    items.push(InvalidationItem::Declaration(*resolved.declaration_id()));
+                }
+            }
+        }
+
+        if !items.is_empty() {
+            self.invalidate_graph(items, pending_detachments);
+        }
+    }
+
+    /// Removes raw document data (refs, defs, names, strings) from maps.
+    /// Does not touch declarations or perform invalidation -- that is handled by `invalidate`.
+    fn remove_document_data(&mut self, document: &Document) {
         for ref_id in document.method_references() {
             if let Some(method_ref) = self.method_references.remove(ref_id) {
                 self.untrack_string(*method_ref.str());
@@ -824,123 +931,293 @@ impl Graph {
         }
 
         for ref_id in document.constant_references() {
-            self.unresolve_reference(*ref_id);
-
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
+                // Detach from target declaration. References unresolved during invalidation
+                // were already detached; this catches the rest.
+                if let NameRef::Resolved(resolved) = self.names.get(constant_ref.name_id()).unwrap()
+                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
+                {
+                    declaration.remove_reference(ref_id);
+                }
+
                 self.remove_name_dependent(*constant_ref.name_id(), NameDependent::Reference(*ref_id));
                 self.untrack_name(*constant_ref.name_id());
             }
         }
 
-        // Vector of (owner_declaration_id, member_name_id) to delete after processing all definitions
-        let mut members_to_delete: Vec<(DeclarationId, StringId)> = Vec::new();
-        let mut definitions_to_delete: Vec<DefinitionId> = Vec::new();
-        let mut declarations_to_delete: Vec<DeclarationId> = Vec::new();
-        let mut declarations_to_invalidate_ancestor_chains: Vec<DeclarationId> = Vec::new();
-
         for def_id in document.definitions() {
-            definitions_to_delete.push(*def_id);
+            let definition = self.definitions.remove(def_id).unwrap();
 
-            if let Some(declaration_id) = self.definition_id_to_declaration_id(*def_id).copied()
-                && let Some(declaration) = self.declarations.get_mut(&declaration_id)
-                && declaration.remove_definition(def_id)
-            {
-                declaration.clear_diagnostics();
-                if declaration.as_namespace().is_some() {
-                    declarations_to_invalidate_ancestor_chains.push(declaration_id);
-                }
-
-                if declaration.has_no_definitions() {
-                    let unqualified_str_id = StringId::from(&declaration.unqualified_name());
-                    members_to_delete.push((*declaration.owner_id(), unqualified_str_id));
-                    declarations_to_delete.push(declaration_id);
-
-                    if let Some(namespace) = declaration.as_namespace()
-                        && let Some(singleton_id) = namespace.singleton_class()
-                    {
-                        declarations_to_delete.push(*singleton_id);
-                    }
-                }
+            if let Some(name_id) = definition.name_id() {
+                self.remove_name_dependent(*name_id, NameDependent::Definition(*def_id));
+                self.untrack_name(*name_id);
             }
-
-            if let Some(name_id) = self.definitions.get(def_id).unwrap().name_id().copied() {
-                self.remove_name_dependent(name_id, NameDependent::Definition(*def_id));
-                self.untrack_name(name_id);
-            }
-        }
-
-        self.invalidate_ancestor_chains(declarations_to_invalidate_ancestor_chains);
-
-        for declaration_id in declarations_to_delete {
-            self.declarations.remove(&declaration_id);
-        }
-
-        // Clean up any members that pointed to declarations that were removed
-        for (owner_id, member_str_id) in members_to_delete {
-            // Remove the `if` and use `unwrap` once we are indexing RBS files to have `Object`
-            if let Some(owner) = self.declarations.get_mut(&owner_id) {
-                match owner {
-                    Declaration::Namespace(Namespace::Class(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    Declaration::Namespace(Namespace::SingletonClass(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    Declaration::Namespace(Namespace::Module(owner)) => {
-                        owner.remove_member(&member_str_id);
-                    }
-                    _ => {} // Nothing happens
-                }
-            }
-        }
-
-        for def_id in definitions_to_delete {
-            let definition = self.definitions.remove(&def_id).unwrap();
             self.untrack_definition_strings(&definition);
         }
     }
 
-    fn invalidate_ancestor_chains(&mut self, initial_ids: Vec<DeclarationId>) {
-        let mut queue = initial_ids;
-        let mut visited = IdentityHashSet::<DeclarationId>::default();
+    /// Unified invalidation worklist. Processes declaration and name items in a single loop,
+    /// where processing one item can push new items back onto the queue.
+    fn invalidate_graph(
+        &mut self,
+        items: Vec<InvalidationItem>,
+        mut pending_detachments: IdentityHashMap<DeclarationId, Vec<DefinitionId>>,
+    ) {
+        let mut queue = items;
+        let mut visited_declarations = IdentityHashSet::<DeclarationId>::default();
 
-        while let Some(declaration_id) = queue.pop() {
-            if !visited.insert(declaration_id) {
-                continue;
+        while let Some(item) = queue.pop() {
+            match item {
+                InvalidationItem::Declaration(decl_id) => {
+                    let detach = pending_detachments.remove(&decl_id).unwrap_or_default();
+                    self.invalidate_declaration(decl_id, &detach, &mut queue, &mut visited_declarations);
+                }
+                InvalidationItem::Name(name_id) => {
+                    self.unresolve_dependent_name(name_id, &mut queue);
+                }
+                InvalidationItem::References(name_id) => {
+                    self.unresolve_dependent_references(name_id, &mut queue);
+                }
             }
+        }
+    }
 
-            let namespace = self
-                .declarations_mut()
-                .get_mut(&declaration_id)
-                .unwrap()
-                .as_namespace_mut()
-                .expect("expected namespace declaration");
+    /// Processes a declaration in the invalidation worklist.
+    ///
+    /// Detaches any pending definitions first, then either:
+    ///
+    /// - **Remove**: no definitions remain or owner was already removed (orphaned).
+    ///   Removes the declaration, unresolves its names, and cascades to members,
+    ///   singleton class, and descendants.
+    ///
+    ///   When an orphaned declaration still has definitions, those are re-queued for
+    ///   re-resolution. For example, given `class Foo::Bar`, if `Foo` is changed from
+    ///   `module Foo` to `Foo = Baz`, we can still recreate `Baz::Bar` from the
+    ///   existing definitions of it.
+    ///
+    /// - **Update**: declaration survives but its ancestor chain may have changed
+    ///   (e.g. mixin added/removed, superclass changed, or an ancestor was removed).
+    ///   Clears ancestors and descendants, then re-queues ancestor resolution.
+    ///   Also enters this path when a new definition targets an existing declaration
+    ///   without changing ancestors (e.g. adding a method in a new file). In that case
+    ///   the ancestor re-resolution is redundant — a future optimization could skip it
+    ///   by tracking why the declaration was seeded.
+    fn invalidate_declaration(
+        &mut self,
+        decl_id: DeclarationId,
+        detach_def_ids: &[DefinitionId],
+        queue: &mut Vec<InvalidationItem>,
+        visited_declarations: &mut IdentityHashSet<DeclarationId>,
+    ) {
+        // Collect names before detaching — after detachment, definitions() may be empty
+        let seed_names = self.names_for_declaration(decl_id);
 
-            for ancestor in &namespace.clone_ancestors() {
-                if let Ancestor::Complete(ancestor_id) = ancestor {
-                    self.declarations_mut()
-                        .get_mut(ancestor_id)
-                        .unwrap()
-                        .as_namespace_mut()
-                        .unwrap()
-                        .remove_descendant(&declaration_id);
+        // Detach pending definitions before deciding the mode
+        if let Some(decl) = self.declarations.get_mut(&decl_id) {
+            for def_id in detach_def_ids {
+                decl.remove_definition(def_id);
+            }
+            if !detach_def_ids.is_empty() {
+                decl.clear_diagnostics();
+            }
+        }
+
+        let Some(decl) = self.declarations.get(&decl_id) else {
+            return;
+        };
+        let should_remove = decl.has_no_definitions() || !self.declarations.contains_key(decl.owner_id());
+
+        if should_remove {
+            // Queue members + singleton for removal
+            if let Some(ns) = decl.as_namespace() {
+                if let Some(singleton_id) = ns.singleton_class() {
+                    queue.push(InvalidationItem::Declaration(*singleton_id));
+                }
+                for member_decl_id in ns.members().values() {
+                    queue.push(InvalidationItem::Declaration(*member_decl_id));
+                }
+                for descendant_id in ns.descendants() {
+                    queue.push(InvalidationItem::Declaration(*descendant_id));
                 }
             }
 
-            let namespace = self
-                .declarations_mut()
-                .get_mut(&declaration_id)
-                .unwrap()
-                .as_namespace_mut()
-                .unwrap();
+            // Unresolve names resolved to this declaration, cascade to dependents
+            for name_id in seed_names {
+                self.unresolve_name(name_id);
+                self.queue_structural_cascade(name_id, queue);
+            }
+
+            // Clean up owner membership and queue remaining definitions for re-resolution
+            if let Some(decl) = self.declarations.get(&decl_id) {
+                let def_ids: Vec<DefinitionId> = decl.definitions().to_vec();
+                let unqualified_str_id = StringId::from(&decl.unqualified_name());
+                let owner_id = *decl.owner_id();
+
+                for def_id in def_ids {
+                    self.push_work(Unit::Definition(def_id));
+                }
+
+                if let Some(owner) = self.declarations.get_mut(&owner_id)
+                    && let Some(ns) = owner.as_namespace_mut()
+                {
+                    ns.remove_member(&unqualified_str_id);
+                }
+            }
+
+            self.declarations.remove(&decl_id);
+        } else {
+            // Update: the declaration still has definitions so it stays in the graph,
+            // but its ancestor chain may have changed (e.g. a mixin was added/removed).
+            // Clear ancestors and descendants, then re-queue ancestor resolution.
+            if !visited_declarations.insert(decl_id) {
+                return;
+            }
+
+            let Some(namespace) = self.declarations.get_mut(&decl_id).and_then(|d| d.as_namespace_mut()) else {
+                return;
+            };
+
+            // Remove self from each ancestor's descendant set
+            for ancestor in &namespace.clone_ancestors() {
+                if let Ancestor::Complete(ancestor_id) = ancestor
+                    && let Some(anc_decl) = self.declarations.get_mut(ancestor_id)
+                    && let Some(ns) = anc_decl.as_namespace_mut()
+                {
+                    ns.remove_descendant(&decl_id);
+                }
+            }
+
+            let namespace = self.declarations.get_mut(&decl_id).unwrap().as_namespace_mut().unwrap();
 
             namespace.for_each_descendant(|descendant_id| {
-                queue.push(*descendant_id);
+                queue.push(InvalidationItem::Declaration(*descendant_id));
             });
 
             namespace.clear_ancestors();
             namespace.clear_descendants();
+
+            self.push_work(Unit::Ancestors(decl_id));
+
+            for seed_name_id in seed_names {
+                self.queue_ancestor_triggered_invalidation(seed_name_id, queue);
+            }
         }
+    }
+
+    /// The name's structural dependency is broken (its nesting or parent scope was removed).
+    /// Unresolves the name and cascades to all dependents — both references and definitions.
+    fn unresolve_dependent_name(&mut self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
+        let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
+        self.queue_structural_cascade(name_id, queue);
+
+        if let Some(old_decl_id) = self.unresolve_name(name_id) {
+            for dep in &dependents {
+                match dep {
+                    NameDependent::Reference(ref_id) => {
+                        if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
+                            decl.remove_reference(ref_id);
+                        }
+                        self.push_work(Unit::ConstantRef(*ref_id));
+                    }
+                    NameDependent::Definition(def_id) => {
+                        self.push_work(Unit::Definition(*def_id));
+
+                        if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
+                            decl.remove_definition(def_id);
+                        }
+
+                        if self
+                            .declarations
+                            .get(&old_decl_id)
+                            .is_some_and(Declaration::has_no_definitions)
+                        {
+                            queue.push(InvalidationItem::Declaration(old_decl_id));
+                        }
+                    }
+                    NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
+                }
+            }
+        }
+    }
+
+    /// Ancestor context changed but the name itself is still valid.
+    /// Unresolves constant references under this name without unresolving the name itself.
+    fn unresolve_dependent_references(&mut self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
+        let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
+        self.queue_ancestor_triggered_invalidation(name_id, queue);
+
+        let is_resolved = matches!(self.names.get(&name_id), Some(NameRef::Resolved(_)));
+
+        for dep in &dependents {
+            if let NameDependent::Reference(ref_id) = dep {
+                if is_resolved {
+                    self.unresolve_reference(*ref_id);
+                }
+                self.push_work(Unit::ConstantRef(*ref_id));
+            }
+        }
+    }
+
+    /// Structural cascade: all dependent names must be unresolved regardless of edge type.
+    /// Both `ChildName` and `NestedName` dependents get `UnresolveName`.
+    fn queue_structural_cascade(&self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
+        if let Some(deps) = self.name_dependents.get(&name_id) {
+            for dep in deps {
+                match dep {
+                    NameDependent::ChildName(id) | NameDependent::NestedName(id) => {
+                        queue.push(InvalidationItem::Name(*id));
+                    }
+                    NameDependent::Reference(_) | NameDependent::Definition(_) => {}
+                }
+            }
+        }
+    }
+
+    /// Ancestor context changed: `ChildName` dependents need full unresolve (structural),
+    /// `NestedName` dependents only need reference re-evaluation.
+    fn queue_ancestor_triggered_invalidation(&self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
+        if let Some(deps) = self.name_dependents.get(&name_id) {
+            for dep in deps {
+                match dep {
+                    NameDependent::ChildName(id) => {
+                        queue.push(InvalidationItem::Name(*id));
+                    }
+                    NameDependent::NestedName(id) => {
+                        queue.push(InvalidationItem::References(*id));
+                    }
+                    NameDependent::Reference(_) | NameDependent::Definition(_) => {}
+                }
+            }
+        }
+    }
+
+    /// Collects all `NameId`s that resolved to the given declaration, by inspecting its
+    /// definitions and references.
+    fn names_for_declaration(&self, decl_id: DeclarationId) -> IdentityHashSet<NameId> {
+        let Some(decl) = self.declarations.get(&decl_id) else {
+            return IdentityHashSet::default();
+        };
+
+        let mut names = IdentityHashSet::default();
+
+        for def_id in decl.definitions() {
+            if let Some(name_id) = self.definitions.get(def_id).and_then(|d| d.name_id())
+                && matches!(self.names.get(name_id), Some(NameRef::Resolved(_)))
+            {
+                names.insert(*name_id);
+            }
+        }
+
+        for ref_id in decl.references() {
+            if let Some(constant_ref) = self.constant_references.get(ref_id) {
+                let name_id = *constant_ref.name_id();
+                if matches!(self.names.get(&name_id), Some(NameRef::Resolved(_))) {
+                    names.insert(name_id);
+                }
+            }
+        }
+
+        names
     }
 
     /// Sets the encoding that should be used for transforming byte offsets into LSP code unit line/column positions
@@ -1946,3 +2223,1139 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod invalidation_tests {
+    use crate::model::name::NameRef;
+    use crate::test_utils::GraphTest;
+    use crate::{
+        assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
+        assert_constant_reference_unresolved, assert_declaration_does_not_exist, assert_declaration_exists,
+        assert_declaration_references_count_eq, assert_members_eq, assert_no_constant_alias_target,
+    };
+
+    const NO_ANCESTORS: [&str; 0] = [];
+
+    #[test]
+    fn new_namespace_shadowing_include_target_invalidates_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module Bar
+                module Baz
+                end
+              end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///qux.rb",
+            r"
+            module Foo
+              module Bar
+                module Baz
+                  class Qux
+                    include Bar
+                  end
+                end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///qux.rb:5:17-5:20");
+        assert_declaration_references_count_eq!(context, "Foo::Bar", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::Bar::Baz::Qux",
+            ["Foo::Bar::Baz::Qux", "Foo::Bar", "Object"]
+        );
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module Bar
+                module Baz
+                  module Bar; end
+                end
+              end
+            end
+            ",
+        );
+
+        assert_constant_reference_unresolved!(context, "Bar");
+        assert_declaration_references_count_eq!(context, "Foo::Bar", 0);
+        assert_ancestors_eq!(context, "Foo::Bar::Baz::Qux", NO_ANCESTORS);
+    }
+
+    #[test]
+    fn deleting_include_file_invalidates_ancestors_and_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+
+            class Bar
+              CONST
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              include Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:3-6:8");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 1);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
+
+        context.delete_uri("file:///bar.rb");
+
+        assert_constant_reference_unresolved!(context, "CONST");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
+        assert_ancestors_eq!(context, "Bar", NO_ANCESTORS);
+    }
+
+    #[test]
+    fn invalidating_constant_aliases() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+
+            class Bar
+              ALIAS_CONST = CONST
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              include Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_targets_contain!(context, "Bar::ALIAS_CONST", "Foo::CONST");
+
+        context.delete_uri("file:///bar.rb");
+
+        assert_no_constant_alias_target!(context, "Bar::ALIAS_CONST");
+    }
+
+    #[test]
+    fn new_constant_in_existing_chain_invalidates_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+
+            module Bar
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            r"
+            class Baz
+              include Foo
+              prepend Bar
+
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo2.rb:5:3-5:8");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 1);
+
+        context.index_uri(
+            "file:///foo3.rb",
+            r"
+            module Bar
+              CONST = 2
+            end
+            ",
+        );
+
+        assert_constant_reference_unresolved!(context, "CONST");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
+    }
+
+    #[test]
+    fn deep_ancestor_chain_invalidation() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              DEEP_CONST = 1
+            end
+            module B
+              include A
+            end
+            module C
+              include B
+            end
+            class D
+              include C
+              DEEP_CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "A::DEEP_CONST", "file:///a.rb:12:3-12:13");
+
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module C
+              prepend B
+            end
+            ",
+        );
+
+        assert_constant_reference_unresolved!(context, "DEEP_CONST");
+    }
+
+    #[test]
+    fn invalidation_cascade_from_reference_to_declaration() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module Bar
+                module Baz
+                end
+              end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            r"
+            module Foo
+              include Bar
+
+              class Baz::Qux
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::Bar::Baz::Qux");
+
+        context.index_uri(
+            "file:///foo3.rb",
+            r"
+            module Foo
+              module Baz
+              end
+            end
+            ",
+        );
+
+        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz::Qux");
+    }
+
+    #[test]
+    fn new_file_adding_superclass_invalidates_ancestors() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.index_uri("file:///bar.rb", "module Bar; end");
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object"]);
+
+        // A new file reopens Foo with a superclass -- ancestors must be invalidated
+        context.index_uri(
+            "file:///foo2.rb",
+            r"
+            class Foo < Bar
+            end
+            ",
+        );
+
+        assert_ancestors_eq!(context, "Foo", NO_ANCESTORS);
+    }
+
+    #[test]
+    fn deleting_module_invalidates_multiple_includers() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module M
+              CONST = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            class A
+              include M
+              CONST
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            class B
+              include M
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "M::CONST", "file:///a.rb:3:3-3:8");
+        assert_ancestors_eq!(context, "A", ["A", "M", "Object"]);
+        assert_ancestors_eq!(context, "B", ["B", "M", "Object"]);
+
+        context.delete_uri("file:///m.rb");
+
+        assert_ancestors_eq!(context, "A", NO_ANCESTORS);
+        assert_ancestors_eq!(context, "B", NO_ANCESTORS);
+    }
+
+    #[test]
+    fn extend_mixin_invalidation() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///helpers.rb",
+            r"
+            module Helpers
+              HELPER_CONST = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              extend Helpers
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Helpers");
+        assert_declaration_exists!(context, "Helpers::HELPER_CONST");
+
+        context.delete_uri("file:///helpers.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Helpers");
+        assert_declaration_does_not_exist!(context, "Helpers::HELPER_CONST");
+    }
+
+    #[test]
+    fn superclass_change_invalidates_ancestors() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              CONST = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///baz.rb",
+            r"
+            class Baz
+              CONST = 2
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo < Bar
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///ref.rb",
+            r"
+            class Foo
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///ref.rb:2:3-2:8");
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo < Baz
+            end
+            ",
+        );
+
+        assert_ancestors_eq!(context, "Foo", NO_ANCESTORS);
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Object"]);
+        assert_constant_reference_to!(context, "Baz::CONST", "file:///ref.rb:2:3-2:8");
+    }
+
+    #[test]
+    fn constant_promotion_during_invalidation() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "Foo = 1");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+
+        context.index_uri(
+            "file:///foo_class.rb",
+            r"
+            class Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_members_eq!(context, "Object", ["Foo"]);
+    }
+
+    #[test]
+    fn multiple_simultaneous_ancestor_changes() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///m1.rb",
+            r"
+            module M1
+              CONST1 = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///m2.rb",
+            r"
+            module M2
+              CONST2 = 2
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include M1
+              include M2
+              CONST1
+              CONST2
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M2", "M1", "Object"]);
+        assert_constant_reference_to!(context, "M1::CONST1", "file:///foo.rb:4:3-4:9");
+        assert_constant_reference_to!(context, "M2::CONST2", "file:///foo.rb:5:3-5:9");
+
+        context.delete_uri("file:///m1.rb");
+        context.delete_uri("file:///m2.rb");
+
+        assert_ancestors_eq!(context, "Foo", NO_ANCESTORS);
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", Partial("M2"), Partial("M1"), "Object"]);
+        assert_declaration_does_not_exist!(context, "M1");
+        assert_declaration_does_not_exist!(context, "M2");
+        assert_constant_reference_unresolved!(context, "CONST1");
+        assert_constant_reference_unresolved!(context, "CONST2");
+    }
+
+    #[test]
+    fn nested_name_reference_resolves_through_lexical_scope() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+              class Bar
+                CONST
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:4:5-4:10");
+
+        // Add a new constant to Foo that shadows — update the file
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 2
+              class Bar
+                CONST
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        // Reference still resolves to Foo::CONST (updated value, same declaration)
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:4:5-4:10");
+    }
+
+    #[test]
+    fn child_name_edge_triggers_structural_cascade_on_parent_removal() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+                module Foo
+                end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+                class Foo::Bar
+                  CONST
+                end
+            ",
+        );
+        context.index_uri(
+            "file:///const.rb",
+            r"
+                module Foo
+                  CONST = 1
+                end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::Bar");
+        assert_members_eq!(context, "Foo", ["Bar", "CONST"]);
+
+        // Delete foo.rb — Foo loses one definition but survives (const.rb still defines it)
+        context.delete_uri("file:///foo.rb");
+
+        // After invalidation but before re-resolve: Bar's name should be unresolved
+        assert_constant_reference_unresolved!(context, "CONST");
+    }
+
+    #[test]
+    fn ancestor_changes_invalidate_and_re_resolve_constant_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+
+            module Bar
+              CONST = 2
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            r"
+            class Baz
+              include Foo
+
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo2.rb:4:3-4:8");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 1);
+
+        // Prepending Bar changes Baz's ancestors
+        context.index_uri(
+            "file:///foo3.rb",
+            r"
+            class Baz
+              prepend Bar
+            end
+            ",
+        );
+
+        // Mid-invalidation: CONST is unresolved, detached from Foo::CONST
+        assert_constant_reference_unresolved!(context, "CONST");
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
+
+        // After re-resolve: CONST now points to Bar::CONST (prepend comes first in MRO)
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///foo2.rb:4:3-4:8");
+        assert_declaration_references_count_eq!(context, "Bar::CONST", 1);
+        assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
+    }
+
+    #[test]
+    fn multiple_definitions_one_removed_declaration_survives() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", "module Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_eq!(context.graph().get("Foo").unwrap().len(), 2);
+
+        context.delete_uri("file:///a.rb");
+        assert_declaration_exists!(context, "Foo");
+        assert_eq!(context.graph().get("Foo").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn re_indexing_same_content_preserves_state() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              include Foo
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:3:3-3:8");
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
+
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              include Foo
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:3:3-3:8");
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
+    }
+
+    #[test]
+    fn incremental_resolve_after_delete_and_re_add() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              include Foo
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:3:3-3:8");
+
+        context.delete_uri("file:///foo.rb");
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 42
+            end
+            ",
+        );
+
+        context.resolve();
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:3:3-3:8");
+    }
+
+    #[test]
+    fn removing_namespace_declaration_cleans_up_member_methods() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def hello; end
+              def world; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert!(context.graph().get("Foo#hello()").is_some());
+        assert!(context.graph().get("Foo#world()").is_some());
+
+        context.delete_uri("file:///foo.rb");
+        context.resolve();
+
+        assert!(context.graph().get("Foo").is_none());
+        assert!(context.graph().get("Foo#hello()").is_none());
+        assert!(context.graph().get("Foo#world()").is_none());
+    }
+
+    #[test]
+    fn removing_declaration_cascades_to_nested_members() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Outer
+              class Inner
+                CONST = 1
+                def method_name; end
+                module Nested; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::Inner");
+        assert_declaration_exists!(context, "Outer::Inner::Nested");
+
+        context.delete_uri("file:///foo.rb");
+        context.resolve();
+
+        assert!(context.graph().get("Outer").is_none());
+        assert!(context.graph().get("Outer::Inner").is_none());
+        assert!(context.graph().get("Outer::Inner::Nested").is_none());
+        assert!(context.graph().get("Outer::Inner#method_name()").is_none());
+    }
+
+    #[test]
+    fn cascade_removes_declaration_with_singleton_and_members() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module Bar
+                class Baz
+                  def self.class_method; end
+                  CONST = 1
+                end
+              end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            module Foo
+              include Bar
+
+              class Baz::Qux
+                def instance_method; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::Bar::Baz::Qux");
+
+        context.index_uri(
+            "file:///baz.rb",
+            r"
+            module Foo
+              module Baz
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz::Qux");
+        assert!(context.graph().get("Foo::Bar::Baz::Qux#instance_method()").is_none());
+    }
+
+    #[test]
+    fn adding_include_resolves_previously_unresolved_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              CONST
+            end
+
+            module Bar
+              CONST = 1
+            end
+            ",
+        );
+        context.resolve();
+
+        // CONST is unresolved (Foo doesn't include Bar yet, CONST not found)
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.index_uri(
+            "file:///foo_include.rb",
+            r"
+            class Foo
+              include Bar
+            end
+            ",
+        );
+
+        // After re-resolve, CONST should now resolve through Foo -> Bar
+        context.resolve();
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///foo.rb:2:3-2:8");
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
+    }
+
+    #[test]
+    fn re_indexing_module_invalidates_compact_class_inside_it() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo; end
+            ",
+        );
+
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module M
+              class Foo::Bar
+                def bar; end
+              end
+            end
+            ",
+        );
+
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::Bar");
+        assert_ancestors_eq!(context, "Foo::Bar", ["Foo::Bar", "Object"]);
+        assert_members_eq!(context, "Foo::Bar", ["bar()"]);
+
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module M
+              module Foo; end
+
+              class Foo::Bar
+                def bar; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "M::Foo::Bar");
+        assert_ancestors_eq!(context, "M::Foo::Bar", ["M::Foo::Bar", "Object"]);
+        assert_members_eq!(context, "M::Foo::Bar", ["bar()"]);
+    }
+
+    #[test]
+    fn invalidating_namespace_cascades_to_compact_class_and_its_members() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+            end
+            ",
+        );
+
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Foo::Bar
+              def bar; end
+            end
+            ",
+        );
+
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::Bar");
+        assert_ancestors_eq!(context, "Foo::Bar", ["Foo::Bar", "Object"]);
+        assert_members_eq!(context, "Foo", ["Bar"]);
+        assert_members_eq!(context, "Foo::Bar", ["bar()"]);
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Baz; end
+
+            Foo = Baz
+
+            class Foo::Bar
+              def bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Baz::Bar");
+        assert_ancestors_eq!(context, "Baz", ["Baz", "Object"]);
+        assert_ancestors_eq!(context, "Baz::Bar", ["Baz::Bar", "Object"]);
+        assert_members_eq!(context, "Baz", ["Bar"]);
+        assert_members_eq!(context, "Baz::Bar", ["bar()"]);
+    }
+    #[test]
+    fn switching_include_target_invalidates_ancestors_and_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module M1
+              CONST = 1
+            end
+            module M2
+              CONST = 2
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include M1
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M1", "Object"]);
+        assert_constant_reference_to!(context, "M1::CONST", "file:///foo.rb:3:3-3:8");
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include M2
+              CONST
+            end
+            ",
+        );
+
+        // Middle state: Foo's only definition was in foo.rb, so the declaration is removed.
+        // CONST reference is unresolved.
+        assert_declaration_does_not_exist!(context, "Foo");
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M2", "Object"]);
+        assert_constant_reference_to!(context, "M2::CONST", "file:///foo.rb:3:3-3:8");
+    }
+
+    #[test]
+    fn removing_superclass_invalidates_ancestors() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              CONST = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo < Bar
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///foo.rb:2:3-2:8");
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              CONST
+            end
+            ",
+        );
+
+        // Middle state: Foo's only definition was in foo.rb, so the declaration is removed.
+        assert_declaration_does_not_exist!(context, "Foo");
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object"]);
+        assert_constant_reference_unresolved!(context, "CONST");
+    }
+
+    #[test]
+    fn changing_alias_target_invalidates_dependents() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///targets.rb",
+            r"
+            class Bar
+              CONST = 1
+            end
+            class Baz
+              CONST = 2
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///alias.rb",
+            r"
+            Foo = Bar
+            ",
+        );
+        context.index_uri(
+            "file:///ref.rb",
+            r"
+            Foo::CONST
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///ref.rb:1:6-1:11");
+
+        context.index_uri(
+            "file:///alias.rb",
+            r"
+            Foo = Baz
+            ",
+        );
+
+        // Middle state: old Foo alias declaration removed, CONST ref unresolved
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Baz::CONST", "file:///ref.rb:1:6-1:11");
+    }
+
+    #[test]
+    fn switching_mixin_order_invalidates_ancestor_chain() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module Bar; end
+            module Baz; end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include Bar
+              include Baz
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object"]);
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include Baz
+              include Bar
+            end
+            ",
+        );
+
+        // Middle state: Foo's only definition was in foo.rb, so the declaration is removed.
+        assert_declaration_does_not_exist!(context, "Foo");
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
+    }
+} // mod invalidation_tests
