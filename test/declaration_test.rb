@@ -599,6 +599,61 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_method_declaration_signatures_from_rbs
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def bar: (String a, ?Integer b) -> void
+        end
+      RBS
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rbs"))
+      graph.resolve
+
+      decl = graph["Foo#bar()"]
+      assert_instance_of(Rubydex::Method, decl)
+
+      signatures = decl.signatures
+      assert_equal(1, signatures.length)
+
+      params = signatures.first.parameters
+      assert_equal(2, params.length)
+      assert_equal([:req, :a], params[0][0..1])
+      assert_equal([:opt, :b], params[1][0..1])
+    end
+  end
+
+  def test_method_declaration_signatures_from_rbs_with_overloads
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def bar: (String name) -> void
+                 | (Integer id, ?Symbol mode) -> String
+        end
+      RBS
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rbs"))
+      graph.resolve
+
+      decl = graph["Foo#bar()"]
+      assert_instance_of(Rubydex::Method, decl)
+
+      signatures = decl.signatures
+      assert_equal(2, signatures.length)
+
+      params0 = signatures[0].parameters
+      assert_equal(1, params0.length)
+      assert_equal([:req, :name], params0[0][0..1])
+
+      params1 = signatures[1].parameters
+      assert_equal(2, params1.length)
+      assert_equal([:req, :id], params1[0][0..1])
+      assert_equal([:opt, :mode], params1[1][0..1])
+    end
+  end
+
   def test_method_declaration_signatures_with_override
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
