@@ -9,7 +9,7 @@ use crate::model::declaration::{Ancestor, Declaration};
 use crate::model::definitions::{Definition, MethodDefinition, Parameter};
 use crate::model::graph::{Graph, OBJECT_ID};
 use crate::model::identity_maps::IdentityHashSet;
-use crate::model::ids::{DeclarationId, DefinitionId, NameId, StringId, UriId};
+use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
 use crate::model::keywords::{self, Keyword};
 use crate::model::name::NameRef;
 
@@ -219,7 +219,7 @@ macro_rules! collect_candidates {
 /// - the declaration is not a method declaration
 /// - any definition or owner declaration referenced by the method is missing from the graph
 #[must_use]
-pub fn method_definitions(graph: &Graph, declaration_id: DeclarationId) -> Vec<(DefinitionId, &MethodDefinition)> {
+pub fn method_definitions(graph: &Graph, declaration_id: DeclarationId) -> Vec<&MethodDefinition> {
     let decl = graph
         .declarations()
         .get(&declaration_id)
@@ -241,7 +241,7 @@ pub fn method_definitions(graph: &Graph, declaration_id: DeclarationId) -> Vec<(
 
         match defn {
             Definition::Method(method_def) => {
-                result.push((*def_id, method_def.as_ref()));
+                result.push(method_def.as_ref());
             }
             Definition::MethodAlias(alias_def) => {
                 // Resolve alias: look up the original method in the owner's members
@@ -268,7 +268,7 @@ pub fn method_definitions(graph: &Graph, declaration_id: DeclarationId) -> Vec<(
                         .get(original_def_id)
                         .expect("original definition should exist in graph");
                     if let Definition::Method(original_method_def) = original_defn {
-                        result.push((*original_def_id, original_method_def.as_ref()));
+                        result.push(original_method_def.as_ref());
                     }
                 }
             }
@@ -1709,7 +1709,7 @@ mod tests {
 
         let defs = method_definitions(context.graph(), DeclarationId::from("Foo#bar()"));
         assert_eq!(1, defs.len());
-        assert_eq!("def bar(a, b); end", source_at(source, defs[0].1.offset()));
+        assert_eq!("def bar(a, b); end", source_at(source, defs[0].offset()));
     }
 
     #[test]
@@ -1722,7 +1722,7 @@ mod tests {
         let defs = method_definitions(context.graph(), DeclarationId::from("Foo#baz()"));
         assert_eq!(1, defs.len());
         // Returns the original method's definition
-        assert_eq!("def bar(a, b); end", source_at(source, defs[0].1.offset()));
+        assert_eq!("def bar(a, b); end", source_at(source, defs[0].offset()));
     }
 
     #[test]
@@ -1745,7 +1745,7 @@ mod tests {
         let defs = method_definitions(context.graph(), DeclarationId::from("Foo#bar()"));
         assert_eq!(2, defs.len());
 
-        let mut texts: Vec<&str> = defs.iter().map(|(_, d)| source_at(source, d.offset())).collect();
+        let mut texts: Vec<&str> = defs.iter().map(|d| source_at(source, d.offset())).collect();
         texts.sort();
         assert_eq!(vec!["def bar(a); end", "def bar(a, b); end"], texts);
     }
@@ -1757,7 +1757,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "class Foo; end");
         context.resolve();
 
-        method_definitions(context.graph(), DeclarationId::from("Foo"));
+        let _ = method_definitions(context.graph(), DeclarationId::from("Foo"));
     }
 
     #[test]
@@ -1771,7 +1771,7 @@ mod tests {
         assert_eq!(1, defs.len());
         assert_eq!(
             "def bar: (String name) -> void\n         | (Integer id) -> String",
-            source_at(source, defs[0].1.offset())
+            source_at(source, defs[0].offset())
         );
     }
 
@@ -1786,6 +1786,6 @@ mod tests {
 
         let defs = method_definitions(context.graph(), DeclarationId::from("Foo#baz()"));
         assert_eq!(1, defs.len());
-        assert_eq!("def bar(a, b); end", source_at(rb_source, defs[0].1.offset()));
+        assert_eq!("def bar(a, b); end", source_at(rb_source, defs[0].offset()));
     }
 }
