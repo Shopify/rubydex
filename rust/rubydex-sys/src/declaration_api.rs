@@ -469,7 +469,7 @@ pub unsafe extern "C" fn rdx_declaration_method_signatures(
 
         let mut sig_entries: Vec<SignatureEntry> = Vec::new();
         for (def_id, method_def) in &method_defs {
-            collect_method_signatures(graph, method_def, **def_id, &mut sig_entries);
+            collect_method_signatures(graph, method_def, def_id.get(), &mut sig_entries);
         }
 
         let mut boxed = sig_entries.into_boxed_slice();
