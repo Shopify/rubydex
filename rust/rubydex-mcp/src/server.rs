@@ -222,12 +222,22 @@ macro_rules! paginate {
 #[tool_router]
 impl RubydexServer {
     #[tool(
-        description = "Search for Ruby classes, modules, methods, or constants by name. Use this INSTEAD OF Grep when you know part of a Ruby identifier name and want to find its definition. Returns fully qualified names, kinds, and file locations. Use the `kind` filter (\"Class\", \"Module\", \"Method\", \"Constant\") to narrow results. Results are paginated: the response includes `total` (the full count of matches). If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
+        description = "Search for Ruby classes, modules, methods, or constants by name. Use this INSTEAD OF Grep when you know part of a Ruby identifier name and want to find its definition. Returns fully qualified names, kinds, and file locations. Use the `kind` filter (\"Class\", \"Module\", \"Method\", \"Constant\") to narrow results. Set `match_mode` to \"exact\" for precise substring matching or \"fuzzy\" for LSP-style workspace symbol search (default). Results are paginated: the response includes `total` (the full count of matches). If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
     )]
     fn search_declarations(&self, Parameters(params): Parameters<SearchDeclarationsParams>) -> String {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
-        let ids = rubydex::query::declaration_search(graph, &params.query);
+        let match_mode = match params.match_mode.as_deref() {
+            Some("exact") => rubydex::query::MatchMode::Exact,
+            None | Some("fuzzy") => rubydex::query::MatchMode::Fuzzy,
+            Some(other) => {
+                return serde_json::json!({
+                    "error": format!("invalid match_mode \"{other}\" (expected \"fuzzy\" or \"exact\")")
+                })
+                .to_string();
+            }
+        };
+        let ids = rubydex::query::declaration_search(graph, &params.query, &match_mode);
 
         let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(100); // default 50, max 100
         let offset = params.offset.unwrap_or(0);
@@ -664,6 +674,7 @@ mod tests {
     macro_rules! search_declarations {
         ($server:expr, $($field:ident: $val:expr),* $(,)?) => {
             parse(&$server.search_declarations(Parameters(SearchDeclarationsParams {
+                match_mode: None,
                 $($field: $val,)*
             })))
         };

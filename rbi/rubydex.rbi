@@ -203,6 +203,9 @@ class Rubydex::Graph
   sig { params(query: String).returns(T::Enumerable[Rubydex::Declaration]) }
   def search(query); end
 
+  sig { params(query: String).returns(T::Enumerable[Rubydex::Declaration]) }
+  def fuzzy_search(query); end
+
   sig { params(encoding: String).void }
   def encoding=(encoding); end
 

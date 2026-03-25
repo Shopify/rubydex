@@ -2,10 +2,14 @@ use schemars::JsonSchema;
 
 #[derive(Debug, serde::Deserialize, JsonSchema)]
 pub struct SearchDeclarationsParams {
-    #[schemars(description = "Search query to fuzzy match against declaration names")]
+    #[schemars(description = "Search query to match against declaration names")]
     pub query: String,
     #[schemars(description = "Filter by declaration kind: Class, Module, Method, Constant, etc.")]
     pub kind: Option<String>,
+    #[schemars(
+        description = "Matching mode: \"fuzzy\" (default) for LSP-style workspace symbol search, or \"exact\" for precise substring matching"
+    )]
+    pub match_mode: Option<String>,
     #[schemars(description = "Maximum number of results to return (default 50, max 100)")]
     pub limit: Option<usize>,
     #[schemars(description = "Number of results to skip for pagination (default 0)")]
