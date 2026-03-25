@@ -3177,4 +3177,185 @@ mod invalidation_tests {
         assert_members_eq!(context, "Baz", ["Bar"]);
         assert_members_eq!(context, "Baz::Bar", ["bar()"]);
     }
+    #[test]
+    fn switching_include_target_invalidates_ancestors_and_references() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module M1
+              CONST = 1
+            end
+            module M2
+              CONST = 2
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include M1
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M1", "Object"]);
+        assert_constant_reference_to!(context, "M1::CONST", "file:///foo.rb:3:3-3:8");
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include M2
+              CONST
+            end
+            ",
+        );
+
+        // Middle state: Foo's only definition was in foo.rb, so the declaration is removed.
+        // CONST reference is unresolved.
+        assert_declaration_does_not_exist!(context, "Foo");
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M2", "Object"]);
+        assert_constant_reference_to!(context, "M2::CONST", "file:///foo.rb:3:3-3:8");
+    }
+
+    #[test]
+    fn removing_superclass_invalidates_ancestors() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              CONST = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo < Bar
+              CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///foo.rb:2:3-2:8");
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              CONST
+            end
+            ",
+        );
+
+        // Middle state: Foo's only definition was in foo.rb, so the declaration is removed.
+        assert_declaration_does_not_exist!(context, "Foo");
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object"]);
+        assert_constant_reference_unresolved!(context, "CONST");
+    }
+
+    #[test]
+    fn changing_alias_target_invalidates_dependents() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///targets.rb",
+            r"
+            class Bar
+              CONST = 1
+            end
+            class Baz
+              CONST = 2
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///alias.rb",
+            r"
+            Foo = Bar
+            ",
+        );
+        context.index_uri(
+            "file:///ref.rb",
+            r"
+            Foo::CONST
+            ",
+        );
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///ref.rb:1:6-1:11");
+
+        context.index_uri(
+            "file:///alias.rb",
+            r"
+            Foo = Baz
+            ",
+        );
+
+        // Middle state: old Foo alias declaration removed, CONST ref unresolved
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Baz::CONST", "file:///ref.rb:1:6-1:11");
+    }
+
+    #[test]
+    fn switching_mixin_order_invalidates_ancestor_chain() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module Bar; end
+            module Baz; end
+            ",
+        );
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include Bar
+              include Baz
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object"]);
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              include Baz
+              include Bar
+            end
+            ",
+        );
+
+        // Middle state: Foo's only definition was in foo.rb, so the declaration is removed.
+        assert_declaration_does_not_exist!(context, "Foo");
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
+    }
 } // mod invalidation_tests
