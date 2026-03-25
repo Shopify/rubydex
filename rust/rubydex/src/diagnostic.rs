@@ -102,7 +102,9 @@ rules! {
     DynamicConstantReference;
     DynamicSingletonDefinition;
     DynamicAncestor;
+    DynamicVisibilityDirective;
     TopLevelMixinSelf;
 
     // Resolution
+    InvalidVisibilityDirectiveTarget;
 }

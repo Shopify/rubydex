@@ -87,6 +87,13 @@ impl Document {
         self.diagnostics.push(diagnostic);
     }
 
+    pub fn retain_diagnostics<F>(&mut self, predicate: F)
+    where
+        F: FnMut(&Diagnostic) -> bool,
+    {
+        self.diagnostics.retain(predicate);
+    }
+
     #[must_use]
     pub fn diagnostics_for_definition(&self, id: DefinitionId) -> &[Diagnostic] {
         self.definition_diagnostics.get(&id).map_or(&[], Vec::as_slice)

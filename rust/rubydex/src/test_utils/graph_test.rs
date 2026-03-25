@@ -563,6 +563,26 @@ macro_rules! assert_no_diagnostics {
 }
 
 #[cfg(test)]
+#[macro_export]
+macro_rules! assert_visibility_eq {
+    ($context:expr, $declaration_name:expr, $expected_visibility:expr) => {
+        let declaration = $context
+            .graph()
+            .declarations()
+            .get(&$crate::model::ids::DeclarationId::from($declaration_name))
+            .unwrap_or_else(|| panic!("Declaration `{}` not found", $declaration_name));
+        assert_eq!(
+            declaration.visibility(),
+            &$expected_visibility,
+            "Expected declaration `{}` to have visibility {:?}, got {:?}",
+            $declaration_name,
+            $expected_visibility,
+            declaration.visibility()
+        );
+    };
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

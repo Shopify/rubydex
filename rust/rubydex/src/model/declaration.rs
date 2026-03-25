@@ -3,6 +3,7 @@ use crate::diagnostic::Diagnostic;
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
     ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+    visibility::Visibility,
 };
 
 /// A single ancestor in the linearized ancestor chain
@@ -109,6 +110,8 @@ macro_rules! namespace_declaration {
             singleton_class_id: Option<DeclarationId>,
             /// Diagnostics associated with this declaration
             diagnostics: Vec<Diagnostic>,
+            /// The visibility of this declaration (default: Public)
+            visibility: Visibility,
         }
 
         impl $name {
@@ -124,6 +127,7 @@ macro_rules! namespace_declaration {
                     descendants: IdentityHashSet::default(),
                     singleton_class_id: None,
                     diagnostics: Vec::new(),
+                    visibility: Visibility::Public,
                 }
             }
 
@@ -219,6 +223,8 @@ macro_rules! simple_declaration {
             owner_id: DeclarationId,
             /// Diagnostics associated with this declaration
             diagnostics: Vec<Diagnostic>,
+            /// The visibility of this declaration (default: Public)
+            visibility: Visibility,
         }
 
         impl $name {
@@ -230,6 +236,7 @@ macro_rules! simple_declaration {
                     references: IdentityHashSet::default(),
                     owner_id,
                     diagnostics: Vec::new(),
+                    visibility: Visibility::Public,
                 }
             }
 
@@ -373,6 +380,15 @@ impl Declaration {
     pub fn clear_diagnostics(&mut self) {
         all_declarations!(self, it => it.diagnostics.clear());
     }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        all_declarations!(self, it => &it.visibility)
+    }
+
+    pub fn set_visibility(&mut self, visibility: Visibility) {
+        all_declarations!(self, it => it.visibility = visibility);
+    }
 }
 
 #[derive(Debug)]
@@ -503,25 +519,25 @@ impl Namespace {
 }
 
 namespace_declaration!(Class, ClassDeclaration);
-assert_mem_size!(ClassDeclaration, 216);
+assert_mem_size!(ClassDeclaration, 224);
 namespace_declaration!(Module, ModuleDeclaration);
-assert_mem_size!(ModuleDeclaration, 216);
+assert_mem_size!(ModuleDeclaration, 224);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
-assert_mem_size!(SingletonClassDeclaration, 216);
+assert_mem_size!(SingletonClassDeclaration, 224);
 namespace_declaration!(Todo, TodoDeclaration);
-assert_mem_size!(TodoDeclaration, 216);
+assert_mem_size!(TodoDeclaration, 224);
 simple_declaration!(ConstantDeclaration);
-assert_mem_size!(ConstantDeclaration, 112);
+assert_mem_size!(ConstantDeclaration, 120);
 simple_declaration!(MethodDeclaration);
-assert_mem_size!(MethodDeclaration, 112);
+assert_mem_size!(MethodDeclaration, 120);
 simple_declaration!(GlobalVariableDeclaration);
-assert_mem_size!(GlobalVariableDeclaration, 112);
+assert_mem_size!(GlobalVariableDeclaration, 120);
 simple_declaration!(InstanceVariableDeclaration);
-assert_mem_size!(InstanceVariableDeclaration, 112);
+assert_mem_size!(InstanceVariableDeclaration, 120);
 simple_declaration!(ClassVariableDeclaration);
-assert_mem_size!(ClassVariableDeclaration, 112);
+assert_mem_size!(ClassVariableDeclaration, 120);
 simple_declaration!(ConstantAliasDeclaration);
-assert_mem_size!(ConstantAliasDeclaration, 112);
+assert_mem_size!(ConstantAliasDeclaration, 120);
 
 #[cfg(test)]
 mod tests {

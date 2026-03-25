@@ -14,7 +14,7 @@ use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
 use crate::model::name::{Name, ParentScope};
 use crate::model::references::{ConstantReference, MethodRef};
-use crate::model::visibility::Visibility;
+use crate::model::visibility::{Visibility, VisibilityDirective, VisibilityDirectiveKind};
 use crate::offset::Offset;
 
 use ruby_prism::{ParseResult, Visit};
@@ -1742,7 +1742,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.visit_call_node_parts(node);
                 }
             }
-            "private" | "protected" | "public" | "module_function" => {
+            "private" | "protected" | "public" => {
                 if let Some(_receiver) = node.receiver() {
                     self.visit_call_node_parts(node);
                     return;
@@ -1752,27 +1752,81 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let offset = Offset::from_prism_location(&node.location());
 
                 if let Some(arguments) = node.arguments() {
-                    // With this case:
-                    //
-                    // ```ruby
-                    // private def foo(bar); end
-                    // ```
-                    //
-                    // We push the new visibility to the stack and then pop it after visiting the arguments so it only affects the method definition.
+                    let args = arguments.arguments();
+                    let is_literal = |arg: &ruby_prism::Node| {
+                        matches!(
+                            arg,
+                            ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. }
+                        )
+                    };
+                    let has_literals = args.iter().any(|arg| is_literal(&arg));
+                    let only_literals = has_literals && args.iter().all(|arg| is_literal(&arg));
+
+                    if only_literals {
+                        // All-literal retroactive form: `private :foo, :bar` or `private "foo"`
+                        let owner_definition_id = self.parent_nesting_id();
+                        let directive_kind = VisibilityDirectiveKind::SetInstanceMethodVisibility(visibility);
+
+                        for argument in &args {
+                            let method_name = match argument {
+                                ruby_prism::Node::SymbolNode { .. } => {
+                                    let symbol = argument.as_symbol_node().unwrap();
+                                    symbol.value_loc().map(|loc| Self::location_to_string(&loc))
+                                }
+                                ruby_prism::Node::StringNode { .. } => {
+                                    let string = argument.as_string_node().unwrap();
+                                    Some(String::from_utf8_lossy(string.unescaped()).to_string())
+                                }
+                                _ => None,
+                            };
+
+                            if let Some(name) = method_name {
+                                let target_name = self.local_graph.intern_string(format!("{name}()"));
+                                self.local_graph.add_visibility_directive(VisibilityDirective::new(
+                                    target_name,
+                                    directive_kind,
+                                    owner_definition_id,
+                                    offset.clone(),
+                                ));
+                            }
+                        }
+                    } else if has_literals {
+                        // Mixed literal + non-literal args: `private :bar, MissingConst`
+                        // Cannot model statically — emit diagnostic, visit all args, no directives.
+                        self.local_graph.add_diagnostic(
+                            Rule::DynamicVisibilityDirective,
+                            offset,
+                            format!("Visibility call `{message}` mixes literal and dynamic arguments"),
+                        );
+                        self.visit_arguments_node(&arguments);
+                    } else {
+                        // Inline/scoped form: `private def foo; end` or `protected attr_reader :bar`
+                        self.visibility_stack
+                            .push(VisibilityModifier::new(visibility, true, offset));
+                        self.visit_arguments_node(&arguments);
+                        self.visibility_stack.pop();
+                    }
+                } else {
+                    // Flag mode: bare `private` affects all subsequent definitions
+                    let last_visibility = self.visibility_stack.last_mut().unwrap();
+                    *last_visibility = VisibilityModifier::new(visibility, false, offset);
+                }
+            }
+            "module_function" => {
+                if let Some(_receiver) = node.receiver() {
+                    self.visit_call_node_parts(node);
+                    return;
+                }
+
+                let visibility = Visibility::from_string(message.as_str());
+                let offset = Offset::from_prism_location(&node.location());
+
+                if let Some(arguments) = node.arguments() {
                     self.visibility_stack
                         .push(VisibilityModifier::new(visibility, true, offset));
                     self.visit_arguments_node(&arguments);
                     self.visibility_stack.pop();
                 } else {
-                    // With this case:
-                    //
-                    // ```ruby
-                    // private
-                    //
-                    // def foo(bar); end
-                    // ```
-                    //
-                    // We replace the current visibility with the new one so it only affects all the subsequent method definitions.
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
                     *last_visibility = VisibilityModifier::new(visibility, false, offset);
                 }
