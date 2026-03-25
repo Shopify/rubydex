@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::sync::LazyLock;
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::Definition;
@@ -12,6 +12,7 @@ use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, String
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
+use crate::model::visibility::VisibilityDirective;
 use crate::stats;
 
 /// An entity whose validity depends on a particular `NameId`.
@@ -57,6 +58,9 @@ pub struct Graph {
     /// Reverse index: for each `NameId`, which definitions, references, and child/nested names depend on it.
     /// Used during invalidation to efficiently find affected entities without scanning the full graph.
     name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
+
+    /// Visibility directives keyed by URI for O(1) incremental removal
+    visibility_directives: IdentityHashMap<UriId, Vec<VisibilityDirective>>,
 }
 
 impl Graph {
@@ -72,6 +76,7 @@ impl Graph {
             method_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
+            visibility_directives: IdentityHashMap::default(),
         }
     }
 
@@ -255,6 +260,21 @@ impl Graph {
         &self.documents
     }
 
+    pub fn add_document_diagnostic(&mut self, uri_id: UriId, diagnostic: Diagnostic) {
+        if let Some(document) = self.documents.get_mut(&uri_id) {
+            document.add_diagnostic(diagnostic);
+        }
+    }
+
+    /// Removes all diagnostics matching `rule` from every document. Used to clear
+    /// resolver-produced diagnostics before re-running resolution without wiping
+    /// parse/index diagnostics.
+    pub fn clear_diagnostics_by_rule(&mut self, rule: Rule) {
+        for document in self.documents.values_mut() {
+            document.retain_diagnostics(|diagnostic| *diagnostic.rule() != rule);
+        }
+    }
+
     /// # Panics
     ///
     /// Panics if the definition is not found
@@ -370,6 +390,11 @@ impl Graph {
     #[must_use]
     pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
         &self.method_references
+    }
+
+    #[must_use]
+    pub fn visibility_directives(&self) -> &IdentityHashMap<UriId, Vec<VisibilityDirective>> {
+        &self.visibility_directives
     }
 
     #[must_use]
@@ -734,14 +759,24 @@ impl Graph {
         let uri_id = UriId::from(uri);
         let document = self.documents.remove(&uri_id)?;
         self.remove_definitions_for_document(&document);
+        self.remove_visibility_directives(uri_id);
         Some(uri_id)
     }
 
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references, name_dependents) =
-            local_graph.into_parts();
+        let (
+            uri_id,
+            document,
+            definitions,
+            strings,
+            names,
+            constant_references,
+            method_references,
+            name_dependents,
+            visibility_directives,
+        ) = local_graph.into_parts();
 
         if self.documents.insert(uri_id, document).is_some() {
             debug_assert!(false, "UriId collision in global graph");
@@ -797,6 +832,13 @@ impl Graph {
                 }
             }
         }
+
+        if !visibility_directives.is_empty() {
+            self.visibility_directives
+                .entry(uri_id)
+                .or_default()
+                .extend(visibility_directives);
+        }
     }
 
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
@@ -808,8 +850,17 @@ impl Graph {
         if let Some(document) = self.documents.remove(&uri_id) {
             self.remove_definitions_for_document(&document);
         }
+        self.remove_visibility_directives(uri_id);
 
         self.extend(other);
+    }
+
+    fn remove_visibility_directives(&mut self, uri_id: UriId) {
+        if let Some(directives) = self.visibility_directives.remove(&uri_id) {
+            for directive in &directives {
+                self.untrack_string(directive.target_name());
+            }
+        }
     }
 
     // Removes all nodes and relationships associated to the given document. This is used to clean up stale data when a

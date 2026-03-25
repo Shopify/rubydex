@@ -3,6 +3,9 @@ use std::{
     hash::BuildHasher,
 };
 
+use crate::diagnostic::{Diagnostic, Rule};
+use crate::offset::Offset;
+
 use crate::model::{
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
@@ -12,8 +15,9 @@ use crate::model::{
     definitions::{Definition, Mixin, Receiver},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId},
     name::{Name, NameRef, ParentScope},
+    visibility::{Visibility, VisibilityDirective, VisibilityDirectiveKind},
 };
 
 pub enum Unit {
@@ -155,6 +159,10 @@ impl<'a> Resolver<'a> {
         }
 
         self.handle_remaining_definitions(other_ids);
+
+        self.graph
+            .clear_diagnostics_by_rule(Rule::InvalidVisibilityDirectiveTarget);
+        self.apply_visibility_operations();
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -275,10 +283,36 @@ impl<'a> Resolver<'a> {
     /// Handle other definitions that don't require resolution, but need to have their declarations and membership created
     #[allow(clippy::too_many_lines)]
     fn handle_remaining_definitions(&mut self, other_ids: Vec<DefinitionId>) {
+        // Baseline visibility: last definition by source offset wins within each URI.
+        // Cross-URI: when multiple URIs define the same method with different flag-mode visibility,
+        // the result is nondeterministic (hash iteration order). Retroactive directives override
+        // this baseline, so the nondeterminism only affects methods with no explicit directive.
+        let mut baseline_visibility: IdentityHashMap<(DeclarationId, UriId), (Offset, Visibility)> =
+            IdentityHashMap::default();
+        let track_baseline = |map: &mut IdentityHashMap<(DeclarationId, UriId), (Offset, Visibility)>,
+                              decl_id: DeclarationId,
+                              uri_id: UriId,
+                              offset: Offset,
+                              vis: Visibility| {
+            match map.entry((decl_id, uri_id)) {
+                Entry::Vacant(entry) => {
+                    entry.insert((offset, vis));
+                }
+                Entry::Occupied(mut entry) => {
+                    if offset > entry.get().0 {
+                        entry.insert((offset, vis));
+                    }
+                }
+            }
+        };
+
         for id in other_ids {
             match self.graph.definitions().get(&id).unwrap() {
                 Definition::Method(method_definition) => {
                     let str_id = *method_definition.str_id();
+                    let visibility = *method_definition.visibility();
+                    let def_offset = method_definition.offset().clone();
+                    let def_uri_id = *method_definition.uri_id();
                     let owner_id = match method_definition.receiver() {
                         Some(Receiver::SelfReceiver(def_id)) => {
                             let Some(&owner_decl_id) = self.graph.definition_id_to_declaration_id(*def_id) else {
@@ -317,36 +351,77 @@ impl<'a> Resolver<'a> {
                         }
                     };
 
-                    self.create_declaration(str_id, id, owner_id, |name| {
+                    let declaration_id = self.create_declaration(str_id, id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
+
+                    track_baseline(
+                        &mut baseline_visibility,
+                        declaration_id,
+                        def_uri_id,
+                        def_offset,
+                        visibility,
+                    );
                 }
                 Definition::AttrAccessor(attr) => {
                     let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
                         continue;
                     };
+                    let visibility = *attr.visibility();
+                    let def_offset = attr.offset().clone();
+                    let def_uri_id = *attr.uri_id();
 
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
+                    let declaration_id = self.create_declaration(*attr.str_id(), id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
+
+                    track_baseline(
+                        &mut baseline_visibility,
+                        declaration_id,
+                        def_uri_id,
+                        def_offset,
+                        visibility,
+                    );
                 }
                 Definition::AttrReader(attr) => {
                     let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
                         continue;
                     };
+                    let visibility = *attr.visibility();
+                    let def_offset = attr.offset().clone();
+                    let def_uri_id = *attr.uri_id();
 
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
+                    let declaration_id = self.create_declaration(*attr.str_id(), id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
+
+                    track_baseline(
+                        &mut baseline_visibility,
+                        declaration_id,
+                        def_uri_id,
+                        def_offset,
+                        visibility,
+                    );
                 }
                 Definition::AttrWriter(attr) => {
                     let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
                         continue;
                     };
+                    let visibility = *attr.visibility();
+                    let def_offset = attr.offset().clone();
+                    let def_uri_id = *attr.uri_id();
 
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
+                    let declaration_id = self.create_declaration(*attr.str_id(), id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
+
+                    track_baseline(
+                        &mut baseline_visibility,
+                        declaration_id,
+                        def_uri_id,
+                        def_offset,
+                        visibility,
+                    );
                 }
                 Definition::GlobalVariable(var) => {
                     let owner_id = *OBJECT_ID;
@@ -555,6 +630,12 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+
+        for ((declaration_id, _uri_id), (_offset, visibility)) in baseline_visibility {
+            if let Some(decl) = self.graph.declarations_mut().get_mut(&declaration_id) {
+                decl.set_visibility(visibility);
+            }
+        }
     }
 
     fn create_declaration<F>(
@@ -563,7 +644,8 @@ impl<'a> Resolver<'a> {
         definition_id: DefinitionId,
         owner_id: DeclarationId,
         declaration_builder: F,
-    ) where
+    ) -> DeclarationId
+    where
         F: FnOnce(String) -> Declaration,
     {
         let fully_qualified_name = {
@@ -576,6 +658,7 @@ impl<'a> Resolver<'a> {
             .graph
             .add_declaration(definition_id, fully_qualified_name, declaration_builder);
         self.graph.add_member(&owner_id, declaration_id, str_id);
+        declaration_id
     }
 
     /// Resolves owner for class variables, bypassing singleton classes. Returns `None` if the owner can't be
@@ -1765,6 +1848,128 @@ impl<'a> Resolver<'a> {
             Definition::Module(module) => Some(module.mixins().to_vec()),
             _ => None,
         }
+    }
+
+    /// Maps a directive's owning definition to its declaration. Returns `None` when unresolvable.
+    fn resolve_directive_owner(&self, directive: &VisibilityDirective) -> Option<DeclarationId> {
+        directive.owner_definition_id().map_or(Some(*OBJECT_ID), |def_id| {
+            self.graph.definition_id_to_declaration_id(def_id).copied()
+        })
+    }
+
+    /// Replays visibility directives in deterministic URI+offset order after all declarations
+    /// exist. Currently handles `SetInstanceMethodVisibility` only.
+    fn apply_visibility_operations(&mut self) {
+        // Clone because we mutate the graph during replay.
+        let mut all_directives: Vec<(UriId, VisibilityDirective)> = self
+            .graph
+            .visibility_directives()
+            .iter()
+            .flat_map(|(&uri_id, directives)| directives.iter().map(move |directive| (uri_id, directive.clone())))
+            .collect();
+
+        all_directives.sort_by(|(uri_a, directive_a), (uri_b, directive_b)| {
+            uri_a
+                .cmp(uri_b)
+                .then_with(|| directive_a.offset().cmp(directive_b.offset()))
+        });
+
+        for (uri_id, directive) in &all_directives {
+            let Some(owner_decl_id) = self.resolve_directive_owner(directive) else {
+                continue;
+            };
+
+            let VisibilityDirectiveKind::SetInstanceMethodVisibility(visibility) = directive.kind();
+            self.apply_instance_method_visibility(
+                owner_decl_id,
+                directive.target_name(),
+                visibility,
+                *uri_id,
+                directive.offset(),
+            );
+        }
+    }
+
+    /// Mutates a local instance method's visibility. Same-URI only: requires a definition
+    /// preceding the directive's offset. Cross-URI directives are skipped — cross-file
+    /// ordering is nondeterministic and will emit diagnostics once conflict detection lands.
+    fn apply_instance_method_visibility(
+        &mut self,
+        owner_decl_id: DeclarationId,
+        target_name: StringId,
+        visibility: Visibility,
+        directive_uri: UriId,
+        directive_offset: &Offset,
+    ) {
+        let target_display_name = self
+            .graph
+            .strings()
+            .get(&target_name)
+            .map_or_else(|| "<unknown>".to_string(), |s| s.as_str().to_string());
+
+        let member_decl_id = self
+            .graph
+            .declarations()
+            .get(&owner_decl_id)
+            .and_then(|decl| decl.as_namespace())
+            .and_then(|ns| ns.member(&target_name))
+            .copied();
+
+        let Some(member_id) = member_decl_id else {
+            // Not found locally — emit diagnostic. TODO: walk ancestors for inherited targets.
+            self.emit_directive_diagnostic(
+                directive_uri,
+                directive_offset,
+                format!("Method `{target_display_name}` does not exist on this class"),
+            );
+            return;
+        };
+
+        // Collect definition URIs and same-URI offsets in one pass. If the declaration has
+        // definitions from multiple URIs, skip — cross-URI behavior requires conflict detection.
+        let mut seen_uris: IdentityHashSet<UriId> = IdentityHashSet::default();
+        let mut same_uri_offsets: Vec<&Offset> = Vec::new();
+        if let Some(decl) = self.graph.declarations().get(&member_id) {
+            for def_id in decl.definitions() {
+                if let Some(def) = self.graph.definitions().get(def_id) {
+                    seen_uris.insert(*def.uri_id());
+                    if *def.uri_id() == directive_uri {
+                        same_uri_offsets.push(def.offset());
+                    }
+                }
+            }
+        }
+
+        if seen_uris.len() > 1 {
+            return;
+        }
+
+        let has_preceding = same_uri_offsets.iter().any(|off| *off < directive_offset);
+        let has_later_redefinition = same_uri_offsets.iter().any(|off| *off > directive_offset);
+
+        if !has_preceding {
+            if !same_uri_offsets.is_empty() {
+                // The method has definitions in this URI, but all appear after the directive.
+                // In Ruby, this would raise NameError at runtime.
+                self.emit_directive_diagnostic(
+                    directive_uri,
+                    directive_offset,
+                    format!("Method `{target_display_name}` is not defined before this visibility directive"),
+                );
+            }
+            // If same_uri_offsets is empty, the method was defined in another URI.
+            // Cross-URI directive behavior is deferred — silently skip.
+            return;
+        }
+
+        if !has_later_redefinition && let Some(decl) = self.graph.declarations_mut().get_mut(&member_id) {
+            decl.set_visibility(visibility);
+        }
+    }
+
+    fn emit_directive_diagnostic(&mut self, uri_id: UriId, offset: &Offset, message: String) {
+        let diagnostic = Diagnostic::new(Rule::InvalidVisibilityDirectiveTarget, uri_id, offset.clone(), message);
+        self.graph.add_document_diagnostic(uri_id, diagnostic);
     }
 }
 
@@ -5899,10 +6104,13 @@ mod todo_tests {
 
 #[cfg(test)]
 mod visibility {
+    use crate::model::visibility::Visibility;
     use crate::test_utils::GraphTest;
+    use crate::{assert_diagnostics_eq, assert_visibility_eq};
+
+    // --- Retroactive instance method visibility (local) ---
 
     #[test]
-    #[ignore = "not yet implemented"]
     fn making_method_private() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
@@ -5917,11 +6125,10 @@ mod visibility {
         });
         context.resolve();
 
-        // changing the visibility of an existing method modifies the visibility of the method
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
     }
 
     #[test]
-    #[ignore = "not yet implemented"]
     fn making_method_public() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
@@ -5936,11 +6143,10 @@ mod visibility {
         });
         context.resolve();
 
-        // changing the visibility of an existing method modifies the visibility of the method
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
     }
 
     #[test]
-    #[ignore = "not yet implemented"]
     fn making_method_protected() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
@@ -5955,8 +6161,191 @@ mod visibility {
         });
         context.resolve();
 
-        // changing the visibility of an existing method modifies the visibility of the method
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Protected);
     }
+
+    #[test]
+    fn multiple_symbols_in_one_call() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              def baz; end
+
+              private :bar, :baz
+            end
+            "
+        });
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#baz()", Visibility::Private);
+    }
+
+    #[test]
+    fn last_directive_wins() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+
+              private :bar
+              public :bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn directive_overrides_flag_mode() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              private
+
+              def bar; end
+
+              public :bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn flag_mode_visibility_baseline() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def public_method; end
+
+              private
+
+              def private_method; end
+
+              protected
+
+              def protected_method; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo#public_method()", Visibility::Public);
+        assert_visibility_eq!(context, "Foo#private_method()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#protected_method()", Visibility::Protected);
+    }
+
+    #[test]
+    fn inline_private_def_visibility() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              private def bar; end
+              def baz; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#baz()", Visibility::Public);
+    }
+
+    #[test]
+    fn private_nonexistent_method_emits_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+
+              private :nonexistent
+            end
+            "
+        });
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+        assert_diagnostics_eq!(
+            &context,
+            ["invalid-visibility-directive-target: Method `nonexistent()` does not exist on this class (4:3-4:23)"]
+        );
+    }
+
+    #[test]
+    fn mixed_literal_and_dynamic_args_emits_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+
+              private :bar, MissingConst
+            end
+            "
+        });
+        context.resolve();
+
+        // Mixed calls are diagnostic-only — no directives enqueued, bar stays public.
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+        assert_diagnostics_eq!(
+            &context,
+            ["dynamic-visibility-directive: Visibility call `private` mixes literal and dynamic arguments (4:3-4:29)"]
+        );
+    }
+
+    #[test]
+    fn mixed_literal_and_constant_args_emits_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              NAMES = [:bar]
+              def bar; end
+
+              private :bar, NAMES
+            end
+            "
+        });
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+        assert_diagnostics_eq!(
+            &context,
+            ["dynamic-visibility-directive: Visibility call `private` mixes literal and dynamic arguments (5:3-5:22)"]
+        );
+    }
+
+    #[test]
+    fn default_declaration_visibility_is_public() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              CONST = 1
+            end
+            "
+        });
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+        assert_visibility_eq!(context, "Foo::CONST", Visibility::Public);
+        assert_visibility_eq!(context, "Foo", Visibility::Public);
+    }
+
+    // --- Retroactive instance method visibility (inherited) ---
 
     #[test]
     #[ignore = "not yet implemented"]
@@ -6001,6 +6390,8 @@ mod visibility {
         // changing the visibility of an inherited method creates a new method entry on the child
         // with the modified visibility, but does not change the original one
     }
+
+    // --- Class method visibility ---
 
     #[test]
     #[ignore = "not yet implemented"]
@@ -6084,6 +6475,8 @@ mod visibility {
         // changing the visibility of an inherited class method creates a new method entry on the
         // child's singleton class with the modified visibility, but does not change the original one
     }
+
+    // --- Constant visibility ---
 
     #[test]
     #[ignore = "not yet implemented"]
@@ -6255,6 +6648,8 @@ mod visibility {
         // This results in a diagnostic saying FOO does not exist
     }
 
+    // --- Retroactive module_function ---
+
     #[test]
     #[ignore = "not yet implemented"]
     fn make_module_function_through_inheritance() {
@@ -6277,5 +6672,149 @@ mod visibility {
 
         // module_function :bar makes the instance method private and creates a public singleton
         // method on Baz. The original Foo#bar is unchanged.
+    }
+
+    // --- Reindex and delete: visibility directive lifecycle ---
+
+    #[test]
+    fn reindexing_clears_old_visibility_directives() {
+        let mut context = GraphTest::new();
+
+        // First index: foo is private via retroactive directive
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              private :bar
+            end
+            "
+        });
+        context.resolve();
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+
+        // Re-index same URI without the directive — bar should be public again
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+            end
+            "
+        });
+        context.resolve();
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn deleting_document_clears_visibility_directives() {
+        let mut context = GraphTest::new();
+
+        // Index a single file with method + directive
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              private :bar
+            end
+            "
+        });
+        context.resolve();
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+
+        // Delete the document entirely and re-add without the directive
+        context.delete_uri("file:///foo.rb");
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+            end
+            "
+        });
+        context.resolve();
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn directive_before_definition_emits_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              private :bar
+              def bar; end
+            end
+            "
+        });
+        context.resolve();
+
+        // In Ruby, `private :bar` before `def bar` raises NameError at runtime.
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+        assert_diagnostics_eq!(
+            &context,
+            [
+                "invalid-visibility-directive-target: Method `bar()` is not defined before this visibility directive (2:3-2:15)"
+            ]
+        );
+    }
+
+    #[test]
+    fn redefinition_after_directive_resets_visibility() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              private :bar
+              def bar; end
+            end
+            "
+        });
+        context.resolve();
+
+        // The later `def bar` supersedes the directive — bar is public again.
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn mixed_uri_definitions_skip_directive() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class Foo
+              def bar; end
+            end
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            r"
+            class Foo
+              def bar; end
+              private :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // The declaration has definitions from two URIs. Retroactive directives are not
+        // applied to shared declarations — cross-URI behavior requires conflict detection.
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn double_resolve_does_not_duplicate_diagnostics() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              private :nonexistent
+            end
+            "
+        });
+        context.resolve();
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            ["invalid-visibility-directive-target: Method `nonexistent()` does not exist on this class (2:3-2:23)"]
+        );
     }
 }

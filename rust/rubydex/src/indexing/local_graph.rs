@@ -9,6 +9,7 @@ use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
 use crate::model::name::{Name, NameRef};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
+use crate::model::visibility::VisibilityDirective;
 use crate::offset::Offset;
 
 type LocalGraphParts = (
@@ -20,6 +21,7 @@ type LocalGraphParts = (
     IdentityHashMap<ReferenceId, ConstantReference>,
     IdentityHashMap<ReferenceId, MethodRef>,
     IdentityHashMap<NameId, Vec<NameDependent>>,
+    Vec<VisibilityDirective>,
 );
 
 #[derive(Debug)]
@@ -32,6 +34,7 @@ pub struct LocalGraph {
     constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
     method_references: IdentityHashMap<ReferenceId, MethodRef>,
     name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
+    visibility_directives: Vec<VisibilityDirective>,
 }
 
 impl LocalGraph {
@@ -46,6 +49,7 @@ impl LocalGraph {
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
             name_dependents: IdentityHashMap::default(),
+            visibility_directives: Vec::new(),
         }
     }
 
@@ -206,6 +210,12 @@ impl LocalGraph {
         &self.name_dependents
     }
 
+    // Visibility directives
+
+    pub fn add_visibility_directive(&mut self, directive: VisibilityDirective) {
+        self.visibility_directives.push(directive);
+    }
+
     // Into parts
 
     #[must_use]
@@ -219,6 +229,7 @@ impl LocalGraph {
             self.constant_references,
             self.method_references,
             self.name_dependents,
+            self.visibility_directives,
         )
     }
 }
