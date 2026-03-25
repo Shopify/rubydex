@@ -175,7 +175,7 @@ macro_rules! assert_declaration_kind_eq {
             .get(&$crate::model::ids::DeclarationId::from($declaration_name))
             .unwrap();
         assert_eq!(
-            declaration.kind(),
+            declaration.kind().to_string(),
             $expected_kind,
             "Expected declaration `{}` to be a {}, got {}",
             $declaration_name,

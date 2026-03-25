@@ -105,4 +105,10 @@ rules! {
     TopLevelMixinSelf;
 
     // Resolution
+    KindRedefinition;
+    ParentRedefinition;
+    NonClassSuperclass;
+    CircularDependency;
+    NonModuleMixin;
+    UnresolvedConstantReference;
 }
