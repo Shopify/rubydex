@@ -511,6 +511,44 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_find_member_ignores_prepend_members_if_only_inherited_is_true
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Prepended
+          def initialize
+            @name = "John"
+          end
+
+          def bar; end
+        end
+
+        module Included
+          def initialize
+            @name = "John"
+          end
+        end
+
+        class Foo
+          prepend Prepended
+          include Included
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      foo = graph["Foo"]
+      decl = foo.find_member("@name", only_inherited: true)
+      assert_equal("Included\#@name", decl.name)
+
+      decl = foo.find_member("initialize()", only_inherited: true)
+      assert_equal("Included#initialize()", decl.name)
+
+      assert_nil(foo.find_member("bar()", only_inherited: true))
+    end
+  end
+
   def test_find_member_returns_members_in_main_namespace
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
