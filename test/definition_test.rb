@@ -297,85 +297,101 @@ class DefinitionTest < Minitest::Test
   end
 
   def test_method_definition_signatures_from_rbs
-    graph = Rubydex::Graph.new
-    graph.index_source("file:///foo.rbs", <<~RBS, "rbs")
-      class Foo
-        def bar: (String a, ?String b, *String c, String d, name: String, ?mode: String, **String opts) { (String) -> void } -> void
-      end
-    RBS
-    graph.resolve
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def bar: (String a, ?String b, *String c, String d, name: String, ?mode: String, **String opts) { (String) -> void } -> void
+        end
+      RBS
 
-    method_def = graph["Foo#bar()"].definitions.first
-    refute_nil(method_def)
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rbs"))
+      graph.resolve
 
-    signatures = method_def.signatures
-    assert_equal(1, signatures.length)
+      method_def = graph["Foo#bar()"].definitions.first
+      refute_nil(method_def)
 
-    params = signatures.first.parameters
-    assert_equal(8, params.length)
+      signatures = method_def.signatures
+      assert_equal(1, signatures.length)
 
-    assert_equal([:req, :a], params[0][0..1])
-    assert_equal("/foo.rbs:2:20-2:21", params[0][2].to_display.to_s) # a
-    assert_equal([:opt, :b], params[1][0..1])
-    assert_equal("/foo.rbs:2:31-2:32", params[1][2].to_display.to_s) # b
-    assert_equal([:rest, :c], params[2][0..1])
-    assert_equal("/foo.rbs:2:42-2:43", params[2][2].to_display.to_s) # c
-    assert_equal([:req, :d], params[3][0..1])
-    assert_equal("/foo.rbs:2:52-2:53", params[3][2].to_display.to_s) # d
-    assert_equal([:keyreq, :name], params[4][0..1])
-    assert_equal("/foo.rbs:2:55-2:60", params[4][2].to_display.to_s) # name:
-    assert_equal([:key, :mode], params[5][0..1])
-    assert_equal("/foo.rbs:2:70-2:75", params[5][2].to_display.to_s) # mode:
-    assert_equal([:keyrest, :opts], params[6][0..1])
-    assert_equal("/foo.rbs:2:93-2:97", params[6][2].to_display.to_s) # opts
-    assert_equal([:block, :block], params[7][0..1])
-    assert_equal("/foo.rbs:2:99-2:119", params[7][2].to_display.to_s) # { (String) -> void }
+      params = signatures.first.parameters
+      assert_equal(8, params.length)
+
+      path = context.absolute_path_to("foo.rbs")
+
+      assert_equal([:req, :a], params[0][0..1])
+      assert_equal("#{path}:2:20-2:21", params[0][2].to_display.to_s) # a
+      assert_equal([:opt, :b], params[1][0..1])
+      assert_equal("#{path}:2:31-2:32", params[1][2].to_display.to_s) # b
+      assert_equal([:rest, :c], params[2][0..1])
+      assert_equal("#{path}:2:42-2:43", params[2][2].to_display.to_s) # c
+      assert_equal([:req, :d], params[3][0..1])
+      assert_equal("#{path}:2:52-2:53", params[3][2].to_display.to_s) # d
+      assert_equal([:keyreq, :name], params[4][0..1])
+      assert_equal("#{path}:2:55-2:60", params[4][2].to_display.to_s) # name:
+      assert_equal([:key, :mode], params[5][0..1])
+      assert_equal("#{path}:2:70-2:75", params[5][2].to_display.to_s) # mode:
+      assert_equal([:keyrest, :opts], params[6][0..1])
+      assert_equal("#{path}:2:93-2:97", params[6][2].to_display.to_s) # opts
+      assert_equal([:block, :block], params[7][0..1])
+      assert_equal("#{path}:2:99-2:119", params[7][2].to_display.to_s) # { (String) -> void }
+    end
   end
 
   def test_method_definition_signatures_from_rbs_with_untyped_parameters
-    graph = Rubydex::Graph.new
-    graph.index_source("file:///foo.rbs", <<~RBS, "rbs")
-      class Foo
-        def baz: (?) -> void
-      end
-    RBS
-    graph.resolve
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def baz: (?) -> void
+        end
+      RBS
 
-    method_def = graph["Foo#baz()"].definitions.first
-    refute_nil(method_def)
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rbs"))
+      graph.resolve
 
-    signatures = method_def.signatures
-    assert_equal(1, signatures.length)
-    assert_empty(signatures.first.parameters)
+      method_def = graph["Foo#baz()"].definitions.first
+      refute_nil(method_def)
+
+      signatures = method_def.signatures
+      assert_equal(1, signatures.length)
+      assert_empty(signatures.first.parameters)
+    end
   end
 
   def test_method_definition_signatures_from_rbs_with_overloads
-    graph = Rubydex::Graph.new
-    graph.index_source("file:///foo.rbs", <<~RBS, "rbs")
-      class Foo
-        def bar: (String name) -> void
-               | (Integer id, ?Symbol mode) -> String
-      end
-    RBS
-    graph.resolve
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def bar: (String name) -> void
+                 | (Integer id, ?Symbol mode) -> String
+        end
+      RBS
 
-    method_def = graph["Foo#bar()"].definitions.first
-    refute_nil(method_def)
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rbs"))
+      graph.resolve
 
-    signatures = method_def.signatures
-    assert_equal(2, signatures.length)
+      method_def = graph["Foo#bar()"].definitions.first
+      refute_nil(method_def)
 
-    params0 = signatures[0].parameters
-    assert_equal(1, params0.length)
-    assert_equal([:req, :name], params0[0][0..1])
-    assert_equal("/foo.rbs:2:20-2:24", params0[0][2].to_display.to_s) # name
+      signatures = method_def.signatures
+      assert_equal(2, signatures.length)
 
-    params1 = signatures[1].parameters
-    assert_equal(2, params1.length)
-    assert_equal([:req, :id], params1[0][0..1])
-    assert_equal("/foo.rbs:3:21-3:23", params1[0][2].to_display.to_s) # id
-    assert_equal([:opt, :mode], params1[1][0..1])
-    assert_equal("/foo.rbs:3:33-3:37", params1[1][2].to_display.to_s) # mode
+      path = context.absolute_path_to("foo.rbs")
+
+      params0 = signatures[0].parameters
+      assert_equal(1, params0.length)
+      assert_equal([:req, :name], params0[0][0..1])
+      assert_equal("#{path}:2:20-2:24", params0[0][2].to_display.to_s) # name
+
+      params1 = signatures[1].parameters
+      assert_equal(2, params1.length)
+      assert_equal([:req, :id], params1[0][0..1])
+      assert_equal("#{path}:3:21-3:23", params1[0][2].to_display.to_s) # id
+      assert_equal([:opt, :mode], params1[1][0..1])
+      assert_equal("#{path}:3:33-3:37", params1[1][2].to_display.to_s) # mode
+    end
   end
 
   private
