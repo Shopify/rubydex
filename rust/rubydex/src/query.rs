@@ -1746,7 +1746,7 @@ mod tests {
         assert_eq!(2, defs.len());
 
         let mut texts: Vec<&str> = defs.iter().map(|d| source_at(source, d.offset())).collect();
-        texts.sort();
+        texts.sort_unstable();
         assert_eq!(vec!["def bar(a); end", "def bar(a, b); end"], texts);
     }
 
@@ -1778,14 +1778,14 @@ mod tests {
     #[test]
     fn test_method_definitions_from_rbs_alias() {
         let mut context = GraphTest::new();
-        let rb_source = "class Foo\n  def bar(a, b); end\nend\n";
+        let ruby_source = "class Foo\n  def bar(a, b); end\nend\n";
         let rbs_source = "class Foo\n  alias baz bar\nend\n";
-        context.index_uri("file:///foo.rb", rb_source);
+        context.index_uri("file:///foo.rb", ruby_source);
         context.index_rbs_uri("file:///foo.rbs", rbs_source);
         context.resolve();
 
         let defs = method_definitions(context.graph(), DeclarationId::from("Foo#baz()"));
         assert_eq!(1, defs.len());
-        assert_eq!("def bar(a, b); end", source_at(rb_source, defs[0].offset()));
+        assert_eq!("def bar(a, b); end", source_at(ruby_source, defs[0].offset()));
     }
 }
