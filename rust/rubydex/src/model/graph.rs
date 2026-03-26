@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, Declaration, Namespace};
+use crate::model::declaration::{Ancestor, ClassDeclaration, Declaration, Namespace};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
@@ -87,8 +87,33 @@ pub struct Graph {
 impl Graph {
     #[must_use]
     pub fn new() -> Self {
+        let mut declarations = IdentityHashMap::default();
+
+        // Built-in declarations that always exist in the Ruby object model
+        declarations.insert(
+            *OBJECT_ID,
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Object".to_string(),
+                *OBJECT_ID,
+            )))),
+        );
+        declarations.insert(
+            *MODULE_ID,
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Module".to_string(),
+                *OBJECT_ID,
+            )))),
+        );
+        declarations.insert(
+            *CLASS_ID,
+            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
+                "Class".to_string(),
+                *OBJECT_ID,
+            )))),
+        );
+
         Self {
-            declarations: IdentityHashMap::default(),
+            declarations,
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
             strings: IdentityHashMap::default(),
@@ -207,18 +232,6 @@ impl Graph {
         self.declarations
             .get(declaration_id)
             .is_some_and(|decl| decl.as_namespace().is_some())
-    }
-
-    // TODO: this method should not exist. Once handling incremental changes is fully implemented, it should be removed
-    pub fn clear_declarations(&mut self) {
-        self.declarations.clear();
-
-        // Unresolve all names so that we don't end up with constants that are pointing to non-existing declarations
-        // after a second round of resolution
-        let name_ids: Vec<_> = self.names.keys().copied().collect();
-        for id in name_ids {
-            self.unresolve_name(id);
-        }
     }
 
     // Returns an immutable reference to the definitions map
@@ -864,9 +877,9 @@ impl Graph {
         let uri_id = other.uri_id();
         let old_document = self.documents.remove(&uri_id);
 
-        // Skip invalidation when the graph has no resolved state yet (boot indexing)
+        // Skip invalidation during boot indexing (no documents have been resolved yet)
         // or when the document is brand new (no old data to invalidate against).
-        if old_document.is_some() || !self.declarations.is_empty() {
+        if old_document.is_some() || !self.documents.is_empty() {
             self.invalidate(old_document.as_ref(), Some(&other));
             if let Some(doc) = &old_document {
                 self.remove_document_data(doc);
@@ -2233,7 +2246,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod invalidation_tests {
+mod incremental_resolution_tests {
     use crate::model::name::NameRef;
     use crate::test_utils::GraphTest;
     use crate::{
@@ -2299,6 +2312,15 @@ mod invalidation_tests {
         assert_constant_reference_unresolved!(context, "Bar");
         assert_declaration_references_count_eq!(context, "Foo::Bar", 0);
         assert_ancestors_eq!(context, "Foo::Bar::Baz::Qux", NO_ANCESTORS);
+
+        context.resolve();
+
+        // Bar now resolves to the new Foo::Bar::Baz::Bar (shadowing Foo::Bar)
+        assert_ancestors_eq!(
+            context,
+            "Foo::Bar::Baz::Qux",
+            ["Foo::Bar::Baz::Qux", "Foo::Bar::Baz::Bar", "Object"]
+        );
     }
 
     #[test]
@@ -2336,6 +2358,12 @@ mod invalidation_tests {
         assert_constant_reference_unresolved!(context, "CONST");
         assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
         assert_ancestors_eq!(context, "Bar", NO_ANCESTORS);
+
+        context.resolve();
+
+        // Bar no longer includes Foo, so CONST is unresolvable
+        assert_constant_reference_unresolved!(context, "CONST");
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object"]);
     }
 
     #[test]
@@ -2368,6 +2396,11 @@ mod invalidation_tests {
 
         context.delete_uri("file:///bar.rb");
 
+        assert_no_constant_alias_target!(context, "Bar::ALIAS_CONST");
+
+        context.resolve();
+
+        // Without the include, ALIAS_CONST = CONST can't resolve CONST through Foo
         assert_no_constant_alias_target!(context, "Bar::ALIAS_CONST");
     }
 
@@ -2413,6 +2446,11 @@ mod invalidation_tests {
 
         assert_constant_reference_unresolved!(context, "CONST");
         assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
+
+        context.resolve();
+
+        // CONST now resolves to Bar::CONST (prepended, so it's higher in the chain than Foo)
+        assert_constant_reference_to!(context, "Bar::CONST", "file:///foo2.rb:5:3-5:8");
     }
 
     #[test]
@@ -2451,49 +2489,62 @@ mod invalidation_tests {
         );
 
         assert_constant_reference_unresolved!(context, "DEEP_CONST");
+
+        context.resolve();
+
+        // C now also prepends B. DEEP_CONST still resolves through the chain.
+        assert_constant_reference_to!(context, "A::DEEP_CONST", "file:///a.rb:12:3-12:13");
     }
 
     #[test]
-    fn invalidation_cascade_from_reference_to_declaration() {
+    fn new_lexical_definition_takes_priority_over_inherited_one() {
         let mut context = GraphTest::new();
 
+        // Foo::Bar::Baz exists via nesting
         context.index_uri(
-            "file:///foo.rb",
+            "file:///inheritance.rb",
             r"
             module Foo
               module Bar
-                module Baz
-                end
+                module Baz; end
               end
             end
             ",
         );
+        // Qux includes Foo::Bar, so Baz is available through inheritance.
+        // `class Baz::Zip` resolves Baz through the ancestor chain to Foo::Bar::Baz.
         context.index_uri(
-            "file:///foo2.rb",
+            "file:///main.rb",
             r"
-            module Foo
-              include Bar
+            module Qux
+              include Foo::Bar
 
-              class Baz::Qux
-              end
+              class Baz::Zip; end
             end
             ",
         );
         context.resolve();
 
-        assert_declaration_exists!(context, "Foo::Bar::Baz::Qux");
+        // Baz in `class Baz::Zip` resolves to Foo::Bar::Baz (via inheritance),
+        // so Zip becomes Foo::Bar::Baz::Zip
+        assert_constant_reference_to!(context, "Foo::Bar::Baz", "file:///main.rb:4:9-4:12");
+        assert_declaration_exists!(context, "Foo::Bar::Baz::Zip");
 
+        // Add Qux::Baz — lexical scope should now take priority over inheritance
         context.index_uri(
-            "file:///foo3.rb",
+            "file:///new.rb",
             r"
-            module Foo
-              module Baz
-              end
+            module Qux
+              class Baz; end
             end
             ",
         );
+        context.resolve();
 
-        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz::Qux");
+        // Baz now resolves to Qux::Baz (lexical scope wins over inheritance),
+        // so Zip moves to Qux::Baz::Zip
+        assert_constant_reference_to!(context, "Qux::Baz", "file:///main.rb:4:9-4:12");
+        assert_declaration_exists!(context, "Qux::Baz::Zip");
     }
 
     #[test]
@@ -2501,7 +2552,7 @@ mod invalidation_tests {
         let mut context = GraphTest::new();
 
         context.index_uri("file:///foo.rb", "class Foo; end");
-        context.index_uri("file:///bar.rb", "module Bar; end");
+        context.index_uri("file:///bar.rb", "class Bar; end");
         context.resolve();
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Object"]);
@@ -2516,6 +2567,10 @@ mod invalidation_tests {
         );
 
         assert_ancestors_eq!(context, "Foo", NO_ANCESTORS);
+
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
     }
 
     #[test]
@@ -2558,6 +2613,13 @@ mod invalidation_tests {
 
         assert_ancestors_eq!(context, "A", NO_ANCESTORS);
         assert_ancestors_eq!(context, "B", NO_ANCESTORS);
+
+        context.resolve();
+
+        // M is gone, but `include M` still exists in the source — M is Partial (unresolvable)
+        assert_ancestors_eq!(context, "A", ["A", Partial("M"), "Object"]);
+        assert_ancestors_eq!(context, "B", ["B", Partial("M"), "Object"]);
+        assert_constant_reference_unresolved!(context, "CONST");
     }
 
     #[test]
@@ -2741,7 +2803,7 @@ mod invalidation_tests {
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:4:5-4:10");
 
-        // Add a new constant to Foo that shadows — update the file
+        // Update the file — reference still resolves to Foo::CONST
         context.index_uri(
             "file:///foo.rb",
             r"
@@ -2755,7 +2817,6 @@ mod invalidation_tests {
         );
         context.resolve();
 
-        // Reference still resolves to Foo::CONST (updated value, same declaration)
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:4:5-4:10");
     }
 
@@ -2796,6 +2857,14 @@ mod invalidation_tests {
         context.delete_uri("file:///foo.rb");
 
         // After invalidation but before re-resolve: Bar's name should be unresolved
+        assert_constant_reference_unresolved!(context, "CONST");
+
+        context.resolve();
+
+        // Foo still exists (const.rb defines it). Bar rebuilds as Foo::Bar.
+        // CONST is unresolvable because compact Foo::Bar has no lexical access to Foo's constants.
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::Bar");
         assert_constant_reference_unresolved!(context, "CONST");
     }
 
@@ -2850,22 +2919,6 @@ mod invalidation_tests {
         assert_constant_reference_to!(context, "Bar::CONST", "file:///foo2.rb:4:3-4:8");
         assert_declaration_references_count_eq!(context, "Bar::CONST", 1);
         assert_declaration_references_count_eq!(context, "Foo::CONST", 0);
-    }
-
-    #[test]
-    fn multiple_definitions_one_removed_declaration_survives() {
-        let mut context = GraphTest::new();
-
-        context.index_uri("file:///a.rb", "module Foo; end");
-        context.index_uri("file:///b.rb", "module Foo; end");
-        context.resolve();
-
-        assert_declaration_exists!(context, "Foo");
-        assert_eq!(context.graph().get("Foo").unwrap().len(), 2);
-
-        context.delete_uri("file:///a.rb");
-        assert_declaration_exists!(context, "Foo");
-        assert_eq!(context.graph().get("Foo").unwrap().len(), 1);
     }
 
     #[test]
@@ -3366,4 +3419,138 @@ mod invalidation_tests {
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
     }
-} // mod invalidation_tests
+    #[test]
+    fn adding_mixin_to_multi_definition_declaration_updates_ancestors() {
+        let mut context = GraphTest::new();
+
+        // Foo is defined in two files
+        context.index_uri(
+            "file:///foo1.rb",
+            r"
+            class Foo
+              def bar; end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            r"
+            class Foo
+              def baz; end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module M
+              CONST = 1
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object"]);
+
+        // Re-index foo2.rb to add a mixin. Foo survives (foo1.rb still defines it)
+        // and enters the update path, pushing Unit::Ancestors.
+        context.index_uri(
+            "file:///foo2.rb",
+            r"
+            class Foo
+              include M
+              def baz; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object"]);
+    }
+    /// Verifies that incremental resolution produces identical results to a fresh
+    /// full resolution by building the same final state through two different paths.
+    #[test]
+    fn incremental_resolution_matches_fresh_resolution() {
+        // Path 1: Incremental — index, resolve, modify, resolve again
+        let mut incremental = GraphTest::new();
+        incremental.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+            class Bar
+              include Foo
+              CONST
+            end
+            ",
+        );
+        incremental.index_uri(
+            "file:///baz.rb",
+            r"
+            module Baz
+              CONST = 2
+            end
+            ",
+        );
+        incremental.resolve();
+
+        // Modify: switch include from Foo to Baz
+        incremental.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+            class Bar
+              include Baz
+              CONST
+            end
+            ",
+        );
+        incremental.resolve();
+
+        // Path 2: Fresh — index the final state directly, resolve once
+        let mut fresh = GraphTest::new();
+        fresh.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              CONST = 1
+            end
+            class Bar
+              include Baz
+              CONST
+            end
+            ",
+        );
+        fresh.index_uri(
+            "file:///baz.rb",
+            r"
+            module Baz
+              CONST = 2
+            end
+            ",
+        );
+        fresh.resolve();
+
+        // Compare: both paths should produce identical resolved state
+        assert_ancestors_eq!(incremental, "Bar", ["Bar", "Baz", "Object"]);
+        assert_ancestors_eq!(fresh, "Bar", ["Bar", "Baz", "Object"]);
+
+        assert_constant_reference_to!(incremental, "Baz::CONST", "file:///foo.rb:6:3-6:8");
+        assert_constant_reference_to!(fresh, "Baz::CONST", "file:///foo.rb:6:3-6:8");
+
+        assert_members_eq!(incremental, "Foo", ["CONST"]);
+        assert_members_eq!(fresh, "Foo", ["CONST"]);
+
+        assert_members_eq!(incremental, "Baz", ["CONST"]);
+        assert_members_eq!(fresh, "Baz", ["CONST"]);
+
+        // Verify stale references are cleaned up
+        assert_declaration_references_count_eq!(incremental, "Foo::CONST", 0);
+        assert_declaration_references_count_eq!(fresh, "Foo::CONST", 0);
+        assert_declaration_references_count_eq!(incremental, "Baz::CONST", 1);
+        assert_declaration_references_count_eq!(fresh, "Baz::CONST", 1);
+    }
+} // mod incremental_resolution_tests
