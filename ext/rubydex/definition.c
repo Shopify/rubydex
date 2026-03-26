@@ -18,6 +18,7 @@ VALUE cModuleDefinition;
 VALUE cConstantDefinition;
 VALUE cConstantAliasDefinition;
 VALUE cConstantVisibilityDefinition;
+VALUE cMethodVisibilityDefinition;
 VALUE cMethodDefinition;
 VALUE cAttrAccessorDefinition;
 VALUE cAttrReaderDefinition;
@@ -43,6 +44,8 @@ VALUE rdxi_definition_class_for_kind(DefinitionKind kind) {
         return cConstantAliasDefinition;
     case DefinitionKind_ConstantVisibility:
         return cConstantVisibilityDefinition;
+    case DefinitionKind_MethodVisibility:
+        return cMethodVisibilityDefinition;
     case DefinitionKind_Method:
         return cMethodDefinition;
     case DefinitionKind_AttrAccessor:
@@ -268,6 +271,7 @@ void rdxi_initialize_definition(VALUE mod) {
     cConstantDefinition = rb_define_class_under(mRubydex, "ConstantDefinition", cDefinition);
     cConstantAliasDefinition = rb_define_class_under(mRubydex, "ConstantAliasDefinition", cDefinition);
     cConstantVisibilityDefinition = rb_define_class_under(mRubydex, "ConstantVisibilityDefinition", cDefinition);
+    cMethodVisibilityDefinition = rb_define_class_under(mRubydex, "MethodVisibilityDefinition", cDefinition);
     cMethodDefinition = rb_define_class_under(mRubydex, "MethodDefinition", cDefinition);
     cAttrAccessorDefinition = rb_define_class_under(mRubydex, "AttrAccessorDefinition", cDefinition);
     cAttrReaderDefinition = rb_define_class_under(mRubydex, "AttrReaderDefinition", cDefinition);
