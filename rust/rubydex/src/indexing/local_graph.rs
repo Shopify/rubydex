@@ -5,7 +5,7 @@ use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::graph::NameDependent;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
+use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
 use crate::model::name::{Name, NameRef};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
@@ -17,8 +17,8 @@ type LocalGraphParts = (
     IdentityHashMap<DefinitionId, Definition>,
     IdentityHashMap<StringId, StringRef>,
     IdentityHashMap<NameId, NameRef>,
-    IdentityHashMap<ReferenceId, ConstantReference>,
-    IdentityHashMap<ReferenceId, MethodRef>,
+    IdentityHashMap<ConstantReferenceId, ConstantReference>,
+    IdentityHashMap<MethodReferenceId, MethodRef>,
     IdentityHashMap<NameId, Vec<NameDependent>>,
 );
 
@@ -29,8 +29,8 @@ pub struct LocalGraph {
     definitions: IdentityHashMap<DefinitionId, Definition>,
     strings: IdentityHashMap<StringId, StringRef>,
     names: IdentityHashMap<NameId, NameRef>,
-    constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
-    method_references: IdentityHashMap<ReferenceId, MethodRef>,
+    constant_references: IdentityHashMap<ConstantReferenceId, ConstantReference>,
+    method_references: IdentityHashMap<MethodReferenceId, MethodRef>,
     name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
 }
 
@@ -150,11 +150,11 @@ impl LocalGraph {
     // Constant references
 
     #[must_use]
-    pub fn constant_references(&self) -> &IdentityHashMap<ReferenceId, ConstantReference> {
+    pub fn constant_references(&self) -> &IdentityHashMap<ConstantReferenceId, ConstantReference> {
         &self.constant_references
     }
 
-    pub fn add_constant_reference(&mut self, reference: ConstantReference) -> ReferenceId {
+    pub fn add_constant_reference(&mut self, reference: ConstantReference) -> ConstantReferenceId {
         let reference_id = reference.id();
         self.name_dependents
             .entry(*reference.name_id())
@@ -172,11 +172,11 @@ impl LocalGraph {
     // Method references
 
     #[must_use]
-    pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
+    pub fn method_references(&self) -> &IdentityHashMap<MethodReferenceId, MethodRef> {
         &self.method_references
     }
 
-    pub fn add_method_reference(&mut self, reference: MethodRef) -> ReferenceId {
+    pub fn add_method_reference(&mut self, reference: MethodRef) -> MethodReferenceId {
         let reference_id = reference.id();
 
         if self.method_references.insert(reference_id, reference).is_some() {

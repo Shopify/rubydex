@@ -29,7 +29,7 @@ use crate::{
     assert_mem_size,
     model::{
         comment::Comment,
-        ids::{DefinitionId, NameId, ReferenceId, StringId, UriId},
+        ids::{ConstantReferenceId, DefinitionId, NameId, StringId, UriId},
         visibility::Visibility,
     },
     offset::Offset,
@@ -192,7 +192,7 @@ pub enum Mixin {
 
 impl Mixin {
     #[must_use]
-    pub fn constant_reference_id(&self) -> &ReferenceId {
+    pub fn constant_reference_id(&self) -> &ConstantReferenceId {
         match self {
             Mixin::Include(def) => def.constant_reference_id(),
             Mixin::Prepend(def) => def.constant_reference_id(),
@@ -205,19 +205,19 @@ macro_rules! mixin_definition {
     ($variant:ident, $name:ident) => {
         #[derive(Debug, Clone)]
         pub struct $name {
-            constant_reference_id: ReferenceId,
+            constant_reference_id: ConstantReferenceId,
         }
 
         impl $name {
             #[must_use]
-            pub const fn new(constant_reference_id: ReferenceId) -> Self {
+            pub const fn new(constant_reference_id: ConstantReferenceId) -> Self {
                 Self {
                     constant_reference_id,
                 }
             }
 
             #[must_use]
-            pub fn constant_reference_id(&self) -> &ReferenceId {
+            pub fn constant_reference_id(&self) -> &ConstantReferenceId {
                 &self.constant_reference_id
             }
         }
@@ -245,7 +245,7 @@ pub struct ClassDefinition {
     comments: Box<[Comment]>,
     lexical_nesting_id: Option<DefinitionId>,
     members: Vec<DefinitionId>,
-    superclass_ref: Option<ReferenceId>,
+    superclass_ref: Option<ConstantReferenceId>,
     mixins: Vec<Mixin>,
 }
 assert_mem_size!(ClassDefinition, 120);
@@ -261,7 +261,7 @@ impl ClassDefinition {
         comments: Box<[Comment]>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
-        superclass_ref: Option<ReferenceId>,
+        superclass_ref: Option<ConstantReferenceId>,
     ) -> Self {
         Self {
             name_id,
@@ -313,7 +313,7 @@ impl ClassDefinition {
     }
 
     #[must_use]
-    pub fn superclass_ref(&self) -> Option<&ReferenceId> {
+    pub fn superclass_ref(&self) -> Option<&ConstantReferenceId> {
         self.superclass_ref.as_ref()
     }
 

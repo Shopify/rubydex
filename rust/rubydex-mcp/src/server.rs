@@ -419,8 +419,16 @@ impl RubydexServer {
         let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(200); // default 50, max 200
         let offset = params.offset.unwrap_or(0);
 
+        let empty = rubydex::model::identity_maps::IdentityHashSet::default();
+        let constant_refs = match decl {
+            rubydex::model::declaration::Declaration::Namespace(ns) => ns.references(),
+            rubydex::model::declaration::Declaration::Constant(c) => c.references(),
+            rubydex::model::declaration::Declaration::ConstantAlias(ca) => ca.references(),
+            _ => &empty,
+        };
+
         let (references, total) = paginate!(
-            decl.references().iter(),
+            constant_refs.iter(),
             offset,
             limit,
             |ref_id| {
