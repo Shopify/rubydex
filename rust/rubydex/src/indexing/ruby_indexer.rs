@@ -2323,22 +2323,35 @@ mod tests {
         }};
     }
 
-    /// Asserts that a method reference has the expected receiver.
+    /// Asserts that exactly one method reference with the given name has the expected receiver.
     ///
-    /// Finds a `MethodRef` by name and checks its receiver's string representation.
+    /// Panics if there isn't exactly one `MethodRef` with that name.
     ///
     /// Usage:
     /// - `assert_method_ref_receiver!(context, "bar", "<Foo>")`
     macro_rules! assert_method_ref_receiver {
         ($context:expr, $method_name:expr, $expected_receiver:expr) => {{
-            let method_ref = $context
+            let target = StringId::from($method_name);
+            let matches: Vec<_> = $context
                 .graph()
                 .method_references()
                 .values()
-                .find(|method_ref| *method_ref.str() == StringId::from($method_name))
-                .unwrap_or_else(|| panic!("should have a method reference for {}", $method_name));
+                .filter(|method_ref| *method_ref.str() == target)
+                .collect();
 
-            let receiver = $context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+            assert_eq!(
+                matches.len(),
+                1,
+                "expected exactly one method reference for `{}`, found {}",
+                $method_name,
+                matches.len()
+            );
+
+            let method_ref = matches[0];
+            let receiver_id = method_ref
+                .receiver()
+                .unwrap_or_else(|| panic!("method reference for `{}` has no receiver", $method_name));
+            let receiver = $context.graph().names().get(&receiver_id).unwrap();
 
             assert_eq!(
                 StringId::from($expected_receiver),
