@@ -206,222 +206,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_class_node() {
-    let context = index_source({
-        "
-        class Foo
-          class Bar
-            class Baz; end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 3);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |def| {
-        assert_def_name_eq!(&context, def, "Foo");
-        assert_def_name_offset_eq!(&context, def, "1:7-1:10");
-        assert!(def.superclass_ref().is_none());
-        assert_eq!(1, def.members().len());
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:3-4:6", Class, |def| {
-        assert_def_name_eq!(&context, def, "Bar");
-        assert_def_name_offset_eq!(&context, def, "2:9-2:12");
-        assert!(def.superclass_ref().is_none());
-        assert_eq!(1, def.members().len());
-
-        assert_definition_at!(&context, "1:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "3:5-3:19", Class, |def| {
-        assert_def_name_eq!(&context, def, "Baz");
-        assert_def_name_offset_eq!(&context, def, "3:11-3:14");
-        assert!(def.superclass_ref().is_none());
-        assert!(def.members().is_empty());
-
-        assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_class_node_with_qualified_name() {
-    let context = index_source({
-        "
-        class Foo::Bar
-          class Baz::Qux
-            class ::Quuux; end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 3);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |def| {
-        assert_def_name_eq!(&context, def, "Foo::Bar");
-        assert_def_name_offset_eq!(&context, def, "1:12-1:15");
-        assert!(def.superclass_ref().is_none());
-        assert!(def.lexical_nesting_id().is_none());
-        assert_eq!(1, def.members().len());
-    });
-
-    assert_definition_at!(&context, "2:3-4:6", Class, |def| {
-        assert_def_name_eq!(&context, def, "Baz::Qux");
-        assert_def_name_offset_eq!(&context, def, "2:14-2:17");
-        assert!(def.superclass_ref().is_none());
-        assert_eq!(1, def.members().len());
-
-        assert_definition_at!(&context, "1:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "3:5-3:23", Class, |def| {
-        assert_def_name_eq!(&context, def, "Quuux");
-        assert_def_name_offset_eq!(&context, def, "3:13-3:18");
-        assert!(def.superclass_ref().is_none());
-        assert!(def.members().is_empty());
-
-        assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_class_with_dynamic_names() {
-    let context = index_source({
-        "
-        class foo::Bar
-        end
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"]
-    );
-    assert!(context.graph().definitions().is_empty());
-}
-
-#[test]
-fn index_module_node() {
-    let context = index_source({
-        "
-        module Foo
-          module Bar
-            module Baz; end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 3);
-
-    assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-        assert_def_name_eq!(&context, def, "Foo");
-        assert_def_name_offset_eq!(&context, def, "1:8-1:11");
-        assert_eq!(1, def.members().len());
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:3-4:6", Module, |def| {
-        assert_def_name_eq!(&context, def, "Bar");
-        assert_def_name_offset_eq!(&context, def, "2:10-2:13");
-        assert_eq!(1, def.members().len());
-
-        assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "3:5-3:20", Module, |def| {
-        assert_def_name_eq!(&context, def, "Baz");
-        assert_def_name_offset_eq!(&context, def, "3:12-3:15");
-
-        assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_module_node_with_qualified_name() {
-    let context = index_source({
-        "
-        module Foo::Bar
-          module Baz::Qux
-            module ::Quuux; end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 3);
-
-    assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-        assert_def_name_eq!(&context, def, "Foo::Bar");
-        assert_def_name_offset_eq!(&context, def, "1:13-1:16");
-        assert_eq!(1, def.members().len());
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:3-4:6", Module, |def| {
-        assert_def_name_eq!(&context, def, "Baz::Qux");
-        assert_def_name_offset_eq!(&context, def, "2:15-2:18");
-        assert_eq!(1, def.members().len());
-
-        assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "3:5-3:24", Module, |def| {
-        assert_def_name_eq!(&context, def, "Quuux");
-        assert_def_name_offset_eq!(&context, def, "3:14-3:19");
-
-        assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_module_with_dynamic_names() {
-    let context = index_source({
-        "
-        module foo::Bar
-        end
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["dynamic-constant-reference: Dynamic constant reference (1:8-1:11)"]
-    );
-    assert!(context.graph().definitions().is_empty());
-}
-
-#[test]
 fn index_constant_write_node() {
     let context = index_source({
         "
@@ -4451,6 +4235,226 @@ fn index_private_constant_calls_diagnostics() {
     );
 
     assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+}
+
+mod class_and_module_tests {
+    use super::*;
+
+    #[test]
+    fn index_class_node() {
+        let context = index_source({
+            "
+            class Foo
+              class Bar
+                class Baz; end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+            assert_def_name_offset_eq!(&context, def, "1:7-1:10");
+            assert!(def.superclass_ref().is_none());
+            assert_eq!(1, def.members().len());
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:3-4:6", Class, |def| {
+            assert_def_name_eq!(&context, def, "Bar");
+            assert_def_name_offset_eq!(&context, def, "2:9-2:12");
+            assert!(def.superclass_ref().is_none());
+            assert_eq!(1, def.members().len());
+
+            assert_definition_at!(&context, "1:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "3:5-3:19", Class, |def| {
+            assert_def_name_eq!(&context, def, "Baz");
+            assert_def_name_offset_eq!(&context, def, "3:11-3:14");
+            assert!(def.superclass_ref().is_none());
+            assert!(def.members().is_empty());
+
+            assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_node_with_qualified_name() {
+        let context = index_source({
+            "
+            class Foo::Bar
+              class Baz::Qux
+                class ::Quuux; end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Foo::Bar");
+            assert_def_name_offset_eq!(&context, def, "1:12-1:15");
+            assert!(def.superclass_ref().is_none());
+            assert!(def.lexical_nesting_id().is_none());
+            assert_eq!(1, def.members().len());
+        });
+
+        assert_definition_at!(&context, "2:3-4:6", Class, |def| {
+            assert_def_name_eq!(&context, def, "Baz::Qux");
+            assert_def_name_offset_eq!(&context, def, "2:14-2:17");
+            assert!(def.superclass_ref().is_none());
+            assert_eq!(1, def.members().len());
+
+            assert_definition_at!(&context, "1:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "3:5-3:23", Class, |def| {
+            assert_def_name_eq!(&context, def, "Quuux");
+            assert_def_name_offset_eq!(&context, def, "3:13-3:18");
+            assert!(def.superclass_ref().is_none());
+            assert!(def.members().is_empty());
+
+            assert_definition_at!(&context, "2:3-4:6", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_with_dynamic_names() {
+        let context = index_source({
+            "
+            class foo::Bar
+            end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"]
+        );
+        assert!(context.graph().definitions().is_empty());
+    }
+
+    #[test]
+    fn index_module_node() {
+        let context = index_source({
+            "
+            module Foo
+              module Bar
+                module Baz; end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-5:4", Module, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+            assert_def_name_offset_eq!(&context, def, "1:8-1:11");
+            assert_eq!(1, def.members().len());
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:3-4:6", Module, |def| {
+            assert_def_name_eq!(&context, def, "Bar");
+            assert_def_name_offset_eq!(&context, def, "2:10-2:13");
+            assert_eq!(1, def.members().len());
+
+            assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "3:5-3:20", Module, |def| {
+            assert_def_name_eq!(&context, def, "Baz");
+            assert_def_name_offset_eq!(&context, def, "3:12-3:15");
+
+            assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_module_node_with_qualified_name() {
+        let context = index_source({
+            "
+            module Foo::Bar
+              module Baz::Qux
+                module ::Quuux; end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-5:4", Module, |def| {
+            assert_def_name_eq!(&context, def, "Foo::Bar");
+            assert_def_name_offset_eq!(&context, def, "1:13-1:16");
+            assert_eq!(1, def.members().len());
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:3-4:6", Module, |def| {
+            assert_def_name_eq!(&context, def, "Baz::Qux");
+            assert_def_name_offset_eq!(&context, def, "2:15-2:18");
+            assert_eq!(1, def.members().len());
+
+            assert_definition_at!(&context, "1:1-5:4", Module, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "3:5-3:24", Module, |def| {
+            assert_def_name_eq!(&context, def, "Quuux");
+            assert_def_name_offset_eq!(&context, def, "3:14-3:19");
+
+            assert_definition_at!(&context, "2:3-4:6", Module, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_module_with_dynamic_names() {
+        let context = index_source({
+            "
+            module foo::Bar
+            end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["dynamic-constant-reference: Dynamic constant reference (1:8-1:11)"]
+        );
+        assert!(context.graph().definitions().is_empty());
+    }
 }
 
 mod name_dependent_tests {
