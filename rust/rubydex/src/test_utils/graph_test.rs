@@ -45,7 +45,7 @@ impl GraphTest {
 
     pub fn resolve(&mut self) {
         let mut resolver = Resolver::new(&mut self.graph);
-        resolver.resolve_all();
+        resolver.resolve();
     }
 
     // Name dependents helpers (shared with LocalGraphTest for assert_dependents! macro)

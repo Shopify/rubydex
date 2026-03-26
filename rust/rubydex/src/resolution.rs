@@ -82,36 +82,7 @@ impl<'a> Resolver<'a> {
     /// # Panics
     ///
     /// Can panic if there's inconsistent data in the graph
-    pub fn resolve_all(&mut self) {
-        // TODO: temporary code while we don't have synchronization. We clear all declarations instead of doing the minimal
-        // amount of work
-        self.graph.clear_declarations();
-        // Ensure that Object exists ahead of time so that we can associate top level declarations with the right membership
-
-        {
-            self.graph.declarations_mut().insert(
-                *OBJECT_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Object".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
-            self.graph.declarations_mut().insert(
-                *MODULE_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Module".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
-            self.graph.declarations_mut().insert(
-                *CLASS_ID,
-                Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                    "Class".to_string(),
-                    *OBJECT_ID,
-                )))),
-            );
-        }
-
+    pub fn resolve(&mut self) {
         let other_ids = self.prepare_units();
 
         loop {
@@ -1593,34 +1564,81 @@ impl<'a> Resolver<'a> {
         cache
     }
 
+    /// Drains `pending_work` and classifies items into the resolution queue.
+    /// Namespace definitions and constant references are sorted by name depth for deterministic
+    /// resolution order. Non-namespace definitions (methods, attrs, variables) are returned
+    /// separately for `handle_remaining_definitions`.
     fn prepare_units(&mut self) -> Vec<DefinitionId> {
-        let estimated_length = self.graph.definitions().len() / 2;
-        let mut definitions = Vec::with_capacity(estimated_length);
-        let mut others = Vec::with_capacity(estimated_length);
+        let work = self.graph.take_pending_work();
+        let estimated = work.len() / 2;
+        let mut definitions = Vec::with_capacity(estimated);
+        let mut others = Vec::with_capacity(estimated);
+        let mut const_refs = Vec::new();
+        let mut ancestors = Vec::new();
         let names = self.graph.names();
         let depths = Self::compute_name_depths(names);
 
-        for (id, definition) in self.graph.definitions() {
-            let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+        // Dedup: when multiple files are indexed before resolution runs, pending_work accumulates
+        // and the same definition/reference ID can be enqueued more than once.
+        let mut seen_defs = IdentityHashSet::<DefinitionId>::default();
+        let mut seen_references = IdentityHashSet::<ReferenceId>::default();
+        let mut seen_ancestors = IdentityHashSet::<DeclarationId>::default();
 
-            match definition {
-                Definition::Class(def) => {
-                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
+        for unit in work {
+            match unit {
+                Unit::Definition(id) => {
+                    if !seen_defs.insert(id) {
+                        continue;
+                    }
+                    // Definition may have been removed by remove_document_data — skip stale items
+                    let Some(definition) = self.graph.definitions().get(&id) else {
+                        continue;
+                    };
+                    let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+
+                    match definition {
+                        Definition::Class(def) => {
+                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                        }
+                        Definition::Module(def) => {
+                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                        }
+                        Definition::Constant(def) => {
+                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                        }
+                        Definition::ConstantAlias(def) => {
+                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                        }
+                        Definition::SingletonClass(def) => {
+                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                        }
+                        _ => {
+                            others.push(id);
+                        }
+                    }
                 }
-                Definition::Module(def) => {
-                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
+                Unit::ConstantRef(id) => {
+                    if !seen_references.insert(id) {
+                        continue;
+                    }
+                    // Reference may have been removed by remove_document_data — skip stale items
+                    let Some(constant_ref) = self.graph.constant_references().get(&id) else {
+                        continue;
+                    };
+                    let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
+                    const_refs.push((
+                        Unit::ConstantRef(id),
+                        (*constant_ref.name_id(), uri, constant_ref.offset()),
+                    ));
                 }
-                Definition::Constant(def) => {
-                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
-                }
-                Definition::ConstantAlias(def) => {
-                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
-                }
-                Definition::SingletonClass(def) => {
-                    definitions.push((Unit::Definition(*id), (*def.name_id(), uri, definition.offset())));
-                }
-                _ => {
-                    others.push(*id);
+                Unit::Ancestors(id) => {
+                    if !seen_ancestors.insert(id) {
+                        continue;
+                    }
+                    // Declaration may have been removed by invalidation — skip stale items
+                    if self.graph.declarations().contains_key(&id) {
+                        ancestors.push(id);
+                    }
                 }
             }
         }
@@ -1631,29 +1649,14 @@ impl<'a> Resolver<'a> {
             (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
         });
 
-        let mut const_refs = self
-            .graph
-            .constant_references()
-            .iter()
-            .map(|(id, constant_ref)| {
-                let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
-
-                (
-                    Unit::ConstantRef(*id),
-                    (*constant_ref.name_id(), uri, constant_ref.offset()),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        // Sort constant references based on their name complexity so that simpler names are always first
         const_refs.sort_unstable_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
             (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
         });
 
-        self.unit_queue
-            .extend(definitions.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
-        self.unit_queue
-            .extend(const_refs.into_iter().map(|(id, _)| id).collect::<VecDeque<_>>());
+        // Definitions first, then constant refs, then ancestors
+        self.unit_queue.extend(definitions.into_iter().map(|(id, _)| id));
+        self.unit_queue.extend(const_refs.into_iter().map(|(id, _)| id));
+        self.unit_queue.extend(ancestors.into_iter().map(Unit::Ancestors));
 
         others.shrink_to_fit();
         others
