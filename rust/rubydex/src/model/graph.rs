@@ -966,6 +966,16 @@ impl Graph {
             }
         }
 
+        // Build a set of definition IDs being removed so we can detach them from declarations.
+        let removed_def_ids: IdentityHashSet<DefinitionId> = document.definitions().iter().copied().collect();
+
+        // Detach removed definitions from their declarations. We iterate all declarations
+        // rather than trying to map definitions → declarations (which is lossy for methods,
+        // instance variables, etc. that `definition_to_declaration_id` can't always resolve).
+        for declaration in self.declarations.values_mut() {
+            declaration.retain_definitions(|def_id| !removed_def_ids.contains(def_id));
+        }
+
         for def_id in document.definitions() {
             let definition = self.definitions.remove(def_id).unwrap();
 

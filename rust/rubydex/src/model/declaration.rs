@@ -343,6 +343,13 @@ impl Declaration {
         })
     }
 
+    /// Removes all definitions that don't match the predicate.
+    pub fn retain_definitions(&mut self, mut f: impl FnMut(&DefinitionId) -> bool) {
+        all_declarations!(self, it => {
+            it.definition_ids.retain(|id| f(id));
+        });
+    }
+
     #[must_use]
     pub fn owner_id(&self) -> &DeclarationId {
         all_declarations!(self, it => &it.owner_id)
