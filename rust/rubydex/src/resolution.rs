@@ -130,9 +130,14 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for resolving a constant definition
     fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
+        // The definition may have been removed during invalidation. Skip stale work items.
+        let Some(definition) = self.graph.definitions().get(&id) else {
+            return;
+        };
+
         let mut needs_linearization = false;
 
-        let outcome = match self.graph.definitions().get(&id).unwrap() {
+        let outcome = match definition {
             Definition::Class(class) => {
                 self.handle_constant_declaration(*class.name_id(), id, false, |name, owner_id| {
                     needs_linearization = true;
@@ -193,7 +198,10 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for resolving a constant reference
     fn handle_reference_unit(&mut self, unit_id: Unit, id: ReferenceId) {
-        let constant_ref = self.graph.constant_references().get(&id).unwrap();
+        // The reference may have been removed during invalidation. Skip stale work items.
+        let Some(constant_ref) = self.graph.constant_references().get(&id) else {
+            return;
+        };
 
         match self.resolve_constant_internal(*constant_ref.name_id()) {
             Outcome::Retry(None) => {
@@ -221,6 +229,11 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for linearizing ancestors of a declaration
     fn handle_ancestor_unit(&mut self, id: DeclarationId) {
+        // The declaration may have been removed during invalidation. Skip stale work items.
+        if !self.graph.declarations().contains_key(&id) {
+            return;
+        }
+
         match self.ancestors_of(id) {
             Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
                 // We succeeded in some capacity this time
@@ -238,7 +251,12 @@ impl<'a> Resolver<'a> {
     #[allow(clippy::too_many_lines)]
     fn handle_remaining_definitions(&mut self, other_ids: Vec<DefinitionId>) {
         for id in other_ids {
-            match self.graph.definitions().get(&id).unwrap() {
+            // The definition may have been removed during invalidation. Skip stale items.
+            let Some(definition) = self.graph.definitions().get(&id) else {
+                continue;
+            };
+
+            match definition {
                 Definition::Method(method_definition) => {
                     let str_id = *method_definition.str_id();
                     let owner_id = match method_definition.receiver() {
@@ -677,7 +695,10 @@ impl<'a> Resolver<'a> {
     #[must_use]
     fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
         {
-            let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
+            // The declaration may have been removed during invalidation. Return partial ancestors.
+            let Some(declaration) = self.graph.declarations_mut().get_mut(&declaration_id) else {
+                return Ancestors::Partial(Vec::new());
+            };
 
             // Add this declaration to the descendants so that we capture transitive descendant relationships
             context.descendants.insert(declaration_id);
