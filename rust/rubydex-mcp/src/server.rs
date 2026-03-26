@@ -60,7 +60,7 @@ impl RubydexServer {
                 }
 
                 let mut resolver = rubydex::resolution::Resolver::new(&mut graph);
-                resolver.resolve_all();
+                resolver.resolve();
 
                 eprintln!(
                     "Rubydex indexed {} files, {} declarations",
