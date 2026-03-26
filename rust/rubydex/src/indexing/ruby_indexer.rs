@@ -7,8 +7,8 @@ use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantAliasDefinition, ConstantDefinition, ConstantVisibilityDefinition, Definition, DefinitionFlags,
     ExtendDefinition, GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition,
-    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter,
-    ParameterStruct, PrependDefinition, Receiver, Signatures, SingletonClassDefinition,
+    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, MethodVisibilityDefinition, Mixin,
+    ModuleDefinition, Parameter, ParameterStruct, PrependDefinition, Receiver, Signatures, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -1240,13 +1240,78 @@ impl<'a> RubyIndexer<'a> {
                 visibility,
                 self.uri_id,
                 offset,
-                Vec::new(),
+                Box::default(),
                 DefinitionFlags::empty(),
                 self.current_nesting_definition_id(),
             )));
 
             let definition_id = self.local_graph.add_definition(definition);
 
+            self.add_member_to_current_owner(definition_id);
+        }
+    }
+
+    fn handle_retroactive_method_visibility(
+        &mut self,
+        args: &ruby_prism::NodeList,
+        arguments_node: &ruby_prism::ArgumentsNode,
+        visibility: Visibility,
+        call_offset: &Offset,
+    ) {
+        let is_literal = |arg: ruby_prism::Node| {
+            matches!(
+                arg,
+                ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. }
+            )
+        };
+
+        let only_literals = args.iter().all(&is_literal);
+        if !only_literals {
+            let has_any_literal = args.iter().any(is_literal);
+            let message = if has_any_literal {
+                "Method visibility called with mixed literal and non-literal arguments"
+            } else {
+                "Method visibility called with non-literal arguments"
+            };
+
+            self.local_graph
+                .add_diagnostic(Rule::InvalidMethodVisibility, call_offset.clone(), message.to_string());
+            self.visit_arguments_node(arguments_node);
+            return;
+        }
+
+        // All symbols/strings — create MethodVisibilityDefinitions
+        for argument in args {
+            let (name, location) = match argument {
+                ruby_prism::Node::SymbolNode { .. } => {
+                    let symbol = argument.as_symbol_node().unwrap();
+                    if let Some(value_loc) = symbol.value_loc() {
+                        (Self::location_to_string(&value_loc), value_loc)
+                    } else {
+                        continue;
+                    }
+                }
+                ruby_prism::Node::StringNode { .. } => {
+                    let string = argument.as_string_node().unwrap();
+                    let name = String::from_utf8_lossy(string.unescaped()).to_string();
+                    (name, argument.location())
+                }
+                _ => unreachable!("only_literals check guarantees only symbol/string nodes"),
+            };
+
+            let str_id = self.local_graph.intern_string(format!("{name}()"));
+            let arg_offset = Offset::from_prism_location(&location);
+            let definition = Definition::MethodVisibility(Box::new(MethodVisibilityDefinition::new(
+                str_id,
+                visibility,
+                self.uri_id,
+                arg_offset,
+                Box::default(),
+                DefinitionFlags::empty(),
+                self.current_nesting_definition_id(),
+            )));
+
+            let definition_id = self.local_graph.add_definition(definition);
             self.add_member_to_current_owner(definition_id);
         }
     }
@@ -1853,7 +1918,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
             "private" | "protected" | "public" | "module_function" => {
-                if let Some(_receiver) = node.receiver() {
+                if node.receiver().is_some() {
                     self.visit_call_node_parts(node);
                     return;
                 }
@@ -1862,27 +1927,46 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let offset = Offset::from_prism_location(&node.location());
 
                 if let Some(arguments) = node.arguments() {
-                    // With this case:
-                    //
-                    // ```ruby
-                    // private def foo(bar); end
-                    // ```
-                    //
-                    // We push the new visibility to the stack and then pop it after visiting the arguments so it only affects the method definition.
-                    self.visibility_stack
-                        .push(VisibilityModifier::new(visibility, true, offset));
-                    self.visit_arguments_node(&arguments);
-                    self.visibility_stack.pop();
+                    let args = arguments.arguments();
+
+                    // Scoped-definition: exactly one arg that is a DefNode or a bare/self attr helper.
+                    // module_function always uses the scoped path (retroactive not supported yet).
+                    let has_single_arg = args.len() == 1;
+
+                    let single_arg_is_def =
+                        has_single_arg && matches!(args.iter().next().unwrap(), ruby_prism::Node::DefNode { .. });
+
+                    let single_arg_is_attr_helper = has_single_arg
+                        && args.iter().next().unwrap().as_call_node().is_some_and(|call| {
+                            let has_no_explicit_receiver = call.receiver().is_none()
+                                || call.receiver().as_ref().is_some_and(|r| r.as_self_node().is_some());
+                            has_no_explicit_receiver
+                                && matches!(
+                                    call.name().as_slice(),
+                                    b"attr" | b"attr_reader" | b"attr_writer" | b"attr_accessor"
+                                )
+                        });
+
+                    let is_scoped_definition =
+                        message.as_str() == "module_function" || single_arg_is_def || single_arg_is_attr_helper;
+
+                    if is_scoped_definition {
+                        // Inline/scoped form: `private def foo(bar); end`
+                        //
+                        // Push the new visibility to the stack and then pop it after visiting
+                        // the arguments so it only affects the method definition.
+                        self.visibility_stack
+                            .push(VisibilityModifier::new(visibility, true, offset));
+                        self.visit_arguments_node(&arguments);
+                        self.visibility_stack.pop();
+                    } else {
+                        // Retroactive method visibility: `private :foo`, `protected :bar, :baz`
+                        self.handle_retroactive_method_visibility(&args, &arguments, visibility, &offset);
+                    }
                 } else {
-                    // With this case:
+                    // Flag mode: `private` with no arguments
                     //
-                    // ```ruby
-                    // private
-                    //
-                    // def foo(bar); end
-                    // ```
-                    //
-                    // We replace the current visibility with the new one so it only affects all the subsequent method definitions.
+                    // Replace the current visibility so it affects all subsequent method definitions.
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
                     *last_visibility = VisibilityModifier::new(visibility, false, offset);
                 }
@@ -2215,3 +2299,4 @@ impl Visit<'_> for RubyIndexer<'_> {
 #[cfg(test)]
 #[path = "ruby_indexer_tests.rs"]
 mod tests;
+
