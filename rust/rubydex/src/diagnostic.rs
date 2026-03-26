@@ -104,6 +104,7 @@ rules! {
     DynamicAncestor;
     TopLevelMixinSelf;
     InvalidPrivateConstant;
+    InvalidMethodVisibility;
 
     // Resolution
 }
