@@ -407,7 +407,7 @@ impl Graph {
 
     #[must_use]
     pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
-        let document_diagnostics = self.documents.values().flat_map(Document::all_diagnostics);
+        let document_diagnostics = self.documents.values().flat_map(Document::diagnostics);
         let declaration_diagnostics = self.declarations.values().flat_map(Declaration::diagnostics);
 
         document_diagnostics.chain(declaration_diagnostics).collect()
