@@ -12,7 +12,7 @@ use crate::model::{
     definitions::{Definition, Mixin, Receiver},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+    ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
     name::{Name, NameRef, ParentScope},
 };
 
@@ -221,7 +221,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Handles a unit of work for resolving a constant reference
-    fn handle_reference_unit(&mut self, unit_id: Unit, id: ReferenceId) {
+    fn handle_reference_unit(&mut self, unit_id: Unit, id: ConstantReferenceId) {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
         match self.resolve_constant_internal(*constant_ref.name_id()) {

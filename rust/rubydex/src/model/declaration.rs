@@ -1,8 +1,11 @@
 use crate::assert_mem_size;
 use crate::diagnostic::Diagnostic;
+use crate::model::ids::{
+    ClassVariableReferenceId, GlobalVariableReferenceId, InstanceVariableReferenceId, MethodReferenceId,
+};
 use crate::model::{
     identity_maps::{IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+    ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
 };
 
 /// A single ancestor in the linearized ancestor chain
@@ -92,7 +95,7 @@ macro_rules! namespace_declaration {
             /// The list of definition IDs that compose this declaration
             definition_ids: Vec<DefinitionId>,
             /// The set of references that are made to this declaration
-            references: IdentityHashSet<ReferenceId>,
+            references: IdentityHashSet<ConstantReferenceId>,
             /// The ID of the owner of this declaration. For singleton classes, this is the ID of the attached object
             owner_id: DeclarationId,
             /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
@@ -129,12 +132,30 @@ macro_rules! namespace_declaration {
 
             pub fn extend(&mut self, mut other: Declaration) {
                 self.definition_ids.extend(other.definitions());
-                self.references.extend(other.references());
                 self.diagnostics.extend(other.take_diagnostics());
 
-                if let Declaration::Namespace(namespace) = other {
-                    self.members.extend(namespace.members());
+                match other {
+                    Declaration::Namespace(namespace) => {
+                        self.members.extend(namespace.members());
+                        self.references.extend(namespace.references());
+                    }
+                    Declaration::Constant(constant) => {
+                        self.references.extend(constant.references());
+                    }
+                    Declaration::ConstantAlias(constant_alias) => {
+                        self.references.extend(constant_alias.references());
+                    }
+                    Declaration::Method(_)
+                    | Declaration::GlobalVariable(_)
+                    | Declaration::InstanceVariable(_)
+                    | Declaration::ClassVariable(_) => {
+                        panic!("Cannot extend a namespace declaration with a method declaration");
+                    }
                 }
+            }
+
+            pub fn add_reference(&mut self, reference_id: ConstantReferenceId) {
+                self.references.insert(reference_id);
             }
 
             pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
@@ -206,7 +227,7 @@ macro_rules! namespace_declaration {
 
 /// Macro to generate a new struct for simple declarations like variables and methods
 macro_rules! simple_declaration {
-    ($name:ident) => {
+    ($name:ident, $reference_type:ty) => {
         #[derive(Debug)]
         pub struct $name {
             /// The fully qualified name of this declaration
@@ -214,7 +235,7 @@ macro_rules! simple_declaration {
             /// The list of definition IDs that compose this declaration
             definition_ids: Vec<DefinitionId>,
             /// The set of references that are made to this declaration
-            references: IdentityHashSet<ReferenceId>,
+            references: IdentityHashSet<$reference_type>,
             /// The ID of the owner of this declaration
             owner_id: DeclarationId,
             /// Diagnostics associated with this declaration
@@ -233,10 +254,32 @@ macro_rules! simple_declaration {
                 }
             }
 
-            pub fn extend(&mut self, mut other: Declaration) {
+            pub fn extend(&mut self, mut other: $name) {
                 self.definition_ids.extend(other.definitions());
-                self.references.extend(other.references());
                 self.diagnostics.extend(other.take_diagnostics());
+                self.references.extend(other.references());
+            }
+
+            #[must_use]
+            pub fn references(&self) -> &IdentityHashSet<$reference_type> {
+                &self.references
+            }
+
+            pub fn add_reference(&mut self, reference_id: $reference_type) {
+                self.references.insert(reference_id);
+            }
+
+            pub fn remove_reference(&mut self, reference_id: &$reference_type) {
+                self.references.remove(reference_id);
+            }
+
+            pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+                std::mem::take(&mut self.diagnostics)
+            }
+
+            #[must_use]
+            pub fn definitions(&self) -> &[DefinitionId] {
+                &self.definition_ids
             }
         }
     };
@@ -293,11 +336,6 @@ impl Declaration {
     }
 
     #[must_use]
-    pub fn references(&self) -> &IdentityHashSet<ReferenceId> {
-        all_declarations!(self, it => &it.references)
-    }
-
-    #[must_use]
     pub fn definitions(&self) -> &[DefinitionId] {
         all_declarations!(self, it => &it.definition_ids)
     }
@@ -315,18 +353,6 @@ impl Declaration {
             );
 
             it.definition_ids.push(definition_id);
-        });
-    }
-
-    pub fn add_reference(&mut self, id: ReferenceId) {
-        all_declarations!(self, it => {
-            it.references.insert(id);
-        });
-    }
-
-    pub fn remove_reference(&mut self, reference_id: &ReferenceId) {
-        all_declarations!(self, it => {
-            it.references.remove(reference_id);
         });
     }
 
@@ -396,8 +422,20 @@ impl Namespace {
     }
 
     #[must_use]
-    pub fn references(&self) -> &IdentityHashSet<ReferenceId> {
+    pub fn references(&self) -> &IdentityHashSet<ConstantReferenceId> {
         all_namespaces!(self, it => &it.references)
+    }
+
+    pub fn remove_reference(&mut self, reference_id: &ConstantReferenceId) {
+        all_namespaces!(self, it => {
+            it.references.remove(reference_id);
+        });
+    }
+
+    pub fn add_reference(&mut self, reference_id: ConstantReferenceId) {
+        all_namespaces!(self, it => {
+            it.references.insert(reference_id);
+        });
     }
 
     #[must_use]
@@ -514,17 +552,17 @@ namespace_declaration!(SingletonClass, SingletonClassDeclaration);
 assert_mem_size!(SingletonClassDeclaration, 216);
 namespace_declaration!(Todo, TodoDeclaration);
 assert_mem_size!(TodoDeclaration, 216);
-simple_declaration!(ConstantDeclaration);
+simple_declaration!(ConstantDeclaration, ConstantReferenceId);
 assert_mem_size!(ConstantDeclaration, 112);
-simple_declaration!(MethodDeclaration);
+simple_declaration!(MethodDeclaration, MethodReferenceId);
 assert_mem_size!(MethodDeclaration, 112);
-simple_declaration!(GlobalVariableDeclaration);
+simple_declaration!(GlobalVariableDeclaration, GlobalVariableReferenceId);
 assert_mem_size!(GlobalVariableDeclaration, 112);
-simple_declaration!(InstanceVariableDeclaration);
+simple_declaration!(InstanceVariableDeclaration, InstanceVariableReferenceId);
 assert_mem_size!(InstanceVariableDeclaration, 112);
-simple_declaration!(ClassVariableDeclaration);
+simple_declaration!(ClassVariableDeclaration, ClassVariableReferenceId);
 assert_mem_size!(ClassVariableDeclaration, 112);
-simple_declaration!(ConstantAliasDeclaration);
+simple_declaration!(ConstantAliasDeclaration, ConstantReferenceId);
 assert_mem_size!(ConstantAliasDeclaration, 112);
 
 #[cfg(test)]

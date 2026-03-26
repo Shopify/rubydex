@@ -16,7 +16,7 @@ use crate::model::definitions::{
     PrependDefinition, Receiver, Signature, Signatures,
 };
 use crate::model::document::Document;
-use crate::model::ids::{DefinitionId, NameId, ReferenceId, StringId, UriId};
+use crate::model::ids::{ConstantReferenceId, DefinitionId, NameId, StringId, UriId};
 use crate::model::name::{Name, ParentScope};
 use crate::model::references::ConstantReference;
 use crate::model::visibility::Visibility;
@@ -124,7 +124,7 @@ impl<'a> RBSIndexer<'a> {
         }
     }
 
-    fn index_mixin(&mut self, type_name: &TypeNameNode, mixin_fn: fn(ReferenceId) -> Mixin) {
+    fn index_mixin(&mut self, type_name: &TypeNameNode, mixin_fn: fn(ConstantReferenceId) -> Mixin) {
         let Some(lexical_nesting_id) = self.parent_lexical_scope_id() else {
             return;
         };

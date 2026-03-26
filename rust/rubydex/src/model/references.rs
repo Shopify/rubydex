@@ -1,6 +1,6 @@
 use crate::{
     assert_mem_size,
-    model::ids::{NameId, ReferenceId, StringId, UriId},
+    model::ids::{ConstantReferenceId, MethodReferenceId, NameId, StringId, UriId},
     offset::Offset,
 };
 
@@ -42,8 +42,8 @@ impl ConstantReference {
     }
 
     #[must_use]
-    pub fn id(&self) -> ReferenceId {
-        ReferenceId::from(&format!(
+    pub fn id(&self) -> ConstantReferenceId {
+        ConstantReferenceId::from(&format!(
             "{}:{}:{}-{}",
             self.name_id,
             self.uri_id,
@@ -99,8 +99,8 @@ impl MethodRef {
     }
 
     #[must_use]
-    pub fn id(&self) -> ReferenceId {
-        ReferenceId::from(&format!(
+    pub fn id(&self) -> MethodReferenceId {
+        MethodReferenceId::from(&format!(
             "{}:{}:{}-{}",
             self.str,
             self.uri_id,

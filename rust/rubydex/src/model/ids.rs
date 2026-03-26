@@ -25,14 +25,36 @@ pub type StringId = Id<StringMarker>;
 assert_mem_size!(StringId, 8);
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub struct ReferenceMarker;
-/// `ReferenceId` represents the ID of a reference occurrence in a file.
-/// It is built from the reference kind, `uri_id` and the reference `offset`.
-pub type ReferenceId = Id<ReferenceMarker>;
-assert_mem_size!(ReferenceId, 8);
-
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub struct NameMarker;
 /// `NameId` represents an ID for any constant name that we find as part of a reference or definition
 pub type NameId = Id<NameMarker>;
 assert_mem_size!(NameId, 8);
+
+// Reference IDs
+//
+// This section is for specialized IDs for each type of declaration reference
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub struct ConstantMarker;
+pub type ConstantReferenceId = Id<ConstantMarker>;
+assert_mem_size!(ConstantReferenceId, 8);
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub struct MethodMarker;
+pub type MethodReferenceId = Id<MethodMarker>;
+assert_mem_size!(MethodReferenceId, 8);
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub struct GlobalVariableMarker;
+pub type GlobalVariableReferenceId = Id<GlobalVariableMarker>;
+assert_mem_size!(GlobalVariableReferenceId, 8);
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub struct ClassVariableMarker;
+pub type ClassVariableReferenceId = Id<ClassVariableMarker>;
+assert_mem_size!(ClassVariableReferenceId, 8);
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub struct InstanceVariableMarker;
+pub type InstanceVariableReferenceId = Id<InstanceVariableMarker>;
+assert_mem_size!(InstanceVariableReferenceId, 8);

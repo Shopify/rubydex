@@ -351,13 +351,20 @@ macro_rules! assert_declaration_references_count_eq {
             .get(&$crate::model::ids::DeclarationId::from($declaration_name))
             .unwrap();
 
+        let count = match declaration {
+            $crate::model::declaration::Declaration::Namespace(it) => it.references().len(),
+            $crate::model::declaration::Declaration::Constant(it) => it.references().len(),
+            $crate::model::declaration::Declaration::ConstantAlias(it) => it.references().len(),
+            $crate::model::declaration::Declaration::Method(it) => it.references().len(),
+            $crate::model::declaration::Declaration::GlobalVariable(it) => it.references().len(),
+            $crate::model::declaration::Declaration::InstanceVariable(it) => it.references().len(),
+            $crate::model::declaration::Declaration::ClassVariable(it) => it.references().len(),
+        };
+
         assert_eq!(
-            declaration.references().len(),
-            $expected_references,
+            count, $expected_references,
             "Expected exactly {} references for `{}`, but got {}",
-            $expected_references,
-            $declaration_name,
-            declaration.references().len()
+            $expected_references, $declaration_name, count,
         );
     };
 }

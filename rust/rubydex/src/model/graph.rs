@@ -8,7 +8,7 @@ use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
-use crate::model::ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId, UriId};
+use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
@@ -19,7 +19,7 @@ use crate::stats;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameDependent {
     Definition(DefinitionId),
-    Reference(ReferenceId),
+    Reference(ConstantReferenceId),
     /// This name's `parent_scope` is the key name — structural dependency.
     ChildName(NameId),
     /// This name's `nesting` is the key name — reference-only dependency.
@@ -47,7 +47,7 @@ pub enum Unit {
     /// A definition that defines a constant and might require resolution
     Definition(DefinitionId),
     /// A constant reference that needs to be resolved
-    ConstantRef(ReferenceId),
+    ConstantRef(ConstantReferenceId),
     /// A declaration whose ancestors need re-linearization
     Ancestors(DeclarationId),
 }
@@ -68,9 +68,9 @@ pub struct Graph {
     // Map of names
     names: IdentityHashMap<NameId, NameRef>,
     // Map of constant references
-    constant_references: IdentityHashMap<ReferenceId, ConstantReference>,
+    constant_references: IdentityHashMap<ConstantReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
-    method_references: IdentityHashMap<ReferenceId, MethodRef>,
+    method_references: IdentityHashMap<MethodReferenceId, MethodRef>,
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
@@ -395,13 +395,13 @@ impl Graph {
 
     // Returns an immutable reference to the constant references map
     #[must_use]
-    pub fn constant_references(&self) -> &IdentityHashMap<ReferenceId, ConstantReference> {
+    pub fn constant_references(&self) -> &IdentityHashMap<ConstantReferenceId, ConstantReference> {
         &self.constant_references
     }
 
     // Returns an immutable reference to the method references map
     #[must_use]
-    pub fn method_references(&self) -> &IdentityHashMap<ReferenceId, MethodRef> {
+    pub fn method_references(&self) -> &IdentityHashMap<MethodReferenceId, MethodRef> {
         &self.method_references
     }
 
@@ -591,14 +591,34 @@ impl Graph {
 
     /// Unresolves a constant reference: removes it from the target declaration's reference set
     /// and unresolves its underlying name.
-    fn unresolve_reference(&mut self, reference_id: ReferenceId) -> Option<DeclarationId> {
+    fn unresolve_reference(&mut self, reference_id: ConstantReferenceId) -> Option<DeclarationId> {
         let constant_ref = self.constant_references.get(&reference_id)?;
         let name_id = *constant_ref.name_id();
 
         if let Some(old_decl_id) = self.unresolve_name(name_id) {
-            if let Some(declaration) = self.declarations.get_mut(&old_decl_id) {
-                declaration.remove_reference(&reference_id);
+            match self.declarations.get_mut(&old_decl_id) {
+                Some(Declaration::Namespace(it)) => {
+                    it.remove_reference(&reference_id);
+                }
+                Some(Declaration::Constant(it)) => {
+                    it.remove_reference(&reference_id);
+                }
+                Some(Declaration::ConstantAlias(it)) => {
+                    it.remove_reference(&reference_id);
+                }
+                Some(
+                    Declaration::Method(_)
+                    | Declaration::GlobalVariable(_)
+                    | Declaration::InstanceVariable(_)
+                    | Declaration::ClassVariable(_),
+                ) => {
+                    unreachable!("Cannot unresolve reference for something that isn't a constant")
+                }
+                None => {
+                    panic!("Tried to unresolve reference for declaration that doesn't exist in the graph")
+                }
             }
+
             Some(old_decl_id)
         } else {
             None
@@ -765,9 +785,31 @@ impl Graph {
         }
     }
 
-    pub fn record_resolved_reference(&mut self, reference_id: ReferenceId, declaration_id: DeclarationId) {
-        if let Some(declaration) = self.declarations.get_mut(&declaration_id) {
-            declaration.add_reference(reference_id);
+    /// # Panics
+    ///
+    /// Will panic if invoked for a non existing declaration
+    pub fn record_resolved_reference(&mut self, reference_id: ConstantReferenceId, declaration_id: DeclarationId) {
+        match self.declarations.get_mut(&declaration_id) {
+            Some(Declaration::Namespace(it)) => {
+                it.add_reference(reference_id);
+            }
+            Some(Declaration::Constant(it)) => {
+                it.add_reference(reference_id);
+            }
+            Some(Declaration::ConstantAlias(it)) => {
+                it.add_reference(reference_id);
+            }
+            Some(
+                Declaration::Method(_)
+                | Declaration::GlobalVariable(_)
+                | Declaration::InstanceVariable(_)
+                | Declaration::ClassVariable(_),
+            ) => {
+                unreachable!("Cannot record constant reference for something that isn't a constant")
+            }
+            None => {
+                panic!("Tried to record a constant reference for a declaration that doesn't exist")
+            }
         }
     }
 
@@ -945,7 +987,23 @@ impl Graph {
                 if let NameRef::Resolved(resolved) = self.names.get(constant_ref.name_id()).unwrap()
                     && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
                 {
-                    declaration.remove_reference(ref_id);
+                    match declaration {
+                        Declaration::Namespace(it) => {
+                            it.remove_reference(ref_id);
+                        }
+                        Declaration::Constant(it) => {
+                            it.remove_reference(ref_id);
+                        }
+                        Declaration::ConstantAlias(it) => {
+                            it.remove_reference(ref_id);
+                        }
+                        Declaration::Method(_)
+                        | Declaration::GlobalVariable(_)
+                        | Declaration::InstanceVariable(_)
+                        | Declaration::ClassVariable(_) => {
+                            unreachable!("Cannot remove constant reference ID from non constant declaration")
+                        }
+                    }
                 }
 
                 self.remove_name_dependent(*constant_ref.name_id(), NameDependent::Reference(*ref_id));
@@ -1123,7 +1181,23 @@ impl Graph {
                 match dep {
                     NameDependent::Reference(ref_id) => {
                         if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
-                            decl.remove_reference(ref_id);
+                            match decl {
+                                Declaration::Namespace(it) => {
+                                    it.remove_reference(ref_id);
+                                }
+                                Declaration::Constant(it) => {
+                                    it.remove_reference(ref_id);
+                                }
+                                Declaration::ConstantAlias(it) => {
+                                    it.remove_reference(ref_id);
+                                }
+                                Declaration::Method(_)
+                                | Declaration::GlobalVariable(_)
+                                | Declaration::InstanceVariable(_)
+                                | Declaration::ClassVariable(_) => {
+                                    unreachable!("Cannot unresolve reference for something that isn't a constant")
+                                }
+                            }
                         }
                         self.push_work(Unit::ConstantRef(*ref_id));
                     }
@@ -1216,7 +1290,18 @@ impl Graph {
             }
         }
 
-        for ref_id in decl.references() {
+        let empty = IdentityHashSet::default();
+        let references = match decl {
+            Declaration::Namespace(it) => it.references(),
+            Declaration::Constant(it) => it.references(),
+            Declaration::ConstantAlias(it) => it.references(),
+            Declaration::Method(_)
+            | Declaration::GlobalVariable(_)
+            | Declaration::InstanceVariable(_)
+            | Declaration::ClassVariable(_) => &empty,
+        };
+
+        for ref_id in references {
             if let Some(constant_ref) = self.constant_references.get(ref_id) {
                 let name_id = *constant_ref.name_id();
                 if matches!(self.names.get(&name_id), Some(NameRef::Resolved(_))) {
@@ -1498,7 +1583,7 @@ mod tests {
         assert_eq!(context.graph().constant_references.len(), 2);
         {
             let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-            assert_eq!(declaration.references().len(), 1);
+            assert_eq!(declaration.as_namespace().unwrap().references().len(), 1);
         }
 
         // Update with empty content to remove definitions but keep the URI
@@ -1510,7 +1595,7 @@ mod tests {
         assert!(context.graph().constant_references.is_empty());
         {
             let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
-            assert!(declaration.references().is_empty());
+            assert!(declaration.as_namespace().unwrap().references().is_empty());
         }
     }
 
@@ -2200,7 +2285,7 @@ mod tests {
 
         // Bar declaration should have 1 reference (from foo.rb)
         let bar_decl = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
-        assert_eq!(bar_decl.references().len(), 1);
+        assert_eq!(bar_decl.as_namespace().unwrap().references().len(), 1);
 
         // Update foo.rb to remove the Bar reference
         context.index_uri("file:///foo.rb", "module Foo; end");
@@ -2208,7 +2293,7 @@ mod tests {
 
         let bar_decl = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
         assert!(
-            bar_decl.references().is_empty(),
+            bar_decl.as_namespace().unwrap().references().is_empty(),
             "Reference to Bar should be detached from declaration"
         );
 
