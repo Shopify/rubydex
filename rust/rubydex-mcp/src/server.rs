@@ -420,7 +420,7 @@ impl RubydexServer {
         let offset = params.offset.unwrap_or(0);
 
         let (references, total) = paginate!(
-            decl.references().iter(),
+            decl.constant_references().into_iter().flatten(),
             offset,
             limit,
             |ref_id| {

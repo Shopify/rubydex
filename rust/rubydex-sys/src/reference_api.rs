@@ -5,7 +5,7 @@ use std::ffi::CString;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
-use rubydex::model::ids::ReferenceId;
+use rubydex::model::ids::{ConstantReferenceId, MethodReferenceId};
 
 /// Kind of reference for FFI dispatch
 #[repr(C)]
@@ -107,7 +107,7 @@ pub unsafe extern "C" fn rdx_references_iter_free(iter: *mut ReferencesIter) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, reference_id: u64) -> *const c_char {
     with_graph(pointer, |graph| {
-        let ref_id = ReferenceId::new(reference_id);
+        let ref_id = ConstantReferenceId::new(reference_id);
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
         let name = graph.names().get(reference.name_id()).expect("Name ID should exist");
 
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, reference_id: u64) -> *const c_char {
     with_graph(pointer, |graph| {
-        let ref_id = ReferenceId::new(reference_id);
+        let ref_id = MethodReferenceId::new(reference_id);
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");
         let name = graph
             .strings()
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, refere
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, reference_id: u64) -> *mut Location {
     with_graph(pointer, |graph| {
-        let ref_id = ReferenceId::new(reference_id);
+        let ref_id = ConstantReferenceId::new(reference_id);
         let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
         let document = graph
             .documents()
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, reference_id: u64) -> *mut Location {
     with_graph(pointer, |graph| {
-        let ref_id = ReferenceId::new(reference_id);
+        let ref_id = MethodReferenceId::new(reference_id);
         let reference = graph.method_references().get(&ref_id).expect("Reference not found");
         let document = graph
             .documents()

@@ -4,7 +4,7 @@ use line_index::LineIndex;
 use url::Url;
 
 use crate::diagnostic::Diagnostic;
-use crate::model::ids::{DefinitionId, ReferenceId};
+use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
 // definitions and references discovered in it
@@ -13,8 +13,8 @@ pub struct Document {
     uri: String,
     line_index: LineIndex,
     definition_ids: Vec<DefinitionId>,
-    method_reference_ids: Vec<ReferenceId>,
-    constant_reference_ids: Vec<ReferenceId>,
+    method_reference_ids: Vec<MethodReferenceId>,
+    constant_reference_ids: Vec<ConstantReferenceId>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -56,20 +56,20 @@ impl Document {
     }
 
     #[must_use]
-    pub fn method_references(&self) -> &[ReferenceId] {
+    pub fn method_references(&self) -> &[MethodReferenceId] {
         &self.method_reference_ids
     }
 
-    pub fn add_method_reference(&mut self, reference_id: ReferenceId) {
+    pub fn add_method_reference(&mut self, reference_id: MethodReferenceId) {
         self.method_reference_ids.push(reference_id);
     }
 
     #[must_use]
-    pub fn constant_references(&self) -> &[ReferenceId] {
+    pub fn constant_references(&self) -> &[ConstantReferenceId] {
         &self.constant_reference_ids
     }
 
-    pub fn add_constant_reference(&mut self, reference_id: ReferenceId) {
+    pub fn add_constant_reference(&mut self, reference_id: ConstantReferenceId) {
         self.constant_reference_ids.push(reference_id);
     }
 
@@ -150,8 +150,8 @@ mod tests {
     #[test]
     fn tracking_references() {
         let mut document = Document::new("file:///foo.rb".to_string(), "class Foo; end");
-        let method_ref = ReferenceId::new(1);
-        let constant_ref = ReferenceId::new(2);
+        let method_ref = MethodReferenceId::new(1);
+        let constant_ref = ConstantReferenceId::new(2);
 
         document.add_method_reference(method_ref);
         document.add_constant_reference(constant_ref);
