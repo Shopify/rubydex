@@ -10,26 +10,6 @@ use crate::{
     test_utils::LocalGraphTest,
 };
 
-// Method assertions
-
-/// Asserts that a parameter matches the expected kind.
-///
-/// Usage:
-/// - `assert_parameter!(parameter, RequiredPositional, |param| { assert_string_eq!(context, param.str(), "a"); })`
-/// - `assert_parameter!(parameter, OptionalPositional, |param| { assert_string_eq!(context, param.str(), "b"); })`
-macro_rules! assert_parameter {
-    ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
-        match $expr {
-            Parameter::$variant($param) => $body,
-            _ => panic!(
-                "parameter kind mismatch: expected `{}`, got `{:?}`",
-                stringify!($variant),
-                $expr
-            ),
-        }
-    };
-}
-
 /// Asserts that a method has a simple (non-overloaded) signature, then runs a closure with it.
 ///
 /// Usage:
@@ -206,429 +186,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_constant_write_node() {
-    let context = index_source({
-        "
-        FOO = 1
-
-        class Foo
-          FOO = 2
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 3);
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_constant_path_write_node() {
-    let context = index_source({
-        "
-        FOO::BAR = 1
-
-        class Foo
-          FOO::BAR = 2
-          ::BAZ = 3
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO::BAR");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO::BAR");
-
-        assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-
-        assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_constant_or_write_node() {
-    let context = index_source({
-        "
-        FOO ||= 1
-
-        class Bar
-          BAZ ||= 2
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 3);
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_constant_references_eq!(&context, ["FOO", "BAZ"]);
-}
-
-#[test]
-fn index_constant_path_or_write_node() {
-    let context = index_source({
-        "
-        FOO::BAR ||= 1
-
-        class MyClass
-          FOO::BAR ||= 2
-          ::BAZ ||= 3
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO::BAR");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO::BAR");
-
-        assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-
-        assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-
-    assert_constant_references_eq!(&context, ["FOO", "BAR", "FOO", "BAR", "BAZ"]);
-}
-
-#[test]
-fn index_constant_multi_write_node() {
-    let context = index_source({
-        "
-        FOO, BAR::BAZ = 1, 2
-
-        class Foo
-          FOO, BAR::BAZ, ::BAZ = 3, 4, 5
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 6);
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAR::BAZ");
-    });
-
-    assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAR::BAZ");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[2], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_def_node() {
-    let context = index_source({
-        "
-        def foo; end
-
-        class Foo
-          def bar; end
-          def self.baz; end
-        end
-
-        class Bar
-          def Foo.quz; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 6);
-
-    assert_definition_at!(&context, "1:1-1:13", Method, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert_simple_signature!(def, |params| {
-            assert_eq!(params.len(), 0);
-        });
-        assert!(def.receiver().is_none());
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "4:3-4:15", Method, |bar_def| {
-            assert_def_str_eq!(&context, bar_def, "bar()");
-            assert_simple_signature!(bar_def, |params| {
-                assert_eq!(params.len(), 0);
-            });
-            assert!(bar_def.receiver().is_none());
-            assert_eq!(foo_class_def.id(), bar_def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[0], bar_def.id());
-        });
-
-        assert_definition_at!(&context, "5:3-5:20", Method, |baz_def| {
-            assert_def_str_eq!(&context, baz_def, "baz()");
-            assert_simple_signature!(baz_def, |params| {
-                assert_eq!(params.len(), 0);
-            });
-            assert_method_has_receiver!(&context, baz_def, "Foo");
-            assert_eq!(foo_class_def.id(), baz_def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[1], baz_def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "8:1-10:4", Class, |bar_class_def| {
-        assert_def_name_eq!(&context, bar_class_def, "Bar");
-
-        assert_definition_at!(&context, "9:3-9:19", Method, |quz_def| {
-            assert_def_str_eq!(&context, quz_def, "quz()");
-            assert_simple_signature!(quz_def, |params| {
-                assert_eq!(params.len(), 0);
-            });
-            assert_method_has_receiver!(&context, quz_def, "Foo");
-            assert_eq!(bar_class_def.id(), quz_def.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
-fn do_not_index_def_node_with_dynamic_receiver() {
-    let context = index_source({
-        "
-        def foo.bar; end
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
-    );
-    assert_eq!(context.graph().definitions().len(), 0);
-    assert_method_references_eq!(&context, ["foo"]);
-}
-
-#[test]
-fn index_class_self_block_creates_singleton_class() {
-    let context = index_source({
-        "
-        class Bar; end
-
-        class Foo
-          class << self
-            def baz; end
-
-            class << Bar
-              def self.qux; end
-            end
-
-            class << self
-              def quz; end
-            end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // class Bar
-    assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
-        assert_def_name_eq!(&context, bar_class, "Bar");
-        assert_def_name_offset_eq!(&context, bar_class, "1:7-1:10");
-    });
-
-    // class Foo
-    assert_definition_at!(&context, "3:1-15:4", Class, |foo_class| {
-        assert_def_name_eq!(&context, foo_class, "Foo");
-        assert_def_name_offset_eq!(&context, foo_class, "3:7-3:10");
-
-        // class << self (inside Foo)
-        assert_definition_at!(&context, "4:3-14:6", SingletonClass, |foo_singleton| {
-            assert_def_name_eq!(&context, foo_singleton, "Foo::<Foo>");
-            // name_offset points to "self"
-            assert_def_name_offset_eq!(&context, foo_singleton, "4:12-4:16");
-            assert_eq!(foo_singleton.lexical_nesting_id(), &Some(foo_class.id()));
-
-            // def baz (inside class << self)
-            assert_definition_at!(&context, "5:5-5:17", Method, |baz_method| {
-                assert_eq!(baz_method.lexical_nesting_id(), &Some(foo_singleton.id()));
-            });
-
-            // class << Bar (inside class << self of Foo)
-            assert_definition_at!(&context, "7:5-9:8", SingletonClass, |bar_singleton| {
-                assert_def_name_eq!(&context, bar_singleton, "Bar::<Bar>");
-                // name_offset points to "Bar"
-                assert_def_name_offset_eq!(&context, bar_singleton, "7:14-7:17");
-                assert_eq!(bar_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
-
-                // def self.qux (inside class << Bar)
-                assert_definition_at!(&context, "8:7-8:24", Method, |qux_method| {
-                    assert_eq!(qux_method.lexical_nesting_id(), &Some(bar_singleton.id()));
-                    assert_method_has_receiver!(&context, qux_method, "<Bar>");
-                });
-            });
-
-            // class << self (nested inside outer class << self)
-            assert_definition_at!(&context, "11:5-13:8", SingletonClass, |nested_singleton| {
-                assert_def_name_eq!(&context, nested_singleton, "Foo::<Foo>::<<Foo>>");
-                // name_offset points to "self"
-                assert_def_name_offset_eq!(&context, nested_singleton, "11:14-11:18");
-                assert_eq!(nested_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
-
-                // def quz (inside nested class << self)
-                assert_definition_at!(&context, "12:7-12:19", Method, |quz_method| {
-                    assert_eq!(quz_method.lexical_nesting_id(), &Some(nested_singleton.id()));
-                });
-            });
-        });
-    });
-}
-
-#[test]
-fn index_singleton_class_definition_in_compact_namespace() {
-    let context = index_source({
-        "
-        class Foo::Bar
-          class << self
-            def baz; end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
-        assert_def_name_eq!(&context, class_def, "Foo::Bar");
-        assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
-            assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
-            assert_definition_at!(&context, "3:5-3:17", Method, |method| {
-                assert_eq!(method.lexical_nesting_id(), &Some(singleton_class.id()));
-            });
-        });
-    });
-
-    assert_constant_references_eq!(&context, ["Foo"]);
-}
-
-#[test]
-fn index_constant_in_singleton_class_definition() {
-    let context = index_source({
-        "
-        class Foo
-          class << self
-            A = 1
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
-        assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
-            assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
-            assert_definition_at!(&context, "3:5-3:6", Constant, |def| {
-                assert_def_name_eq!(&context, def, "A");
-                assert_eq!(Some(singleton_class.id()), def.lexical_nesting_id().clone());
-            });
-        });
-    });
-}
-
-#[test]
-fn do_not_index_singleton_class_with_dynamic_expression() {
-    let context = index_source({
-        "
-        class << foo
-          def bar; end
-        end
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
-    );
-    assert_eq!(context.graph().definitions().len(), 0);
-}
-
-#[test]
 fn index_class_variable_in_singleton_class_definition() {
     let context = index_source({
         "
@@ -697,584 +254,6 @@ fn index_class_variable_in_singleton_method_definition() {
             assert_def_str_eq!(&context, def, "@@var");
             assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
         });
-    });
-}
-
-#[test]
-fn index_def_node_with_parameters() {
-    let context = index_source({
-        "
-        def foo(a, b = 42, *c, d, e:, g: 42, **i, &j); end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:51", Method, |def| {
-        assert_simple_signature!(def, |params| {
-            assert_eq!(params.len(), 8);
-
-            assert_parameter!(&params[0], RequiredPositional, |param| {
-                assert_string_eq!(context, param.str(), "a");
-            });
-
-            assert_parameter!(&params[1], OptionalPositional, |param| {
-                assert_string_eq!(context, param.str(), "b");
-            });
-
-            assert_parameter!(&params[2], RestPositional, |param| {
-                assert_string_eq!(context, param.str(), "c");
-            });
-
-            assert_parameter!(&params[3], Post, |param| {
-                assert_string_eq!(context, param.str(), "d");
-            });
-
-            assert_parameter!(&params[4], RequiredKeyword, |param| {
-                assert_string_eq!(context, param.str(), "e");
-            });
-
-            assert_parameter!(&params[5], OptionalKeyword, |param| {
-                assert_string_eq!(context, param.str(), "g");
-            });
-
-            assert_parameter!(&params[6], RestKeyword, |param| {
-                assert_string_eq!(context, param.str(), "i");
-            });
-
-            assert_parameter!(&params[7], Block, |param| {
-                assert_string_eq!(context, param.str(), "j");
-            });
-        });
-    });
-}
-
-#[test]
-fn index_def_node_with_forward_parameters() {
-    let context = index_source({
-        "
-        def foo(...); end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:18", Method, |def| {
-        assert_simple_signature!(def, |params| {
-            assert_eq!(params.len(), 1);
-            assert_parameter!(&params[0], Forward, |param| {
-                assert_string_eq!(context, param.str(), "...");
-            });
-        });
-    });
-}
-
-#[test]
-fn index_def_node_with_visibility_top_level() {
-    let context = index_source({
-        "
-        def m1; end
-
-        protected def m2; end
-
-        public
-
-        def m3; end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:12", Method, |def| {
-        assert_def_str_eq!(&context, def, "m1()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-
-    assert_definition_at!(&context, "3:11-3:22", Method, |def| {
-        assert_def_str_eq!(&context, def, "m2()");
-        assert_eq!(def.visibility(), &Visibility::Protected);
-    });
-
-    assert_definition_at!(&context, "7:1-7:12", Method, |def| {
-        assert_def_str_eq!(&context, def, "m3()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-}
-
-#[test]
-fn index_module_function() {
-    let context = index_source({
-        "
-        module Foo
-          def bar; end
-
-          module_function
-
-          def baz; end
-          attr_reader :attribute
-
-          public
-
-          def qux; end
-
-          module_function def boop; end
-
-          def zip; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:3-2:15", Method, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    let definitions = context.all_definitions_at("6:3-6:15");
-    assert_eq!(
-        definitions.len(),
-        2,
-        "module_function should create two definitions for baz"
-    );
-
-    let instance_method = definitions
-        .iter()
-        .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
-        .expect("should have instance method definition");
-    let Definition::Method(instance_method) = instance_method else {
-        panic!()
-    };
-    assert_def_str_eq!(&context, instance_method, "baz()");
-    assert_eq!(instance_method.visibility(), &Visibility::Private);
-
-    let singleton_method = definitions
-        .iter()
-        .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
-        .expect("should have singleton method definition");
-    let Definition::Method(singleton_method) = singleton_method else {
-        panic!()
-    };
-    assert_def_str_eq!(&context, singleton_method, "baz()");
-    assert_eq!(singleton_method.visibility(), &Visibility::Public);
-
-    assert_definition_at!(&context, "7:16-7:25", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "attribute()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-
-    assert_definition_at!(&context, "11:3-11:15", Method, |def| {
-        assert_def_str_eq!(&context, def, "qux()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    let definitions = context.all_definitions_at("13:19-13:32");
-    assert_eq!(
-        definitions.len(),
-        2,
-        "module_function should create two definitions for boop"
-    );
-
-    let instance_method = definitions
-        .iter()
-        .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
-        .expect("boop: should have instance method definition");
-    let Definition::Method(instance_method) = instance_method else {
-        panic!()
-    };
-    assert_def_str_eq!(&context, instance_method, "boop()");
-    assert_eq!(instance_method.visibility(), &Visibility::Private);
-
-    let singleton_method = definitions
-        .iter()
-        .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
-        .expect("boop: should have singleton method definition");
-    let Definition::Method(singleton_method) = singleton_method else {
-        panic!()
-    };
-    assert_def_str_eq!(&context, singleton_method, "boop()");
-    assert_eq!(singleton_method.visibility(), &Visibility::Public);
-
-    assert_definition_at!(&context, "15:3-15:15", Method, |def| {
-        assert_def_str_eq!(&context, def, "zip()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-}
-
-#[test]
-fn index_def_node_with_visibility_nested() {
-    let context = index_source({
-        "
-        protected
-
-        class Foo
-          def m1; end
-
-          private
-
-          module Bar
-            def m2; end
-
-            private
-
-            def m3; end
-
-            protected
-          end
-
-          def m4; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "4:3-4:14", Method, |def| {
-        assert_def_str_eq!(&context, def, "m1()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "9:5-9:16", Method, |def| {
-        assert_def_str_eq!(&context, def, "m2()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "13:5-13:16", Method, |def| {
-        assert_def_str_eq!(&context, def, "m3()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-
-    assert_definition_at!(&context, "18:3-18:14", Method, |def| {
-        assert_def_str_eq!(&context, def, "m4()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-}
-
-#[test]
-fn index_def_node_singleton_visibility() {
-    let context = index_source({
-        "
-        protected
-
-        def self.m1; end
-
-        protected def self.m2; end
-
-        class Foo
-          private
-
-          def self.m3; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "3:1-3:17", Method, |def| {
-        assert_def_str_eq!(&context, def, "m1()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "5:11-5:27", Method, |def| {
-        assert_def_str_eq!(&context, def, "m2()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "10:3-10:19", Method, |def| {
-        assert_def_str_eq!(&context, def, "m3()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-}
-
-#[test]
-fn index_visibility_in_singleton_class() {
-    let context = index_source({
-        "
-        class Foo
-          protected
-
-          class << self
-            def m1; end
-
-            private
-
-            def m2; end
-          end
-
-          def m3; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "5:5-5:16", Method, |def| {
-        assert_def_str_eq!(&context, def, "m1()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "9:5-9:16", Method, |def| {
-        assert_def_str_eq!(&context, def, "m2()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-
-    assert_definition_at!(&context, "12:3-12:14", Method, |def| {
-        assert_def_str_eq!(&context, def, "m3()");
-        assert_eq!(def.visibility(), &Visibility::Protected);
-    });
-}
-
-#[test]
-fn index_attr_accessor_definition() {
-    let context = index_source({
-        "
-        attr_accessor :foo
-
-        class Foo
-          attr_accessor :bar, :baz
-        end
-
-        foo.attr_accessor :not_indexed
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:24-4:27", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_attr_reader_definition() {
-    let context = index_source({
-        "
-        attr_reader :foo
-
-        class Foo
-          attr_reader :bar, :baz
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_attr_writer_definition() {
-    let context = index_source({
-        "
-        attr_writer :foo
-
-        class Foo
-          attr_writer :bar, :baz
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 4);
-
-    assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-
-        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_attr_definition() {
-    let context = index_source({
-        r#"
-        attr "a1", :a2
-
-        class Foo
-          attr "a3", true
-          attr :a4, false
-          attr :a5, 123
-        end
-        "#
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 6);
-
-    assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "a1()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "1:13-1:15", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "a2()");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "a3()");
-
-        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "5:9-5:11", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "a4()");
-
-        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[1], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "6:9-6:11", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "a5()");
-        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[2], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_attr_accessor_with_visibility_top_level() {
-    let context = index_source({
-        "
-        attr_accessor :foo
-
-        protected attr_reader :bar
-
-        public
-
-        attr_writer :baz
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-
-    assert_definition_at!(&context, "3:24-3:27", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-        assert_eq!(def.visibility(), &Visibility::Protected);
-    });
-
-    assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-}
-
-#[test]
-fn index_attr_accessor_with_visibility_nested() {
-    let context = index_source({
-        "
-        protected
-
-        class Foo
-          attr_accessor :foo
-
-          private
-
-          module Bar
-            attr_accessor :bar
-
-            private
-
-            attr_reader :baz
-
-            public
-          end
-
-          attr_writer :qux
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "9:20-9:23", AttrAccessor, |def| {
-        assert_def_str_eq!(&context, def, "bar()");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-
-    assert_definition_at!(&context, "13:18-13:21", AttrReader, |def| {
-        assert_def_str_eq!(&context, def, "baz()");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-
-    assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
-        assert_def_str_eq!(&context, def, "qux()");
-        assert_eq!(def.visibility(), &Visibility::Private);
     });
 }
 
@@ -3441,29 +2420,6 @@ fn index_singleton_method_in_anonymous_namespace() {
 }
 
 #[test]
-fn index_nested_method_definitions() {
-    let context = index_source({
-        "
-        class Foo
-          def bar
-            def baz; end
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
-        assert_definition_at!(&context, "2:3-4:6", Method, |bar| {
-            assert_definition_at!(&context, "3:5-3:17", Method, |baz| {
-                assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
-            });
-        });
-    });
-}
-
-#[test]
 fn index_constant_alias_simple() {
     let context = index_source({
         "
@@ -4142,99 +3098,204 @@ fn constant_with_colon_colon_call_is_promotable() {
     });
 }
 
-#[test]
-fn index_private_constant_calls() {
-    let context = index_source({
-        r#"
-        module Foo
-          BAR = 42
-          BAZ = 43
-          FOO = 44
+mod constant_tests {
+    use super::*;
 
-          private_constant :BAR, :BAZ
-          private_constant "FOO"
+    #[test]
+    fn index_constant_write_node() {
+        let context = index_source({
+            "
+            FOO = 1
 
-          class Qux
-            BAR = 42
-            BAZ = 43
+            class Foo
+              FOO = 2
+            end
+            "
+        });
 
-            Foo.public_constant :BAR
-            Foo.public_constant "BAZ"
-          end
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 3);
 
-          self.private_constant :Qux
-        end
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert!(def.lexical_nesting_id().is_none());
+        });
 
-        Foo.public_constant :BAR
-        "#
-    });
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
 
-    assert_no_local_diagnostics!(&context);
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+    }
 
-    assert_definition_at!(&context, "6:21-6:24", ConstantVisibility, |def| {
-        assert_def_name_eq!(&context, def, "BAR");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-    assert_definition_at!(&context, "6:27-6:30", ConstantVisibility, |def| {
-        assert_def_name_eq!(&context, def, "BAZ");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-    assert_definition_at!(&context, "7:20-7:25", ConstantVisibility, |def| {
-        assert_def_name_eq!(&context, def, "FOO");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-    assert_definition_at!(&context, "13:26-13:29", ConstantVisibility, |def| {
-        assert_def_name_eq!(&context, def, "Foo::BAR");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-    assert_definition_at!(&context, "14:25-14:30", ConstantVisibility, |def| {
-        assert_def_name_eq!(&context, def, "Foo::BAZ");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-    assert_definition_at!(&context, "17:26-17:29", ConstantVisibility, |def| {
-        assert_def_name_eq!(&context, def, "Qux");
-        assert_eq!(def.visibility(), &Visibility::Private);
-    });
-    assert_definition_at!(&context, "20:22-20:25", ConstantVisibility, |def| {
-        assert_def_name_eq!(&context, def, "Foo::BAR");
-        assert_eq!(def.visibility(), &Visibility::Public);
-    });
-}
+    #[test]
+    fn index_constant_path_write_node() {
+        let context = index_source({
+            "
+            FOO::BAR = 1
 
-#[test]
-fn index_private_constant_calls_diagnostics() {
-    let context = index_source({
-        "
-        private_constant :NOT_INDEXED
-        self.private_constant :NOT_INDEXED
-        foo.private_constant :NOT_INDEXED # not indexed, dynamic receiver
+            class Foo
+              FOO::BAR = 2
+              ::BAZ = 3
+            end
+            "
+        });
 
-        module Foo
-          private_constant NOT_INDEXED, not_indexed # not indexed, not a symbol
-          private_constant # not indexed, no arguments
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
 
-          def self.qux
-            private_constant :Bar # not indexed, dynamic
-          end
+        assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO::BAR");
+            assert!(def.lexical_nesting_id().is_none());
+        });
 
-          def foo
-            private_constant :Bar # not indexed, dynamic
-          end
-        end
-        "
-    });
+        assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO::BAR");
 
-    assert_local_diagnostics_eq!(
-        &context,
-        vec![
-            "invalid-private-constant: Private constant called at top level (1:1-1:30)",
-            "invalid-private-constant: Private constant called at top level (2:1-2:35)",
-            "invalid-private-constant: Dynamic receiver for private constant (3:1-3:34)",
-            "invalid-private-constant: Private constant called with non-symbol argument (6:20-6:31)",
-        ]
-    );
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
 
-    assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+        assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_constant_or_write_node() {
+        let context = index_source({
+            "
+            FOO ||= 1
+
+            class Bar
+              BAZ ||= 2
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 3);
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_constant_references_eq!(&context, ["FOO", "BAZ"]);
+    }
+
+    #[test]
+    fn index_constant_path_or_write_node() {
+        let context = index_source({
+            "
+            FOO::BAR ||= 1
+
+            class MyClass
+              FOO::BAR ||= 2
+              ::BAZ ||= 3
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:6-1:9", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO::BAR");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:8-4:11", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO::BAR");
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:5-5:8", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+
+            assert_definition_at!(&context, "3:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_constant_references_eq!(&context, ["FOO", "BAR", "FOO", "BAR", "BAZ"]);
+    }
+
+    #[test]
+    fn index_constant_multi_write_node() {
+        let context = index_source({
+            "
+            FOO, BAR::BAZ = 1, 2
+
+            class Foo
+              FOO, BAR::BAZ, ::BAZ = 3, 4, 5
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 6);
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "1:6-1:14", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAR::BAZ");
+        });
+
+        assert_definition_at!(&context, "4:3-4:6", Constant, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:8-4:16", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAR::BAZ");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:18-4:23", Constant, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
 }
 
 mod class_and_module_tests {
@@ -4454,6 +3515,963 @@ mod class_and_module_tests {
             ["dynamic-constant-reference: Dynamic constant reference (1:8-1:11)"]
         );
         assert!(context.graph().definitions().is_empty());
+    }
+}
+
+mod method_tests {
+    use super::*;
+
+    /// Asserts that a parameter matches the expected kind.
+    ///
+    /// Usage:
+    /// - `assert_parameter!(parameter, RequiredPositional, |param| { assert_string_eq!(context, param.str(), "a"); })`
+    /// - `assert_parameter!(parameter, OptionalPositional, |param| { assert_string_eq!(context, param.str(), "b"); })`
+    macro_rules! assert_parameter {
+        ($expr:expr, $variant:ident, |$param:ident| $body:block) => {
+            match $expr {
+                Parameter::$variant($param) => $body,
+                _ => panic!(
+                    "parameter kind mismatch: expected `{}`, got `{:?}`",
+                    stringify!($variant),
+                    $expr
+                ),
+            }
+        };
+    }
+
+    #[test]
+    fn index_def_node() {
+        let context = index_source({
+            "
+                def foo; end
+
+                class Foo
+                  def bar; end
+                  def self.baz; end
+                end
+
+                class Bar
+                  def Foo.quz; end
+                end
+                "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 6);
+
+        assert_definition_at!(&context, "1:1-1:13", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_simple_signature!(def, |params| {
+                assert_eq!(params.len(), 0);
+            });
+            assert!(def.receiver().is_none());
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:15", Method, |bar_def| {
+                assert_def_str_eq!(&context, bar_def, "bar()");
+                assert_simple_signature!(bar_def, |params| {
+                    assert_eq!(params.len(), 0);
+                });
+                assert!(bar_def.receiver().is_none());
+                assert_eq!(foo_class_def.id(), bar_def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[0], bar_def.id());
+            });
+
+            assert_definition_at!(&context, "5:3-5:20", Method, |baz_def| {
+                assert_def_str_eq!(&context, baz_def, "baz()");
+                assert_simple_signature!(baz_def, |params| {
+                    assert_eq!(params.len(), 0);
+                });
+                assert_method_has_receiver!(&context, baz_def, "Foo");
+                assert_eq!(foo_class_def.id(), baz_def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[1], baz_def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "8:1-10:4", Class, |bar_class_def| {
+            assert_def_name_eq!(&context, bar_class_def, "Bar");
+
+            assert_definition_at!(&context, "9:3-9:19", Method, |quz_def| {
+                assert_def_str_eq!(&context, quz_def, "quz()");
+                assert_simple_signature!(quz_def, |params| {
+                    assert_eq!(params.len(), 0);
+                });
+                assert_method_has_receiver!(&context, quz_def, "Foo");
+                assert_eq!(bar_class_def.id(), quz_def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn do_not_index_def_node_with_dynamic_receiver() {
+        let context = index_source({
+            "
+                def foo.bar; end
+                "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (1:1-1:17)"]
+        );
+        assert_eq!(context.graph().definitions().len(), 0);
+        assert_method_references_eq!(&context, ["foo"]);
+    }
+
+    #[test]
+    fn index_def_node_with_parameters() {
+        let context = index_source({
+            "
+                def foo(a, b = 42, *c, d, e:, g: 42, **i, &j); end
+                "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:51", Method, |def| {
+            assert_simple_signature!(def, |params| {
+                assert_eq!(params.len(), 8);
+
+                assert_parameter!(&params[0], RequiredPositional, |param| {
+                    assert_string_eq!(context, param.str(), "a");
+                });
+
+                assert_parameter!(&params[1], OptionalPositional, |param| {
+                    assert_string_eq!(context, param.str(), "b");
+                });
+
+                assert_parameter!(&params[2], RestPositional, |param| {
+                    assert_string_eq!(context, param.str(), "c");
+                });
+
+                assert_parameter!(&params[3], Post, |param| {
+                    assert_string_eq!(context, param.str(), "d");
+                });
+
+                assert_parameter!(&params[4], RequiredKeyword, |param| {
+                    assert_string_eq!(context, param.str(), "e");
+                });
+
+                assert_parameter!(&params[5], OptionalKeyword, |param| {
+                    assert_string_eq!(context, param.str(), "g");
+                });
+
+                assert_parameter!(&params[6], RestKeyword, |param| {
+                    assert_string_eq!(context, param.str(), "i");
+                });
+
+                assert_parameter!(&params[7], Block, |param| {
+                    assert_string_eq!(context, param.str(), "j");
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_def_node_with_forward_parameters() {
+        let context = index_source({
+            "
+                def foo(...); end
+                "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:18", Method, |def| {
+            assert_simple_signature!(def, |params| {
+                assert_eq!(params.len(), 1);
+                assert_parameter!(&params[0], Forward, |param| {
+                    assert_string_eq!(context, param.str(), "...");
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_nested_method_definitions() {
+        let context = index_source({
+            "
+                class Foo
+                  def bar
+                    def baz; end
+                  end
+                end
+                "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "2:3-4:6", Method, |bar| {
+                assert_definition_at!(&context, "3:5-3:17", Method, |baz| {
+                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                    assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+}
+
+mod singleton_class_tests {
+    use super::*;
+
+    #[test]
+    fn index_class_self_block_creates_singleton_class() {
+        let context = index_source({
+            "
+            class Bar; end
+
+            class Foo
+              class << self
+                def baz; end
+
+                class << Bar
+                  def self.qux; end
+                end
+
+                class << self
+                  def quz; end
+                end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // class Bar
+        assert_definition_at!(&context, "1:1-1:15", Class, |bar_class| {
+            assert_def_name_eq!(&context, bar_class, "Bar");
+            assert_def_name_offset_eq!(&context, bar_class, "1:7-1:10");
+        });
+
+        // class Foo
+        assert_definition_at!(&context, "3:1-15:4", Class, |foo_class| {
+            assert_def_name_eq!(&context, foo_class, "Foo");
+            assert_def_name_offset_eq!(&context, foo_class, "3:7-3:10");
+
+            // class << self (inside Foo)
+            assert_definition_at!(&context, "4:3-14:6", SingletonClass, |foo_singleton| {
+                assert_def_name_eq!(&context, foo_singleton, "Foo::<Foo>");
+                // name_offset points to "self"
+                assert_def_name_offset_eq!(&context, foo_singleton, "4:12-4:16");
+                assert_eq!(foo_singleton.lexical_nesting_id(), &Some(foo_class.id()));
+
+                // def baz (inside class << self)
+                assert_definition_at!(&context, "5:5-5:17", Method, |baz_method| {
+                    assert_eq!(baz_method.lexical_nesting_id(), &Some(foo_singleton.id()));
+                });
+
+                // class << Bar (inside class << self of Foo)
+                assert_definition_at!(&context, "7:5-9:8", SingletonClass, |bar_singleton| {
+                    assert_def_name_eq!(&context, bar_singleton, "Bar::<Bar>");
+                    // name_offset points to "Bar"
+                    assert_def_name_offset_eq!(&context, bar_singleton, "7:14-7:17");
+                    assert_eq!(bar_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
+
+                    // def self.qux (inside class << Bar)
+                    assert_definition_at!(&context, "8:7-8:24", Method, |qux_method| {
+                        assert_eq!(qux_method.lexical_nesting_id(), &Some(bar_singleton.id()));
+                        assert_method_has_receiver!(&context, qux_method, "<Bar>");
+                    });
+                });
+
+                // class << self (nested inside outer class << self)
+                assert_definition_at!(&context, "11:5-13:8", SingletonClass, |nested_singleton| {
+                    assert_def_name_eq!(&context, nested_singleton, "Foo::<Foo>::<<Foo>>");
+                    // name_offset points to "self"
+                    assert_def_name_offset_eq!(&context, nested_singleton, "11:14-11:18");
+                    assert_eq!(nested_singleton.lexical_nesting_id(), &Some(foo_singleton.id()));
+
+                    // def quz (inside nested class << self)
+                    assert_definition_at!(&context, "12:7-12:19", Method, |quz_method| {
+                        assert_eq!(quz_method.lexical_nesting_id(), &Some(nested_singleton.id()));
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_singleton_class_definition_in_compact_namespace() {
+        let context = index_source({
+            "
+            class Foo::Bar
+              class << self
+                def baz; end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_def_name_eq!(&context, class_def, "Foo::Bar");
+            assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
+                assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
+                assert_definition_at!(&context, "3:5-3:17", Method, |method| {
+                    assert_eq!(method.lexical_nesting_id(), &Some(singleton_class.id()));
+                });
+            });
+        });
+
+        assert_constant_references_eq!(&context, ["Foo"]);
+    }
+
+    #[test]
+    fn index_constant_in_singleton_class_definition() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                A = 1
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
+                assert_eq!(singleton_class.lexical_nesting_id(), &Some(class_def.id()));
+                assert_definition_at!(&context, "3:5-3:6", Constant, |def| {
+                    assert_def_name_eq!(&context, def, "A");
+                    assert_eq!(Some(singleton_class.id()), def.lexical_nesting_id().clone());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn do_not_index_singleton_class_with_dynamic_expression() {
+        let context = index_source({
+            "
+            class << foo
+                def bar; end
+            end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["dynamic-singleton-definition: Dynamic singleton class definition (1:1-3:4)"]
+        );
+        assert_eq!(context.graph().definitions().len(), 0);
+    }
+}
+
+mod visibility_tests {
+    use super::*;
+
+    #[test]
+    fn index_def_node_with_visibility_top_level() {
+        let context = index_source({
+            "
+            def m1; end
+
+            protected def m2; end
+
+            public
+
+            def m3; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:12", Method, |def| {
+            assert_def_str_eq!(&context, def, "m1()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "3:11-3:22", Method, |def| {
+            assert_def_str_eq!(&context, def, "m2()");
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+
+        assert_definition_at!(&context, "7:1-7:12", Method, |def| {
+            assert_def_str_eq!(&context, def, "m3()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_module_function() {
+        let context = index_source({
+            "
+            module Foo
+              def bar; end
+
+              module_function
+
+              def baz; end
+              attr_reader :attribute
+
+              public
+
+              def qux; end
+
+              module_function def boop; end
+
+              def zip; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:3-2:15", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        let definitions = context.all_definitions_at("6:3-6:15");
+        assert_eq!(
+            definitions.len(),
+            2,
+            "module_function should create two definitions for baz"
+        );
+
+        let instance_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
+            .expect("should have instance method definition");
+        let Definition::Method(instance_method) = instance_method else {
+            panic!()
+        };
+        assert_def_str_eq!(&context, instance_method, "baz()");
+        assert_eq!(instance_method.visibility(), &Visibility::Private);
+
+        let singleton_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
+            .expect("should have singleton method definition");
+        let Definition::Method(singleton_method) = singleton_method else {
+            panic!()
+        };
+        assert_def_str_eq!(&context, singleton_method, "baz()");
+        assert_eq!(singleton_method.visibility(), &Visibility::Public);
+
+        assert_definition_at!(&context, "7:16-7:25", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "attribute()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "11:3-11:15", Method, |def| {
+            assert_def_str_eq!(&context, def, "qux()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        let definitions = context.all_definitions_at("13:19-13:32");
+        assert_eq!(
+            definitions.len(),
+            2,
+            "module_function should create two definitions for boop"
+        );
+
+        let instance_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_none()))
+            .expect("boop: should have instance method definition");
+        let Definition::Method(instance_method) = instance_method else {
+            panic!()
+        };
+        assert_def_str_eq!(&context, instance_method, "boop()");
+        assert_eq!(instance_method.visibility(), &Visibility::Private);
+
+        let singleton_method = definitions
+            .iter()
+            .find(|d| matches!(d, Definition::Method(m) if m.receiver().is_some()))
+            .expect("boop: should have singleton method definition");
+        let Definition::Method(singleton_method) = singleton_method else {
+            panic!()
+        };
+        assert_def_str_eq!(&context, singleton_method, "boop()");
+        assert_eq!(singleton_method.visibility(), &Visibility::Public);
+
+        assert_definition_at!(&context, "15:3-15:15", Method, |def| {
+            assert_def_str_eq!(&context, def, "zip()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_def_node_with_visibility_nested() {
+        let context = index_source({
+            "
+            protected
+
+            class Foo
+              def m1; end
+
+              private
+
+              module Bar
+                def m2; end
+
+                private
+
+                def m3; end
+
+                protected
+              end
+
+              def m4; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:3-4:14", Method, |def| {
+            assert_def_str_eq!(&context, def, "m1()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "9:5-9:16", Method, |def| {
+            assert_def_str_eq!(&context, def, "m2()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "13:5-13:16", Method, |def| {
+            assert_def_str_eq!(&context, def, "m3()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "18:3-18:14", Method, |def| {
+            assert_def_str_eq!(&context, def, "m4()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_def_node_singleton_visibility() {
+        let context = index_source({
+            "
+            protected
+
+            def self.m1; end
+
+            protected def self.m2; end
+
+            class Foo
+              private
+
+              def self.m3; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:1-3:17", Method, |def| {
+            assert_def_str_eq!(&context, def, "m1()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "5:11-5:27", Method, |def| {
+            assert_def_str_eq!(&context, def, "m2()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "10:3-10:19", Method, |def| {
+            assert_def_str_eq!(&context, def, "m3()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_visibility_in_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              protected
+
+              class << self
+                def m1; end
+
+                private
+
+                def m2; end
+              end
+
+              def m3; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:5-5:16", Method, |def| {
+            assert_def_str_eq!(&context, def, "m1()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "9:5-9:16", Method, |def| {
+            assert_def_str_eq!(&context, def, "m2()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "12:3-12:14", Method, |def| {
+            assert_def_str_eq!(&context, def, "m3()");
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+    }
+
+    #[test]
+    fn index_private_constant_calls() {
+        let context = index_source({
+            r#"
+            module Foo
+              BAR = 42
+              BAZ = 43
+              FOO = 44
+
+              private_constant :BAR, :BAZ
+              private_constant "FOO"
+
+              class Qux
+                BAR = 42
+                BAZ = 43
+
+                Foo.public_constant :BAR
+                Foo.public_constant "BAZ"
+              end
+
+              self.private_constant :Qux
+            end
+
+            Foo.public_constant :BAR
+            "#
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "6:21-6:24", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "BAR");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "6:27-6:30", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "BAZ");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "7:20-7:25", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "FOO");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "13:26-13:29", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "Foo::BAR");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+        assert_definition_at!(&context, "14:25-14:30", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "Foo::BAZ");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+        assert_definition_at!(&context, "17:26-17:29", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "Qux");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "20:22-20:25", ConstantVisibility, |def| {
+            assert_def_name_eq!(&context, def, "Foo::BAR");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_private_constant_calls_diagnostics() {
+        let context = index_source({
+            "
+            private_constant :NOT_INDEXED
+            self.private_constant :NOT_INDEXED
+            foo.private_constant :NOT_INDEXED # not indexed, dynamic receiver
+
+            module Foo
+              private_constant NOT_INDEXED, not_indexed # not indexed, not a symbol
+              private_constant # not indexed, no arguments
+
+              def self.qux
+                private_constant :Bar # not indexed, dynamic
+              end
+
+              def foo
+                private_constant :Bar # not indexed, dynamic
+              end
+            end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec![
+                "invalid-private-constant: Private constant called at top level (1:1-1:30)",
+                "invalid-private-constant: Private constant called at top level (2:1-2:35)",
+                "invalid-private-constant: Dynamic receiver for private constant (3:1-3:34)",
+                "invalid-private-constant: Private constant called with non-symbol argument (6:20-6:31)",
+            ]
+        );
+
+        assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+    }
+}
+
+mod attr_accessor_tests {
+    use super::*;
+
+    #[test]
+    fn index_attr_accessor_definition() {
+        let context = index_source({
+            "
+            attr_accessor :foo
+
+            class Foo
+              attr_accessor :bar, :baz
+            end
+
+            foo.attr_accessor :not_indexed
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:24-4:27", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_reader_definition() {
+        let context = index_source({
+            "
+            attr_reader :foo
+
+            class Foo
+              attr_reader :bar, :baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:14-1:17", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_writer_definition() {
+        let context = index_source({
+            "
+            attr_writer :foo
+
+            class Foo
+              attr_writer :bar, :baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 4);
+
+        assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+
+            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_definition() {
+        let context = index_source({
+            r#"
+            attr "a1", :a2
+
+            class Foo
+              attr "a3", true
+              attr :a4, false
+              attr :a5, 123
+            end
+            "#
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 6);
+
+        assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "a1()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "1:13-1:15", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "a2()");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "a3()");
+
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "5:9-5:11", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "a4()");
+
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[1], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "6:9-6:11", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "a5()");
+            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_attr_accessor_with_visibility_top_level() {
+        let context = index_source({
+            "
+            attr_accessor :foo
+
+            protected attr_reader :bar
+
+            public
+
+            attr_writer :baz
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "3:24-3:27", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+
+        assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_attr_accessor_with_visibility_nested() {
+        let context = index_source({
+            "
+            protected
+
+            class Foo
+              attr_accessor :foo
+
+              private
+
+              module Bar
+                attr_accessor :bar
+
+                private
+
+                attr_reader :baz
+
+                public
+              end
+
+              attr_writer :qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "9:20-9:23", AttrAccessor, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        assert_definition_at!(&context, "13:18-13:21", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
+            assert_def_str_eq!(&context, def, "qux()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
     }
 }
 
