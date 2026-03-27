@@ -4,7 +4,6 @@ use line_index::LineIndex;
 use url::Url;
 
 use crate::diagnostic::Diagnostic;
-use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{DefinitionId, ReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
@@ -17,8 +16,6 @@ pub struct Document {
     method_reference_ids: Vec<ReferenceId>,
     constant_reference_ids: Vec<ReferenceId>,
     diagnostics: Vec<Diagnostic>,
-    definition_diagnostics: IdentityHashMap<DefinitionId, Vec<Diagnostic>>,
-    reference_diagnostics: IdentityHashMap<ReferenceId, Vec<Diagnostic>>,
 }
 
 impl Document {
@@ -31,8 +28,6 @@ impl Document {
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
             diagnostics: Vec::new(),
-            definition_diagnostics: IdentityHashMap::default(),
-            reference_diagnostics: IdentityHashMap::default(),
         }
     }
 
@@ -85,31 +80,6 @@ impl Document {
 
     pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
         self.diagnostics.push(diagnostic);
-    }
-
-    #[must_use]
-    pub fn diagnostics_for_definition(&self, id: DefinitionId) -> &[Diagnostic] {
-        self.definition_diagnostics.get(&id).map_or(&[], Vec::as_slice)
-    }
-
-    pub fn add_diagnostic_for_definition(&mut self, id: DefinitionId, diagnostic: Diagnostic) {
-        self.definition_diagnostics.entry(id).or_default().push(diagnostic);
-    }
-
-    #[must_use]
-    pub fn diagnostics_for_reference(&self, id: ReferenceId) -> &[Diagnostic] {
-        self.reference_diagnostics.get(&id).map_or(&[], Vec::as_slice)
-    }
-
-    pub fn add_diagnostic_for_reference(&mut self, id: ReferenceId, diagnostic: Diagnostic) {
-        self.reference_diagnostics.entry(id).or_default().push(diagnostic);
-    }
-
-    pub fn all_diagnostics(&self) -> impl Iterator<Item = &Diagnostic> {
-        self.diagnostics
-            .iter()
-            .chain(self.definition_diagnostics.values().flatten())
-            .chain(self.reference_diagnostics.values().flatten())
     }
 
     /// Computes the require path for this document given load paths.
