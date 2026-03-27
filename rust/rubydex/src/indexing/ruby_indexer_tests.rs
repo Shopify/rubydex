@@ -3531,6 +3531,51 @@ fn index_attr_reader_with_extra_args_not_scoped() {
     });
 }
 
+#[test]
+fn index_retroactive_module_function_symbol_target() {
+    let context = index_source(
+        "
+        module Foo
+          def foo; end
+
+          module_function :foo
+        end
+        ",
+    );
+
+    assert_no_local_diagnostics!(&context);
+
+    assert_definition_at!(&context, "4:20-4:23", MethodVisibility, |def| {
+        assert_def_str_eq!(&context, def, "foo()");
+        assert_eq!(def.visibility(), &Visibility::ModuleFunction);
+    });
+}
+
+#[test]
+fn index_retroactive_module_function_in_class_is_invalid() {
+    let context = index_source(
+        "
+        class Foo
+          def foo; end
+
+          module_function :foo
+        end
+        ",
+    );
+
+    assert_local_diagnostics_eq!(
+        &context,
+        vec!["invalid-method-visibility: `module_function` can only be used in modules (4:3-4:23)"]
+    );
+
+    for def in context.graph().definitions().values() {
+        assert!(
+            !matches!(def, Definition::MethodVisibility(_)),
+            "should not create MethodVisibility for module_function in class"
+        );
+    }
+}
+
 mod class_and_module_tests {
     use super::*;
 
