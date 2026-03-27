@@ -818,6 +818,15 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
+    fn current_nesting_is_module(&self) -> bool {
+        self.current_nesting_definition_id().is_some_and(|id| {
+            self.local_graph
+                .definitions()
+                .get(&id)
+                .is_some_and(|def| matches!(def, Definition::Module(_)))
+        })
+    }
+
     /// Indexes the final constant target from a value node, unwrapping chained assignments.
     ///
     /// For `A = B = C`, when processing `A`, the value is `ConstantWriteNode(B)`.
@@ -1253,11 +1262,7 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
-    fn should_apply_inline_visibility(message: &str, args: &ruby_prism::NodeList) -> bool {
-        if message == "module_function" {
-            return true;
-        }
-
+    fn should_apply_inline_visibility(args: &ruby_prism::NodeList) -> bool {
         if args.len() != 1 {
             return false;
         }
@@ -1285,6 +1290,7 @@ impl<'a> RubyIndexer<'a> {
         arguments_node: &ruby_prism::ArgumentsNode,
         visibility: Visibility,
         call_offset: &Offset,
+        call_name: &str,
     ) {
         let is_literal = |arg: ruby_prism::Node| {
             matches!(
@@ -1297,13 +1303,13 @@ impl<'a> RubyIndexer<'a> {
         if !only_literals {
             let has_any_literal = args.iter().any(is_literal);
             let message = if has_any_literal {
-                "Method visibility called with mixed literal and non-literal arguments"
+                format!("`{call_name}` called with mixed literal and non-literal arguments")
             } else {
-                "Method visibility called with non-literal arguments"
+                format!("`{call_name}` called with non-literal arguments")
             };
 
             self.local_graph
-                .add_diagnostic(Rule::InvalidMethodVisibility, call_offset.clone(), message.to_string());
+                .add_diagnostic(Rule::InvalidMethodVisibility, call_offset.clone(), message);
             self.visit_arguments_node(arguments_node);
             return;
         }
@@ -1957,7 +1963,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 if let Some(arguments) = node.arguments() {
                     let args = arguments.arguments();
 
-                    if Self::should_apply_inline_visibility(message.as_str(), &args) {
+                    if Self::should_apply_inline_visibility(&args) {
                         // Inline/scoped form: `private def foo(bar); end`
                         //
                         // Push the new visibility to the stack and then pop it after visiting
@@ -1966,9 +1972,22 @@ impl Visit<'_> for RubyIndexer<'_> {
                             .push(VisibilityModifier::new(visibility, true, offset));
                         self.visit_arguments_node(&arguments);
                         self.visibility_stack.pop();
+                    } else if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
+                        self.local_graph.add_diagnostic(
+                            Rule::InvalidMethodVisibility,
+                            offset,
+                            "`module_function` can only be used in modules".to_string(),
+                        );
+                        self.visit_arguments_node(&arguments);
                     } else {
-                        // Retroactive method visibility: `private :foo`, `protected :bar, :baz`
-                        self.handle_retroactive_method_visibility(&args, &arguments, visibility, &offset);
+                        // Retroactive method visibility: `private :foo`, `module_function :bar`
+                        self.handle_retroactive_method_visibility(
+                            &args,
+                            &arguments,
+                            visibility,
+                            &offset,
+                            message.as_str(),
+                        );
                     }
                 } else {
                     // Flag mode: `private` with no arguments
@@ -6831,9 +6850,7 @@ mod tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec![
-                "invalid-method-visibility: Method visibility called with mixed literal and non-literal arguments (4:3-4:27)",
-            ]
+            vec!["invalid-method-visibility: `private` called with mixed literal and non-literal arguments (4:3-4:27)",]
         );
 
         // No MethodVisibilityDefinition created
@@ -6883,7 +6900,7 @@ mod tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: Method visibility called with non-literal arguments (4:3-4:21)"]
+            vec!["invalid-method-visibility: `private` called with non-literal arguments (4:3-4:21)"]
         );
 
         // No MethodVisibilityDefinition created
@@ -6907,7 +6924,7 @@ mod tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: Method visibility called with non-literal arguments (2:3-2:23)"]
+            vec!["invalid-method-visibility: `private` called with non-literal arguments (2:3-2:23)"]
         );
 
         // No MethodVisibilityDefinition created
@@ -6931,7 +6948,7 @@ mod tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: Method visibility called with non-literal arguments (2:3-2:35)"]
+            vec!["invalid-method-visibility: `private` called with non-literal arguments (2:3-2:35)"]
         );
 
         // No MethodVisibilityDefinition or AttrReader created from that call
@@ -6973,9 +6990,7 @@ mod tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec![
-                "invalid-method-visibility: Method visibility called with mixed literal and non-literal arguments (2:3-2:34)"
-            ]
+            vec!["invalid-method-visibility: `private` called with mixed literal and non-literal arguments (2:3-2:34)"]
         );
 
         // No MethodVisibilityDefinition created
@@ -6992,6 +7007,51 @@ mod tests {
             // The attr_reader is public (default) — the visibility stack was NOT pushed
             assert_eq!(def.visibility(), &Visibility::Public);
         });
+    }
+
+    #[test]
+    fn index_retroactive_module_function_symbol_target() {
+        let context = index_source(
+            "
+            module Foo
+              def foo; end
+
+              module_function :foo
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:20-4:23", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::ModuleFunction);
+        });
+    }
+
+    #[test]
+    fn index_retroactive_module_function_in_class_is_invalid() {
+        let context = index_source(
+            "
+            class Foo
+              def foo; end
+
+              module_function :foo
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `module_function` can only be used in modules (4:3-4:23)"]
+        );
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function in class"
+            );
+        }
     }
 }
 
