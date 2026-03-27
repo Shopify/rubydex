@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use crate::tools::{
-    FindConstantReferencesParams, GetDeclarationParams, GetDescendantsParams, GetFileDeclarationsParams,
-    SearchDeclarationsParams,
+    DetectDeadConstantsParams, FindConstantReferencesParams, GetDeclarationParams, GetDescendantsParams,
+    GetFileDeclarationsParams, SearchDeclarationsParams,
 };
 use rmcp::{
     ServerHandler,
@@ -15,7 +15,7 @@ use rmcp::{
 };
 use rubydex::model::ids::{DeclarationId, UriId};
 use rubydex::model::{
-    declaration::{Ancestor, Ancestors},
+    declaration::{Ancestor, Ancestors, Declaration},
     graph::Graph,
 };
 use url::Url;
@@ -178,6 +178,12 @@ fn format_path(uri: &str, root: &Path) -> String {
 
     path.strip_prefix(root)
         .map_or_else(|_| path.display().to_string(), |rel| rel.display().to_string())
+}
+
+/// Returns true for declarations that are part of Ruby's built-in runtime or are
+/// synthetic internal entries that should never be reported as dead code.
+fn is_infrastructure_declaration(name: &str) -> bool {
+    matches!(name, "Object" | "BasicObject" | "Module" | "Class") || name.contains("<anonymous>")
 }
 
 /// Formats an ancestor chain into a JSON array of `{"name": ..., "kind": ...}` objects.
@@ -452,6 +458,108 @@ impl RubydexServer {
     }
 
     #[tool(
+        description = "Find Ruby classes, modules, and constants with zero resolved references across the codebase — dead code candidates. Returns declarations that are defined but never referenced anywhere, with file locations and owning namespace. Uses resolved name references (not string matching) for high accuracy. Results may not account for dynamic access (const_get, const_defined?, metaprogramming) or references in type annotations — cross-validate with Grep before removing. Results are paginated: the response includes `total`."
+    )]
+    fn detect_dead_constants(&self, Parameters(params): Parameters<DetectDeadConstantsParams>) -> String {
+        let state = ensure_graph_ready!(self);
+        let graph = state.graph.as_ref().unwrap();
+
+        let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(200); // default 50, max 200
+        let offset = params.offset.unwrap_or(0);
+        let kind_filter = params.kind.as_deref();
+
+        // Resolve optional file_path to an absolute prefix for matching
+        let path_prefix = params.file_path.as_ref().map(|fp| {
+            let p = if Path::new(fp).is_absolute() {
+                PathBuf::from(fp)
+            } else {
+                self.root_path.join(fp)
+            };
+            std::fs::canonicalize(&p).unwrap_or(p)
+        });
+
+        // Collect and sort by name for deterministic pagination order.
+        // Cannot use paginate! here because graph.declarations() is a HashMap
+        // with non-deterministic iteration order.
+        let mut filtered: Vec<_> = graph
+            .declarations()
+            .values()
+            .filter(|decl| {
+                let kind = decl.kind();
+                if !matches!(kind, "Class" | "Module" | "Constant" | "ConstantAlias") {
+                    return false;
+                }
+
+                if let Some(filter) = kind_filter
+                    && !kind.eq_ignore_ascii_case(filter)
+                {
+                    return false;
+                }
+
+                if !decl.references().is_empty() {
+                    return false;
+                }
+
+                if is_infrastructure_declaration(decl.name()) {
+                    return false;
+                }
+
+                if let Some(prefix) = &path_prefix {
+                    let has_matching_def = decl.definitions().iter().any(|def_id| {
+                        graph
+                            .definitions()
+                            .get(def_id)
+                            .and_then(|def| graph.documents().get(def.uri_id()))
+                            .and_then(|doc| uri_to_path(doc.uri()))
+                            .is_some_and(|p| p.starts_with(prefix))
+                    });
+                    if !has_matching_def {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .collect();
+        filtered.sort_by_key(|decl| decl.name());
+        let total = filtered.len();
+
+        let results: Vec<serde_json::Value> = filtered
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|decl| {
+                let file_info = decl.definitions().first().and_then(|def_id| {
+                    let def = graph.definitions().get(def_id)?;
+                    let doc = graph.documents().get(def.uri_id())?;
+                    let loc = def.offset().to_location(doc).to_presentation();
+                    Some((format_path(doc.uri(), &self.root_path), loc.start_line()))
+                });
+
+                let owner_name = graph
+                    .declarations()
+                    .get(decl.owner_id())
+                    .map_or("<unknown>", Declaration::name);
+
+                serde_json::json!({
+                    "name": decl.name(),
+                    "kind": decl.kind(),
+                    "file": file_info.as_ref().map(|(f, _)| f.as_str()),
+                    "line": file_info.map(|(_, l)| l),
+                    "owner": owner_name,
+                })
+            })
+            .collect();
+
+        let result = serde_json::json!({
+            "results": results,
+            "total": total,
+        });
+
+        serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    #[tool(
         description = "List all Ruby classes, modules, methods, and constants defined in a specific file. Returns a structural overview with names, kinds, and line numbers. Use this to understand a file's structure before reading it, or to see what a file contributes to the codebase. Accepts relative or absolute paths."
     )]
     fn get_file_declarations(&self, Parameters(params): Parameters<GetFileDeclarationsParams>) -> String {
@@ -555,13 +663,14 @@ Decision guide:
 - Need reverse hierarchy? -> get_descendants (what inherits from this class/module)
 - Refactoring a class/module/constant? -> find_constant_references (all precise usages across codebase)
 - Exploring a file? -> get_file_declarations (structural overview)
+- Finding dead code? -> detect_dead_constants (unreferenced classes, modules, constants)
 - Want general statistics? -> codebase_stats (size and composition)
 
 Typical workflow: search_declarations -> get_declaration -> find_constant_references.
 
 Fully qualified name format: "Foo::Bar" for classes/modules/constants, "Foo::Bar#method_name" for instance methods.
 
-Pagination: tools that may return a high number of results include `total` for pagination. When `total` exceeds the number of returned items, use `offset` to fetch the next page.
+Pagination: search_declarations, get_descendants, find_constant_references, and detect_dead_constants return paginated results. The response includes a `total` count. When `total` exceeds the number of returned items, use `offset` to fetch the next page.
 
 Use Grep instead for: literal string search, log messages, comments, non-Ruby files, or content search rather than structural queries."#;
 
@@ -1063,6 +1172,391 @@ mod tests {
             })),
             "not_found",
         );
+    }
+
+    // -- detect_dead_constants --
+
+    /// Extract all "name" strings from a JSON array field.
+    fn result_names<'a>(json: &'a Value, field: &str) -> Vec<&'a str> {
+        json[field]
+            .as_array()
+            .expect("expected array")
+            .iter()
+            .filter_map(|e| e["name"].as_str())
+            .collect()
+    }
+
+    macro_rules! detect_dead_constants {
+        ($server:expr, $($field:ident: $val:expr),* $(,)?) => {
+            parse(&$server.detect_dead_constants(Parameters(DetectDeadConstantsParams {
+                $($field: $val,)*
+            })))
+        };
+    }
+
+    #[test]
+    fn detect_dead_constants_finds_unreferenced_class() {
+        let s = server_with_source(
+            "
+            class LiveClass; end
+            class DeadClass; end
+            class Consumer < LiveClass; end
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            names.contains(&"DeadClass"),
+            "DeadClass has no references, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"LiveClass"),
+            "LiveClass is referenced by Consumer, got: {names:?}"
+        );
+
+        let entry = array!(res, "results")
+            .iter()
+            .find(|e| e["name"].as_str() == Some("DeadClass"))
+            .unwrap();
+        assert_eq!(entry["kind"], "Class");
+        assert!(entry["file"].as_str().unwrap().ends_with("test.rb"));
+        assert!(entry["line"].as_u64().is_some());
+    }
+
+    #[test]
+    fn detect_dead_constants_superclass_counts_as_reference() {
+        let s = server_with_source(
+            "
+            class Base; end
+            class LiveChild < Base; end
+            class DeadChild < Base; end
+            x = LiveChild.new
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            !names.contains(&"Base"),
+            "Base is referenced as superclass, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"LiveChild"),
+            "LiveChild is referenced by x, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"DeadChild"),
+            "DeadChild has no references, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_include_counts_as_reference() {
+        let s = server_with_source(
+            "
+            module LiveModule; end
+            module DeadModule; end
+            class User
+              include LiveModule
+            end
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            !names.contains(&"LiveModule"),
+            "LiveModule is included by User, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"DeadModule"),
+            "DeadModule has no references, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_finds_unreferenced_constant_alias() {
+        let s = server_with_source(
+            "
+            class Original; end
+            LiveAlias = Original
+            DeadAlias = Original
+            x = LiveAlias.new
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            names.contains(&"DeadAlias"),
+            "DeadAlias has no references, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"LiveAlias"),
+            "LiveAlias is referenced by x, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"Original"),
+            "Original is referenced by aliases, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_finds_unreferenced_module() {
+        let s = server_with_source(
+            "
+            module LiveModule; end
+            module DeadModule; end
+            class Foo
+              include LiveModule
+            end
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            names.contains(&"DeadModule"),
+            "DeadModule has no references, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"LiveModule"),
+            "LiveModule is included by Foo, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_finds_unreferenced_constant() {
+        let s = server_with_source(
+            "
+            class Holder
+              LIVE_CONST = 1
+              DEAD_CONST = 2
+            end
+            x = Holder::LIVE_CONST
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            names.contains(&"Holder::DEAD_CONST"),
+            "DEAD_CONST has no references, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"Holder::LIVE_CONST"),
+            "LIVE_CONST is referenced by x, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_excludes_infrastructure() {
+        let s = server_with_source(
+            "
+            class DeadClass; end
+            class LiveClass; end
+            x = LiveClass.new
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(names.contains(&"DeadClass"), "DeadClass should appear, got: {names:?}");
+        assert!(
+            names.iter().all(|n| !is_infrastructure_declaration(n)),
+            "Infrastructure declarations should be excluded, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_excludes_anonymous_classes() {
+        let s = server_with_source(
+            "
+            class Named; end
+            anon = Class.new
+            x = Named.new
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            !names.iter().any(|n| n.contains("<anonymous>")),
+            "Anonymous classes should be excluded, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_excludes_methods_and_variables() {
+        let s = server_with_source(
+            "
+            class Foo
+              def unused_method; end
+              LIVE_CONST = 1
+              DEAD_CONST = 2
+            end
+            x = Foo::LIVE_CONST
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            names.contains(&"Foo::DEAD_CONST"),
+            "DEAD_CONST should appear, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"Foo::LIVE_CONST"),
+            "LIVE_CONST is referenced, got: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("unused_method")),
+            "Methods should never appear, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_kind_filter() {
+        let s = server_with_source(
+            "
+            class LiveClass; end
+            class DeadClass; end
+            module DeadModule; end
+            x = LiveClass.new
+            ",
+        );
+
+        let res = detect_dead_constants!(s, kind: Some("Class".into()), file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+        assert!(
+            names.contains(&"DeadClass"),
+            "DeadClass should appear with kind=Class, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"DeadModule"),
+            "Module should be filtered out when kind=Class, got: {names:?}"
+        );
+
+        // Case-insensitive
+        let res = detect_dead_constants!(s, kind: Some("module".into()), file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+        assert!(
+            names.contains(&"DeadModule"),
+            "DeadModule should appear with kind=module, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"DeadClass"),
+            "Class should be filtered out when kind=module, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_pagination() {
+        let s = server_with_source(
+            "
+            class LiveClass; end
+            class DeadA; end
+            class DeadB; end
+            class DeadC; end
+            x = LiveClass.new
+            ",
+        );
+
+        let full = detect_dead_constants!(s, kind: Some("Class".into()), file_path: None, limit: None, offset: None);
+        let total = full["total"].as_u64().unwrap();
+        assert!(total >= 3, "Expected at least 3 dead classes, got {total}");
+        let all_names = result_names(&full, "results");
+        assert!(
+            !all_names.contains(&"LiveClass"),
+            "LiveClass should not appear, got: {all_names:?}"
+        );
+
+        let page1 =
+            detect_dead_constants!(s, kind: Some("Class".into()), file_path: None, limit: Some(1), offset: Some(0));
+        assert_eq!(array!(page1, "results").len(), 1);
+        assert_json_int!(page1, "total", total);
+
+        let page2 =
+            detect_dead_constants!(s, kind: Some("Class".into()), file_path: None, limit: Some(1), offset: Some(1));
+        let name1 = array!(page1, "results")[0]["name"].as_str().unwrap();
+        let name2 = array!(page2, "results")[0]["name"].as_str().unwrap();
+        assert_ne!(name1, name2, "Pages should return different items");
+    }
+
+    #[test]
+    fn detect_dead_constants_file_path_filter() {
+        let models = test_uri("app/models/user.rb");
+        let services = test_uri("app/services/notifier.rb");
+        let s = server_with_sources(&[
+            (&models, "class DeadUser; end\nclass LiveUser; end"),
+            (&services, "class DeadNotifier; end\nx = LiveUser"),
+        ]);
+
+        let res =
+            detect_dead_constants!(s, kind: None, file_path: Some("app/models".into()), limit: None, offset: None);
+        let names = result_names(&res, "results");
+        assert!(
+            names.contains(&"DeadUser"),
+            "DeadUser is in app/models and dead, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"LiveUser"),
+            "LiveUser is referenced from services, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"DeadNotifier"),
+            "DeadNotifier is in app/services, not app/models, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn detect_dead_constants_all_referenced() {
+        let s = server_with_source(
+            "
+            class Animal; end
+            class Dog < Animal; end
+            Dog.new
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: Some("Class".into()), file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            !names.contains(&"Animal"),
+            "Animal is referenced by Dog, got: {names:?}"
+        );
+        assert!(!names.contains(&"Dog"), "Dog is referenced by Dog.new, got: {names:?}");
+    }
+
+    #[test]
+    fn detect_dead_constants_includes_owner() {
+        let s = server_with_source(
+            "
+            class Outer
+              class LiveInner; end
+              class DeadInner; end
+            end
+            x = Outer::LiveInner.new
+            ",
+        );
+        let res = detect_dead_constants!(s, kind: None, file_path: None, limit: None, offset: None);
+        let names = result_names(&res, "results");
+
+        assert!(
+            names.contains(&"Outer::DeadInner"),
+            "DeadInner has no references, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"Outer::LiveInner"),
+            "LiveInner is referenced by x, got: {names:?}"
+        );
+
+        let entry = array!(res, "results")
+            .iter()
+            .find(|e| e["name"].as_str() == Some("Outer::DeadInner"))
+            .unwrap();
+        assert_eq!(entry["owner"].as_str().unwrap(), "Outer");
     }
 
     // -- get_file_declarations --
