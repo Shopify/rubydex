@@ -608,4 +608,145 @@ class DeclarationTest < Minitest::Test
       assert_equal("Foo#initialize()", decl.name)
     end
   end
+
+  def test_method_declaration_signatures
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bar(a, b = 1); end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      decl = graph["Foo#bar()"]
+      assert_instance_of(Rubydex::Method, decl)
+
+      signatures = decl.signatures
+      assert_equal(1, signatures.length)
+
+      sig = signatures.first
+      assert_instance_of(Rubydex::Signature, sig)
+      assert_instance_of(Rubydex::MethodDefinition, sig.method_definition)
+
+      params = sig.parameters
+      assert_equal(2, params.length)
+      assert_equal([:req, :a], params[0][0..1])
+      assert_equal([:opt, :b], params[1][0..1])
+    end
+  end
+
+  def test_method_declaration_signatures_with_alias
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bar(a, b); end
+          alias_method :baz, :bar
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      # Alias resolves to original method's signatures
+      decl = graph["Foo#baz()"]
+      assert_instance_of(Rubydex::Method, decl)
+
+      signatures = decl.signatures
+      assert_equal(1, signatures.length)
+
+      params = signatures.first.parameters
+      assert_equal(2, params.length)
+      assert_equal([:req, :a], params[0][0..1])
+      assert_equal([:req, :b], params[1][0..1])
+
+      # method_definition points to the original MethodDefinition
+      assert_instance_of(Rubydex::MethodDefinition, signatures.first.method_definition)
+      assert_equal("bar()", signatures.first.method_definition.name)
+    end
+  end
+
+  def test_method_declaration_signatures_from_rbs
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def bar: (String a, ?Integer b) -> void
+        end
+      RBS
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rbs"))
+      graph.resolve
+
+      decl = graph["Foo#bar()"]
+      assert_instance_of(Rubydex::Method, decl)
+
+      signatures = decl.signatures
+      assert_equal(1, signatures.length)
+
+      params = signatures.first.parameters
+      assert_equal(2, params.length)
+      assert_equal([:req, :a], params[0][0..1])
+      assert_equal([:opt, :b], params[1][0..1])
+    end
+  end
+
+  def test_method_declaration_signatures_from_rbs_with_overloads
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def bar: (String name) -> void
+                 | (Integer id, ?Symbol mode) -> String
+        end
+      RBS
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rbs"))
+      graph.resolve
+
+      decl = graph["Foo#bar()"]
+      assert_instance_of(Rubydex::Method, decl)
+
+      signatures = decl.signatures
+      assert_equal(2, signatures.length)
+
+      params0 = signatures[0].parameters
+      assert_equal(1, params0.length)
+      assert_equal([:req, :name], params0[0][0..1])
+
+      params1 = signatures[1].parameters
+      assert_equal(2, params1.length)
+      assert_equal([:req, :id], params1[0][0..1])
+      assert_equal([:opt, :mode], params1[1][0..1])
+    end
+  end
+
+  def test_method_declaration_signatures_with_override
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bar(a); end
+          def bar(a, b); end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      decl = graph["Foo#bar()"]
+      signatures = decl.signatures
+      assert_equal(2, signatures.length)
+
+      # Each signature comes from a different definition
+      params0 = signatures[0].parameters
+      params1 = signatures[1].parameters
+
+      param_counts = [params0.length, params1.length].sort
+      assert_equal([1, 2], param_counts)
+    end
+  end
 end

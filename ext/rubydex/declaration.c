@@ -4,6 +4,7 @@
 #include "handle.h"
 #include "reference.h"
 #include "rustbindings.h"
+#include "signature.h"
 #include "utils.h"
 
 VALUE cDeclaration;
@@ -354,6 +355,18 @@ static VALUE rdxr_declaration_references(VALUE self) {
     return self;
 }
 
+// Method#signatures -> [Rubydex::Signature]
+static VALUE rdxr_method_declaration_signatures(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    SignatureArray *arr = rdx_declaration_method_signatures(graph, data->id);
+    return rdxi_signatures_to_ruby(arr, data->graph_obj, Qnil);
+}
+
 void rdxi_initialize_declaration(VALUE mRubydex) {
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
     cNamespace = rb_define_class_under(mRubydex, "Namespace", cDeclaration);
@@ -364,6 +377,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     cConstant = rb_define_class_under(mRubydex, "Constant", cDeclaration);
     cConstantAlias = rb_define_class_under(mRubydex, "ConstantAlias", cDeclaration);
     cMethod = rb_define_class_under(mRubydex, "Method", cDeclaration);
+    rb_define_method(cMethod, "signatures", rdxr_method_declaration_signatures, 0);
     cGlobalVariable = rb_define_class_under(mRubydex, "GlobalVariable", cDeclaration);
     cInstanceVariable = rb_define_class_under(mRubydex, "InstanceVariable", cDeclaration);
     cClassVariable = rb_define_class_under(mRubydex, "ClassVariable", cDeclaration);

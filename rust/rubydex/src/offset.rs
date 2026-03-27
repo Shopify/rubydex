@@ -74,6 +74,15 @@ impl Offset {
         self.end
     }
 
+    /// Returns a new offset with the end extended by the given number of bytes.
+    #[must_use]
+    pub const fn extend_end(self, bytes: u32) -> Self {
+        Self {
+            start: self.start,
+            end: self.end + bytes,
+        }
+    }
+
     /// Converts an offset to a display range like `1:1-1:5`
     #[must_use]
     pub fn to_display_range(&self, document: &Document) -> String {

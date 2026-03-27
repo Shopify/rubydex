@@ -6,7 +6,7 @@ use std::thread;
 use url::Url;
 
 use crate::model::declaration::{Ancestor, Declaration};
-use crate::model::definitions::{Definition, Parameter};
+use crate::model::definitions::{Definition, MethodDefinition, Parameter};
 use crate::model::graph::{Graph, OBJECT_ID};
 use crate::model::identity_maps::IdentityHashSet;
 use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
@@ -223,6 +223,78 @@ macro_rules! collect_candidates {
             }
         }
     };
+}
+
+/// Returns the method definitions associated with a method declaration, resolving aliases.
+///
+/// For regular method declarations, returns the `MethodDefinition`s directly.
+/// For alias declarations, follows the alias to the original method and returns its definitions.
+///
+/// # Panics
+///
+/// Panics if:
+/// - the `declaration_id` does not exist in the graph
+/// - the declaration is not a method declaration
+/// - any definition or owner declaration referenced by the method is missing from the graph
+#[must_use]
+pub fn method_definitions(graph: &Graph, declaration_id: DeclarationId) -> Vec<&MethodDefinition> {
+    let decl = graph
+        .declarations()
+        .get(&declaration_id)
+        .expect("declaration should exist in graph");
+    assert!(
+        matches!(decl, Declaration::Method(_)),
+        "expected a method declaration, got {:?}",
+        decl.kind()
+    );
+
+    let owner_id = *decl.owner_id();
+    let mut result = Vec::new();
+
+    for def_id in decl.definitions() {
+        let defn = graph
+            .definitions()
+            .get(def_id)
+            .expect("definition should exist in graph");
+
+        match defn {
+            Definition::Method(method_def) => {
+                result.push(method_def.as_ref());
+            }
+            Definition::MethodAlias(alias_def) => {
+                // Resolve alias: look up the original method in the owner's members
+                let owner = graph
+                    .declarations()
+                    .get(&owner_id)
+                    .expect("owner declaration should exist")
+                    .as_namespace()
+                    .expect("owner should be a namespace");
+
+                // Alias target may not exist (e.g. aliasing an undefined method)
+                let Some(original_decl_id) = owner.member(alias_def.old_name_str_id()) else {
+                    continue;
+                };
+
+                let original_decl = graph
+                    .declarations()
+                    .get(original_decl_id)
+                    .expect("original declaration should exist");
+
+                for original_def_id in original_decl.definitions() {
+                    let original_defn = graph
+                        .definitions()
+                        .get(original_def_id)
+                        .expect("original definition should exist in graph");
+                    if let Definition::Method(original_method_def) = original_defn {
+                        result.push(original_method_def.as_ref());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    result
 }
 
 /// Determines all possible completion candidates based on the current context of the cursor. There are multiple cases
@@ -1696,5 +1768,100 @@ mod tests {
         .unwrap();
 
         assert!(!candidates.iter().any(|c| matches!(c, CompletionCandidate::Keyword(_))));
+    }
+
+    /// Helper to get source text at an offset
+    fn source_at<'a>(source: &'a str, offset: &crate::offset::Offset) -> &'a str {
+        &source[offset.start() as usize..offset.end() as usize]
+    }
+
+    #[test]
+    fn test_method_definitions_returns_method_definitions() {
+        let mut context = GraphTest::new();
+        //                 0123456789...
+        let source = "class Foo\n  def bar(a, b); end\nend\n";
+        context.index_uri("file:///foo.rb", source);
+        context.resolve();
+
+        let defs = method_definitions(context.graph(), DeclarationId::from("Foo#bar()"));
+        assert_eq!(1, defs.len());
+        assert_eq!("def bar(a, b); end", source_at(source, defs[0].offset()));
+    }
+
+    #[test]
+    fn test_method_definitions_resolves_alias() {
+        let mut context = GraphTest::new();
+        let source = "class Foo\n  def bar(a, b); end\n  alias_method :baz, :bar\nend\n";
+        context.index_uri("file:///foo.rb", source);
+        context.resolve();
+
+        let defs = method_definitions(context.graph(), DeclarationId::from("Foo#baz()"));
+        assert_eq!(1, defs.len());
+        // Returns the original method's definition
+        assert_eq!("def bar(a, b); end", source_at(source, defs[0].offset()));
+    }
+
+    #[test]
+    fn test_method_definitions_alias_to_undefined_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo\n  alias_method :baz, :nonexistent\nend\n");
+        context.resolve();
+
+        let defs = method_definitions(context.graph(), DeclarationId::from("Foo#baz()"));
+        assert!(defs.is_empty());
+    }
+
+    #[test]
+    fn test_method_definitions_with_override() {
+        let mut context = GraphTest::new();
+        let source = "class Foo\n  def bar(a); end\n  def bar(a, b); end\nend\n";
+        context.index_uri("file:///foo.rb", source);
+        context.resolve();
+
+        let defs = method_definitions(context.graph(), DeclarationId::from("Foo#bar()"));
+        assert_eq!(2, defs.len());
+
+        let mut texts: Vec<&str> = defs.iter().map(|d| source_at(source, d.offset())).collect();
+        texts.sort_unstable();
+        assert_eq!(vec!["def bar(a); end", "def bar(a, b); end"], texts);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected a method declaration")]
+    fn test_method_definitions_panics_for_non_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        let _ = method_definitions(context.graph(), DeclarationId::from("Foo"));
+    }
+
+    #[test]
+    fn test_method_definitions_from_rbs() {
+        let mut context = GraphTest::new();
+        let source = "class Foo\n  def bar: (String name) -> void\n         | (Integer id) -> String\nend\n";
+        context.index_rbs_uri("file:///foo.rbs", source);
+        context.resolve();
+
+        let defs = method_definitions(context.graph(), DeclarationId::from("Foo#bar()"));
+        assert_eq!(1, defs.len());
+        assert_eq!(
+            "def bar: (String name) -> void\n         | (Integer id) -> String",
+            source_at(source, defs[0].offset())
+        );
+    }
+
+    #[test]
+    fn test_method_definitions_from_rbs_alias() {
+        let mut context = GraphTest::new();
+        let ruby_source = "class Foo\n  def bar(a, b); end\nend\n";
+        let rbs_source = "class Foo\n  alias baz bar\nend\n";
+        context.index_uri("file:///foo.rb", ruby_source);
+        context.index_rbs_uri("file:///foo.rbs", rbs_source);
+        context.resolve();
+
+        let defs = method_definitions(context.graph(), DeclarationId::from("Foo#baz()"));
+        assert_eq!(1, defs.len());
+        assert_eq!("def bar(a, b); end", source_at(ruby_source, defs[0].offset()));
     }
 }
