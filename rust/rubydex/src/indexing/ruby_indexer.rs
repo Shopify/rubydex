@@ -1251,6 +1251,32 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
+    fn should_apply_inline_visibility(message: &str, args: &ruby_prism::NodeList) -> bool {
+        if message == "module_function" {
+            return true;
+        }
+
+        if args.len() != 1 {
+            return false;
+        }
+
+        let arg = args.iter().next().unwrap();
+
+        if matches!(arg, ruby_prism::Node::DefNode { .. }) {
+            return true;
+        }
+
+        arg.as_call_node().is_some_and(|call| {
+            let receiver = call.receiver();
+            let bare_or_self = receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some());
+            bare_or_self
+                && matches!(
+                    call.name().as_slice(),
+                    b"attr" | b"attr_reader" | b"attr_writer" | b"attr_accessor"
+                )
+        })
+    }
+
     fn handle_retroactive_method_visibility(
         &mut self,
         args: &ruby_prism::NodeList,
@@ -1929,28 +1955,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 if let Some(arguments) = node.arguments() {
                     let args = arguments.arguments();
 
-                    // Scoped-definition: exactly one arg that is a DefNode or a bare/self attr helper.
-                    // module_function always uses the scoped path (retroactive not supported yet).
-                    let has_single_arg = args.len() == 1;
-
-                    let single_arg_is_def =
-                        has_single_arg && matches!(args.iter().next().unwrap(), ruby_prism::Node::DefNode { .. });
-
-                    let single_arg_is_attr_helper = has_single_arg
-                        && args.iter().next().unwrap().as_call_node().is_some_and(|call| {
-                            let has_no_explicit_receiver = call.receiver().is_none()
-                                || call.receiver().as_ref().is_some_and(|r| r.as_self_node().is_some());
-                            has_no_explicit_receiver
-                                && matches!(
-                                    call.name().as_slice(),
-                                    b"attr" | b"attr_reader" | b"attr_writer" | b"attr_accessor"
-                                )
-                        });
-
-                    let is_scoped_definition =
-                        message.as_str() == "module_function" || single_arg_is_def || single_arg_is_attr_helper;
-
-                    if is_scoped_definition {
+                    if Self::should_apply_inline_visibility(message.as_str(), &args) {
                         // Inline/scoped form: `private def foo(bar); end`
                         //
                         // Push the new visibility to the stack and then pop it after visiting
