@@ -816,6 +816,15 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
+    fn current_nesting_is_module(&self) -> bool {
+        self.current_nesting_definition_id().is_some_and(|id| {
+            self.local_graph
+                .definitions()
+                .get(&id)
+                .is_some_and(|def| matches!(def, Definition::Module(_)))
+        })
+    }
+
     /// Indexes the final constant target from a value node, unwrapping chained assignments.
     ///
     /// For `A = B = C`, when processing `A`, the value is `ConstantWriteNode(B)`.
@@ -1251,11 +1260,7 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
-    fn should_apply_inline_visibility(message: &str, args: &ruby_prism::NodeList) -> bool {
-        if message == "module_function" {
-            return true;
-        }
-
+    fn should_apply_inline_visibility(args: &ruby_prism::NodeList) -> bool {
         if args.len() != 1 {
             return false;
         }
@@ -1283,6 +1288,7 @@ impl<'a> RubyIndexer<'a> {
         arguments_node: &ruby_prism::ArgumentsNode,
         visibility: Visibility,
         call_offset: &Offset,
+        call_name: &str,
     ) {
         let is_literal = |arg: ruby_prism::Node| {
             matches!(
@@ -1295,13 +1301,13 @@ impl<'a> RubyIndexer<'a> {
         if !only_literals {
             let has_any_literal = args.iter().any(is_literal);
             let message = if has_any_literal {
-                "Method visibility called with mixed literal and non-literal arguments"
+                format!("`{call_name}` called with mixed literal and non-literal arguments")
             } else {
-                "Method visibility called with non-literal arguments"
+                format!("`{call_name}` called with non-literal arguments")
             };
 
             self.local_graph
-                .add_diagnostic(Rule::InvalidMethodVisibility, call_offset.clone(), message.to_string());
+                .add_diagnostic(Rule::InvalidMethodVisibility, call_offset.clone(), message);
             self.visit_arguments_node(arguments_node);
             return;
         }
@@ -1961,7 +1967,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 if let Some(arguments) = node.arguments() {
                     let args = arguments.arguments();
 
-                    if Self::should_apply_inline_visibility(message.as_str(), &args) {
+                    if Self::should_apply_inline_visibility(&args) {
                         // Inline/scoped form: `private def foo(bar); end`
                         //
                         // Push the new visibility to the stack and then pop it after visiting
@@ -1970,9 +1976,22 @@ impl Visit<'_> for RubyIndexer<'_> {
                             .push(VisibilityModifier::new(visibility, true, offset));
                         self.visit_arguments_node(&arguments);
                         self.visibility_stack.pop();
+                    } else if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
+                        self.local_graph.add_diagnostic(
+                            Rule::InvalidMethodVisibility,
+                            offset,
+                            "`module_function` can only be used in modules".to_string(),
+                        );
+                        self.visit_arguments_node(&arguments);
                     } else {
-                        // Retroactive method visibility: `private :foo`, `protected :bar, :baz`
-                        self.handle_retroactive_method_visibility(&args, &arguments, visibility, &offset);
+                        // Retroactive method visibility: `private :foo`, `module_function :bar`
+                        self.handle_retroactive_method_visibility(
+                            &args,
+                            &arguments,
+                            visibility,
+                            &offset,
+                            message.as_str(),
+                        );
                     }
                 } else {
                     // Flag mode: `private` with no arguments
