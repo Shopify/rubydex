@@ -22,8 +22,8 @@ module Rubydex
     #: MethodDefinition
     attr_reader :method_definition
 
-    #: (parameters: Array[Parameter], method_definition: MethodDefinition) -> void
-    def initialize(parameters:, method_definition:)
+    #: (Array[Parameter], MethodDefinition) -> void
+    def initialize(parameters, method_definition)
       @parameters = parameters
       @method_definition = method_definition
     end

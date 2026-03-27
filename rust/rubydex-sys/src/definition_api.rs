@@ -355,24 +355,24 @@ pub unsafe extern "C" fn rdx_definition_name_location(pointer: GraphPointer, def
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ParameterKind {
-    Req = 0,
-    Opt = 1,
+    RequiredPositional = 0,
+    OptionalPositional = 1,
     Rest = 2,
-    Keyreq = 3,
-    Key = 4,
-    Keyrest = 5,
+    RequiredKeyword = 3,
+    OptionalKeyword = 4,
+    RestKeyword = 5,
     Block = 6,
     Forward = 7,
 }
 
 fn map_parameter_kind(param: &Parameter) -> ParameterKind {
     match param {
-        Parameter::RequiredPositional(_) | Parameter::Post(_) => ParameterKind::Req,
-        Parameter::OptionalPositional(_) => ParameterKind::Opt,
+        Parameter::RequiredPositional(_) | Parameter::Post(_) => ParameterKind::RequiredPositional,
+        Parameter::OptionalPositional(_) => ParameterKind::OptionalPositional,
         Parameter::RestPositional(_) => ParameterKind::Rest,
-        Parameter::RequiredKeyword(_) => ParameterKind::Keyreq,
-        Parameter::OptionalKeyword(_) => ParameterKind::Key,
-        Parameter::RestKeyword(_) => ParameterKind::Keyrest,
+        Parameter::RequiredKeyword(_) => ParameterKind::RequiredKeyword,
+        Parameter::OptionalKeyword(_) => ParameterKind::OptionalKeyword,
+        Parameter::RestKeyword(_) => ParameterKind::RestKeyword,
         Parameter::Block(_) => ParameterKind::Block,
         Parameter::Forward(_) => ParameterKind::Forward,
     }
@@ -415,11 +415,7 @@ pub struct SignatureArray {
 pub unsafe extern "C" fn rdx_definition_signatures(pointer: GraphPointer, definition_id: u64) -> *mut SignatureArray {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
-        let Some(defn) = graph.definitions().get(&def_id) else {
-            panic!("Definition not found: {definition_id:?}");
-        };
-
-        let Definition::Method(method_def) = defn else {
+        let Some(Definition::Method(method_def)) = graph.definitions().get(&def_id) else {
             return ptr::null_mut();
         };
 
@@ -435,8 +431,8 @@ pub unsafe extern "C" fn rdx_definition_signatures(pointer: GraphPointer, defini
     })
 }
 
-/// Helper: build signature entries from a MethodDefinition and append them to the output vector.
-pub(crate) fn collect_method_signatures(
+/// Helper: build signature entries from a `MethodDefinition` and append them to the output vector.
+fn collect_method_signatures(
     graph: &rubydex::model::graph::Graph,
     method_def: &rubydex::model::definitions::MethodDefinition,
     definition_id: u64,

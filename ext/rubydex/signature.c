@@ -16,14 +16,14 @@ VALUE cForwardParameter;
 
 static VALUE parameter_class_for_kind(ParameterKind kind) {
     switch (kind) {
-    case ParameterKind_Req:     return cPositionalParameter;
-    case ParameterKind_Opt:     return cOptionalPositionalParameter;
-    case ParameterKind_Rest:    return cRestPositionalParameter;
-    case ParameterKind_Keyreq:  return cKeywordParameter;
-    case ParameterKind_Key:     return cOptionalKeywordParameter;
-    case ParameterKind_Keyrest: return cRestKeywordParameter;
-    case ParameterKind_Block:   return cBlockParameter;
-    case ParameterKind_Forward: return cForwardParameter;
+    case ParameterKind_RequiredPositional: return cPositionalParameter;
+    case ParameterKind_OptionalPositional: return cOptionalPositionalParameter;
+    case ParameterKind_Rest:               return cRestPositionalParameter;
+    case ParameterKind_RequiredKeyword:    return cKeywordParameter;
+    case ParameterKind_OptionalKeyword:    return cOptionalKeywordParameter;
+    case ParameterKind_RestKeyword:        return cRestKeywordParameter;
+    case ParameterKind_Block:              return cBlockParameter;
+    case ParameterKind_Forward:            return cForwardParameter;
     default: rb_raise(rb_eRuntimeError, "Unknown ParameterKind: %d", kind);
     }
 }
@@ -62,10 +62,8 @@ VALUE rdxi_signatures_to_ruby(SignatureArray *arr, VALUE graph_obj, VALUE defaul
             rb_ary_push(parameters, param);
         }
 
-        VALUE sig_kwargs = rb_hash_new();
-        rb_hash_aset(sig_kwargs, ID2SYM(rb_intern("parameters")), parameters);
-        rb_hash_aset(sig_kwargs, ID2SYM(rb_intern("method_definition")), method_def);
-        VALUE signature = rb_class_new_instance_kw(1, &sig_kwargs, cSignature, RB_PASS_KEYWORDS);
+        VALUE sig_argv[] = {parameters, method_def};
+        VALUE signature = rb_class_new_instance(2, sig_argv, cSignature);
 
         rb_ary_push(signatures, signature);
     }
