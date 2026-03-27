@@ -1284,12 +1284,14 @@ impl<'a> RubyIndexer<'a> {
 
     fn handle_retroactive_method_visibility(
         &mut self,
-        args: &ruby_prism::NodeList,
-        arguments_node: &ruby_prism::ArgumentsNode,
+        node: &ruby_prism::CallNode,
+        arguments: &ruby_prism::ArgumentsNode,
         visibility: Visibility,
         call_offset: &Offset,
         call_name: &str,
     ) {
+        let args = arguments.arguments();
+
         let is_literal = |arg: ruby_prism::Node| {
             matches!(
                 arg,
@@ -1297,8 +1299,7 @@ impl<'a> RubyIndexer<'a> {
             )
         };
 
-        let only_literals = args.iter().all(&is_literal);
-        if !only_literals {
+        if !args.iter().all(&is_literal) {
             let has_any_literal = args.iter().any(is_literal);
             let message = if has_any_literal {
                 format!("`{call_name}` called with mixed literal and non-literal arguments")
@@ -1308,29 +1309,12 @@ impl<'a> RubyIndexer<'a> {
 
             self.local_graph
                 .add_diagnostic(Rule::InvalidMethodVisibility, call_offset.clone(), message);
-            self.visit_arguments_node(arguments_node);
+            self.visit_arguments_node(arguments);
             return;
         }
 
         // All symbols/strings — create MethodVisibilityDefinitions
-        for argument in args {
-            let (name, location) = match argument {
-                ruby_prism::Node::SymbolNode { .. } => {
-                    let symbol = argument.as_symbol_node().unwrap();
-                    if let Some(value_loc) = symbol.value_loc() {
-                        (Self::location_to_string(&value_loc), value_loc)
-                    } else {
-                        continue;
-                    }
-                }
-                ruby_prism::Node::StringNode { .. } => {
-                    let string = argument.as_string_node().unwrap();
-                    let name = String::from_utf8_lossy(string.unescaped()).to_string();
-                    (name, argument.location())
-                }
-                _ => unreachable!("only_literals check guarantees only symbol/string nodes"),
-            };
-
+        Self::each_string_or_symbol_arg(node, |name, location| {
             let str_id = self.local_graph.intern_string(format!("{name}()"));
             let arg_offset = Offset::from_prism_location(&location);
             let definition = Definition::MethodVisibility(Box::new(MethodVisibilityDefinition::new(
@@ -1345,7 +1329,7 @@ impl<'a> RubyIndexer<'a> {
 
             let definition_id = self.local_graph.add_definition(definition);
             self.add_member_to_current_owner(definition_id);
-        }
+        });
     }
 }
 
@@ -1986,7 +1970,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     } else {
                         // Retroactive method visibility: `private :foo`, `module_function :bar`
                         self.handle_retroactive_method_visibility(
-                            &args,
+                            node,
                             &arguments,
                             visibility,
                             &offset,
