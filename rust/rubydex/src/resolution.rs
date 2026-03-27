@@ -1015,7 +1015,10 @@ impl<'a> Resolver<'a> {
                 // If the owner is a promotable constant and something is being defined inside it, promote it to a
                 // module
                 {
-                    let owner = self.graph.declarations().get(&owner_id).unwrap();
+                    // The owner may have been removed during invalidation. Retry later.
+                    let Some(owner) = self.graph.declarations().get(&owner_id) else {
+                        return Outcome::Retry(id_needing_linearization);
+                    };
                     let is_promotable_constant =
                         matches!(owner, Declaration::Constant(_)) && self.graph.all_definitions_promotable(owner);
 
@@ -1027,7 +1030,10 @@ impl<'a> Resolver<'a> {
                     }
                 }
 
-                let owner = self.graph.declarations().get(&owner_id).unwrap();
+                // Re-check: owner may have been removed by promotion logic above, or by invalidation.
+                let Some(owner) = self.graph.declarations().get(&owner_id) else {
+                    return Outcome::Retry(id_needing_linearization);
+                };
                 let owner_is_namespace = owner.as_namespace().is_some();
 
                 // Skip creating singletons when the target is a not a namespace or not promotable. For example:

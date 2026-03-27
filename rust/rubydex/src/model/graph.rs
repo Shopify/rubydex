@@ -1056,12 +1056,16 @@ impl Graph {
         let Some(decl) = self.declarations.get(&decl_id) else {
             return;
         };
-        // Singleton class declarations are synthetic (created by the resolver, not backed by
-        // definitions). They should only be removed when their owner is removed, not when they
-        // have no definitions (which is their normal state).
-        let is_singleton = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)));
+        // Some declarations are synthetic (not backed by definitions from source files):
+        // - Singleton classes: created by the resolver for every namespace
+        // - Bootstrap declarations (Object, Module, Class): created in Graph::new()
+        // These should only be removed when their owner is removed, not when they have no definitions.
+        let is_synthetic = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)))
+            || decl_id == *OBJECT_ID
+            || decl_id == *MODULE_ID
+            || decl_id == *CLASS_ID;
         let should_remove =
-            (!is_singleton && decl.has_no_definitions()) || !self.declarations.contains_key(decl.owner_id());
+            (!is_synthetic && decl.has_no_definitions()) || !self.declarations.contains_key(decl.owner_id());
 
         if should_remove {
             // Queue members + singleton for removal
