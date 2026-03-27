@@ -122,8 +122,15 @@ fn check_dangling_definitions(graph: &Graph) -> Vec<String> {
     let mut dangles = Vec::new();
     for decl in graph.declarations().values() {
         for def_id in decl.definitions() {
-            if graph.definitions().get(def_id).is_none() {
-                dangles.push(format!("Declaration `{}` references missing definition", decl.name()));
+            if let Some(def) = graph.definitions().get(def_id) {
+                // Definition exists — not dangling, but check if it maps back
+                let _ = def;
+            } else {
+                dangles.push(format!(
+                    "Declaration `{}` (kind={}) references missing def {def_id:?}",
+                    decl.name(),
+                    decl.kind(),
+                ));
             }
         }
     }
@@ -198,11 +205,79 @@ fn run_round(
         indexing::index_source(&mut incremental, &files[i].0, &files[i].1, &files[i].2);
     }
 
+    // Check: how many SingletonClass definitions exist before resolving?
+    let singleton_defs: Vec<_> = incremental
+        .definitions()
+        .values()
+        .filter(|d| d.kind() == "SingletonClass")
+        .collect();
+    let singleton_decls: Vec<_> = incremental
+        .declarations()
+        .values()
+        .filter(|d| d.kind() == "SingletonClass")
+        .collect();
+    println!(
+        "  Before re-resolve: {} SingletonClass definitions, {} SingletonClass declarations",
+        singleton_defs.len(),
+        singleton_decls.len()
+    );
+
     println!("  Resolving after re-index...");
     resolve(&mut incremental);
 
+    let singleton_decls_after: Vec<_> = incremental
+        .declarations()
+        .values()
+        .filter(|d| d.kind() == "SingletonClass")
+        .collect();
+    println!(
+        "  After re-resolve: {} SingletonClass declarations",
+        singleton_decls_after.len()
+    );
+
     let counts = GraphCounts::from_graph(&incremental);
     let integrity_errors = integrity::check_integrity(&incremental);
+
+    // Build fresh graph for declaration-level comparison
+    let mut fresh = Graph::new();
+    for (uri, source, lang) in files {
+        indexing::index_source(&mut fresh, uri, source, lang);
+    }
+    resolve(&mut fresh);
+
+    // Find missing declarations
+    let mut missing: Vec<String> = Vec::new();
+    for (decl_id, decl) in fresh.declarations() {
+        if !incremental.declarations().contains_key(decl_id) {
+            missing.push(format!("{} ({})", decl.name(), decl.kind()));
+        }
+    }
+    missing.sort();
+    if !missing.is_empty() {
+        println!("  Missing declarations ({}):", missing.len());
+        for m in missing.iter().take(30) {
+            println!("    {m}");
+        }
+        if missing.len() > 30 {
+            println!("    ... and {} more", missing.len() - 30);
+        }
+    }
+
+    // Find extra declarations (in incremental but not fresh)
+    let mut extra: Vec<String> = Vec::new();
+    for (decl_id, decl) in incremental.declarations() {
+        if !fresh.declarations().contains_key(decl_id) {
+            extra.push(format!("{} ({})", decl.name(), decl.kind()));
+        }
+    }
+    extra.sort();
+    if !extra.is_empty() {
+        println!("  Extra declarations ({}):", extra.len());
+        for e in extra.iter().take(10) {
+            println!("    {e}");
+        }
+    }
+
     (counts, integrity_errors)
 }
 
