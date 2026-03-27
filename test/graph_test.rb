@@ -637,6 +637,37 @@ class GraphTest < Minitest::Test
     refute_empty(if_keyword.documentation)
   end
 
+  def test_complete_expression_with_empty_nesting
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Object; end\nclass Foo; end", "ruby")
+    graph.resolve
+
+    candidates = graph.complete_expression([])
+
+    # Top-level constants should be reachable (Object context)
+    constants = candidates.select { |c| c.is_a?(Rubydex::Declaration) }
+    assert(constants.any? { |c| c.name == "Foo" })
+
+    # Keywords should still be present
+    keywords = candidates.select { |c| c.is_a?(Rubydex::Keyword) }
+    assert(keywords.any? { |c| c.name == "if" })
+  end
+
+  def test_complete_expression_for_non_namespace_nesting
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar
+        end
+      end
+    RUBY
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["Foo#bar()"])
+    end
+  end
+
   def test_complete_namespace_access
     graph = Rubydex::Graph.new
     graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
@@ -659,6 +690,21 @@ class GraphTest < Minitest::Test
     assert(candidates.any? { |c| c.is_a?(Rubydex::Method) && c.name == "Foo::<Foo>#bar()" })
   end
 
+  def test_complete_namespace_access_for_non_namespace
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar
+        end
+      end
+    RUBY
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_namespace_access("Foo#bar()")
+    end
+  end
+
   def test_complete_method_call
     graph = Rubydex::Graph.new
     graph.index_source("file:///foo.rb", "class Foo\n  def bar; end\n  def baz; end\nend", "ruby")
@@ -672,6 +718,21 @@ class GraphTest < Minitest::Test
     method_names = candidates.map(&:name)
     assert_includes(method_names, "Foo#bar()")
     assert_includes(method_names, "Foo#baz()")
+  end
+
+  def test_complete_method_call_for_non_namespace
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar
+        end
+      end
+    RUBY
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_method_call("Foo#bar()")
+    end
   end
 
   def test_complete_method_argument
@@ -691,7 +752,22 @@ class GraphTest < Minitest::Test
 
     # KeywordParameter candidates
     keyword_params = candidates.select { |c| c.is_a?(Rubydex::KeywordParameter) }
-    assert(keyword_params.any? { |c| c.name == "name:" })
+    assert(keyword_params.any? { |c| c.name == "name" })
+  end
+
+  def test_complete_method_argument_for_non_namespace_nesting
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar(name:)
+        end
+      end
+    RUBY
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_method_argument("Foo#bar()", ["Foo#bar()"])
+    end
   end
 
   def test_complete_expression_raises_with_wrong_types
@@ -723,6 +799,25 @@ class GraphTest < Minitest::Test
 
     assert_equal([], graph.complete_namespace_access("DoesNotExist"))
     assert_equal([], graph.complete_method_call("DoesNotExist"))
+  end
+
+  def test_complete_expression_for_non_existent_nesting
+    graph = Rubydex::Graph.new
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["NonExistent"])
+    end
+  end
+
+  def test_complete_expression_on_unresolved_graph
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+
+    # Nesting with a name that exists but hasn't been resolved
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["Foo"])
+    end
   end
 
   private

@@ -490,8 +490,15 @@ static VALUE rdxr_graph_diagnostics(VALUE self) {
     return diagnostics;
 }
 
-// Helper: convert a CompletionCandidateArray into a Ruby array of typed objects and free the C array.
-static VALUE completion_candidates_to_ruby_array(CompletionCandidateArray *array, VALUE graph_obj) {
+// Helper: convert a CompletionResult into a Ruby array, raising ArgumentError on error.
+static VALUE completion_result_to_ruby_array(struct CompletionResult result, VALUE graph_obj) {
+    if (result.error != NULL) {
+        VALUE msg = rb_utf8_str_new_cstr(result.error);
+        free_c_string(result.error);
+        rb_raise(rb_eArgError, "%s", StringValueCStr(msg));
+    }
+
+    CompletionCandidateArray *array = result.candidates;
     if (array == NULL) {
         return rb_ary_new();
     }
@@ -501,7 +508,7 @@ static VALUE completion_candidates_to_ruby_array(CompletionCandidateArray *array
         return rb_ary_new();
     }
 
-    VALUE result = rb_ary_new_capa((long)array->len);
+    VALUE ruby_array = rb_ary_new_capa((long)array->len);
 
     for (size_t i = 0; i < array->len; i++) {
         CCompletionCandidate item = array->items[i];
@@ -532,11 +539,11 @@ static VALUE completion_candidates_to_ruby_array(CompletionCandidateArray *array
             rb_raise(rb_eRuntimeError, "Unknown CCompletionCandidateKind: %d", item.kind);
         }
 
-        rb_ary_push(result, obj);
+        rb_ary_push(ruby_array, obj);
     }
 
     rdx_completion_candidates_free(array);
-    return result;
+    return ruby_array;
 }
 
 // Graph#complete_expression: (Array[String] nesting) -> Array[Declaration | Keyword]
@@ -551,11 +558,11 @@ static VALUE rdxr_graph_complete_expression(VALUE self, VALUE nesting) {
     size_t nesting_count = RARRAY_LEN(nesting);
     char **converted_nesting = rdxi_str_array_to_char(nesting, nesting_count);
 
-    CompletionCandidateArray *results =
+    struct CompletionResult result =
         rdx_graph_complete_expression(graph, (const char *const *)converted_nesting, nesting_count);
 
     rdxi_free_str_array(converted_nesting, nesting_count);
-    return completion_candidates_to_ruby_array(results, self);
+    return completion_result_to_ruby_array(result, self);
 }
 
 // Graph#complete_namespace_access: (String name) -> Array[Declaration]
@@ -566,8 +573,8 @@ static VALUE rdxr_graph_complete_namespace_access(VALUE self, VALUE name) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    CompletionCandidateArray *results = rdx_graph_complete_namespace_access(graph, StringValueCStr(name));
-    return completion_candidates_to_ruby_array(results, self);
+    struct CompletionResult result = rdx_graph_complete_namespace_access(graph, StringValueCStr(name));
+    return completion_result_to_ruby_array(result, self);
 }
 
 // Graph#complete_method_call: (String name) -> Array[Declaration]
@@ -578,8 +585,8 @@ static VALUE rdxr_graph_complete_method_call(VALUE self, VALUE name) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    CompletionCandidateArray *results = rdx_graph_complete_method_call(graph, StringValueCStr(name));
-    return completion_candidates_to_ruby_array(results, self);
+    struct CompletionResult result = rdx_graph_complete_method_call(graph, StringValueCStr(name));
+    return completion_result_to_ruby_array(result, self);
 }
 
 // Graph#complete_method_argument: (String name, Array[String] nesting) -> Array[Declaration | Keyword | KeywordParameter]
@@ -594,11 +601,11 @@ static VALUE rdxr_graph_complete_method_argument(VALUE self, VALUE name, VALUE n
     size_t nesting_count = RARRAY_LEN(nesting);
     char **converted_nesting = rdxi_str_array_to_char(nesting, nesting_count);
 
-    CompletionCandidateArray *results = rdx_graph_complete_method_argument(
+    struct CompletionResult result = rdx_graph_complete_method_argument(
         graph, StringValueCStr(name), (const char *const *)converted_nesting, nesting_count);
 
     rdxi_free_str_array(converted_nesting, nesting_count);
-    return completion_candidates_to_ruby_array(results, self);
+    return completion_result_to_ruby_array(result, self);
 }
 
 void rdxi_initialize_graph(VALUE moduleRubydex) {

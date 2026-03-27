@@ -715,48 +715,91 @@ unsafe fn completion_nesting_name_id(
     Ok(name_api::nesting_stack_to_name_id(graph, &self_name, nesting))
 }
 
-/// Runs completion for the given receiver and returns a structured array of candidates
+/// The result of a completion operation, carrying either a candidate array or an error message.
+#[repr(C)]
+pub struct CompletionResult {
+    /// Non-null on success; null on error.
+    pub candidates: *mut CompletionCandidateArray,
+    /// Non-null on error; null on success. Caller must free with `free_c_string`.
+    pub error: *const c_char,
+}
+
+impl CompletionResult {
+    fn success(candidates: *mut CompletionCandidateArray) -> Self {
+        Self {
+            candidates,
+            error: ptr::null(),
+        }
+    }
+
+    fn error(message: &str) -> Self {
+        Self {
+            candidates: ptr::null_mut(),
+            error: CString::new(message)
+                .map(|s| s.into_raw().cast_const())
+                .unwrap_or(ptr::null()),
+        }
+    }
+}
+
+/// Runs completion for the given receiver and returns a structured result with candidates or an error message
 fn run_and_finalize_completion(
     graph: &mut Graph,
     receiver: CompletionReceiver,
     names_to_untrack: Vec<NameId>,
-) -> *mut CompletionCandidateArray {
-    let Ok(candidates) = query::completion_candidates(graph, CompletionContext::new(receiver)) else {
-        for name_id in names_to_untrack {
-            graph.untrack_name(name_id);
+) -> CompletionResult {
+    let candidates = match query::completion_candidates(graph, CompletionContext::new(receiver)) {
+        Ok(candidates) => candidates,
+        Err(e) => {
+            for name_id in names_to_untrack {
+                graph.untrack_name(name_id);
+            }
+            return CompletionResult::error(&e.to_string());
         }
-        return ptr::null_mut();
     };
 
     let entries: Vec<CCompletionCandidate> = candidates
         .into_iter()
-        .filter_map(|candidate| {
-            Some(match candidate {
-                CompletionCandidate::Declaration(id) => {
-                    let decl = graph.declarations().get(&id)?;
-                    CCompletionCandidate {
-                        kind: CCompletionCandidateKind::Declaration,
-                        declaration: Box::into_raw(Box::new(CDeclaration::from_declaration(id, decl))),
-                        name: ptr::null(),
-                        documentation: ptr::null(),
-                    }
+        .map(|candidate| match candidate {
+            CompletionCandidate::Declaration(id) => {
+                let decl = graph
+                    .declarations()
+                    .get(&id)
+                    .expect("completion candidate declaration must exist in graph");
+                CCompletionCandidate {
+                    kind: CCompletionCandidateKind::Declaration,
+                    declaration: Box::into_raw(Box::new(CDeclaration::from_declaration(id, decl))),
+                    name: ptr::null(),
+                    documentation: ptr::null(),
                 }
-                CompletionCandidate::Keyword(kw) => CCompletionCandidate {
-                    kind: CCompletionCandidateKind::Keyword,
+            }
+            CompletionCandidate::Keyword(kw) => CCompletionCandidate {
+                kind: CCompletionCandidateKind::Keyword,
+                declaration: ptr::null(),
+                name: CString::new(kw.name())
+                    .expect("keyword name must not contain NUL")
+                    .into_raw()
+                    .cast_const(),
+                documentation: CString::new(kw.documentation())
+                    .expect("keyword documentation must not contain NUL")
+                    .into_raw()
+                    .cast_const(),
+            },
+            CompletionCandidate::KeywordArgument(str_id) => {
+                let name_str = graph
+                    .strings()
+                    .get(&str_id)
+                    .expect("keyword argument string must exist in graph");
+                CCompletionCandidate {
+                    kind: CCompletionCandidateKind::KeywordParameter,
                     declaration: ptr::null(),
-                    name: CString::new(kw.name()).ok()?.into_raw().cast_const(),
-                    documentation: CString::new(kw.documentation()).ok()?.into_raw().cast_const(),
-                },
-                CompletionCandidate::KeywordArgument(str_id) => {
-                    let name_str = graph.strings().get(&str_id)?;
-                    CCompletionCandidate {
-                        kind: CCompletionCandidateKind::KeywordParameter,
-                        declaration: ptr::null(),
-                        name: CString::new(name_str.as_str()).ok()?.into_raw().cast_const(),
-                        documentation: ptr::null(),
-                    }
+                    name: CString::new(name_str.as_str())
+                        .expect("keyword argument name must not contain NUL")
+                        .into_raw()
+                        .cast_const(),
+                    documentation: ptr::null(),
                 }
-            })
+            }
         })
         .collect();
 
@@ -764,11 +807,12 @@ fn run_and_finalize_completion(
         graph.untrack_name(name_id);
     }
 
-    CompletionCandidateArray::from_vec(entries)
+    CompletionResult::success(CompletionCandidateArray::from_vec(entries))
 }
 
 /// Returns expression completion candidates.
-/// The caller must free the result with `rdx_completion_candidates_free`.
+/// The caller must free candidates with `rdx_completion_candidates_free`
+/// and the error string (if non-null) with `free_c_string`.
 ///
 /// # Safety
 ///
@@ -779,11 +823,11 @@ pub unsafe extern "C" fn rdx_graph_complete_expression(
     pointer: GraphPointer,
     nesting: *const *const c_char,
     nesting_count: usize,
-) -> *mut CompletionCandidateArray {
+) -> CompletionResult {
     with_mut_graph(pointer, |graph| {
         let Ok((name_id, names_to_untrack)) = (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
         else {
-            return ptr::null_mut();
+            return CompletionResult::success(ptr::null_mut());
         };
 
         run_and_finalize_completion(graph, CompletionReceiver::Expression(name_id), names_to_untrack)
@@ -791,7 +835,8 @@ pub unsafe extern "C" fn rdx_graph_complete_expression(
 }
 
 /// Returns namespace access completion candidates.
-/// The caller must free the result with `rdx_completion_candidates_free`.
+/// The caller must free candidates with `rdx_completion_candidates_free`
+/// and the error string (if non-null) with `free_c_string`.
 ///
 /// # Safety
 ///
@@ -801,9 +846,9 @@ pub unsafe extern "C" fn rdx_graph_complete_expression(
 pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
     pointer: GraphPointer,
     name: *const c_char,
-) -> *mut CompletionCandidateArray {
+) -> CompletionResult {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
-        return ptr::null_mut();
+        return CompletionResult::success(ptr::null_mut());
     };
 
     with_mut_graph(pointer, |graph| {
@@ -816,7 +861,8 @@ pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
 }
 
 /// Returns method call completion candidates.
-/// The caller must free the result with `rdx_completion_candidates_free`.
+/// The caller must free candidates with `rdx_completion_candidates_free`
+/// and the error string (if non-null) with `free_c_string`.
 ///
 /// # Safety
 ///
@@ -826,9 +872,9 @@ pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
 pub unsafe extern "C" fn rdx_graph_complete_method_call(
     pointer: GraphPointer,
     name: *const c_char,
-) -> *mut CompletionCandidateArray {
+) -> CompletionResult {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
-        return ptr::null_mut();
+        return CompletionResult::success(ptr::null_mut());
     };
 
     with_mut_graph(pointer, |graph| {
@@ -841,7 +887,8 @@ pub unsafe extern "C" fn rdx_graph_complete_method_call(
 }
 
 /// Returns method argument completion candidates.
-/// The caller must free the result with `rdx_completion_candidates_free`.
+/// The caller must free candidates with `rdx_completion_candidates_free`
+/// and the error string (if non-null) with `free_c_string`.
 ///
 /// # Safety
 ///
@@ -854,16 +901,16 @@ pub unsafe extern "C" fn rdx_graph_complete_method_argument(
     name: *const c_char,
     nesting: *const *const c_char,
     nesting_count: usize,
-) -> *mut CompletionCandidateArray {
+) -> CompletionResult {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
-        return ptr::null_mut();
+        return CompletionResult::success(ptr::null_mut());
     };
 
     with_mut_graph(pointer, |graph| {
         let Ok((self_name_id, names_to_untrack)) =
             (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
         else {
-            return ptr::null_mut();
+            return CompletionResult::success(ptr::null_mut());
         };
 
         run_and_finalize_completion(

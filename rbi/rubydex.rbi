@@ -248,17 +248,17 @@ class Rubydex::Graph
   #
   # The nesting array represents the lexical scope stack, where the last element is the self type. An empty array
   # defaults to `Object` as the self type (top-level context).
-  sig { params(nesting: T::Array[String]).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword, Rubydex::KeywordParameter)]) }
+  sig { params(nesting: T::Array[String]).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword)]) }
   def complete_expression(nesting); end
 
   # Returns completion candidates after a namespace access operator (e.g., `Foo::`). This includes all constants and
   # singleton methods for the namespace and its ancestors.
-  sig { params(name: String).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword, Rubydex::KeywordParameter)]) }
+  sig { params(name: String).returns(T::Array[Rubydex::Declaration]) }
   def complete_namespace_access(name); end
 
   # Returns completion candidates after a method call operator (e.g., `foo.`). This includes all methods that exist on
   # the type of the receiver and its ancestors.
-  sig { params(name: String).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword, Rubydex::KeywordParameter)]) }
+  sig { params(name: String).returns(T::Array[Rubydex::Method]) }
   def complete_method_call(name); end
 
   # Returns completion candidates inside a method call's argument list (e.g., `foo.bar(|)`). This includes everything
