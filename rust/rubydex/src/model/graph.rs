@@ -2272,6 +2272,7 @@ mod incremental_resolution_tests {
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
         assert_constant_reference_unresolved, assert_declaration_does_not_exist, assert_declaration_exists,
         assert_declaration_references_count_eq, assert_members_eq, assert_no_constant_alias_target,
+        assert_singleton_class_eq,
     };
 
     const NO_ANCESTORS: [&str; 0] = [];
@@ -3571,5 +3572,52 @@ mod incremental_resolution_tests {
         assert_declaration_references_count_eq!(fresh, "Foo::CONST", 0);
         assert_declaration_references_count_eq!(incremental, "Baz::CONST", 1);
         assert_declaration_references_count_eq!(fresh, "Baz::CONST", 1);
+    }
+    // Regression: when a class defined inside a singleton class scope has its singleton
+    // class removed during invalidation cascade, the singleton may not be recreated if
+    // the method definitions that trigger `get_or_create_singleton_class` are not in
+    // `pending_work`.
+    //
+    // Pattern from irb: `IRB::<IRB>::Canvas::<Canvas>` — a class defined inside
+    // `class << self` of a module, where its singleton is created as a side effect of
+    // ancestor linearization rather than `def self.method`.
+    #[test]
+    #[ignore = "Known bug: singleton class not recreated after cascading invalidation"]
+    fn singleton_class_recreated_for_class_inside_singleton_scope() {
+        let mut context = GraphTest::new();
+
+        // easter-egg.rb defines Canvas inside IRB's singleton class scope
+        context.index_uri(
+            "file:///main.rb",
+            r"
+            module Outer
+              class << self
+                class Canvas
+                end
+              end
+            end
+            ",
+        );
+        // sibling.rb defines a subclass of something inside Outer
+        context.index_uri(
+            "file:///sibling.rb",
+            r"
+            class Outer::Sibling
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::<Outer>::Canvas");
+        assert_singleton_class_eq!(context, "Outer::<Outer>::Canvas", "Outer::<Outer>::Canvas::<Canvas>");
+
+        // Delete sibling.rb — this triggers invalidation on Outer (loses a member),
+        // which cascades. Canvas::<Canvas> should survive.
+        context.delete_uri("file:///sibling.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer::<Outer>::Canvas");
+        assert_singleton_class_eq!(context, "Outer::<Outer>::Canvas", "Outer::<Outer>::Canvas::<Canvas>");
     }
 } // mod incremental_resolution_tests
