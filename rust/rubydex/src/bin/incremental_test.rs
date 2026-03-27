@@ -206,19 +206,13 @@ fn run_round(
     }
 
     // Check: how many SingletonClass definitions exist before resolving?
-    let singleton_defs: Vec<_> = incremental
-        .definitions()
-        .values()
-        .filter(|d| d.kind() == "SingletonClass")
-        .collect();
     let singleton_decls: Vec<_> = incremental
         .declarations()
         .values()
         .filter(|d| d.kind() == "SingletonClass")
         .collect();
     println!(
-        "  Before re-resolve: {} SingletonClass definitions, {} SingletonClass declarations",
-        singleton_defs.len(),
+        "  Before re-resolve: {} SingletonClass declarations",
         singleton_decls.len()
     );
 
@@ -245,11 +239,29 @@ fn run_round(
     }
     resolve(&mut fresh);
 
-    // Find missing declarations
+    // Find missing declarations and check WHY they're missing
     let mut missing: Vec<String> = Vec::new();
     for (decl_id, decl) in fresh.declarations() {
         if !incremental.declarations().contains_key(decl_id) {
-            missing.push(format!("{} ({})", decl.name(), decl.kind()));
+            // Check if the owner exists in incremental and its state
+            let owner_name = fresh.declarations().get(decl.owner_id()).map(|d| d.name().to_string());
+            let owner_exists_in_inc = incremental.declarations().contains_key(decl.owner_id());
+            let owner_has_singleton_in_inc = if owner_exists_in_inc {
+                incremental
+                    .declarations()
+                    .get(decl.owner_id())
+                    .and_then(|d| d.as_namespace())
+                    .and_then(|ns| ns.singleton_class())
+                    .is_some()
+            } else {
+                false
+            };
+            missing.push(format!(
+                "{} ({}) owner={} in_inc={owner_exists_in_inc} has_singleton={owner_has_singleton_in_inc}",
+                decl.name(),
+                decl.kind(),
+                owner_name.as_deref().unwrap_or("?"),
+            ));
         }
     }
     missing.sort();
