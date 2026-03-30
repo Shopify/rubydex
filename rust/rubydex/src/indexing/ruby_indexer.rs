@@ -7,8 +7,8 @@ use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantAliasDefinition, ConstantDefinition, ConstantVisibilityDefinition, Definition, DefinitionFlags,
     ExtendDefinition, GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition,
-    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter,
-    ParameterStruct, PrependDefinition, Receiver, Signatures, SingletonClassDefinition,
+    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, MethodVisibilityDefinition, Mixin,
+    ModuleDefinition, Parameter, ParameterStruct, PrependDefinition, Receiver, Signatures, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -816,6 +816,15 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
+    fn current_nesting_is_module(&self) -> bool {
+        self.current_nesting_definition_id().is_some_and(|id| {
+            self.local_graph
+                .definitions()
+                .get(&id)
+                .is_some_and(|def| matches!(def, Definition::Module(_)))
+        })
+    }
+
     /// Indexes the final constant target from a value node, unwrapping chained assignments.
     ///
     /// For `A = B = C`, when processing `A`, the value is `ConstantWriteNode(B)`.
@@ -1240,7 +1249,7 @@ impl<'a> RubyIndexer<'a> {
                 visibility,
                 self.uri_id,
                 offset,
-                Vec::new(),
+                Box::default(),
                 DefinitionFlags::empty(),
                 self.current_nesting_definition_id(),
             )));
@@ -1249,6 +1258,78 @@ impl<'a> RubyIndexer<'a> {
 
             self.add_member_to_current_owner(definition_id);
         }
+    }
+
+    fn should_apply_inline_visibility(args: &ruby_prism::NodeList) -> bool {
+        if args.len() != 1 {
+            return false;
+        }
+
+        let arg = args.iter().next().unwrap();
+
+        if matches!(arg, ruby_prism::Node::DefNode { .. }) {
+            return true;
+        }
+
+        arg.as_call_node().is_some_and(|call| {
+            let receiver = call.receiver();
+            let bare_or_self = receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some());
+            bare_or_self
+                && matches!(
+                    call.name().as_slice(),
+                    b"attr" | b"attr_reader" | b"attr_writer" | b"attr_accessor"
+                )
+        })
+    }
+
+    fn handle_retroactive_method_visibility(
+        &mut self,
+        node: &ruby_prism::CallNode,
+        arguments: &ruby_prism::ArgumentsNode,
+        visibility: Visibility,
+        call_offset: &Offset,
+        call_name: &str,
+    ) {
+        let args = arguments.arguments();
+
+        let is_literal = |arg: ruby_prism::Node| {
+            matches!(
+                arg,
+                ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. }
+            )
+        };
+
+        if !args.iter().all(&is_literal) {
+            let has_any_literal = args.iter().any(is_literal);
+            let message = if has_any_literal {
+                format!("`{call_name}` called with mixed literal and non-literal arguments")
+            } else {
+                format!("`{call_name}` called with non-literal arguments")
+            };
+
+            self.local_graph
+                .add_diagnostic(Rule::InvalidMethodVisibility, call_offset.clone(), message);
+            self.visit_arguments_node(arguments);
+            return;
+        }
+
+        // All symbols/strings — create MethodVisibilityDefinitions
+        Self::each_string_or_symbol_arg(node, |name, location| {
+            let str_id = self.local_graph.intern_string(format!("{name}()"));
+            let arg_offset = Offset::from_prism_location(&location);
+            let definition = Definition::MethodVisibility(Box::new(MethodVisibilityDefinition::new(
+                str_id,
+                visibility,
+                self.uri_id,
+                arg_offset,
+                Box::default(),
+                DefinitionFlags::empty(),
+                self.current_nesting_definition_id(),
+            )));
+
+            let definition_id = self.local_graph.add_definition(definition);
+            self.add_member_to_current_owner(definition_id);
+        });
     }
 }
 
@@ -1853,7 +1934,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
             "private" | "protected" | "public" | "module_function" => {
-                if let Some(_receiver) = node.receiver() {
+                if node.receiver().is_some() {
                     self.visit_call_node_parts(node);
                     return;
                 }
@@ -1862,27 +1943,38 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let offset = Offset::from_prism_location(&node.location());
 
                 if let Some(arguments) = node.arguments() {
-                    // With this case:
-                    //
-                    // ```ruby
-                    // private def foo(bar); end
-                    // ```
-                    //
-                    // We push the new visibility to the stack and then pop it after visiting the arguments so it only affects the method definition.
-                    self.visibility_stack
-                        .push(VisibilityModifier::new(visibility, true, offset));
-                    self.visit_arguments_node(&arguments);
-                    self.visibility_stack.pop();
+                    let args = arguments.arguments();
+
+                    if Self::should_apply_inline_visibility(&args) {
+                        // Inline/scoped form: `private def foo(bar); end`
+                        //
+                        // Push the new visibility to the stack and then pop it after visiting
+                        // the arguments so it only affects the method definition.
+                        self.visibility_stack
+                            .push(VisibilityModifier::new(visibility, true, offset));
+                        self.visit_arguments_node(&arguments);
+                        self.visibility_stack.pop();
+                    } else if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
+                        self.local_graph.add_diagnostic(
+                            Rule::InvalidMethodVisibility,
+                            offset,
+                            "`module_function` can only be used in modules".to_string(),
+                        );
+                        self.visit_arguments_node(&arguments);
+                    } else {
+                        // Retroactive method visibility: `private :foo`, `module_function :bar`
+                        self.handle_retroactive_method_visibility(
+                            node,
+                            &arguments,
+                            visibility,
+                            &offset,
+                            message.as_str(),
+                        );
+                    }
                 } else {
-                    // With this case:
+                    // Flag mode: `private` with no arguments
                     //
-                    // ```ruby
-                    // private
-                    //
-                    // def foo(bar); end
-                    // ```
-                    //
-                    // We replace the current visibility with the new one so it only affects all the subsequent method definitions.
+                    // Replace the current visibility so it affects all subsequent method definitions.
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
                     *last_visibility = VisibilityModifier::new(visibility, false, offset);
                 }
@@ -6670,6 +6762,280 @@ mod tests {
         );
 
         assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+    }
+
+    #[test]
+    fn index_retroactive_method_visibility() {
+        let context = index_source(
+            "
+            class Foo
+              def foo; end
+              def bar; end
+              def baz; end
+
+              private :foo
+              protected :bar, :baz
+              public :foo
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "6:12-6:15", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "7:14-7:17", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+        assert_definition_at!(&context, "7:20-7:23", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "baz()");
+            assert_eq!(def.visibility(), &Visibility::Protected);
+        });
+        assert_definition_at!(&context, "8:11-8:14", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_retroactive_method_visibility_string_targets() {
+        let context = index_source(
+            "
+            class Foo
+              def foo; end
+
+              private \"foo\"
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:11-4:16", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_retroactive_method_visibility_mixed_args_diagnostic() {
+        let context = index_source(
+            "
+            class Foo
+              def foo; end
+
+              private :foo, SOME_CONST
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `private` called with mixed literal and non-literal arguments (4:3-4:27)",]
+        );
+
+        // No MethodVisibilityDefinition created
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for mixed args"
+            );
+        }
+
+        // Dynamic args still visited — constant reference indexed
+        assert_constant_references_eq!(&context, ["SOME_CONST"]);
+    }
+
+    #[test]
+    fn index_retroactive_method_visibility_receiver_ignored() {
+        let context = index_source(
+            "
+            class Foo
+              def foo; end
+
+              Foo.private :foo
+            end
+            ",
+        );
+
+        // Explicit receiver — not indexed as method visibility, visited as normal call
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility with explicit receiver"
+            );
+        }
+    }
+
+    #[test]
+    fn index_retroactive_method_visibility_dynamic_only_diagnostic() {
+        let context = index_source(
+            "
+            class Foo
+              def foo; end
+
+              private SOME_CONST
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `private` called with non-literal arguments (4:3-4:21)"]
+        );
+
+        // No MethodVisibilityDefinition created
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for dynamic-only args"
+            );
+        }
+    }
+
+    #[test]
+    fn index_retroactive_method_visibility_call_expression_arg_diagnosed() {
+        let context = index_source(
+            "
+            class Foo
+              private helper(:foo)
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `private` called with non-literal arguments (2:3-2:23)"]
+        );
+
+        // No MethodVisibilityDefinition created
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for call-expression arg"
+            );
+        }
+    }
+
+    #[test]
+    fn index_receiver_attr_reader_not_scoped_definition() {
+        let context = index_source(
+            "
+            class Foo
+              private helper.attr_reader(:foo)
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `private` called with non-literal arguments (2:3-2:35)"]
+        );
+
+        // No MethodVisibilityDefinition or AttrReader created from that call
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_) | Definition::AttrReader(_)),
+                "should not create MethodVisibility or AttrReader for receiver attr_reader call"
+            );
+        }
+    }
+
+    #[test]
+    fn index_scoped_private_attr_reader_single_arg() {
+        let context = index_source(
+            "
+            class Foo
+              private attr_reader(:foo)
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:24-2:27", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_attr_reader_with_extra_args_not_scoped() {
+        let context = index_source(
+            "
+            class Foo
+              private attr_reader(:foo), :bar
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `private` called with mixed literal and non-literal arguments (2:3-2:34)"]
+        );
+
+        // No MethodVisibilityDefinition created
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for attr_reader with extra args"
+            );
+        }
+
+        // The attr_reader(:foo) call is still visited — AttrReader for foo() is indexed
+        assert_definition_at!(&context, "2:24-2:27", AttrReader, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            // The attr_reader is public (default) — the visibility stack was NOT pushed
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_retroactive_module_function_symbol_target() {
+        let context = index_source(
+            "
+            module Foo
+              def foo; end
+
+              module_function :foo
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:20-4:23", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::ModuleFunction);
+        });
+    }
+
+    #[test]
+    fn index_retroactive_module_function_in_class_is_invalid() {
+        let context = index_source(
+            "
+            class Foo
+              def foo; end
+
+              module_function :foo
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `module_function` can only be used in modules (4:3-4:23)"]
+        );
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function in class"
+            );
+        }
     }
 }
 

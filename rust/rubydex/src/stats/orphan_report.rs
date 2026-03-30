@@ -134,6 +134,7 @@ impl Graph {
             | Definition::AttrReader(_)
             | Definition::AttrWriter(_)
             | Definition::MethodAlias(_)
+            | Definition::MethodVisibility(_)
             | Definition::InstanceVariable(_) => "#",
             Definition::Class(_)
             | Definition::SingletonClass(_)

@@ -511,6 +511,9 @@ impl<'a> Resolver<'a> {
                 Definition::ConstantVisibility(_constant_visibility) => {
                     // TODO
                 }
+                Definition::MethodVisibility(_method_visibility) => {
+                    // TODO
+                }
                 Definition::Class(_)
                 | Definition::SingletonClass(_)
                 | Definition::Module(_)
