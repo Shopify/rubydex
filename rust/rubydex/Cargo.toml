@@ -9,6 +9,10 @@ license = "MIT"
 name = "rubydex_cli"
 path = "src/main.rs"
 
+[[bin]]
+name = "incremental_test"
+path = "src/bin/incremental_test.rs"
+
 [lib]
 crate-type = ["rlib"]
 
