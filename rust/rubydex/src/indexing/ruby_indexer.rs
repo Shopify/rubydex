@@ -1260,17 +1260,7 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
-    fn should_apply_inline_visibility(args: &ruby_prism::NodeList) -> bool {
-        if args.len() != 1 {
-            return false;
-        }
-
-        let arg = args.iter().next().unwrap();
-
-        if matches!(arg, ruby_prism::Node::DefNode { .. }) {
-            return true;
-        }
-
+    fn is_attr_call(arg: &ruby_prism::Node) -> bool {
         arg.as_call_node().is_some_and(|call| {
             let receiver = call.receiver();
             let bare_or_self = receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some());
@@ -1282,54 +1272,85 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
-    fn handle_retroactive_method_visibility(
+    /// Classifies each visibility argument and applies visibility left-to-right:
+    /// - `DefNode`: inline visibility (always valid)
+    /// - Sole attr_* call: inline visibility (multi-arg attr_* is unsupported — returns array)
+    /// - `SymbolNode`/`StringNode`: retroactive `MethodVisibilityDefinition`
+    /// - Anything else: per-arg diagnostic, visibility stops for subsequent args
+    fn handle_visibility_arguments(
         &mut self,
-        node: &ruby_prism::CallNode,
         arguments: &ruby_prism::ArgumentsNode,
         visibility: Visibility,
         call_offset: &Offset,
         call_name: &str,
     ) {
         let args = arguments.arguments();
+        let arg_count = args.len();
+        let mut visibility_still_applies = true;
 
-        let is_literal = |arg: ruby_prism::Node| {
-            matches!(
+        for arg in &args {
+            if matches!(arg, ruby_prism::Node::DefNode { .. }) || (arg_count == 1 && Self::is_attr_call(&arg)) {
+                if visibility_still_applies {
+                    self.visibility_stack
+                        .push(VisibilityModifier::new(visibility, true, call_offset.clone()));
+                }
+                self.visit(&arg);
+                if visibility_still_applies {
+                    self.visibility_stack.pop();
+                }
+            } else if matches!(
                 arg,
                 ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. }
-            )
+            ) {
+                if visibility_still_applies {
+                    self.create_method_visibility_definition(&arg, visibility);
+                }
+            } else {
+                // Unsupported arg — diagnostic + visit for side effects, stop applying visibility.
+                let arg_offset = Offset::from_prism_location(&arg.location());
+                self.local_graph.add_diagnostic(
+                    Rule::InvalidMethodVisibility,
+                    arg_offset,
+                    format!("`{call_name}` called with a non-literal argument"),
+                );
+                self.visit(&arg);
+                visibility_still_applies = false;
+            }
+        }
+    }
+
+    fn create_method_visibility_definition(&mut self, arg: &ruby_prism::Node, visibility: Visibility) {
+        let (name, location) = match arg {
+            ruby_prism::Node::SymbolNode { .. } => {
+                let symbol = arg.as_symbol_node().unwrap();
+                if let Some(value_loc) = symbol.value_loc() {
+                    (Self::location_to_string(&value_loc), value_loc)
+                } else {
+                    return;
+                }
+            }
+            ruby_prism::Node::StringNode { .. } => {
+                let string = arg.as_string_node().unwrap();
+                let name = String::from_utf8_lossy(string.unescaped()).to_string();
+                (name, arg.location())
+            }
+            _ => return,
         };
 
-        if !args.iter().all(&is_literal) {
-            let has_any_literal = args.iter().any(is_literal);
-            let message = if has_any_literal {
-                format!("`{call_name}` called with mixed literal and non-literal arguments")
-            } else {
-                format!("`{call_name}` called with non-literal arguments")
-            };
+        let str_id = self.local_graph.intern_string(format!("{name}()"));
+        let arg_offset = Offset::from_prism_location(&location);
+        let definition = Definition::MethodVisibility(Box::new(MethodVisibilityDefinition::new(
+            str_id,
+            visibility,
+            self.uri_id,
+            arg_offset,
+            Box::default(),
+            DefinitionFlags::empty(),
+            self.current_nesting_definition_id(),
+        )));
 
-            self.local_graph
-                .add_diagnostic(Rule::InvalidMethodVisibility, call_offset.clone(), message);
-            self.visit_arguments_node(arguments);
-            return;
-        }
-
-        // All symbols/strings — create MethodVisibilityDefinitions
-        Self::each_string_or_symbol_arg(node, |name, location| {
-            let str_id = self.local_graph.intern_string(format!("{name}()"));
-            let arg_offset = Offset::from_prism_location(&location);
-            let definition = Definition::MethodVisibility(Box::new(MethodVisibilityDefinition::new(
-                str_id,
-                visibility,
-                self.uri_id,
-                arg_offset,
-                Box::default(),
-                DefinitionFlags::empty(),
-                self.current_nesting_definition_id(),
-            )));
-
-            let definition_id = self.local_graph.add_definition(definition);
-            self.add_member_to_current_owner(definition_id);
-        });
+        let definition_id = self.local_graph.add_definition(definition);
+        self.add_member_to_current_owner(definition_id);
     }
 }
 
@@ -1943,18 +1964,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let offset = Offset::from_prism_location(&node.location());
 
                 if let Some(arguments) = node.arguments() {
-                    let args = arguments.arguments();
-
-                    if Self::should_apply_inline_visibility(&args) {
-                        // Inline/scoped form: `private def foo(bar); end`
-                        //
-                        // Push the new visibility to the stack and then pop it after visiting
-                        // the arguments so it only affects the method definition.
-                        self.visibility_stack
-                            .push(VisibilityModifier::new(visibility, true, offset));
-                        self.visit_arguments_node(&arguments);
-                        self.visibility_stack.pop();
-                    } else if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
+                    if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
                         self.local_graph.add_diagnostic(
                             Rule::InvalidMethodVisibility,
                             offset,
@@ -1962,14 +1972,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         );
                         self.visit_arguments_node(&arguments);
                     } else {
-                        // Retroactive method visibility: `private :foo`, `module_function :bar`
-                        self.handle_retroactive_method_visibility(
-                            node,
-                            &arguments,
-                            visibility,
-                            &offset,
-                            message.as_str(),
-                        );
+                        self.handle_visibility_arguments(&arguments, visibility, &offset, message.as_str());
                     }
                 } else {
                     // Flag mode: `private` with no arguments
@@ -2307,5 +2310,3 @@ impl Visit<'_> for RubyIndexer<'_> {
 #[cfg(test)]
 #[path = "ruby_indexer_tests.rs"]
 mod tests;
-
-
