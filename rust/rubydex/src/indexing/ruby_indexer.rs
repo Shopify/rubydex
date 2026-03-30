@@ -160,6 +160,10 @@ impl<'a> RubyIndexer<'a> {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
+    fn offset_to_string(&self, offset: &Offset) -> String {
+        self.source[offset.start() as usize..offset.end() as usize].to_string()
+    }
+
     fn find_comments_for(&self, offset: u32) -> (Box<[Comment]>, DefinitionFlags) {
         let offset_usize = offset as usize;
         if self.comments.is_empty() {
@@ -257,27 +261,21 @@ impl<'a> RubyIndexer<'a> {
                 match keyword {
                     ruby_prism::Node::RequiredKeywordParameterNode { .. } => {
                         let required = keyword.as_required_keyword_parameter_node().unwrap();
-                        let name_loc = required.name_loc();
-                        let str_id = self
-                            .local_graph
-                            .intern_string(Self::location_to_string(&name_loc).trim_end_matches(':').to_string());
+                        let loc = required.name_loc();
+                        let full = Offset::from_prism_location(&loc);
+                        let offset = Offset::new(full.start(), full.end() - 1); // Exclude trailing colon
+                        let str_id = self.local_graph.intern_string(self.offset_to_string(&offset));
 
-                        parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(
-                            Offset::from_prism_location(&name_loc),
-                            str_id,
-                        )));
+                        parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(offset, str_id)));
                     }
                     ruby_prism::Node::OptionalKeywordParameterNode { .. } => {
                         let optional = keyword.as_optional_keyword_parameter_node().unwrap();
-                        let name_loc = optional.name_loc();
-                        let str_id = self
-                            .local_graph
-                            .intern_string(Self::location_to_string(&name_loc).trim_end_matches(':').to_string());
+                        let loc = optional.name_loc();
+                        let full = Offset::from_prism_location(&loc);
+                        let offset = Offset::new(full.start(), full.end() - 1); // Exclude trailing colon
+                        let str_id = self.local_graph.intern_string(self.offset_to_string(&offset));
 
-                        parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(
-                            Offset::from_prism_location(&name_loc),
-                            str_id,
-                        )));
+                        parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(offset, str_id)));
                     }
                     _ => {}
                 }
@@ -3166,10 +3164,12 @@ mod tests {
 
                 assert_parameter!(&params[4], RequiredKeyword, |param| {
                     assert_string_eq!(context, param.str(), "e");
+                    assert_eq!(context.source_at(param.offset()), "e");
                 });
 
                 assert_parameter!(&params[5], OptionalKeyword, |param| {
                     assert_string_eq!(context, param.str(), "g");
+                    assert_eq!(context.source_at(param.offset()), "g");
                 });
 
                 assert_parameter!(&params[6], RestKeyword, |param| {
