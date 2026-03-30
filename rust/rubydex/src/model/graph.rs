@@ -966,6 +966,29 @@ impl Graph {
             }
         }
 
+        // Detach removed definitions from their declarations.
+        // Most definitions were already detached by invalidate_declaration via
+        // pending_detachments. Definitions not handled by pending_detachments are
+        // those where definition_to_declaration_id returns None, for example:
+        //   - methods inside `class << self` when <Foo> was unresolved by a prior deletion
+        //   - instance variables in class body (owned by singleton, but lookup resolves to class)
+        //   - definitions whose enclosing namespace name chain is broken
+        // Detach those by scanning declarations for the remainder.
+        let missed_def_ids: Vec<DefinitionId> = document
+            .definitions()
+            .iter()
+            .copied()
+            .filter(|def_id| self.definition_id_to_declaration_id(*def_id).is_none())
+            .collect();
+
+        if !missed_def_ids.is_empty() {
+            for declaration in self.declarations.values_mut() {
+                for def_id in &missed_def_ids {
+                    declaration.remove_definition(def_id);
+                }
+            }
+        }
+
         for def_id in document.definitions() {
             let definition = self.definitions.remove(def_id).unwrap();
 
@@ -2256,6 +2279,19 @@ mod incremental_resolution_tests {
     };
 
     const NO_ANCESTORS: [&str; 0] = [];
+
+    /// Asserts no declaration holds a definition ID absent from the graph.
+    fn assert_no_dangling_definitions(graph: &super::Graph) {
+        for decl in graph.declarations().values() {
+            for def_id in decl.definitions() {
+                assert!(
+                    graph.definitions().contains_key(def_id),
+                    "Declaration `{}` references dangling definition {def_id:?}",
+                    decl.name(),
+                );
+            }
+        }
+    }
 
     #[test]
     fn new_namespace_shadowing_include_target_invalidates_references() {
@@ -3552,5 +3588,19 @@ mod incremental_resolution_tests {
         assert_declaration_references_count_eq!(fresh, "Foo::CONST", 0);
         assert_declaration_references_count_eq!(incremental, "Baz::CONST", 1);
         assert_declaration_references_count_eq!(fresh, "Baz::CONST", 1);
+    }
+
+    #[test]
+    fn no_dangling_definitions_after_sequential_deletions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "module Foo; end");
+        context.index_uri("file:///b.rb", "module Foo; end");
+        context.index_uri("file:///c.rb", "module Foo; class << self; def bar; end; end; end");
+        context.resolve();
+
+        context.delete_uri("file:///b.rb");
+        context.delete_uri("file:///c.rb");
+
+        assert_no_dangling_definitions(context.graph());
     }
 } // mod incremental_resolution_tests
