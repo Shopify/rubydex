@@ -610,6 +610,216 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_complete_expression
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo\n  CONST = 1\n  def bar; end\nend", "ruby")
+    graph.resolve
+
+    candidates = graph.complete_expression(["Foo"])
+
+    # Declaration candidates
+    constants = candidates.select { |c| c.is_a?(Rubydex::Constant) }
+    assert(constants.any? { |c| c.name == "Foo::CONST" })
+
+    methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
+    assert(methods.any? { |c| c.name == "Foo#bar()" })
+
+    # Keyword candidates
+    keywords = candidates.select { |c| c.is_a?(Rubydex::Keyword) }
+    keyword_names = keywords.map(&:name)
+    assert_includes(keyword_names, "if")
+    assert_includes(keyword_names, "yield")
+
+    # Keywords have documentation
+    if_keyword = keywords.find { |c| c.name == "if" }
+    refute_nil(if_keyword)
+    assert_kind_of(String, if_keyword.documentation)
+    refute_empty(if_keyword.documentation)
+  end
+
+  def test_complete_expression_with_empty_nesting
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Object; end\nclass Foo; end", "ruby")
+    graph.resolve
+
+    candidates = graph.complete_expression([])
+
+    # Top-level constants should be reachable (Object context)
+    constants = candidates.select { |c| c.is_a?(Rubydex::Declaration) }
+    assert(constants.any? { |c| c.name == "Foo" })
+
+    # Keywords should still be present
+    keywords = candidates.select { |c| c.is_a?(Rubydex::Keyword) }
+    assert(keywords.any? { |c| c.name == "if" })
+  end
+
+  def test_complete_expression_for_non_namespace_nesting
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar
+        end
+      end
+    RUBY
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["Foo#bar()"])
+    end
+  end
+
+  def test_complete_namespace_access
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        CONST = 1
+
+        class << self
+          def bar; end
+        end
+      end
+    RUBY
+    graph.resolve
+
+    candidates = graph.complete_namespace_access("Foo")
+
+    # All candidates should be Declaration subclasses (no keywords)
+    candidates.each { |c| assert_kind_of(Rubydex::Declaration, c) }
+
+    assert(candidates.any? { |c| c.is_a?(Rubydex::Constant) && c.name == "Foo::CONST" })
+    assert(candidates.any? { |c| c.is_a?(Rubydex::Method) && c.name == "Foo::<Foo>#bar()" })
+  end
+
+  def test_complete_namespace_access_for_non_namespace
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar
+        end
+      end
+    RUBY
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_namespace_access("Foo#bar()")
+    end
+  end
+
+  def test_complete_method_call
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo\n  def bar; end\n  def baz; end\nend", "ruby")
+    graph.resolve
+
+    candidates = graph.complete_method_call("Foo")
+
+    # All candidates should be Method instances
+    candidates.each { |c| assert_kind_of(Rubydex::Method, c) }
+
+    method_names = candidates.map(&:name)
+    assert_includes(method_names, "Foo#bar()")
+    assert_includes(method_names, "Foo#baz()")
+  end
+
+  def test_complete_method_call_for_non_namespace
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar
+        end
+      end
+    RUBY
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_method_call("Foo#bar()")
+    end
+  end
+
+  def test_complete_method_argument
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo\n  def bar(name:); end\nend", "ruby")
+    graph.resolve
+
+    candidates = graph.complete_method_argument("Foo#bar()", ["Foo"])
+
+    # Method candidates
+    methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
+    assert(methods.any? { |c| c.name == "Foo#bar()" })
+
+    # Keyword candidates
+    keywords = candidates.select { |c| c.is_a?(Rubydex::Keyword) }
+    assert(keywords.any? { |c| c.name == "if" })
+
+    # KeywordParameter candidates
+    keyword_params = candidates.select { |c| c.is_a?(Rubydex::KeywordParameter) }
+    assert(keyword_params.any? { |c| c.name == "name" })
+  end
+
+  def test_complete_method_argument_for_non_namespace_nesting
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar(name:)
+        end
+      end
+    RUBY
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_method_argument("Foo#bar()", ["Foo#bar()"])
+    end
+  end
+
+  def test_complete_expression_raises_with_wrong_types
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) { graph.complete_expression("not an array") }
+    assert_raises(TypeError) { graph.complete_expression([123]) }
+  end
+
+  def test_complete_namespace_access_raises_with_wrong_types
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) { graph.complete_namespace_access(123) }
+  end
+
+  def test_complete_method_call_raises_with_wrong_types
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) { graph.complete_method_call(123) }
+  end
+
+  def test_complete_method_argument_raises_with_wrong_types
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) { graph.complete_method_argument(123, []) }
+    assert_raises(TypeError) { graph.complete_method_argument("Foo#bar()", "not an array") }
+    assert_raises(TypeError) { graph.complete_method_argument("Foo#bar()", [123]) }
+  end
+
+  def test_completion_returns_empty_for_non_existent_declarations
+    graph = Rubydex::Graph.new
+    graph.resolve
+
+    assert_equal([], graph.complete_namespace_access("DoesNotExist"))
+    assert_equal([], graph.complete_method_call("DoesNotExist"))
+  end
+
+  def test_complete_expression_for_non_existent_nesting
+    graph = Rubydex::Graph.new
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["NonExistent"])
+    end
+  end
+
+  def test_complete_expression_on_unresolved_graph
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+
+    # Nesting with a name that exists but hasn't been resolved
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["Foo"])
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)
