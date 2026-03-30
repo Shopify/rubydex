@@ -3406,18 +3406,15 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with mixed literal and non-literal arguments (4:3-4:27)",]
+            vec!["invalid-method-visibility: `private` called with a non-literal argument (4:17-4:27)"]
         );
 
-        // No MethodVisibilityDefinition created
-        for def in context.graph().definitions().values() {
-            assert!(
-                !matches!(def, Definition::MethodVisibility(_)),
-                "should not create MethodVisibility for mixed args"
-            );
-        }
+        // :foo is a literal arg, so visibility is still applied
+        assert_definition_at!(&context, "4:12-4:15", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
 
-        // Dynamic args still visited — constant reference indexed
         assert_constant_references_eq!(&context, ["SOME_CONST"]);
     }
 
@@ -3460,7 +3457,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with non-literal arguments (4:3-4:21)"]
+            vec!["invalid-method-visibility: `private` called with a non-literal argument (4:11-4:21)"]
         );
 
         // No MethodVisibilityDefinition created
@@ -3484,7 +3481,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with non-literal arguments (2:3-2:23)"]
+            vec!["invalid-method-visibility: `private` called with a non-literal argument (2:11-2:23)"]
         );
 
         // No MethodVisibilityDefinition created
@@ -3508,7 +3505,7 @@ mod visibility_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with non-literal arguments (2:3-2:35)"]
+            vec!["invalid-method-visibility: `private` called with a non-literal argument (2:11-2:35)"]
         );
 
         // No MethodVisibilityDefinition or AttrReader created from that call
@@ -3548,23 +3545,17 @@ mod visibility_tests {
             ",
         );
 
+        // attr_reader(:foo) returns an array in multi-arg context, invalid for `private`
         assert_local_diagnostics_eq!(
             &context,
-            vec!["invalid-method-visibility: `private` called with mixed literal and non-literal arguments (2:3-2:34)"]
+            vec![
+                "invalid-method-visibility: `private` with `attr_*` is only supported as a single argument (2:11-2:28)"
+            ]
         );
 
-        // No MethodVisibilityDefinition created
-        for def in context.graph().definitions().values() {
-            assert!(
-                !matches!(def, Definition::MethodVisibility(_)),
-                "should not create MethodVisibility for attr_reader with extra args"
-            );
-        }
-
-        // The attr_reader(:foo) call is still visited — AttrReader for foo() is indexed
+        // foo reader still defined via side effects, but public
         assert_definition_at!(&context, "2:24-2:27", AttrReader, |def| {
             assert_def_str_eq!(&context, def, "foo()");
-            // The attr_reader is public (default) — the visibility stack was NOT pushed
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
@@ -3604,6 +3595,130 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec!["invalid-method-visibility: `module_function` can only be used in modules (4:3-4:23)"]
+        );
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function in class"
+            );
+        }
+    }
+
+    #[test]
+    fn index_inline_visibility_mixed_with_retroactive() {
+        let context = index_source(
+            "
+            class Foo
+              def bar; end
+              private def foo; end, :bar
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:11-3:23", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "3:26-3:29", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_inline_visibility_multiple_defs() {
+        let context = index_source(
+            "
+            class Foo
+              private def foo; end, def bar; end
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:11-2:23", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_definition_at!(&context, "2:25-2:37", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_inline_visibility_mixed_with_unsupported() {
+        let context = index_source(
+            "
+            class Foo
+              private def foo; end, CONST_A
+              private CONST_B, def bar; end
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec![
+                "invalid-method-visibility: `private` called with a non-literal argument (2:25-2:32)",
+                "invalid-method-visibility: `private` called with a non-literal argument (3:11-3:18)",
+            ]
+        );
+
+        // Def gets visibility regardless of arg position
+        assert_definition_at!(&context, "2:11-2:23", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "3:20-3:32", Method, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        assert_constant_references_eq!(&context, ["CONST_A", "CONST_B"]);
+    }
+
+    #[test]
+    fn index_retroactive_visibility_multiple_unsupported_args() {
+        let context = index_source(
+            "
+            class Foo
+              private CONST_A, CONST_B
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec![
+                "invalid-method-visibility: `private` called with a non-literal argument (2:11-2:18)",
+                "invalid-method-visibility: `private` called with a non-literal argument (2:20-2:27)",
+            ]
+        );
+
+        assert_constant_references_eq!(&context, ["CONST_A", "CONST_B"]);
+    }
+
+    #[test]
+    fn index_module_function_mixed_args_in_class_is_invalid() {
+        let context = index_source(
+            "
+            class Foo
+              module_function def foo; end, :bar
+            end
+            ",
+        );
+
+        // module_function in a class is always invalid regardless of args
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `module_function` can only be used in modules (2:3-2:37)"]
         );
 
         for def in context.graph().definitions().values() {
