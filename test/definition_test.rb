@@ -413,6 +413,81 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_method_alias_definition_signatures
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def foo(a, b); end
+          alias bar foo
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      alias_def = graph["Foo#bar()"].definitions.first
+      assert_instance_of(Rubydex::MethodAliasDefinition, alias_def)
+
+      signatures = alias_def.signatures
+      assert_equal(1, signatures.length)
+
+      params = signatures.first.parameters
+      assert_equal(2, params.length)
+      assert_equal(:a, params[0].name)
+      assert_equal(:b, params[1].name)
+
+      # method_definition points to the resolved MethodDefinition, not the alias
+      assert_instance_of(Rubydex::MethodDefinition, signatures.first.method_definition)
+    end
+  end
+
+  def test_method_alias_definition_signatures_chained
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def foo(x); end
+          alias bar foo
+          alias baz bar
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      alias_def = graph["Foo#baz()"].definitions.first
+      assert_instance_of(Rubydex::MethodAliasDefinition, alias_def)
+
+      signatures = alias_def.signatures
+      assert_equal(1, signatures.length)
+
+      params = signatures.first.parameters
+      assert_equal(1, params.length)
+      assert_equal(:x, params[0].name)
+    end
+  end
+
+  def test_method_alias_definition_signatures_unresolved
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          alias bar nonexistent
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      alias_def = graph["Foo#bar()"].definitions.first
+      assert_instance_of(Rubydex::MethodAliasDefinition, alias_def)
+
+      signatures = alias_def.signatures
+      assert_empty(signatures)
+    end
+  end
+
   private
 
   # Comment locations on Windows include the carriage return. This means that the end column is off by one when compared

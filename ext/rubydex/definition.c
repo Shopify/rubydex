@@ -177,6 +177,18 @@ static VALUE rdxr_method_definition_signatures(VALUE self) {
     return rdxi_signatures_to_ruby(arr, data->graph_obj, self);
 }
 
+// MethodAliasDefinition#signatures -> [Rubydex::Signature]
+static VALUE rdxr_method_alias_definition_signatures(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    SignatureArray *arr = rdx_method_alias_definition_signatures(graph, data->id);
+    return rdxi_signatures_to_ruby(arr, data->graph_obj, Qnil);
+}
+
 void rdxi_initialize_definition(VALUE mod) {
     mRubydex = mod;
 
@@ -207,5 +219,6 @@ void rdxi_initialize_definition(VALUE mod) {
     cInstanceVariableDefinition = rb_define_class_under(mRubydex, "InstanceVariableDefinition", cDefinition);
     cClassVariableDefinition = rb_define_class_under(mRubydex, "ClassVariableDefinition", cDefinition);
     cMethodAliasDefinition = rb_define_class_under(mRubydex, "MethodAliasDefinition", cDefinition);
+    rb_define_method(cMethodAliasDefinition, "signatures", rdxr_method_alias_definition_signatures, 0);
     cGlobalVariableAliasDefinition = rb_define_class_under(mRubydex, "GlobalVariableAliasDefinition", cDefinition);
 }

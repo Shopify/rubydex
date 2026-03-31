@@ -6,10 +6,10 @@ use std::thread;
 use url::Url;
 
 use crate::model::declaration::{Ancestor, Declaration};
-use crate::model::definitions::{Definition, Parameter};
+use crate::model::definitions::{Definition, MethodAliasDefinition, Parameter, Receiver};
 use crate::model::graph::{Graph, OBJECT_ID};
 use crate::model::identity_maps::IdentityHashSet;
-use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, StringId, UriId};
 use crate::model::keywords::{self, Keyword};
 use crate::model::name::NameRef;
 
@@ -456,6 +456,99 @@ fn method_argument_completion<'a>(
     }
 
     Ok(candidates)
+}
+
+/// Result of looking up the enclosing namespace for a definition.
+#[allow(dead_code)]
+enum EnclosingNamespace {
+    /// Found a namespace (class, module, or singleton class).
+    Found(DeclarationId),
+    /// The definition has no enclosing namespace (top-level).
+    NotFound,
+    /// The enclosing namespace could not be determined because name resolution failed.
+    Unresolved(DefinitionId),
+}
+
+/// Walks up the lexical nesting chain from the given `DefinitionId` to find
+/// the nearest enclosing namespace (class, module, or singleton class).
+fn enclosing_namespace(graph: &Graph, starting_id: Option<&DefinitionId>) -> EnclosingNamespace {
+    let mut current = starting_id;
+    while let Some(id) = current {
+        let def = graph.definitions().get(id).unwrap();
+        let is_namespace_def = matches!(
+            def,
+            Definition::Class(_) | Definition::Module(_) | Definition::SingletonClass(_)
+        );
+
+        let Some(decl_id) = graph.definition_id_to_declaration_id(*id) else {
+            if is_namespace_def {
+                return EnclosingNamespace::Unresolved(*id);
+            }
+            current = def.lexical_nesting_id().as_ref();
+            continue;
+        };
+        if is_namespace_def {
+            return EnclosingNamespace::Found(*decl_id);
+        }
+        current = def.lexical_nesting_id().as_ref();
+    }
+    EnclosingNamespace::NotFound
+}
+
+/// Result of dealiasing a single level of method alias.
+pub enum DealiasMethodResult {
+    /// The alias target is a concrete method definition.
+    Method(DefinitionId),
+    /// The alias target is another alias.
+    Alias(DefinitionId),
+}
+
+/// Dereferences a `MethodAliasDefinition` by one level, returning the definitions
+/// found under the aliased name. Returns an empty vector if the alias target cannot
+/// be found (e.g., unresolved constant receiver or missing member).
+///
+/// # Panics
+///
+/// Panics if a `SelfReceiver` definition cannot be resolved to a namespace with a singleton class.
+#[must_use]
+pub fn dealias_method(graph: &Graph, alias: &MethodAliasDefinition) -> Vec<DealiasMethodResult> {
+    let owner_id = match alias.receiver() {
+        Some(Receiver::SelfReceiver(def_id)) => {
+            let decl_id = graph.definition_id_to_declaration_id(*def_id).unwrap();
+            let decl = graph.declarations().get(decl_id).unwrap();
+            let ns = decl.as_namespace().unwrap();
+            *ns.singleton_class().unwrap()
+        }
+        Some(Receiver::ConstantReceiver(name_id)) => {
+            let Some(&id) = graph.name_id_to_declaration_id(*name_id) else {
+                return vec![];
+            };
+            id
+        }
+        None => match enclosing_namespace(graph, alias.lexical_nesting_id().as_ref()) {
+            EnclosingNamespace::Found(id) => id,
+            EnclosingNamespace::NotFound | EnclosingNamespace::Unresolved(_) => return vec![],
+        },
+    };
+
+    let owner_decl = graph.declarations().get(&owner_id).unwrap();
+    let ns = owner_decl.as_namespace().unwrap();
+
+    let Some(&method_decl_id) = ns.member(alias.old_name_str_id()) else {
+        return vec![];
+    };
+    let method_decl = graph.declarations().get(&method_decl_id).unwrap();
+    assert!(matches!(method_decl, Declaration::Method(_)));
+
+    method_decl
+        .definitions()
+        .iter()
+        .filter_map(|def_id| match graph.definitions().get(def_id) {
+            Some(Definition::Method(_)) => Some(DealiasMethodResult::Method(*def_id)),
+            Some(Definition::MethodAlias(_)) => Some(DealiasMethodResult::Alias(*def_id)),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1681,6 +1774,123 @@ mod tests {
         .unwrap();
 
         assert!(!candidates.iter().any(|c| matches!(c, CompletionCandidate::Keyword(_))));
+    }
+
+    fn get_method_alias_def<'a>(graph: &'a Graph, decl_name: &str) -> &'a MethodAliasDefinition {
+        let decl = graph.declarations().get(&DeclarationId::from(decl_name)).unwrap();
+        for def_id in decl.definitions() {
+            if let Some(Definition::MethodAlias(alias)) = graph.definitions().get(def_id) {
+                return alias;
+            }
+        }
+        panic!("No MethodAliasDefinition found for {decl_name}");
+    }
+
+    #[test]
+    fn dealias_method_basic() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def foo(a, b); end
+              alias bar foo
+            end
+        ",
+        );
+        context.resolve();
+
+        let alias = get_method_alias_def(context.graph(), "Foo#bar()");
+        let results = dealias_method(context.graph(), alias);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+    }
+
+    #[test]
+    fn dealias_method_chained() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def foo(x); end
+              alias bar foo
+              alias baz bar
+            end
+        ",
+        );
+        context.resolve();
+
+        // baz -> bar: one level returns the alias to bar
+        let alias = get_method_alias_def(context.graph(), "Foo#baz()");
+        let results = dealias_method(context.graph(), alias);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], DealiasMethodResult::Alias(_)));
+
+        // bar -> foo: one more level returns the method definition
+        let alias = get_method_alias_def(context.graph(), "Foo#bar()");
+        let results = dealias_method(context.graph(), alias);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+    }
+
+    #[test]
+    fn dealias_method_unresolved() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              alias bar nonexistent
+            end
+        ",
+        );
+        context.resolve();
+
+        let alias = get_method_alias_def(context.graph(), "Foo#bar()");
+        let results = dealias_method(context.graph(), alias);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn dealias_method_multiple_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def foo(a); end
+            end
+        ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
+            class Foo
+              alias foo baz # another alias definition of #foo()
+              alias bar foo
+            end
+        ",
+        );
+        context.resolve();
+
+        let alias = get_method_alias_def(context.graph(), "Foo#bar()");
+        let results = dealias_method(context.graph(), alias);
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| matches!(r, DealiasMethodResult::Method(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| matches!(r, DealiasMethodResult::Alias(_)))
+                .count(),
+            1
+        );
     }
 
     #[test]
