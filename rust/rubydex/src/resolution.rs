@@ -116,6 +116,13 @@ impl<'a> Resolver<'a> {
             }
         }
 
+        // unit_queue is ephemeral (lives on Resolver), but pending_work persists
+        // on Graph across resolve() calls. With incremental invalidation, items
+        // can be temporarily unresolvable (e.g. a reference whose target was just
+        // deleted but will be re-added). Drain leftovers back to pending_work so
+        // they're retried on the next resolve() call.
+        self.graph.extend_work(std::mem::take(&mut self.unit_queue));
+
         self.handle_remaining_definitions(other_ids);
     }
 
