@@ -128,7 +128,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Handles a unit of work for resolving a constant definition
+    /// Handles a unit of work for resolving a constant definition or singleton method
     fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
         let mut needs_linearization = false;
 
@@ -163,7 +163,27 @@ impl<'a> Resolver<'a> {
                     ))))
                 })
             }
-            _ => panic!("Expected constant definitions"),
+            Definition::Method(method) if matches!(method.receiver(), Some(Receiver::SelfReceiver(_))) => {
+                let Some(Receiver::SelfReceiver(def_id)) = method.receiver() else {
+                    unreachable!()
+                };
+                let str_id = *method.str_id();
+                match self.graph.definition_id_to_declaration_id(*def_id) {
+                    Some(&owner_decl_id) => match self.get_or_create_singleton_class(owner_decl_id) {
+                        Some(singleton_id) => {
+                            self.create_declaration(str_id, id, singleton_id, |name| {
+                                Declaration::Method(Box::new(MethodDeclaration::new(name, singleton_id)))
+                            });
+                            Outcome::Resolved(singleton_id, None)
+                        }
+                        // Owner is a non-promotable constant — method is orphaned
+                        None => Outcome::Unresolved(None),
+                    },
+                    // Owning class not resolved yet — retry next pass
+                    None => Outcome::Retry(None),
+                }
+            }
+            _ => panic!("Expected constant or singleton method definitions"),
         };
 
         match outcome {
@@ -241,20 +261,12 @@ impl<'a> Resolver<'a> {
             match self.graph.definitions().get(&id).unwrap() {
                 Definition::Method(method_definition) => {
                     let str_id = *method_definition.str_id();
+                    // SelfReceiver methods are handled in the convergence loop
+                    // (handle_definition_unit) to allow singleton class ancestor
+                    // linearization. Only ConstantReceiver and regular methods here.
                     let owner_id = match method_definition.receiver() {
-                        Some(Receiver::SelfReceiver(def_id)) => {
-                            let Some(&owner_decl_id) = self.graph.definition_id_to_declaration_id(*def_id) else {
-                                // The enclosing class/module couldn't be resolved (e.g., `class Foo::Bar` where
-                                // `Foo` is undefined). The method is orphaned as a consequence.
-                                continue;
-                            };
-                            let Some(singleton_id) = self.get_or_create_singleton_class(owner_decl_id) else {
-                                // The enclosing declaration is a constant that can't be promoted to a namespace
-                                // (e.g., `CONST = 1; module CONST; def self.bar; end; end`). The method is
-                                // orphaned as a consequence.
-                                continue;
-                            };
-                            singleton_id
+                        Some(Receiver::SelfReceiver(_)) => {
+                            unreachable!("SelfReceiver methods should be routed to handle_definition_unit");
                         }
                         Some(Receiver::ConstantReceiver(name_id)) => {
                             let receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
@@ -654,6 +666,11 @@ impl<'a> Resolver<'a> {
                 attached_id,
             )))),
         );
+
+        // Queue ancestor linearization so the singleton's ancestor chain is
+        // built — this cascades upward via singleton_parent_id, creating
+        // parent singletons as needed.
+        self.unit_queue.push_back(Unit::Ancestors(decl_id));
 
         Some(decl_id)
     }
@@ -1573,6 +1590,7 @@ impl<'a> Resolver<'a> {
         let estimated = work.len() / 2;
         let mut definitions = Vec::with_capacity(estimated);
         let mut others = Vec::with_capacity(estimated);
+        let mut singleton_methods = Vec::new();
         let mut const_refs = Vec::new();
         let mut ancestors = Vec::new();
         let names = self.graph.names();
@@ -1611,6 +1629,12 @@ impl<'a> Resolver<'a> {
                         }
                         Definition::SingletonClass(def) => {
                             definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                        }
+                        // SelfReceiver methods create singleton classes, which need
+                        // ancestor linearization. Process them in the convergence loop
+                        // so Unit::Ancestors items are handled naturally.
+                        Definition::Method(method) if matches!(method.receiver(), Some(Receiver::SelfReceiver(_))) => {
+                            singleton_methods.push(Unit::Definition(id));
                         }
                         _ => {
                             others.push(id);
@@ -1653,9 +1677,10 @@ impl<'a> Resolver<'a> {
             (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
         });
 
-        // Definitions first, then constant refs, then ancestors
+        // Definitions first, then constant refs, then singleton methods, then ancestors
         self.unit_queue.extend(definitions.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(const_refs.into_iter().map(|(id, _)| id));
+        self.unit_queue.extend(singleton_methods);
         self.unit_queue.extend(ancestors.into_iter().map(Unit::Ancestors));
 
         others.shrink_to_fit();
@@ -5494,6 +5519,38 @@ mod tests {
         assert_declaration_exists!(context, "Bar::Baz");
         assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
         assert_declaration_does_not_exist!(context, "Foo::Bar");
+    }
+
+    #[test]
+    fn singleton_ancestor_chain_cascades_through_intermediate_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.foo; end
+            end
+            class Bar < Foo
+            end
+            class Baz < Bar
+              def self.baz; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>",
+            [
+                "Baz::<Baz>",
+                "Bar::<Bar>",
+                "Foo::<Foo>",
+                "Object::<Object>",
+                "Class",
+                "Object"
+            ]
+        );
     }
 }
 
