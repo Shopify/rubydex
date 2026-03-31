@@ -162,6 +162,14 @@ macro_rules! namespace_declaration {
                 self.singleton_class_id = Some(declaration_id);
             }
 
+            /// Clears `singleton_class_id` only if it matches `expected`.
+            /// Prevents accidentally clearing a pointer to a re-created singleton.
+            pub fn clear_singleton_class_id(&mut self, expected: &DeclarationId) {
+                if self.singleton_class_id.as_ref() == Some(expected) {
+                    self.singleton_class_id = None;
+                }
+            }
+
             pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
                 self.singleton_class_id.as_ref()
             }
@@ -343,6 +351,27 @@ impl Declaration {
     #[must_use]
     pub fn has_no_definitions(&self) -> bool {
         all_declarations!(self, it => it.definition_ids.is_empty())
+    }
+
+    /// Returns true if this declaration has no backing definitions and is eligible
+    /// for removal. Bootstrap declarations (Object, Module, Class) are never
+    /// removable. Singleton classes are only removable when they have no
+    /// definitions AND no members — populated singletons serve as namespace
+    /// parents for class-level methods.
+    #[must_use]
+    pub fn has_no_backing_definitions(&self, decl_id: &DeclarationId) -> bool {
+        if *decl_id == *super::graph::OBJECT_ID
+            || *decl_id == *super::graph::MODULE_ID
+            || *decl_id == *super::graph::CLASS_ID
+        {
+            return false;
+        }
+
+        if matches!(self, Declaration::Namespace(Namespace::SingletonClass(_))) {
+            return self.has_no_definitions() && self.as_namespace().is_some_and(|ns| ns.members().is_empty());
+        }
+
+        self.has_no_definitions()
     }
 
     pub fn add_definition(&mut self, definition_id: DefinitionId) {
@@ -576,6 +605,10 @@ impl Namespace {
 
     pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
         all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
+    }
+
+    pub fn clear_singleton_class_id(&mut self, expected: &DeclarationId) {
+        all_namespaces!(self, it => it.clear_singleton_class_id(expected));
     }
 
     #[must_use]

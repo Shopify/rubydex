@@ -82,7 +82,31 @@ impl<'a> Resolver<'a> {
     /// # Panics
     ///
     /// Can panic if there's inconsistent data in the graph
+    /// Resolves all pending work, then cleans up synthetic declarations
+    /// (empty `Todo` parents and orphaned singletons). Loops until cleanup
+    /// produces no new work and removes no declarations. Unresolvable
+    /// leftovers (e.g. references to deleted declarations) persist in
+    /// `pending_work` for the next `resolve()` call and do not prevent
+    /// convergence.
     pub fn resolve(&mut self) {
+        loop {
+            self.resolve_pending_units();
+
+            let work_before = self.graph.pending_work_count();
+            let decl_count_before = self.graph.declarations().len();
+
+            self.graph.cleanup_empty_declarations();
+
+            let work_after = self.graph.pending_work_count();
+            let decl_count_after = self.graph.declarations().len();
+
+            if work_after == work_before && decl_count_after == decl_count_before {
+                break;
+            }
+        }
+    }
+
+    fn resolve_pending_units(&mut self) {
         let other_ids = self.prepare_units();
 
         loop {
@@ -1153,6 +1177,7 @@ impl<'a> Resolver<'a> {
                 parent_owner_id,
             )))));
             self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+            self.graph.mark_declaration_for_cleanup(declaration_id);
         }
 
         declaration_id
