@@ -564,6 +564,66 @@ fn collect_method_signatures(
     }
 }
 
+/// Returns signatures for a `MethodAliasDefinition` by following the alias chain.
+/// Returns NULL if the definition is not a method alias or the chain cannot be resolved.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `definition_id` must be a valid definition id.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_method_alias_definition_signatures(
+    pointer: GraphPointer,
+    definition_id: u64,
+) -> *mut SignatureArray {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let Some(Definition::MethodAlias(alias)) = graph.definitions().get(&def_id) else {
+            return ptr::null_mut();
+        };
+
+        // Follow the alias chain until we find method definitions
+        let mut current_results = rubydex::query::dealias_method(graph, alias);
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(def_id);
+
+        loop {
+            let mut sig_entries: Vec<SignatureEntry> = Vec::new();
+            let mut next_aliases = Vec::new();
+
+            for result in &current_results {
+                match result {
+                    rubydex::query::DealiasMethodResult::Method(id) => {
+                        if let Some(Definition::Method(method_def)) = graph.definitions().get(id) {
+                            collect_method_signatures(graph, method_def, id.get(), &mut sig_entries);
+                        }
+                    }
+                    rubydex::query::DealiasMethodResult::Alias(id) => {
+                        if visited.insert(*id)
+                            && let Some(Definition::MethodAlias(next_alias)) = graph.definitions().get(id)
+                        {
+                            next_aliases.extend(rubydex::query::dealias_method(graph, next_alias));
+                        }
+                    }
+                }
+            }
+
+            if !sig_entries.is_empty() {
+                let mut boxed = sig_entries.into_boxed_slice();
+                let len = boxed.len();
+                let items_ptr = boxed.as_mut_ptr();
+                std::mem::forget(boxed);
+                return Box::into_raw(Box::new(SignatureArray { items: items_ptr, len }));
+            }
+
+            if next_aliases.is_empty() {
+                return ptr::null_mut();
+            }
+
+            current_results = next_aliases;
+        }
+    })
+}
+
 /// Frees a `SignatureArray` previously returned by `rdx_definition_signatures`.
 ///
 /// # Safety
