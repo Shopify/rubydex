@@ -87,6 +87,11 @@ pub struct Graph {
 
     /// Paths to exclude from file discovery during indexing.
     excluded_paths: HashSet<PathBuf>,
+
+    /// Declarations that became empty during name cascade and may need removal.
+    /// Deferred until after resolution — if the declaration was repopulated, skip it.
+    /// Drained by `take_pending_declaration_cleanup()`.
+    pending_declaration_cleanup: Vec<DeclarationId>,
 }
 
 impl Graph {
@@ -129,6 +134,7 @@ impl Graph {
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
             excluded_paths: HashSet::new(),
+            pending_declaration_cleanup: Vec::default(),
         }
     }
 
@@ -628,12 +634,39 @@ impl Graph {
         std::mem::take(&mut self.pending_work)
     }
 
+    /// Drains declarations that need post-resolution cleanup.
+    pub(crate) fn take_pending_declaration_cleanup(&mut self) -> Vec<DeclarationId> {
+        std::mem::take(&mut self.pending_declaration_cleanup)
+    }
+
     fn push_work(&mut self, unit: Unit) {
         self.pending_work.push(unit);
     }
 
     pub(crate) fn extend_work(&mut self, units: impl IntoIterator<Item = Unit>) {
         self.pending_work.extend(units);
+    }
+
+    /// Post-resolution cleanup: removes declarations that were emptied during name
+    /// cascade and never repopulated by re-resolution. Runs `invalidate_graph` on
+    /// any that are still empty, which cascades to their members and singletons.
+    /// Post-resolution cleanup: removes declarations that were emptied during
+    /// invalidation cascade and never repopulated by re-resolution. Cascades
+    /// to members, singletons, and descendants via `invalidate_graph`.
+    pub(crate) fn cleanup_empty_declarations(&mut self, candidates: Vec<DeclarationId>) {
+        let items: Vec<InvalidationItem> = candidates
+            .into_iter()
+            .filter(|decl_id| {
+                self.declarations
+                    .get(decl_id)
+                    .is_some_and(Declaration::has_no_definitions)
+            })
+            .map(InvalidationItem::Declaration)
+            .collect();
+
+        if !items.is_empty() {
+            self.invalidate_graph(items, IdentityHashMap::default());
+        }
     }
 
     /// Converts a `Resolved` `NameRef` back to `Unresolved`, preserving the original `Name` data.
@@ -1038,9 +1071,13 @@ impl Graph {
             .collect();
 
         if !missed_def_ids.is_empty() {
-            for declaration in self.declarations.values_mut() {
+            for (decl_id, declaration) in &mut self.declarations {
+                let had_definitions = !declaration.definitions().is_empty();
                 for def_id in &missed_def_ids {
                     declaration.remove_definition(def_id);
+                }
+                if had_definitions && declaration.has_no_backing_definitions(decl_id) {
+                    self.pending_declaration_cleanup.push(*decl_id);
                 }
             }
         }
@@ -1056,8 +1093,11 @@ impl Graph {
         }
     }
 
-    /// Unified invalidation worklist. Processes declaration and name items in a single loop,
+    /// Invalidation worklist. Processes declaration, name, and reference items in a loop,
     /// where processing one item can push new items back onto the queue.
+    ///
+    /// `pending_detachments` maps declarations to definitions that need to be detached
+    /// before deciding whether to remove or update each declaration.
     fn invalidate_graph(
         &mut self,
         items: Vec<InvalidationItem>,
@@ -1125,10 +1165,13 @@ impl Graph {
         let Some(decl) = self.declarations.get(&decl_id) else {
             return;
         };
-        let should_remove = decl.has_no_definitions() || !self.declarations.contains_key(decl.owner_id());
+        let should_remove =
+            decl.has_no_backing_definitions(&decl_id) || !self.declarations.contains_key(decl.owner_id());
 
         if should_remove {
-            // Queue members + singleton for removal
+            // Remove path: definitions came from a deleted/changed file and won't
+            // re-resolve to this declaration. Removal must be immediate so child
+            // declarations see a missing owner and cascade correctly.
             if let Some(ns) = decl.as_namespace() {
                 if let Some(singleton_id) = ns.singleton_class() {
                     queue.push(InvalidationItem::Declaration(*singleton_id));
@@ -1236,12 +1279,18 @@ impl Graph {
                             decl.remove_definition(def_id);
                         }
 
+                        // Defer cleanup: unlike the remove path in invalidate_declaration
+                        // (where definitions are from a deleted file and won't return),
+                        // this definition is from a surviving file — it was re-queued and
+                        // will likely re-resolve to the same declaration. Removing now
+                        // would destroy accumulated state (singleton, members) that can't
+                        // be rebuilt. Post-resolution cleanup removes it if still empty.
                         if self
                             .declarations
                             .get(&old_decl_id)
-                            .is_some_and(Declaration::has_no_definitions)
+                            .is_some_and(|decl| decl.has_no_backing_definitions(&old_decl_id))
                         {
-                            queue.push(InvalidationItem::Declaration(old_decl_id));
+                            self.pending_declaration_cleanup.push(old_decl_id);
                         }
                     }
                     NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
@@ -3671,6 +3720,58 @@ mod incremental_resolution_tests {
     }
 
     #[test]
+    fn singleton_class_survives_when_reopener_is_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.index_uri("file:///reopener.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///reopener.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn class_inside_singleton_scope_instance_methods_only_survives_cascade() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///main.rb",
+            r"
+            module Outer
+              class << self
+                class Inner
+                  def initialize; end
+                end
+
+                def run
+                  Inner.new
+                end
+              end
+            end
+            ",
+        );
+        context.index_uri("file:///reopener.rb", "module Outer; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner::<Inner>");
+
+        context.delete_uri("file:///reopener.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner::<Inner>");
+    }
+
+    #[test]
     fn singleton_class_preserved_after_delete_and_reindex() {
         let mut context = GraphTest::new();
 
@@ -3692,27 +3793,29 @@ mod incremental_resolution_tests {
     }
 
     #[test]
-    fn singleton_recreated_when_reference_nested_in_compact_class() {
+    fn singleton_members_cleaned_up_after_file_deletion() {
         let mut context = GraphTest::new();
-
-        context.index_uri("file:///parent.rb", "module Parent; end");
-        context.index_uri("file:///target.rb", "class Parent::Target; end");
-        context.index_uri("file:///caller.rb", "class Parent::Caller; Parent::Target.new; end");
+        context.index_uri(
+            "file:///a.rb",
+            "
+            class Foo
+              @x = 1
+              def self.bar; end
+            end
+            ",
+        );
+        context.index_uri("file:///b.rb", "class Foo; end");
         context.resolve();
 
-        assert_declaration_exists!(context, "Parent::Target");
-        assert_declaration_exists!(context, "Parent::Target::<Target>");
+        assert_declaration_exists!(context, "Foo::<Foo>#@x");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
 
-        context.delete_uri("file:///parent.rb");
-        context.delete_uri("file:///target.rb");
+        context.delete_uri("file:///a.rb");
         context.resolve();
 
-        context.index_uri("file:///parent.rb", "module Parent; end");
-        context.index_uri("file:///target.rb", "class Parent::Target; end");
-        context.resolve();
-
-        assert_declaration_exists!(context, "Parent::Target");
-        assert_declaration_exists!(context, "Parent::Target::<Target>");
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#@x");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
     }
 
     #[test]
