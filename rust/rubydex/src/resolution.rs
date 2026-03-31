@@ -124,6 +124,15 @@ impl<'a> Resolver<'a> {
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
 
         self.handle_remaining_definitions(other_ids);
+
+        // Post-resolution cleanup: declarations emptied during name cascade
+        // (unresolve_dependent_name) and never repopulated should be removed.
+        let mut cleanup_candidates = self.graph.take_pending_declaration_cleanup();
+        if !cleanup_candidates.is_empty() {
+            cleanup_candidates.sort_unstable();
+            cleanup_candidates.dedup();
+            self.graph.cleanup_empty_declarations(cleanup_candidates);
+        }
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by

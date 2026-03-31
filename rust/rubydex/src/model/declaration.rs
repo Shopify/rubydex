@@ -345,6 +345,18 @@ impl Declaration {
         all_declarations!(self, it => it.definition_ids.is_empty())
     }
 
+    /// Returns true if this declaration has no backing definitions and is eligible
+    /// for removal. Synthetic declarations (singleton classes, bootstrap Object/Module/Class)
+    /// are never definition-backed — they should only be removed when their owner is removed.
+    #[must_use]
+    pub fn has_no_backing_definitions(&self, decl_id: &DeclarationId) -> bool {
+        let is_synthetic = matches!(self, Declaration::Namespace(Namespace::SingletonClass(_)))
+            || *decl_id == *super::graph::OBJECT_ID
+            || *decl_id == *super::graph::MODULE_ID
+            || *decl_id == *super::graph::CLASS_ID;
+        !is_synthetic && self.has_no_definitions()
+    }
+
     pub fn add_definition(&mut self, definition_id: DefinitionId) {
         all_declarations!(self, it => {
             debug_assert!(
