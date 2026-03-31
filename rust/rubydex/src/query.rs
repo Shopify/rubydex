@@ -542,10 +542,9 @@ pub fn dealias_method(graph: &Graph, alias: &MethodAliasDefinition) -> Vec<Deali
         },
     };
 
-    let owner_decl = graph.declarations().get(&owner_id).unwrap();
-    let ns = owner_decl.as_namespace().unwrap();
+    let method_decl_id = find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id());
 
-    let Some(&method_decl_id) = ns.member(alias.old_name_str_id()) else {
+    let Some(method_decl_id) = method_decl_id else {
         return vec![];
     };
     let method_decl = graph.declarations().get(&method_decl_id).unwrap();
@@ -560,6 +559,31 @@ pub fn dealias_method(graph: &Graph, alias: &MethodAliasDefinition) -> Vec<Deali
             _ => None,
         })
         .collect()
+}
+
+/// Searches for a member by `StringId` in the given namespace and its ancestor chain.
+#[must_use]
+pub fn find_member_in_ancestors(
+    graph: &Graph,
+    namespace_id: DeclarationId,
+    str_id: StringId,
+) -> Option<DeclarationId> {
+    let ns = graph.declarations().get(&namespace_id)?.as_namespace()?;
+
+    if let Some(&decl_id) = ns.member(&str_id) {
+        return Some(decl_id);
+    }
+
+    for ancestor in ns.ancestors() {
+        if let Ancestor::Complete(ancestor_id) = ancestor {
+            let ancestor_ns = graph.declarations().get(ancestor_id)?.as_namespace()?;
+            if let Some(&decl_id) = ancestor_ns.member(&str_id) {
+                return Some(decl_id);
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -1902,6 +1926,122 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn dealias_method_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "
+            class Parent
+              def foo(a); end
+            end
+            class Child < Parent
+              alias bar foo
+            end
+        ");
+        context.resolve();
+
+        let alias = get_method_alias_def(context.graph(), "Child#bar()");
+        let results = dealias_method(context.graph(), alias);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+    }
+
+    #[test]
+    fn find_member_in_ancestors_direct() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "
+            class Foo
+              def bar; end
+            end
+        ");
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Foo"),
+            StringId::from("bar()"),
+        );
+        assert_eq!(result, Some(DeclarationId::from("Foo#bar()")));
+    }
+
+    #[test]
+    fn find_member_in_ancestors_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "
+            class Parent
+              def foo; end
+            end
+            class Child < Parent
+            end
+        ");
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("foo()"),
+        );
+        assert_eq!(result, Some(DeclarationId::from("Parent#foo()")));
+    }
+
+    #[test]
+    fn find_member_in_ancestors_overridden() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "
+            class Parent
+              def foo; end
+            end
+            class Child < Parent
+              def foo; end
+            end
+        ");
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("foo()"),
+        );
+        assert_eq!(result, Some(DeclarationId::from("Child#foo()")));
+    }
+
+    #[test]
+    fn find_member_in_ancestors_not_found() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "
+            class Foo
+            end
+        ");
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Foo"),
+            StringId::from("nonexistent()"),
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_member_in_ancestors_via_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "
+            module Greetable
+              def greet; end
+            end
+            class Foo
+              include Greetable
+            end
+        ");
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Foo"),
+            StringId::from("greet()"),
+        );
+        assert_eq!(result, Some(DeclarationId::from("Greetable#greet()")));
     }
 
     #[test]
