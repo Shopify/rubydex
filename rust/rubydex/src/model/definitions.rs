@@ -1024,6 +1024,23 @@ pub enum Parameter {
 }
 assert_mem_size!(Parameter, 24);
 
+impl Parameter {
+    #[must_use]
+    pub fn inner(&self) -> &ParameterStruct {
+        match self {
+            Parameter::RequiredPositional(s)
+            | Parameter::OptionalPositional(s)
+            | Parameter::RestPositional(s)
+            | Parameter::Post(s)
+            | Parameter::RequiredKeyword(s)
+            | Parameter::OptionalKeyword(s)
+            | Parameter::RestKeyword(s)
+            | Parameter::Forward(s)
+            | Parameter::Block(s) => s,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParameterStruct {
     offset: Offset,
