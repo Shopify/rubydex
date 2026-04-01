@@ -188,79 +188,6 @@ fn index_alias_ignores_method_nesting() {
 }
 
 #[test]
-fn superclasses_are_indexed_as_constant_ref_ids() {
-    let context = index_source({
-        "
-        class Foo < Bar; end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:21", Class, |def| {
-        assert_def_superclass_ref_eq!(&context, def, "Bar");
-    });
-}
-
-#[test]
-fn constant_path_superclasses() {
-    let context = index_source({
-        "
-        class Foo < Bar::Baz; end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let mut refs = context.graph().constant_references().values().collect::<Vec<_>>();
-    refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
-
-    assert_definition_at!(&context, "1:1-1:26", Class, |def| {
-        assert_def_superclass_ref_eq!(&context, def, "Bar::Baz");
-        assert_def_name_offset_eq!(&context, def, "1:7-1:10");
-    });
-}
-
-#[test]
-fn ignored_super_classes() {
-    let context = index_source({
-        "
-        class Foo < method_call; end
-        class Bar < 123; end
-        class MyMigration < ActiveRecord::Migration[8.0]; end
-        class Baz < foo::Bar; end
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
-            "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
-            "dynamic-ancestor: Dynamic superclass (3:21-3:49)",
-            "dynamic-constant-reference: Dynamic constant reference (4:13-4:16)",
-            "dynamic-ancestor: Dynamic superclass (4:13-4:21)",
-        ]
-    );
-
-    assert_definition_at!(&context, "1:1-1:29", Class, |def| {
-        assert!(def.superclass_ref().is_none(),);
-    });
-
-    assert_definition_at!(&context, "2:1-2:21", Class, |def| {
-        assert!(def.superclass_ref().is_none(),);
-    });
-
-    assert_definition_at!(&context, "3:1-3:54", Class, |def| {
-        assert!(def.superclass_ref().is_none(),);
-    });
-
-    assert_definition_at!(&context, "4:1-4:26", Class, |def| {
-        assert!(def.superclass_ref().is_none(),);
-    });
-}
-
-#[test]
 fn index_includes_at_top_level() {
     let context = index_source({
         "
@@ -4489,6 +4416,83 @@ mod method_receiver_tests {
         assert_eq!(StringId::from("Foo"), *parent_scope.str());
         assert!(parent_scope.nesting().is_none());
         assert!(parent_scope.parent_scope().is_none());
+    }
+}
+
+mod superclass_tests {
+    use super::*;
+
+    #[test]
+    fn superclasses_are_indexed_as_constant_ref_ids() {
+        let context = index_source({
+            "
+            class Foo < Bar; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:21", Class, |def| {
+            assert_def_superclass_ref_eq!(&context, def, "Bar");
+        });
+    }
+
+    #[test]
+    fn constant_path_superclasses() {
+        let context = index_source({
+            "
+            class Foo < Bar::Baz; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let mut refs = context.graph().constant_references().values().collect::<Vec<_>>();
+        refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
+
+        assert_definition_at!(&context, "1:1-1:26", Class, |def| {
+            assert_def_superclass_ref_eq!(&context, def, "Bar::Baz");
+            assert_def_name_offset_eq!(&context, def, "1:7-1:10");
+        });
+    }
+
+    #[test]
+    fn ignored_super_classes() {
+        let context = index_source({
+            "
+            class Foo < method_call; end
+            class Bar < 123; end
+            class MyMigration < ActiveRecord::Migration[8.0]; end
+            class Baz < foo::Bar; end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
+                "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
+                "dynamic-ancestor: Dynamic superclass (3:21-3:49)",
+                "dynamic-constant-reference: Dynamic constant reference (4:13-4:16)",
+                "dynamic-ancestor: Dynamic superclass (4:13-4:21)",
+            ]
+        );
+
+        assert_definition_at!(&context, "1:1-1:29", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
+
+        assert_definition_at!(&context, "2:1-2:21", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
+
+        assert_definition_at!(&context, "3:1-3:54", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
+
+        assert_definition_at!(&context, "4:1-4:26", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
     }
 }
 
