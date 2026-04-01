@@ -449,21 +449,31 @@ pub unsafe extern "C" fn rdx_declaration_references_iter_new(
             return ReferencesIter::new(Vec::new().into_boxed_slice());
         };
 
-        let kind = match decl {
-            Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_) => {
-                ReferenceKind::Constant
-            }
-            Declaration::Method(_) => ReferenceKind::Method,
+        let entries: Vec<_> = match decl {
+            Declaration::Namespace(ns) => ns
+                .references()
+                .iter()
+                .map(|ref_id| CReference::new(**ref_id, ReferenceKind::Constant))
+                .collect(),
+            Declaration::Constant(c) => c
+                .references()
+                .iter()
+                .map(|ref_id| CReference::new(**ref_id, ReferenceKind::Constant))
+                .collect(),
+            Declaration::ConstantAlias(ca) => ca
+                .references()
+                .iter()
+                .map(|ref_id| CReference::new(**ref_id, ReferenceKind::Constant))
+                .collect(),
+            Declaration::Method(m) => m
+                .references()
+                .iter()
+                .map(|ref_id| CReference::new(**ref_id, ReferenceKind::Method))
+                .collect(),
             Declaration::GlobalVariable(_) | Declaration::InstanceVariable(_) | Declaration::ClassVariable(_) => {
                 return ReferencesIter::new(Vec::new().into_boxed_slice());
             }
         };
-
-        let entries: Vec<_> = decl
-            .references()
-            .iter()
-            .map(|ref_id| CReference::new(**ref_id, kind))
-            .collect();
         ReferencesIter::new(entries.into_boxed_slice())
     })
 }

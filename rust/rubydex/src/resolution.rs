@@ -12,7 +12,7 @@ use crate::model::{
     definitions::{Definition, Mixin, Receiver},
     graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
-    ids::{DeclarationId, DefinitionId, NameId, ReferenceId, StringId},
+    ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
     name::{Name, NameRef, ParentScope},
 };
 
@@ -219,7 +219,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Handles a unit of work for resolving a constant reference
-    fn handle_reference_unit(&mut self, unit_id: Unit, id: ReferenceId) {
+    fn handle_reference_unit(&mut self, unit_id: Unit, id: ConstantReferenceId) {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
         match self.resolve_constant_internal(*constant_ref.name_id()) {
@@ -1606,7 +1606,7 @@ impl<'a> Resolver<'a> {
         // Dedup: when multiple files are indexed before resolution runs, pending_work accumulates
         // and the same definition/reference ID can be enqueued more than once.
         let mut seen_defs = IdentityHashSet::<DefinitionId>::default();
-        let mut seen_references = IdentityHashSet::<ReferenceId>::default();
+        let mut seen_references = IdentityHashSet::<ConstantReferenceId>::default();
         let mut seen_ancestors = IdentityHashSet::<DeclarationId>::default();
 
         for unit in work {

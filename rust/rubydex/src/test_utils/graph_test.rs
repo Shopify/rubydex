@@ -351,13 +351,12 @@ macro_rules! assert_declaration_references_count_eq {
             .get(&$crate::model::ids::DeclarationId::from($declaration_name))
             .unwrap();
 
+        let count = declaration.reference_count();
+
         assert_eq!(
-            declaration.references().len(),
-            $expected_references,
+            count, $expected_references,
             "Expected exactly {} references for `{}`, but got {}",
-            $expected_references,
-            $declaration_name,
-            declaration.references().len()
+            $expected_references, $declaration_name, count,
         );
     };
 }
