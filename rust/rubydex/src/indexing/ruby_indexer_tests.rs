@@ -186,323 +186,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_class_variable_in_singleton_class_definition() {
-    let context = index_source({
-        "
-        class Foo
-          class << self
-            @@var = 1
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // During indexing, lexical_nesting_id is the actual enclosing scope (singleton class).
-    // The resolution phase handles bypassing singleton classes for class variable ownership.
-    assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
-        assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@var");
-            assert_eq!(Some(singleton_class.id()), *def.lexical_nesting_id());
-        });
-    });
-}
-
-#[test]
-fn index_class_variable_in_nested_singleton_class_definition() {
-    let context = index_source({
-        "
-        class Foo
-          class << self
-            class << self
-              @@var = 1
-            end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // During indexing, lexical_nesting_id is the actual enclosing scope (innermost singleton class).
-    // The resolution phase handles bypassing singleton classes for class variable ownership.
-    assert_definition_at!(&context, "3:5-5:8", SingletonClass, |nested_singleton| {
-        assert_definition_at!(&context, "4:7-4:12", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@var");
-            assert_eq!(Some(nested_singleton.id()), *def.lexical_nesting_id());
-        });
-    });
-}
-
-#[test]
-fn index_class_variable_in_singleton_method_definition() {
-    let context = index_source({
-        "
-        class Foo
-          def self.bar
-            @@var = 1
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
-        assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@var");
-            assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
-        });
-    });
-}
-
-#[test]
-fn index_global_variable_definition() {
-    let context = index_source({
-        "
-        $foo = 1
-        $bar, $baz = 2, 3
-
-        class Foo
-          $qux = 2
-        end
-
-        $one &= 1
-        $two &&= 1
-        $three ||= 1
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 8);
-
-    assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$foo");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:1-2:5", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$bar");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:7-2:11", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$baz");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "5:3-5:7", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$qux");
-
-        assert_definition_at!(&context, "4:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "8:1-8:5", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$one");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "9:1-9:5", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$two");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "10:1-10:7", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$three");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-}
-
-#[test]
-fn index_instance_variable_definition() {
-    let context = index_source({
-        "
-        @foo = 1
-
-        class Foo
-          @bar = 2
-          @baz, @qux = 3, 4
-        end
-
-        @bar &= 5
-        @baz &&= 6
-        @qux ||= 7
-
-        class Bar
-          @foo &= 8
-          @bar &&= 9
-          @baz ||= 10
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@foo");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@bar");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[0], def.id());
-        });
-
-        assert_definition_at!(&context, "5:3-5:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@baz");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[1], def.id());
-        });
-
-        assert_definition_at!(&context, "5:9-5:13", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@qux");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[2], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "8:1-8:5", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@bar");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "9:1-9:5", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@baz");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "10:1-10:5", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@qux");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "12:1-16:4", Class, |bar_class_def| {
-        assert_definition_at!(&context, "13:3-13:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@foo");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[0], def.id());
-        });
-
-        assert_definition_at!(&context, "14:3-14:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@bar");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[1], def.id());
-        });
-
-        assert_definition_at!(&context, "15:3-15:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@baz");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[2], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_class_variable_definition() {
-    let context = index_source({
-        "
-        @@foo = 1
-
-        class Foo
-          @@bar = 2
-          @@baz, @@qux = 3, 4
-        end
-
-        @@bar &= 5
-        @@baz &&= 6
-        @@qux ||= 7
-
-        class Bar
-          @@foo &= 1
-          @@bar &&= 2
-          @@baz ||= 3
-
-          def set_foo
-            @@foo = 4
-          end
-        end
-        "
-    });
-
-    // This is actually not allowed in Ruby and will raise a runtime error
-    // But we should still index it so we can insert a diagnostic for it
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
-        assert_def_str_eq!(&context, def, "@@foo");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "4:3-4:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@bar");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[0], def.id());
-        });
-
-        assert_definition_at!(&context, "5:3-5:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@baz");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[1], def.id());
-        });
-
-        assert_definition_at!(&context, "5:10-5:15", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@qux");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[2], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "8:1-8:6", ClassVariable, |def| {
-        assert_def_str_eq!(&context, def, "@@bar");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "9:1-9:6", ClassVariable, |def| {
-        assert_def_str_eq!(&context, def, "@@baz");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "10:1-10:6", ClassVariable, |def| {
-        assert_def_str_eq!(&context, def, "@@qux");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "12:1-20:4", Class, |bar_class_def| {
-        assert_definition_at!(&context, "13:3-13:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@foo");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[0], def.id());
-        });
-
-        assert_definition_at!(&context, "14:3-14:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@bar");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[1], def.id());
-        });
-
-        assert_definition_at!(&context, "15:3-15:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@baz");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[2], def.id());
-        });
-
-        // Method `set_foo` is members()[3], class variable inside method is members()[4]
-        assert_definition_at!(&context, "18:5-18:10", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@foo");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[4], def.id());
-        });
-    });
-}
-
-#[test]
 fn index_unresolved_constant_references() {
     let context = index_source({
         r##"
@@ -1525,102 +1208,6 @@ fn index_mixins_self_at_top_level() {
     );
 
     assert_eq!(context.graph().definitions().len(), 0);
-}
-
-#[test]
-fn index_class_instance_variable() {
-    let context = index_source({
-        "
-        class Foo
-          @foo = 0
-
-          class << self
-            @bar = 1
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-7:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "2:3-2:7", InstanceVariable, |foo_var_def| {
-            assert_def_str_eq!(&context, foo_var_def, "@foo");
-            assert_eq!(foo_class_def.id(), foo_var_def.lexical_nesting_id().unwrap());
-        });
-
-        assert_definition_at!(&context, "4:3-6:6", SingletonClass, |foo_singleton_def| {
-            assert_definition_at!(&context, "5:5-5:9", InstanceVariable, |bar_var_def| {
-                assert_def_str_eq!(&context, bar_var_def, "@bar");
-                assert_eq!(foo_singleton_def.id(), bar_var_def.lexical_nesting_id().unwrap());
-            });
-        });
-    });
-}
-
-#[test]
-fn index_instance_variable_inside_methods_stay_instance_variable() {
-    let context = index_source({
-        "
-        class Foo
-          def initialize
-            @bar = 1
-          end
-
-          def self.class_method
-            @baz = 2
-          end
-
-          class << self
-            def singleton_method
-              @qux = 3
-            end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@bar");
-    });
-
-    assert_definition_at!(&context, "7:5-7:9", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@baz");
-    });
-
-    assert_definition_at!(&context, "12:7-12:11", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@qux");
-    });
-}
-
-#[test]
-fn index_instance_variable_in_method_with_non_self_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def String.bar
-            @var = 123
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // The instance variable is associated with the singleton class of String.
-    // During indexing, we can't know what String resolves to because we haven't
-    // resolved constants yet. The lexical nesting is the method definition.
-    assert_definition_at!(&context, "1:1-5:4", Class, |_foo_class_def| {
-        assert_definition_at!(&context, "2:3-4:6", Method, |method_def| {
-            assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |var_def| {
-                assert_def_str_eq!(&context, var_def, "@var");
-                // The lexical nesting of the ivar is the method
-                assert_eq!(method_def.id(), var_def.lexical_nesting_id().unwrap());
-            });
-        });
-    });
 }
 
 #[test]
@@ -3293,6 +2880,423 @@ mod constant_tests {
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
+}
+
+mod variable_tests {
+    use super::*;
+
+    #[test]
+    fn index_global_variable_definition() {
+        let context = index_source({
+            "
+            $foo = 1
+            $bar, $baz = 2, 3
+
+            class Foo
+              $qux = 2
+            end
+
+            $one &= 1
+            $two &&= 1
+            $three ||= 1
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 8);
+
+        assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$foo");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:1-2:5", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$bar");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:7-2:11", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$baz");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "5:3-5:7", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$qux");
+
+            assert_definition_at!(&context, "4:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "8:1-8:5", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$one");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "9:1-9:5", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$two");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "10:1-10:7", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$three");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_definition() {
+        let context = index_source({
+            "
+            @foo = 1
+
+            class Foo
+              @bar = 2
+              @baz, @qux = 3, 4
+            end
+
+            @bar &= 5
+            @baz &&= 6
+            @qux ||= 7
+
+            class Bar
+              @foo &= 8
+              @bar &&= 9
+              @baz ||= 10
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@foo");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@bar");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "5:3-5:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@baz");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "5:9-5:13", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@qux");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[2], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "8:1-8:5", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@bar");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "9:1-9:5", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@baz");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "10:1-10:5", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@qux");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "12:1-16:4", Class, |bar_class_def| {
+            assert_definition_at!(&context, "13:3-13:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@foo");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "14:3-14:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@bar");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "15:3-15:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@baz");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[2], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_instance_variable() {
+        let context = index_source({
+            "
+            class Foo
+              @foo = 0
+
+              class << self
+                @bar = 1
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "2:3-2:7", InstanceVariable, |foo_var_def| {
+                assert_def_str_eq!(&context, foo_var_def, "@foo");
+                assert_eq!(foo_class_def.id(), foo_var_def.lexical_nesting_id().unwrap());
+            });
+
+            assert_definition_at!(&context, "4:3-6:6", SingletonClass, |foo_singleton_def| {
+                assert_definition_at!(&context, "5:5-5:9", InstanceVariable, |bar_var_def| {
+                    assert_def_str_eq!(&context, bar_var_def, "@bar");
+                    assert_eq!(foo_singleton_def.id(), bar_var_def.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_inside_methods_stay_instance_variable() {
+        let context = index_source({
+            "
+            class Foo
+              def initialize
+                @bar = 1
+              end
+
+              def self.class_method
+                @baz = 2
+              end
+
+              class << self
+                def singleton_method
+                  @qux = 3
+                end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@bar");
+        });
+
+        assert_definition_at!(&context, "7:5-7:9", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@baz");
+        });
+
+        assert_definition_at!(&context, "12:7-12:11", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@qux");
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_in_method_with_non_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def String.bar
+                @var = 123
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // The instance variable is associated with the singleton class of String.
+        // During indexing, we can't know what String resolves to because we haven't
+        // resolved constants yet. The lexical nesting is the method definition.
+        assert_definition_at!(&context, "1:1-5:4", Class, |_foo_class_def| {
+            assert_definition_at!(&context, "2:3-4:6", Method, |method_def| {
+                assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |var_def| {
+                    assert_def_str_eq!(&context, var_def, "@var");
+                    // The lexical nesting of the ivar is the method
+                    assert_eq!(method_def.id(), var_def.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_definition() {
+        let context = index_source({
+            "
+            @@foo = 1
+
+            class Foo
+              @@bar = 2
+              @@baz, @@qux = 3, 4
+            end
+
+            @@bar &= 5
+            @@baz &&= 6
+            @@qux ||= 7
+
+            class Bar
+              @@foo &= 1
+              @@bar &&= 2
+              @@baz ||= 3
+
+              def set_foo
+                @@foo = 4
+              end
+            end
+            "
+        });
+
+        // This is actually not allowed in Ruby and will raise a runtime error
+        // But we should still index it so we can insert a diagnostic for it
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
+            assert_def_str_eq!(&context, def, "@@foo");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@bar");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "5:3-5:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@baz");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "5:10-5:15", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@qux");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[2], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "8:1-8:6", ClassVariable, |def| {
+            assert_def_str_eq!(&context, def, "@@bar");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "9:1-9:6", ClassVariable, |def| {
+            assert_def_str_eq!(&context, def, "@@baz");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "10:1-10:6", ClassVariable, |def| {
+            assert_def_str_eq!(&context, def, "@@qux");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "12:1-20:4", Class, |bar_class_def| {
+            assert_definition_at!(&context, "13:3-13:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@foo");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "14:3-14:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@bar");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "15:3-15:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@baz");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[2], def.id());
+            });
+
+            // Method `set_foo` is members()[3], class variable inside method is members()[4]
+            assert_definition_at!(&context, "18:5-18:10", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@foo");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[4], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_in_singleton_class_definition() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                @@var = 1
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // During indexing, lexical_nesting_id is the actual enclosing scope (singleton class).
+        // The resolution phase handles bypassing singleton classes for class variable ownership.
+        assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
+            assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@var");
+                assert_eq!(Some(singleton_class.id()), *def.lexical_nesting_id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_in_nested_singleton_class_definition() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                class << self
+                  @@var = 1
+                end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // During indexing, lexical_nesting_id is the actual enclosing scope (innermost singleton class).
+        // The resolution phase handles bypassing singleton classes for class variable ownership.
+        assert_definition_at!(&context, "3:5-5:8", SingletonClass, |nested_singleton| {
+            assert_definition_at!(&context, "4:7-4:12", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@var");
+                assert_eq!(Some(nested_singleton.id()), *def.lexical_nesting_id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_in_singleton_method_definition() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar
+                @@var = 1
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@var");
+                assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
             });
         });
     }
