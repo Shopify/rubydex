@@ -29,6 +29,13 @@ pub enum DefinitionKind {
     GlobalVariableAlias = 14,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CDefinition {
+    pub id: u64,
+    pub kind: DefinitionKind,
+}
+
 pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
     match defn {
         Definition::Class(_) => DefinitionKind::Class,
@@ -101,72 +108,33 @@ pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_i
 /// Shared iterator over definition (id, kind) pairs
 #[derive(Debug)]
 pub struct DefinitionsIter {
-    pub entries: Box<[(u64, DefinitionKind)]>,
-    pub index: usize,
+    entries: Box<[CDefinition]>,
+    index: usize,
 }
 
-impl DefinitionsIter {
-    #[must_use]
-    pub fn new(entries: Box<[(u64, DefinitionKind)]>) -> *mut DefinitionsIter {
-        Box::into_raw(Box::new(DefinitionsIter { entries, index: 0 }))
-    }
-}
+iterator!(DefinitionsIter, entries: CDefinition);
 
-/// Returns the total number of entries in the iterator snapshot.
-///
 /// # Safety
-/// - `iter` must be a valid pointer previously returned by `DefinitionsIter::new`.
+/// `iter` must be a valid pointer previously returned by `DefinitionsIter::new`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_definitions_iter_len(iter: *const DefinitionsIter) -> usize {
-    if iter.is_null() {
-        return 0;
-    }
-    unsafe { (&*iter).entries.len() }
+    unsafe { DefinitionsIter::len(iter) }
 }
 
-/// Advances the iterator and writes the next (ID, Kind) into `out_id` and `out_kind`.
-/// Returns `true` if a pair was written, or `false` if the iterator is exhausted or inputs are invalid.
-///
 /// # Safety
 /// - `iter` must be a valid pointer previously returned by `DefinitionsIter::new`.
-/// - `out_id` and `out_kind` must be valid, writable pointers.
+/// - `out` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_definitions_iter_next(
-    iter: *mut DefinitionsIter,
-    out_id: *mut u64,
-    out_kind: *mut DefinitionKind,
-) -> bool {
-    if iter.is_null() || out_id.is_null() || out_kind.is_null() {
-        return false;
-    }
-
-    let it = unsafe { &mut *iter };
-    if it.index >= it.entries.len() {
-        return false;
-    }
-
-    let (id, kind) = it.entries[it.index];
-    it.index += 1;
-    unsafe {
-        *out_id = id;
-        *out_kind = kind;
-    }
-    true
+pub unsafe extern "C" fn rdx_definitions_iter_next(iter: *mut DefinitionsIter, out: *mut CDefinition) -> bool {
+    unsafe { DefinitionsIter::next(iter, out) }
 }
 
-/// Frees an iterator created by `DefinitionsIter::new`.
-///
 /// # Safety
 /// - `iter` must be a pointer previously returned by `DefinitionsIter::new`.
 /// - `iter` must not be used after being freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_definitions_iter_free(iter: *mut DefinitionsIter) {
-    if iter.is_null() {
-        return;
-    }
-    unsafe {
-        let _ = Box::from_raw(iter);
-    }
+    unsafe { DefinitionsIter::free(iter) }
 }
 
 /// C-compatible struct representing a single comment with its string and location
@@ -299,7 +267,7 @@ where
                 .definitions()
                 .get(&DefinitionId::new(id))
                 .map_or_else(|| panic!("Definition not found: {id:?}"), map_definition_to_kind);
-            (id, kind)
+            CDefinition { id, kind }
         })
         .collect::<Vec<_>>()
         .into_boxed_slice();

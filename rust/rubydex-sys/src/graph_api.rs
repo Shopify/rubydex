@@ -2,6 +2,7 @@
 
 use crate::declaration_api::CDeclaration;
 use crate::declaration_api::DeclarationsIter;
+use crate::document_api::DocumentsIter;
 use crate::reference_api::{CReference, ReferenceKind, ReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
@@ -78,7 +79,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_search(
                 .into_boxed_slice()
         });
 
-        Box::into_raw(Box::new(DeclarationsIter::new(entries)))
+        DeclarationsIter::new(entries)
     }
 }
 
@@ -108,7 +109,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_fuzzy_search(
                 .into_boxed_slice()
         });
 
-        Box::into_raw(Box::new(DeclarationsIter::new(entries)))
+        DeclarationsIter::new(entries)
     }
 }
 
@@ -308,71 +309,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) 
             .into_boxed_slice()
     });
 
-    Box::into_raw(Box::new(DeclarationsIter::new(entries)))
-}
-
-/// Returns the total number of IDs in the iterator snapshot.
-///
-/// # Safety
-///
-/// - `iter` must be a valid pointer previously returned by `rdx_graph_declarations_iter_new`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_declarations_iter_len(iter: *const DeclarationsIter) -> usize {
-    if iter.is_null() {
-        return 0;
-    }
-
-    unsafe { (&*iter).len() }
-}
-
-/// Advances the iterator and writes the next declaration into `out_decl`.
-/// Returns `true` if a declaration was written, or `false` if the iterator is exhausted or inputs are invalid.
-///
-/// # Safety
-///
-/// - `iter` must be a valid pointer previously returned by `rdx_graph_declarations_iter_new`.
-/// - `out_decl` must be a valid, writable pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_declarations_iter_next(
-    iter: *mut DeclarationsIter,
-    out_decl: *mut CDeclaration,
-) -> bool {
-    if iter.is_null() || out_decl.is_null() {
-        return false;
-    }
-
-    unsafe {
-        let it = &mut *iter;
-        it.next(out_decl)
-    }
-}
-
-/// Frees an iterator created by `rdx_graph_declarations_iter_new`.
-///
-/// # Safety
-///
-/// - `iter` must be a pointer previously returned by `rdx_graph_declarations_iter_new`.
-/// - `iter` must not be used after being freed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_declarations_iter_free(iter: *mut DeclarationsIter) {
-    if iter.is_null() {
-        return;
-    }
-
-    unsafe {
-        let _ = Box::from_raw(iter);
-    }
-}
-
-/// An iterator over document (URI) IDs
-///
-/// We snapshot the IDs at iterator creation so if the graph is modified, the iterator will not see the changes
-#[derive(Debug)]
-pub struct DocumentsIter {
-    /// The snapshot of document (URI) IDs
-    ids: Box<[u64]>,
-    /// The current index of the iterator
-    index: usize,
+    DeclarationsIter::new(entries)
 }
 
 /// Creates a new iterator over document (URI) IDs by snapshotting the current set of IDs.
@@ -383,8 +320,7 @@ pub struct DocumentsIter {
 /// - The returned pointer must be freed with `rdx_graph_documents_iter_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_documents_iter_new(pointer: GraphPointer) -> *mut DocumentsIter {
-    // Snapshot the IDs at iterator creation to avoid borrowing across FFI calls
-    let ids = with_graph(pointer, |graph| {
+    let entries = with_graph(pointer, |graph| {
         graph
             .documents()
             .keys()
@@ -393,63 +329,7 @@ pub unsafe extern "C" fn rdx_graph_documents_iter_new(pointer: GraphPointer) -> 
             .into_boxed_slice()
     });
 
-    Box::into_raw(Box::new(DocumentsIter { ids, index: 0 }))
-}
-
-/// Returns the total number of IDs in the iterator snapshot.
-///
-/// # Safety
-///
-/// - `iter` must be a valid pointer previously returned by `rdx_graph_documents_iter_new`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_documents_iter_len(iter: *const DocumentsIter) -> usize {
-    if iter.is_null() {
-        return 0;
-    }
-
-    unsafe { (&*iter).ids.len() }
-}
-
-/// Advances the iterator and writes the next ID into `out_id`.
-/// Returns `true` if an ID was written, or `false` if the iterator is exhausted or inputs are invalid.
-///
-/// # Safety
-///
-/// - `iter` must be a valid pointer previously returned by `rdx_graph_documents_iter_new`.
-/// - `out_id` must be a valid, writable pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_documents_iter_next(iter: *mut DocumentsIter, out_id: *mut u64) -> bool {
-    if iter.is_null() || out_id.is_null() {
-        return false;
-    }
-
-    let it = unsafe { &mut *iter };
-    if it.index >= it.ids.len() {
-        return false;
-    }
-
-    let id = it.ids[it.index];
-    it.index += 1;
-    unsafe { *out_id = id };
-
-    true
-}
-
-/// Frees an iterator created by `rdx_graph_documents_iter_new`.
-///
-/// # Safety
-///
-/// - `iter` must be a pointer previously returned by `rdx_graph_documents_iter_new`.
-/// - `iter` must not be used after being freed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_documents_iter_free(iter: *mut DocumentsIter) {
-    if iter.is_null() {
-        return;
-    }
-
-    unsafe {
-        let _ = Box::from_raw(iter);
-    }
+    DocumentsIter::new(entries)
 }
 
 /// Attempts to resolve a declaration from a fully-qualified name string.

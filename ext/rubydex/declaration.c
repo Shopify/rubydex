@@ -93,11 +93,10 @@ static VALUE declaration_definitions_yield(VALUE args) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
-    uint64_t id = 0;
-    DefinitionKind kind;
-    while (rdx_definitions_iter_next(iter, &id, &kind)) {
-        VALUE argv[] = {data->graph_obj, ULL2NUM(id)};
-        VALUE defn_class = rdxi_definition_class_for_kind(kind);
+    CDefinition defn;
+    while (rdx_definitions_iter_next(iter, &defn)) {
+        VALUE argv[] = {data->graph_obj, ULL2NUM(defn.id)};
+        VALUE defn_class = rdxi_definition_class_for_kind(defn.kind);
         VALUE handle = rb_class_new_instance(2, argv, defn_class);
         rb_yield(handle);
     }
