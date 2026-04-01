@@ -29,13 +29,6 @@ static VALUE parameter_class_for_kind(ParameterKind kind) {
 }
 
 VALUE rdxi_signatures_to_ruby(SignatureArray *arr) {
-    if (arr == NULL || arr->len == 0) {
-        if (arr != NULL) {
-            rdx_definition_signatures_free(arr);
-        }
-        return rb_ary_new();
-    }
-
     VALUE signatures = rb_ary_new_capa((long)arr->len);
 
     for (size_t i = 0; i < arr->len; i++) {

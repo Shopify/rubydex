@@ -503,15 +503,33 @@ pub enum DealiasMethodResult {
     Alias(DefinitionId),
 }
 
+/// Error type for `dealias_method`.
+#[derive(Debug)]
+pub enum DealiasMethodError {
+    /// The constant receiver (e.g., `Foo` in `def Foo.bar`) could not be resolved.
+    UnresolvedReceiver,
+    /// The enclosing namespace's name could not be resolved.
+    UnresolvedEnclosingNamespace(DefinitionId),
+    /// No enclosing namespace exists (e.g., top-level alias with no lexical nesting).
+    NoEnclosingNamespace,
+    /// The aliased method name was not found in the namespace or its ancestors.
+    MemberNotFound,
+}
+
 /// Dereferences a `MethodAliasDefinition` by one level, returning the definitions
-/// found under the aliased name. Returns an empty vector if the alias target cannot
-/// be found (e.g., unresolved constant receiver or missing member).
+/// found under the aliased name.
+///
+/// # Errors
+///
+/// Returns a `DealiasMethodError` if the alias target cannot be resolved.
 ///
 /// # Panics
 ///
 /// Panics if a `SelfReceiver` definition cannot be resolved to a namespace with a singleton class.
-#[must_use]
-pub fn dealias_method(graph: &Graph, alias: &MethodAliasDefinition) -> Vec<DealiasMethodResult> {
+pub fn dealias_method(
+    graph: &Graph,
+    alias: &MethodAliasDefinition,
+) -> Result<Vec<DealiasMethodResult>, DealiasMethodError> {
     let owner_id = match alias.receiver() {
         Some(Receiver::SelfReceiver(def_id)) => {
             let decl_id = graph.definition_id_to_declaration_id(*def_id).unwrap();
@@ -521,25 +539,30 @@ pub fn dealias_method(graph: &Graph, alias: &MethodAliasDefinition) -> Vec<Deali
         }
         Some(Receiver::ConstantReceiver(name_id)) => {
             let Some(&id) = graph.name_id_to_declaration_id(*name_id) else {
-                return vec![];
+                return Err(DealiasMethodError::UnresolvedReceiver);
             };
             id
         }
         None => match enclosing_namespace(graph, alias.lexical_nesting_id().as_ref()) {
             EnclosingNamespace::Found(id) => id,
-            EnclosingNamespace::NotFound | EnclosingNamespace::Unresolved(_) => return vec![],
+            EnclosingNamespace::Unresolved(def_id) => {
+                return Err(DealiasMethodError::UnresolvedEnclosingNamespace(def_id));
+            }
+            EnclosingNamespace::NotFound => {
+                return Err(DealiasMethodError::NoEnclosingNamespace);
+            }
         },
     };
 
-    let method_decl_id = find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id(), false);
-
-    let Some(method_decl_id) = method_decl_id else {
-        return vec![];
+    let Some(method_decl_id) =
+        find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id(), false)
+    else {
+        return Err(DealiasMethodError::MemberNotFound);
     };
     let method_decl = graph.declarations().get(&method_decl_id).unwrap();
     assert!(matches!(method_decl, Declaration::Method(_)));
 
-    method_decl
+    Ok(method_decl
         .definitions()
         .iter()
         .filter_map(|def_id| match graph.definitions().get(def_id) {
@@ -547,7 +570,80 @@ pub fn dealias_method(graph: &Graph, alias: &MethodAliasDefinition) -> Vec<Deali
             Some(Definition::MethodAlias(_)) => Some(DealiasMethodResult::Alias(*def_id)),
             _ => None,
         })
-        .collect()
+        .collect())
+}
+
+/// Result of following a `MethodAliasDefinition` chain to completion.
+#[derive(Debug)]
+pub struct DeepDealiasMethodResult {
+    /// Successfully resolved method definition IDs.
+    pub method_ids: Vec<DefinitionId>,
+    /// `DefinitionId`s where circular alias chains were detected.
+    pub circular_aliases: Vec<DefinitionId>,
+    /// Alias resolution errors (`DefinitionId` of the failing alias + the error).
+    pub errors: Vec<(DefinitionId, DealiasMethodError)>,
+}
+
+/// Follows a `MethodAliasDefinition` chain to completion, returning all resolved
+/// `MethodDefinition` IDs along with any errors encountered. Unlike `dealias_method`
+/// which resolves one level, this function keeps following alias chains until only
+/// method definitions remain.
+///
+/// # Panics
+///
+/// Panics if a `SelfReceiver` definition cannot be resolved to a namespace with a singleton class.
+#[must_use]
+pub fn deep_dealias_method(
+    graph: &Graph,
+    alias: &MethodAliasDefinition,
+    alias_def_id: DefinitionId,
+) -> DeepDealiasMethodResult {
+    let mut result = DeepDealiasMethodResult {
+        method_ids: Vec::new(),
+        circular_aliases: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    let mut current_results = match dealias_method(graph, alias) {
+        Ok(results) => results,
+        Err(err) => {
+            result.errors.push((alias_def_id, err));
+            return result;
+        }
+    };
+
+    let mut visited = HashSet::new();
+    visited.insert(alias_def_id);
+
+    loop {
+        let mut next_aliases = Vec::new();
+
+        for item in &current_results {
+            match item {
+                DealiasMethodResult::Method(id) => {
+                    result.method_ids.push(*id);
+                }
+                DealiasMethodResult::Alias(id) => {
+                    if !visited.insert(*id) {
+                        result.circular_aliases.push(*id);
+                        continue;
+                    }
+                    if let Some(Definition::MethodAlias(next_alias)) = graph.definitions().get(id) {
+                        match dealias_method(graph, next_alias) {
+                            Ok(next) => next_aliases.extend(next),
+                            Err(err) => result.errors.push((*id, err)),
+                        }
+                    }
+                }
+            }
+        }
+
+        if next_aliases.is_empty() {
+            return result;
+        }
+
+        current_results = next_aliases;
+    }
 }
 
 /// Searches for a member by `StringId` in the given namespace's ancestor chain.
@@ -1849,7 +1945,7 @@ mod tests {
         context.resolve();
 
         let alias = get_method_alias_def(context.graph(), "Foo#bar()");
-        let results = dealias_method(context.graph(), alias);
+        let results = dealias_method(context.graph(), alias).unwrap();
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], DealiasMethodResult::Method(_)));
     }
@@ -1871,13 +1967,13 @@ mod tests {
 
         // baz -> bar: one level returns the alias to bar
         let alias = get_method_alias_def(context.graph(), "Foo#baz()");
-        let results = dealias_method(context.graph(), alias);
+        let results = dealias_method(context.graph(), alias).unwrap();
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], DealiasMethodResult::Alias(_)));
 
         // bar -> foo: one more level returns the method definition
         let alias = get_method_alias_def(context.graph(), "Foo#bar()");
-        let results = dealias_method(context.graph(), alias);
+        let results = dealias_method(context.graph(), alias).unwrap();
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], DealiasMethodResult::Method(_)));
     }
@@ -1896,8 +1992,8 @@ mod tests {
         context.resolve();
 
         let alias = get_method_alias_def(context.graph(), "Foo#bar()");
-        let results = dealias_method(context.graph(), alias);
-        assert!(results.is_empty());
+        let result = dealias_method(context.graph(), alias);
+        assert!(matches!(result, Err(DealiasMethodError::MemberNotFound)));
     }
 
     #[test]
@@ -1923,7 +2019,7 @@ mod tests {
         context.resolve();
 
         let alias = get_method_alias_def(context.graph(), "Foo#bar()");
-        let results = dealias_method(context.graph(), alias);
+        let results = dealias_method(context.graph(), alias).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(
             results
@@ -1944,18 +2040,21 @@ mod tests {
     #[test]
     fn dealias_method_inherited() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "
+        context.index_uri(
+            "file:///foo.rb",
+            "
             class Parent
               def foo(a); end
             end
             class Child < Parent
               alias bar foo
             end
-        ");
+        ",
+        );
         context.resolve();
 
         let alias = get_method_alias_def(context.graph(), "Child#bar()");
-        let results = dealias_method(context.graph(), alias);
+        let results = dealias_method(context.graph(), alias).unwrap();
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], DealiasMethodResult::Method(_)));
     }
@@ -1963,11 +2062,14 @@ mod tests {
     #[test]
     fn find_member_in_ancestors_direct() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "
+        context.index_uri(
+            "file:///foo.rb",
+            "
             class Foo
               def bar; end
             end
-        ");
+        ",
+        );
         context.resolve();
 
         let result = find_member_in_ancestors(
@@ -1982,13 +2084,16 @@ mod tests {
     #[test]
     fn find_member_in_ancestors_inherited() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "
+        context.index_uri(
+            "file:///foo.rb",
+            "
             class Parent
               def foo; end
             end
             class Child < Parent
             end
-        ");
+        ",
+        );
         context.resolve();
 
         let result = find_member_in_ancestors(
@@ -2003,14 +2108,17 @@ mod tests {
     #[test]
     fn find_member_in_ancestors_overridden() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "
+        context.index_uri(
+            "file:///foo.rb",
+            "
             class Parent
               def foo; end
             end
             class Child < Parent
               def foo; end
             end
-        ");
+        ",
+        );
         context.resolve();
 
         let result = find_member_in_ancestors(
@@ -2025,10 +2133,13 @@ mod tests {
     #[test]
     fn find_member_in_ancestors_not_found() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "
+        context.index_uri(
+            "file:///foo.rb",
+            "
             class Foo
             end
-        ");
+        ",
+        );
         context.resolve();
 
         let result = find_member_in_ancestors(
@@ -2043,14 +2154,17 @@ mod tests {
     #[test]
     fn find_member_in_ancestors_via_module() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "
+        context.index_uri(
+            "file:///foo.rb",
+            "
             module Greetable
               def greet; end
             end
             class Foo
               include Greetable
             end
-        ");
+        ",
+        );
         context.resolve();
 
         let result = find_member_in_ancestors(
