@@ -9,11 +9,12 @@ extern VALUE cParameter;
 extern VALUE cPositionalParameter;
 extern VALUE cOptionalPositionalParameter;
 extern VALUE cRestPositionalParameter;
+extern VALUE cPostParameter;
 extern VALUE cKeywordParameter;
 extern VALUE cOptionalKeywordParameter;
 extern VALUE cRestKeywordParameter;
-extern VALUE cBlockParameter;
 extern VALUE cForwardParameter;
+extern VALUE cBlockParameter;
 
 // Convert a SignatureArray into a Ruby array of Rubydex::Signature objects.
 // The SignatureArray is freed after conversion.

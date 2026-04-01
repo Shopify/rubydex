@@ -357,19 +357,21 @@ pub unsafe extern "C" fn rdx_definition_name_location(pointer: GraphPointer, def
 pub enum ParameterKind {
     RequiredPositional = 0,
     OptionalPositional = 1,
-    Rest = 2,
-    RequiredKeyword = 3,
-    OptionalKeyword = 4,
-    RestKeyword = 5,
-    Block = 6,
+    RestPositional = 2,
+    Post = 3,
+    RequiredKeyword = 4,
+    OptionalKeyword = 5,
+    RestKeyword = 6,
     Forward = 7,
+    Block = 8,
 }
 
 fn map_parameter_kind(param: &Parameter) -> ParameterKind {
     match param {
-        Parameter::RequiredPositional(_) | Parameter::Post(_) => ParameterKind::RequiredPositional,
+        Parameter::RequiredPositional(_) => ParameterKind::RequiredPositional,
+        Parameter::Post(_) => ParameterKind::Post,
         Parameter::OptionalPositional(_) => ParameterKind::OptionalPositional,
-        Parameter::RestPositional(_) => ParameterKind::Rest,
+        Parameter::RestPositional(_) => ParameterKind::RestPositional,
         Parameter::RequiredKeyword(_) => ParameterKind::RequiredKeyword,
         Parameter::OptionalKeyword(_) => ParameterKind::OptionalKeyword,
         Parameter::RestKeyword(_) => ParameterKind::RestKeyword,
