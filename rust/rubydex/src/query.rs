@@ -261,18 +261,25 @@ pub fn completion_candidates<'a>(
 }
 
 /// Resolves a declaration ID to a namespace, following constant aliases if necessary.
-fn resolve_to_namespace(graph: &Graph, decl_id: DeclarationId) -> Result<DeclarationId, Box<dyn Error>> {
-    if let Some(Declaration::Namespace(_)) = graph.declarations().get(&decl_id) {
-        return Ok(decl_id);
+///
+/// Returns:
+/// - `Ok(Some(id))` if the declaration is a namespace (directly or via alias)
+/// - `Ok(None)` if the declaration does not exist in the graph
+/// - `Err(...)` if the declaration exists but is not a namespace or alias to a namespace
+fn resolve_to_namespace(graph: &Graph, decl_id: DeclarationId) -> Result<Option<DeclarationId>, Box<dyn Error>> {
+    match graph.declarations().get(&decl_id) {
+        Some(Declaration::Namespace(_)) => Ok(Some(decl_id)),
+        None => Ok(None),
+        Some(_) => {
+            if let Some(target_id) = graph.resolve_alias(&decl_id)
+                && let Some(Declaration::Namespace(_)) = graph.declarations().get(&target_id)
+            {
+                Ok(Some(target_id))
+            } else {
+                Err(format!("Expected declaration {decl_id:?} to be a namespace or alias to a namespace").into())
+            }
+        }
     }
-
-    if let Some(target_id) = graph.resolve_alias(&decl_id)
-        && let Some(Declaration::Namespace(_)) = graph.declarations().get(&target_id)
-    {
-        return Ok(target_id);
-    }
-
-    Err(format!("Expected declaration {decl_id:?} to be a namespace or alias to a namespace").into())
 }
 
 /// Collect completion for a namespace access (e.g.: `Foo::`)
@@ -281,7 +288,9 @@ fn namespace_access_completion<'a>(
     namespace_decl_id: DeclarationId,
     mut context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
-    let resolved_id = resolve_to_namespace(graph, namespace_decl_id)?;
+    let Some(resolved_id) = resolve_to_namespace(graph, namespace_decl_id)? else {
+        return Ok(Vec::new());
+    };
     let namespace = graph.declarations().get(&resolved_id).unwrap().as_namespace().unwrap();
     let mut candidates = Vec::new();
 
@@ -328,7 +337,9 @@ fn method_call_completion<'a>(
     receiver_decl_id: DeclarationId,
     mut context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
-    let resolved_id = resolve_to_namespace(graph, receiver_decl_id)?;
+    let Some(resolved_id) = resolve_to_namespace(graph, receiver_decl_id)? else {
+        return Ok(Vec::new());
+    };
     let namespace = graph.declarations().get(&resolved_id).unwrap().as_namespace().unwrap();
     let mut candidates = Vec::new();
 

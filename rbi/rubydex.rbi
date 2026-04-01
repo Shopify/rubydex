@@ -128,6 +128,25 @@ class Rubydex::Diagnostic
   def rule; end
 end
 
+class Rubydex::Keyword
+  sig { params(name: String, documentation: String).void }
+  def initialize(name, documentation); end
+
+  sig { returns(String) }
+  def name; end
+
+  sig { returns(String) }
+  def documentation; end
+end
+
+class Rubydex::KeywordParameter
+  sig { params(name: String).void }
+  def initialize(name); end
+
+  sig { returns(String) }
+  def name; end
+end
+
 class Rubydex::Document
   sig { returns(T::Enumerable[Rubydex::Definition]) }
   def definitions; end
@@ -223,6 +242,31 @@ class Rubydex::Graph
 
   sig { returns(T::Array[Rubydex::Failure]) }
   def check_integrity; end
+
+  # Returns completion candidates for an expression context. This includes all keywords, constants, methods, instance
+  # variables, class variables and global variables reachable from the current lexical scope and self type.
+  #
+  # The nesting array represents the lexical scope stack, where the last element is the self type. An empty array
+  # defaults to `Object` as the self type (top-level context).
+  sig { params(nesting: T::Array[String]).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword)]) }
+  def complete_expression(nesting); end
+
+  # Returns completion candidates after a namespace access operator (e.g., `Foo::`). This includes all constants and
+  # singleton methods for the namespace and its ancestors.
+  sig { params(name: String).returns(T::Array[Rubydex::Declaration]) }
+  def complete_namespace_access(name); end
+
+  # Returns completion candidates after a method call operator (e.g., `foo.`). This includes all methods that exist on
+  # the type of the receiver and its ancestors.
+  sig { params(name: String).returns(T::Array[Rubydex::Method]) }
+  def complete_method_call(name); end
+
+  # Returns completion candidates inside a method call's argument list (e.g., `foo.bar(|)`). This includes everything
+  # that expression completion provides plus keyword argument names of the method being called.
+  #
+  # The nesting array represents the lexical scope stack, where the last element is the self type.
+  sig { params(name: String, nesting: T::Array[String]).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword, Rubydex::KeywordParameter)]) }
+  def complete_method_argument(name, nesting); end
 
   private
 
