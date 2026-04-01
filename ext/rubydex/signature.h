@@ -16,10 +16,8 @@ extern VALUE cBlockParameter;
 extern VALUE cForwardParameter;
 
 // Convert a SignatureArray into a Ruby array of Rubydex::Signature objects.
-// If default_method_def is not Qnil, it is used as method_definition for all signatures.
-// Otherwise, a new MethodDefinition handle is built from each SignatureEntry's definition_id.
 // The SignatureArray is freed after conversion.
-VALUE rdxi_signatures_to_ruby(SignatureArray *arr, VALUE graph_obj, VALUE default_method_def);
+VALUE rdxi_signatures_to_ruby(SignatureArray *arr);
 
 void rdxi_initialize_signature(VALUE mRubydex);
 

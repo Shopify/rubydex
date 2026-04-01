@@ -382,7 +382,6 @@ class DefinitionTest < Minitest::Test
 
       sig = signatures.first
       assert_instance_of(Rubydex::Signature, sig)
-      assert_same(method_def, sig.method_definition)
 
       params = sig.parameters
       assert_equal(8, params.length)
@@ -597,8 +596,6 @@ class DefinitionTest < Minitest::Test
       assert_equal(:a, params[0].name)
       assert_equal(:b, params[1].name)
 
-      # method_definition points to the resolved MethodDefinition, not the alias
-      assert_instance_of(Rubydex::MethodDefinition, signatures.first.method_definition)
     end
   end
 
