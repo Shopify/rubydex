@@ -1921,10 +1921,18 @@ mod tests {
     }
 
     fn get_method_alias_def<'a>(graph: &'a Graph, decl_name: &str) -> &'a MethodAliasDefinition {
+        let (_, alias) = get_method_alias_def_with_id(graph, decl_name);
+        alias
+    }
+
+    fn get_method_alias_def_with_id<'a>(
+        graph: &'a Graph,
+        decl_name: &str,
+    ) -> (DefinitionId, &'a MethodAliasDefinition) {
         let decl = graph.declarations().get(&DeclarationId::from(decl_name)).unwrap();
         for def_id in decl.definitions() {
             if let Some(Definition::MethodAlias(alias)) = graph.definitions().get(def_id) {
-                return alias;
+                return (*def_id, alias);
             }
         }
         panic!("No MethodAliasDefinition found for {decl_name}");
@@ -2057,6 +2065,42 @@ mod tests {
         let results = dealias_method(context.graph(), alias).unwrap();
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+    }
+
+    #[test]
+    fn deep_dealias_method_mixed() {
+        let mut context = GraphTest::new();
+        // `then` has three definitions:
+        //   - a Method (from file1)
+        //   - an alias to `baz` which is circular (from file2)
+        //   - an alias to `nonexistent` which is unresolved (from file2)
+        // `start` aliases `then`, so deep_dealias_method(start) sees all three.
+        context.index_uri("file:///foo1.rb", "
+            class Foo
+              def then(a); end
+              alias bar baz
+              alias baz bar
+            end
+        ");
+        context.index_uri("file:///foo2.rb", "
+            class Foo
+              alias then baz
+              alias then nonexistent
+              alias start then
+            end
+        ");
+        context.resolve();
+
+        let (id, alias) = get_method_alias_def_with_id(context.graph(), "Foo#start()");
+        let result = deep_dealias_method(context.graph(), alias, id);
+
+        // Method definition of `then` is found
+        assert_eq!(result.method_ids.len(), 1);
+        // Circular chain via baz -> bar -> baz
+        assert_eq!(result.circular_aliases.len(), 1);
+        // Unresolved alias to nonexistent
+        assert_eq!(result.errors.len(), 1);
+        assert!(matches!(result.errors[0].1, DealiasMethodError::MemberNotFound));
     }
 
     #[test]
