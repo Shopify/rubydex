@@ -1089,10 +1089,20 @@ impl Graph {
                 }
             }
 
-            // Unresolve names resolved to this declaration, cascade to dependents
+            // Unresolve names and cascade. Reference dependents from surviving
+            // files must be re-queued — their resolution path through this
+            // declaration is broken and needs to be retried after re-add.
             for name_id in seed_names {
                 self.unresolve_name(name_id);
                 self.queue_structural_cascade(name_id, queue);
+
+                if let Some(deps) = self.name_dependents.get(&name_id) {
+                    for dep in deps {
+                        if let NameDependent::Reference(ref_id) = dep {
+                            self.pending_work.push(Unit::ConstantRef(*ref_id));
+                        }
+                    }
+                }
             }
 
             // Clean up owner membership and queue remaining definitions for re-resolution
@@ -3627,5 +3637,29 @@ mod incremental_resolution_tests {
 
         assert_declaration_exists!(context, "Foo");
         assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn singleton_recreated_when_reference_nested_in_compact_class() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///parent.rb", "module Parent; end");
+        context.index_uri("file:///target.rb", "class Parent::Target; end");
+        context.index_uri("file:///caller.rb", "class Parent::Caller; Parent::Target.new; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Parent::Target");
+        assert_declaration_exists!(context, "Parent::Target::<Target>");
+
+        context.delete_uri("file:///parent.rb");
+        context.delete_uri("file:///target.rb");
+        context.resolve();
+
+        context.index_uri("file:///parent.rb", "module Parent; end");
+        context.index_uri("file:///target.rb", "class Parent::Target; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Parent::Target");
+        assert_declaration_exists!(context, "Parent::Target::<Target>");
     }
 } // mod incremental_resolution_tests

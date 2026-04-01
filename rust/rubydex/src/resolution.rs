@@ -223,12 +223,11 @@ impl<'a> Resolver<'a> {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
         match self.resolve_constant_internal(*constant_ref.name_id()) {
-            Outcome::Retry(None) => {
-                // There might be dependencies we haven't figured out yet, so we need to retry
+            Outcome::Retry(None) | Outcome::Unresolved(None) => {
+                // Retry: dependencies not resolved yet, or name genuinely unknown
+                // (which can be temporary during incremental invalidation when the
+                // parent namespace was deleted but will be re-added).
                 self.unit_queue.push_back(unit_id);
-            }
-            Outcome::Unresolved(None) => {
-                // We couldn't resolve this name. Emit a diagnostic
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
                 self.unit_queue.push_back(unit_id);
