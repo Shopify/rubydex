@@ -149,6 +149,59 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
     })
 }
 
+/// Adds paths to exclude from file discovery during indexing.
+///
+/// # Panics
+///
+/// Will panic if the given array of C string paths cannot be converted to a `Vec<String>`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `paths` must be an array of `count` valid, null-terminated UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_exclude_paths(pointer: GraphPointer, paths: *const *const c_char, count: usize) {
+    let paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(paths, count).unwrap() };
+    let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    with_mut_graph(pointer, |graph| graph.exclude_paths(path_bufs));
+}
+
+/// Returns the currently excluded paths as an array of C strings. Writes the count to `out_count`. Returns NULL if no
+/// paths are excluded. Caller must free with `free_c_string_array`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `out_count` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_excluded_paths(
+    pointer: GraphPointer,
+    out_count: *mut usize,
+) -> *const *const c_char {
+    with_graph(pointer, |graph| {
+        let excluded = graph.excluded_paths();
+
+        if excluded.is_empty() {
+            unsafe { *out_count = 0 };
+            return ptr::null();
+        }
+
+        let c_strings: Vec<*const c_char> = excluded
+            .iter()
+            .filter_map(|path| {
+                CString::new(path.to_string_lossy().as_ref())
+                    .ok()
+                    .map(|c_string| c_string.into_raw().cast_const())
+            })
+            .collect();
+
+        unsafe { *out_count = c_strings.len() };
+
+        let boxed = c_strings.into_boxed_slice();
+        Box::into_raw(boxed).cast::<*const c_char>()
+    })
+}
+
 /// Indexes all given file paths in parallel using the provided Graph pointer.
 /// Returns an array of error message strings and writes the count to `out_error_count`.
 /// Returns NULL if there are no errors. Caller must free with `free_c_string_array`.

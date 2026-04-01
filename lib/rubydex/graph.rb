@@ -7,8 +7,12 @@ module Rubydex
   class Graph
     IGNORED_DIRECTORIES = [
       ".bundle",
+      ".claude",
       ".git",
       ".github",
+      ".ruby-lsp",
+      ".vscode",
+      "log",
       "node_modules",
       "tmp",
     ].freeze
@@ -19,6 +23,8 @@ module Rubydex
     #: (?workspace_path: String) -> void
     def initialize(workspace_path: Dir.pwd)
       @workspace_path = workspace_path
+
+      exclude_paths(IGNORED_DIRECTORIES.map { |dir| File.join(@workspace_path, dir) })
     end
 
     # Index all files and dependencies of the workspace that exists in `@workspace_path`
