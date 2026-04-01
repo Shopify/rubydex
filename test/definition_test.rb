@@ -435,7 +435,6 @@ class DefinitionTest < Minitest::Test
       assert_equal(2, params.length)
       assert_equal(:a, params[0].name)
       assert_equal(:b, params[1].name)
-
     end
   end
 
