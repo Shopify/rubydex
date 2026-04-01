@@ -586,6 +586,10 @@ impl Graph {
         self.pending_work.push(unit);
     }
 
+    pub(crate) fn extend_work(&mut self, units: impl IntoIterator<Item = Unit>) {
+        self.pending_work.extend(units);
+    }
+
     /// Converts a `Resolved` `NameRef` back to `Unresolved`, preserving the original `Name` data.
     /// Returns the `DeclarationId` it was previously resolved to, if any.
     fn unresolve_name(&mut self, name_id: NameId) -> Option<DeclarationId> {
@@ -3602,5 +3606,26 @@ mod incremental_resolution_tests {
         context.delete_uri("file:///c.rb");
 
         assert_no_dangling_definitions(context.graph());
+    }
+
+    #[test]
+    fn singleton_class_preserved_after_delete_and_reindex() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.index_uri("file:///bar.rb", "Foo.new");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///foo.rb");
+        context.resolve();
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
     }
 } // mod incremental_resolution_tests
