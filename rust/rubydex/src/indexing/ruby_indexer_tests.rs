@@ -186,203 +186,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_method_reference_references() {
-    let context = index_source({
-        "
-        m1
-        m2(m3)
-        m4 m5
-        self.m6
-        self.m7(m8)
-        self.m9 m10
-        C.m11
-        C.m12(m13)
-        C.m14 m15
-        m16.m17
-        m18.m19(m20)
-        m21.m22 m23
-
-        m24.m25.m26
-
-        !m27 # The `!` is collected and will count as one more reference
-        m28&.m29
-        m30(&m31)
-        m32 { m33 }
-        m34 do m35 end
-        m36[m37] # The `[]` is collected and will count as one more reference
-
-        def foo(&block)
-            m38(&block)
-        end
-
-        m39(&:m40)
-        m41(&m42)
-        m43(m44, &m45(m46))
-        m47(x: m48, m49:)
-        m50(...)
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
-    );
-
-    assert_method_references_eq!(
-        &context,
-        [
-            "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16",
-            "m17", "m18", "m19", "m20", "m21", "m22", "m23", "m24", "m25", "m26", "!", "m27", "m28", "m29", "m30",
-            "m31", "m32", "m33", "m34", "m35", "m36", "[]", "m37", "m38", "m39", "m40", "m41", "m42", "m43", "m44",
-            "m45", "m46", "m47", "m48", "m49", "m50"
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_assign_references() {
-    let context = index_source({
-        "
-        self.m1 = m2
-        m3.m4.m5 = m6.m7.m8
-        self.m9, self.m10 = m11, m12
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_method_references_eq!(
-        &context,
-        [
-            "m1=", "m2", "m3", "m4", "m5=", "m6", "m7", "m8", "m9=", "m10=", "m11", "m12"
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_opassign_references() {
-    let context = index_source({
-        "
-        self.m1 += 42
-        self.m2 |= 42
-        self.m3 ||= 42
-        self.m4 &&= 42
-        m5.m6 += m7
-        m8.m9 ||= m10
-        m11.m12 &&= m13
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_method_references_eq!(
-        &context,
-        [
-            "m1", "m1=", "m2", "m2=", "m3", "m3=", "m4", "m4=", "m5", "m6", "m6=", "m7", "m8", "m9", "m9=", "m10",
-            "m11", "m12", "m12=", "m13",
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_operator_references() {
-    let context = index_source({
-        "
-        X != Y
-        X % Y
-        X & Y
-        X && Y
-        X * Y
-        X ** Y
-        X + Y
-        X - Y
-        X / Y
-        X << Y
-        X == Y
-        X === Y
-        X >> Y
-        X ^ Y
-        X | Y
-        X || Y
-        X <=> Y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "parse-warning: possibly useless use of != in void context (1:1-1:7)",
-            "parse-warning: possibly useless use of % in void context (2:1-2:6)",
-            "parse-warning: possibly useless use of & in void context (3:1-3:6)",
-            "parse-warning: possibly useless use of * in void context (5:1-5:6)",
-            "parse-warning: possibly useless use of ** in void context (6:1-6:7)",
-            "parse-warning: possibly useless use of + in void context (7:1-7:6)",
-            "parse-warning: possibly useless use of - in void context (8:1-8:6)",
-            "parse-warning: possibly useless use of / in void context (9:1-9:6)",
-            "parse-warning: possibly useless use of == in void context (11:1-11:7)",
-            "parse-warning: possibly useless use of ^ in void context (14:1-14:6)",
-            "parse-warning: possibly useless use of | in void context (15:1-15:6)",
-            "parse-warning: possibly useless use of <=> in void context (17:1-17:8)"
-        ]
-    );
-
-    assert_method_references_eq!(
-        &context,
-        [
-            "!=", "%", "&", "&&", "*", "**", "+", "-", "/", "<<", "==", "===", ">>", "^", "|", "||", "<=>",
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_lesser_than_operator_references() {
-    let context = index_source({
-        "
-        x < y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
-    );
-
-    assert_method_references_eq!(&context, ["x", "<", "<=>", "y"]);
-}
-
-#[test]
-fn index_method_reference_lesser_than_or_equal_to_operator_references() {
-    let context = index_source({
-        "
-        x <= y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
-    );
-
-    assert_method_references_eq!(&context, ["x", "<=", "<=>", "y"]);
-}
-
-#[test]
-fn index_method_reference_greater_than_operator_references() {
-    let context = index_source({
-        "
-        x > y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
-    );
-
-    assert_method_references_eq!(&context, ["x", "<=>", ">", "y"]);
-}
-
-#[test]
 fn index_method_reference_constant_receiver() {
     let context = index_source({
         "
@@ -591,33 +394,6 @@ fn index_method_reference_self_receiver_in_singleton_method() {
 }
 
 #[test]
-fn index_method_reference_empty_message() {
-    // Indexing this method reference is necessary for triggering the creation of the singleton class and its
-    // ancestor linearization, which then triggers correct completion
-    let context = index_source({
-        "
-        Foo.
-        "
-    });
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from(""), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.nesting().is_none());
-    assert!(parent_scope.parent_scope().is_none());
-}
-
-#[test]
 fn index_method_reference_singleton_class_receiver() {
     let context = index_source({
         "
@@ -650,22 +426,6 @@ fn index_method_reference_singleton_class_receiver() {
     assert_eq!(StringId::from("Foo"), *attached.str());
     assert!(attached.nesting().is_none());
     assert!(attached.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_greater_than_or_equal_to_operator_references() {
-    let context = index_source({
-        "
-        x >= y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
-    );
-
-    assert_method_references_eq!(&context, ["x", "<=>", ">=", "y"]);
 }
 
 #[test]
@@ -728,20 +488,6 @@ fn index_method_reference_or_node_constant_receiver() {
     assert_eq!(StringId::from("Foo"), *parent_scope.str());
     assert!(parent_scope.nesting().is_none());
     assert!(parent_scope.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_alias_references() {
-    let context = index_source({
-        "
-        alias ignored m1
-        alias_method :ignored, :m2
-        alias_method :ignored, ignored
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_method_references_eq!(&context, ["m1()", "m2()"]);
 }
 
 #[test]
@@ -2427,61 +2173,6 @@ fn index_comments_visibility() {
     assert_definition_at!(&context, "12:24-12:27", AttrReader, |def| {
         assert_def_comments_eq!(&context, def, ["# Comment"]);
     });
-}
-
-#[test]
-fn method_call_operators() {
-    let context = index_source({
-        "
-        Foo.bar ||= {}
-        Foo.bar += {}
-        Foo.bar &&= {}
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    // We expect two constant references for `Foo` and `<Foo>` on each singleton method call
-    assert_eq!(6, context.graph().constant_references().len());
-}
-
-#[test]
-fn invoking_new_creates_singleton_reference() {
-    let context = index_source(
-        r"
-        class Foo; end
-        Foo.new.bar
-        ",
-    );
-
-    assert_no_local_diagnostics!(&context);
-    // We expect two constant references for `Foo` and `<Foo>` due to the new call
-    assert_eq!(2, context.graph().constant_references().len());
-}
-
-#[test]
-fn class_new_creates_singleton_reference() {
-    let context = index_source(
-        r"
-        CONST = Class.new
-        ",
-    );
-
-    assert_no_local_diagnostics!(&context);
-    // We expect two constant references for `Class` and `<Class>` due to the new call
-    assert_eq!(2, context.graph().constant_references().len());
-}
-
-#[test]
-fn module_new_creates_singleton_reference() {
-    let context = index_source(
-        r"
-        CONST = Module.new
-        ",
-    );
-
-    assert_no_local_diagnostics!(&context);
-    // We expect two constant references for `Module` and `<Module>` due to the new call
-    assert_eq!(2, context.graph().constant_references().len());
 }
 
 #[test]
@@ -4481,6 +4172,319 @@ mod constant_reference_tests {
                 "M17", "M18", "M19", "M20", "M21", "M22",
             ]
         );
+    }
+}
+
+mod method_reference_tests {
+    use super::*;
+
+    #[test]
+    fn index_method_reference_references() {
+        let context = index_source({
+            "
+            m1
+            m2(m3)
+            m4 m5
+            self.m6
+            self.m7(m8)
+            self.m9 m10
+            C.m11
+            C.m12(m13)
+            C.m14 m15
+            m16.m17
+            m18.m19(m20)
+            m21.m22 m23
+
+            m24.m25.m26
+
+            !m27 # The `!` is collected and will count as one more reference
+            m28&.m29
+            m30(&m31)
+            m32 { m33 }
+            m34 do m35 end
+            m36[m37] # The `[]` is collected and will count as one more reference
+
+            def foo(&block)
+              m38(&block)
+            end
+
+            m39(&:m40)
+            m41(&m42)
+            m43(m44, &m45(m46))
+            m47(x: m48, m49:)
+            m50(...)
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
+        );
+
+        assert_method_references_eq!(
+            &context,
+            [
+                "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16",
+                "m17", "m18", "m19", "m20", "m21", "m22", "m23", "m24", "m25", "m26", "!", "m27", "m28", "m29", "m30",
+                "m31", "m32", "m33", "m34", "m35", "m36", "[]", "m37", "m38", "m39", "m40", "m41", "m42", "m43", "m44",
+                "m45", "m46", "m47", "m48", "m49", "m50"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_method_reference_assign_references() {
+        let context = index_source({
+            "
+            self.m1 = m2
+            m3.m4.m5 = m6.m7.m8
+            self.m9, self.m10 = m11, m12
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_method_references_eq!(
+            &context,
+            [
+                "m1=", "m2", "m3", "m4", "m5=", "m6", "m7", "m8", "m9=", "m10=", "m11", "m12"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_method_reference_opassign_references() {
+        let context = index_source({
+            "
+            self.m1 += 42
+            self.m2 |= 42
+            self.m3 ||= 42
+            self.m4 &&= 42
+            m5.m6 += m7
+            m8.m9 ||= m10
+            m11.m12 &&= m13
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_method_references_eq!(
+            &context,
+            [
+                "m1", "m1=", "m2", "m2=", "m3", "m3=", "m4", "m4=", "m5", "m6", "m6=", "m7", "m8", "m9", "m9=", "m10",
+                "m11", "m12", "m12=", "m13",
+            ]
+        );
+    }
+
+    #[test]
+    fn index_method_reference_operator_references() {
+        let context = index_source({
+            "
+            X != Y
+            X % Y
+            X & Y
+            X && Y
+            X * Y
+            X ** Y
+            X + Y
+            X - Y
+            X / Y
+            X << Y
+            X == Y
+            X === Y
+            X >> Y
+            X ^ Y
+            X | Y
+            X || Y
+            X <=> Y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "parse-warning: possibly useless use of != in void context (1:1-1:7)",
+                "parse-warning: possibly useless use of % in void context (2:1-2:6)",
+                "parse-warning: possibly useless use of & in void context (3:1-3:6)",
+                "parse-warning: possibly useless use of * in void context (5:1-5:6)",
+                "parse-warning: possibly useless use of ** in void context (6:1-6:7)",
+                "parse-warning: possibly useless use of + in void context (7:1-7:6)",
+                "parse-warning: possibly useless use of - in void context (8:1-8:6)",
+                "parse-warning: possibly useless use of / in void context (9:1-9:6)",
+                "parse-warning: possibly useless use of == in void context (11:1-11:7)",
+                "parse-warning: possibly useless use of ^ in void context (14:1-14:6)",
+                "parse-warning: possibly useless use of | in void context (15:1-15:6)",
+                "parse-warning: possibly useless use of <=> in void context (17:1-17:8)"
+            ]
+        );
+
+        assert_method_references_eq!(
+            &context,
+            [
+                "!=", "%", "&", "&&", "*", "**", "+", "-", "/", "<<", "==", "===", ">>", "^", "|", "||", "<=>",
+            ]
+        );
+    }
+
+    #[test]
+    fn index_method_reference_lesser_than_operator_references() {
+        let context = index_source({
+            "
+            x < y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
+        );
+
+        assert_method_references_eq!(&context, ["x", "<", "<=>", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_lesser_than_or_equal_to_operator_references() {
+        let context = index_source({
+            "
+            x <= y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
+        );
+
+        assert_method_references_eq!(&context, ["x", "<=", "<=>", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_greater_than_operator_references() {
+        let context = index_source({
+            "
+            x > y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
+        );
+
+        assert_method_references_eq!(&context, ["x", "<=>", ">", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_greater_than_or_equal_to_operator_references() {
+        let context = index_source({
+            "
+            x >= y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
+        );
+
+        assert_method_references_eq!(&context, ["x", "<=>", ">=", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_empty_message() {
+        // Indexing this method reference is necessary for triggering the creation of the singleton class and its
+        // ancestor linearization, which then triggers correct completion
+        let context = index_source({
+            "
+            Foo.
+            "
+        });
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from(""), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_alias_references() {
+        let context = index_source({
+            "
+            alias ignored m1
+            alias_method :ignored, :m2
+            alias_method :ignored, ignored
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_references_eq!(&context, ["m1()", "m2()"]);
+    }
+
+    #[test]
+    fn method_call_operators() {
+        let context = index_source({
+            "
+            Foo.bar ||= {}
+            Foo.bar += {}
+            Foo.bar &&= {}
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Foo` and `<Foo>` on each singleton method call
+        assert_eq!(6, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn invoking_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            class Foo; end
+            Foo.new.bar
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Foo` and `<Foo>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn class_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            CONST = Class.new
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Class` and `<Class>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn module_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            CONST = Module.new
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Module` and `<Module>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
     }
 }
 
