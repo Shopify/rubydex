@@ -174,7 +174,7 @@ static VALUE rdxr_method_definition_signatures(VALUE self) {
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
     SignatureArray *arr = rdx_definition_signatures(graph, data->id);
-    return rdxi_signatures_to_ruby(arr, data->graph_obj, self);
+    return rdxi_signatures_to_ruby(arr);
 }
 
 // MethodAliasDefinition#signatures -> [Rubydex::Signature]
@@ -186,7 +186,7 @@ static VALUE rdxr_method_alias_definition_signatures(VALUE self) {
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
     SignatureArray *arr = rdx_method_alias_definition_signatures(graph, data->id);
-    return rdxi_signatures_to_ruby(arr, data->graph_obj, Qnil);
+    return rdxi_signatures_to_ruby(arr);
 }
 
 void rdxi_initialize_definition(VALUE mod) {

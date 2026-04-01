@@ -1,6 +1,4 @@
 #include "signature.h"
-#include "definition.h"
-#include "handle.h"
 #include "location.h"
 
 VALUE cSignature;
@@ -28,7 +26,7 @@ static VALUE parameter_class_for_kind(ParameterKind kind) {
     }
 }
 
-VALUE rdxi_signatures_to_ruby(SignatureArray *arr, VALUE graph_obj, VALUE default_method_def) {
+VALUE rdxi_signatures_to_ruby(SignatureArray *arr) {
     if (arr == NULL || arr->len == 0) {
         if (arr != NULL) {
             rdx_definition_signatures_free(arr);
@@ -40,14 +38,6 @@ VALUE rdxi_signatures_to_ruby(SignatureArray *arr, VALUE graph_obj, VALUE defaul
 
     for (size_t i = 0; i < arr->len; i++) {
         SignatureEntry sig_entry = arr->items[i];
-
-        VALUE method_def;
-        if (default_method_def != Qnil) {
-            method_def = default_method_def;
-        } else {
-            VALUE def_argv[] = {graph_obj, ULL2NUM(sig_entry.definition_id)};
-            method_def = rb_class_new_instance(2, def_argv, cMethodDefinition);
-        }
 
         VALUE parameters = rb_ary_new_capa((long)sig_entry.parameters_len);
         for (size_t j = 0; j < sig_entry.parameters_len; j++) {
@@ -62,8 +52,7 @@ VALUE rdxi_signatures_to_ruby(SignatureArray *arr, VALUE graph_obj, VALUE defaul
             rb_ary_push(parameters, param);
         }
 
-        VALUE sig_argv[] = {parameters, method_def};
-        VALUE signature = rb_class_new_instance(2, sig_argv, cSignature);
+        VALUE signature = rb_class_new_instance(1, &parameters, cSignature);
 
         rb_ary_push(signatures, signature);
     }
