@@ -565,9 +565,7 @@ pub fn dealias_method(
         },
     };
 
-    let Some(method_decl_id) =
-        find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id(), false)
-    else {
+    let Some(method_decl_id) = find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id(), false) else {
         return Err(DealiasMethodError::MemberNotFound);
     };
     let method_decl = graph.declarations().get(&method_decl_id).unwrap();
@@ -2086,20 +2084,26 @@ mod tests {
         //   - an alias to `baz` which is circular (from file2)
         //   - an alias to `nonexistent` which is unresolved (from file2)
         // `start` aliases `then`, so deep_dealias_method(start) sees all three.
-        context.index_uri("file:///foo1.rb", "
+        context.index_uri(
+            "file:///foo1.rb",
+            "
             class Foo
               def then(a); end
               alias bar baz
               alias baz bar
             end
-        ");
-        context.index_uri("file:///foo2.rb", "
+        ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
             class Foo
               alias then baz
               alias then nonexistent
               alias start then
             end
-        ");
+        ",
+        );
         context.resolve();
 
         let (id, alias) = get_method_alias_def_with_id(context.graph(), "Foo#start()");
@@ -2209,7 +2213,9 @@ mod tests {
     #[test]
     fn find_member_in_ancestors_only_inherited() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "
+        context.index_uri(
+            "file:///foo.rb",
+            "
             class Parent
               def foo; end
             end
@@ -2217,7 +2223,8 @@ mod tests {
               def foo; end
               def bar; end
             end
-        ");
+        ",
+        );
         context.resolve();
 
         // own method is skipped with only_inherited
@@ -2242,7 +2249,9 @@ mod tests {
     #[test]
     fn find_member_in_ancestors_only_inherited_with_prepend() {
         let mut context = GraphTest::new();
-        context.index_uri("file:///foo.rb", "
+        context.index_uri(
+            "file:///foo.rb",
+            "
             module M
               def foo; end
             end
@@ -2253,7 +2262,8 @@ mod tests {
               prepend M
               def foo; end
             end
-        ");
+        ",
+        );
         context.resolve();
 
         // prepended module and self are skipped, finds Parent's foo

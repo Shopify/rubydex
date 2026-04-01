@@ -180,8 +180,7 @@ pub unsafe extern "C" fn rdx_declaration_find_member(
         let id = DeclarationId::new(declaration_id);
         let member_id = StringId::from(member_str.as_str());
 
-        let Some(member_decl_id) =
-            rubydex::query::find_member_in_ancestors(graph, id, member_id, only_inherited)
+        let Some(member_decl_id) = rubydex::query::find_member_in_ancestors(graph, id, member_id, only_inherited)
         else {
             return ptr::null();
         };
