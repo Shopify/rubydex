@@ -531,7 +531,7 @@ pub fn dealias_method(graph: &Graph, alias: &MethodAliasDefinition) -> Vec<Deali
         },
     };
 
-    let method_decl_id = find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id());
+    let method_decl_id = find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id(), false);
 
     let Some(method_decl_id) = method_decl_id else {
         return vec![];
@@ -550,22 +550,46 @@ pub fn dealias_method(graph: &Graph, alias: &MethodAliasDefinition) -> Vec<Deali
         .collect()
 }
 
-/// Searches for a member by `StringId` in the given namespace and its ancestor chain.
+/// Searches for a member by `StringId` in the given namespace's ancestor chain.
+///
+/// If `only_inherited` is true, all ancestors up to and including `namespace_id` itself
+/// are skipped, so only ancestors after the namespace are searched. This excludes
+/// the namespace's own members and any prepended modules.
+///
+/// # Panics
+///
+/// Panics if `namespace_id` does not exist in declarations, is not a namespace, or
+/// if `only_inherited` is true and `namespace_id` is not found in its own ancestor chain.
 #[must_use]
 pub fn find_member_in_ancestors(
     graph: &Graph,
     namespace_id: DeclarationId,
     str_id: StringId,
+    only_inherited: bool,
 ) -> Option<DeclarationId> {
-    let ns = graph.declarations().get(&namespace_id)?.as_namespace()?;
+    let ns = graph
+        .declarations()
+        .get(&namespace_id)
+        .expect("namespace_id should exist in declarations")
+        .as_namespace()
+        .expect("namespace_id should be a namespace declaration");
 
-    if let Some(&decl_id) = ns.member(&str_id) {
-        return Some(decl_id);
-    }
+    let ancestors: Vec<_> = ns.ancestors().iter().collect();
 
-    for ancestor in ns.ancestors() {
+    let search_start = if only_inherited {
+        let pos = ancestors
+            .iter()
+            .position(|a| matches!(a, Ancestor::Complete(id) if *id == namespace_id))
+            .expect("namespace_id should be present in its own ancestor chain");
+        pos + 1
+    } else {
+        0
+    };
+
+    for ancestor in &ancestors[search_start..] {
         if let Ancestor::Complete(ancestor_id) = ancestor {
-            let ancestor_ns = graph.declarations().get(ancestor_id)?.as_namespace()?;
+            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap();
+            let ancestor_ns = ancestor_decl.as_namespace().unwrap();
             if let Some(&decl_id) = ancestor_ns.member(&str_id) {
                 return Some(decl_id);
             }
@@ -1950,6 +1974,7 @@ mod tests {
             context.graph(),
             DeclarationId::from("Foo"),
             StringId::from("bar()"),
+            false,
         );
         assert_eq!(result, Some(DeclarationId::from("Foo#bar()")));
     }
@@ -1970,6 +1995,7 @@ mod tests {
             context.graph(),
             DeclarationId::from("Child"),
             StringId::from("foo()"),
+            false,
         );
         assert_eq!(result, Some(DeclarationId::from("Parent#foo()")));
     }
@@ -1991,6 +2017,7 @@ mod tests {
             context.graph(),
             DeclarationId::from("Child"),
             StringId::from("foo()"),
+            false,
         );
         assert_eq!(result, Some(DeclarationId::from("Child#foo()")));
     }
@@ -2008,6 +2035,7 @@ mod tests {
             context.graph(),
             DeclarationId::from("Foo"),
             StringId::from("nonexistent()"),
+            false,
         );
         assert_eq!(result, None);
     }
@@ -2029,6 +2057,7 @@ mod tests {
             context.graph(),
             DeclarationId::from("Foo"),
             StringId::from("greet()"),
+            false,
         );
         assert_eq!(result, Some(DeclarationId::from("Greetable#greet()")));
     }
