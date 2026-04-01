@@ -6,22 +6,24 @@ VALUE cParameter;
 VALUE cPositionalParameter;
 VALUE cOptionalPositionalParameter;
 VALUE cRestPositionalParameter;
+VALUE cPostParameter;
 VALUE cKeywordParameter;
 VALUE cOptionalKeywordParameter;
 VALUE cRestKeywordParameter;
-VALUE cBlockParameter;
 VALUE cForwardParameter;
+VALUE cBlockParameter;
 
 static VALUE parameter_class_for_kind(ParameterKind kind) {
     switch (kind) {
     case ParameterKind_RequiredPositional: return cPositionalParameter;
     case ParameterKind_OptionalPositional: return cOptionalPositionalParameter;
-    case ParameterKind_Rest:               return cRestPositionalParameter;
+    case ParameterKind_RestPositional:     return cRestPositionalParameter;
+    case ParameterKind_Post:              return cPostParameter;
     case ParameterKind_RequiredKeyword:    return cKeywordParameter;
     case ParameterKind_OptionalKeyword:    return cOptionalKeywordParameter;
     case ParameterKind_RestKeyword:        return cRestKeywordParameter;
-    case ParameterKind_Block:              return cBlockParameter;
     case ParameterKind_Forward:            return cForwardParameter;
+    case ParameterKind_Block:              return cBlockParameter;
     default: rb_raise(rb_eRuntimeError, "Unknown ParameterKind: %d", kind);
     }
 }
@@ -68,9 +70,10 @@ void rdxi_initialize_signature(VALUE mRubydex) {
     cPositionalParameter = rb_define_class_under(cSignature, "PositionalParameter", cParameter);
     cOptionalPositionalParameter = rb_define_class_under(cSignature, "OptionalPositionalParameter", cParameter);
     cRestPositionalParameter = rb_define_class_under(cSignature, "RestPositionalParameter", cParameter);
+    cPostParameter = rb_define_class_under(cSignature, "PostParameter", cParameter);
     cKeywordParameter = rb_define_class_under(cSignature, "KeywordParameter", cParameter);
     cOptionalKeywordParameter = rb_define_class_under(cSignature, "OptionalKeywordParameter", cParameter);
     cRestKeywordParameter = rb_define_class_under(cSignature, "RestKeywordParameter", cParameter);
-    cBlockParameter = rb_define_class_under(cSignature, "BlockParameter", cParameter);
     cForwardParameter = rb_define_class_under(cSignature, "ForwardParameter", cParameter);
+    cBlockParameter = rb_define_class_under(cSignature, "BlockParameter", cParameter);
 }

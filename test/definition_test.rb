@@ -400,7 +400,7 @@ class DefinitionTest < Minitest::Test
       assert_equal(:c, params[2].name)
       assert_equal("#{path}:1:20-1:21", params[2].location.to_display.to_s) # c
 
-      assert_instance_of(Rubydex::Signature::PositionalParameter, params[3])
+      assert_instance_of(Rubydex::Signature::PostParameter, params[3])
       assert_equal(:d, params[3].name)
       assert_equal("#{path}:1:23-1:24", params[3].location.to_display.to_s) # d
 
@@ -495,7 +495,7 @@ class DefinitionTest < Minitest::Test
       assert_instance_of(Rubydex::Signature::RestPositionalParameter, params[2])
       assert_equal(:c, params[2].name)
       assert_equal("#{path}:2:42-2:43", params[2].location.to_display.to_s) # c
-      assert_instance_of(Rubydex::Signature::PositionalParameter, params[3])
+      assert_instance_of(Rubydex::Signature::PostParameter, params[3])
       assert_equal(:d, params[3].name)
       assert_equal("#{path}:2:52-2:53", params[3].location.to_display.to_s) # d
       assert_instance_of(Rubydex::Signature::KeywordParameter, params[4])
