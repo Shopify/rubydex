@@ -85,47 +85,6 @@ macro_rules! assert_method_references_eq {
     }};
 }
 
-/// Asserts that exactly one method reference with the given name has the expected receiver.
-///
-/// Panics if there isn't exactly one `MethodRef` with that name.
-///
-/// Usage:
-/// - `assert_method_ref_receiver!(context, "bar", "<Foo>")`
-macro_rules! assert_method_ref_receiver {
-    ($context:expr, $method_name:expr, $expected_receiver:expr) => {{
-        let target = StringId::from($method_name);
-        let matches: Vec<_> = $context
-            .graph()
-            .method_references()
-            .values()
-            .filter(|method_ref| *method_ref.str() == target)
-            .collect();
-
-        assert_eq!(
-            matches.len(),
-            1,
-            "expected exactly one method reference for `{}`, found {}",
-            $method_name,
-            matches.len()
-        );
-
-        let method_ref = matches[0];
-        let receiver_id = method_ref
-            .receiver()
-            .unwrap_or_else(|| panic!("method reference for `{}` has no receiver", $method_name));
-        let receiver = $context.graph().names().get(&receiver_id).unwrap();
-
-        assert_eq!(
-            StringId::from($expected_receiver),
-            *receiver.str(),
-            "receiver mismatch for `{}`: expected `{}`, got `{}`",
-            $method_name,
-            $expected_receiver,
-            $context.graph().strings().get(receiver.str()).unwrap().as_str()
-        );
-    }};
-}
-
 macro_rules! assert_promotable {
     ($def:expr) => {{
         assert!(
@@ -183,311 +142,6 @@ fn index_source_with_warnings() {
         &context,
         ["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
     );
-}
-
-#[test]
-fn index_method_reference_constant_receiver() {
-    let context = index_source({
-        "
-        Foo.bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("bar"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.nesting().is_none());
-    assert!(parent_scope.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_receiver_at_class_level() {
-    let context = index_source({
-        "
-        class Foo
-          self.bar
-          baz
-        end
-        Foo.qux
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_method_ref_receiver!(context, "bar", "<Foo>");
-    assert_method_ref_receiver!(context, "baz", "<Foo>");
-    assert_method_ref_receiver!(context, "qux", "<Foo>");
-}
-
-#[test]
-fn index_method_receiver_self_at_module_level() {
-    let context = index_source({
-        "
-        module Foo
-          self.bar
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_method_ref_receiver!(context, "bar", "<Foo>");
-}
-
-#[test]
-fn index_method_receiver_inside_singleton_class() {
-    let context = index_source({
-        "
-        class Foo
-          class << self
-            self.bar
-            baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_method_ref_receiver!(context, "bar", "<<Foo>>");
-    assert_method_ref_receiver!(context, "baz", "<<Foo>>");
-}
-
-#[test]
-fn index_method_receiver_at_top_level() {
-    let context = index_source({
-        "
-        self.bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_method_ref_receiver!(context, "bar", "Object");
-}
-
-#[test]
-fn index_method_reference_self_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def bar
-            baz
-          end
-
-          def baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("baz"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("Foo"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-    assert!(receiver.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_explicit_self_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def bar
-            self.baz
-          end
-
-          def baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("baz"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("Foo"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-    assert!(receiver.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_self_receiver_in_method_ref_with_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def Bar.bar
-            baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("baz"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Bar>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Bar"), *parent_scope.str());
-    assert!(parent_scope.parent_scope().is_none());
-
-    let nesting = context.graph().names().get(&parent_scope.nesting().unwrap()).unwrap();
-    assert_eq!(StringId::from("Foo"), *nesting.str());
-    assert!(nesting.nesting().is_none());
-    assert!(nesting.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_self_receiver_in_singleton_method() {
-    let context = index_source({
-        "
-        class Foo
-          def self.bar
-            baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("baz"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.parent_scope().is_none());
-    assert!(parent_scope.nesting().is_none());
-}
-
-#[test]
-fn index_method_reference_singleton_class_receiver() {
-    let context = index_source({
-        "
-        Foo.singleton_class.bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("bar"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<<Foo>>"), *receiver.str(),);
-    assert!(receiver.nesting().is_none());
-
-    let singleton = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("<Foo>"), *singleton.str());
-    assert!(singleton.nesting().is_none());
-
-    let attached = context
-        .graph()
-        .names()
-        .get(&singleton.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *attached.str());
-    assert!(attached.nesting().is_none());
-    assert!(attached.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_and_node_constant_receiver() {
-    let context = index_source({
-        "
-        Foo && bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context
-        .graph()
-        .method_references()
-        .values()
-        .find(|r| *r.str() == StringId::from("&&"))
-        .unwrap();
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.nesting().is_none());
-    assert!(parent_scope.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_or_node_constant_receiver() {
-    let context = index_source({
-        "
-        Foo || bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context
-        .graph()
-        .method_references()
-        .values()
-        .find(|r| *r.str() == StringId::from("||"))
-        .unwrap();
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.nesting().is_none());
-    assert!(parent_scope.parent_scope().is_none());
 }
 
 #[test]
@@ -4485,6 +4139,356 @@ mod method_reference_tests {
         assert_no_local_diagnostics!(&context);
         // We expect two constant references for `Module` and `<Module>` due to the new call
         assert_eq!(2, context.graph().constant_references().len());
+    }
+}
+
+mod method_receiver_tests {
+    use super::*;
+
+    /// Asserts that exactly one method reference with the given name has the expected receiver.
+    ///
+    /// Panics if there isn't exactly one `MethodRef` with that name.
+    ///
+    /// Usage:
+    /// - `assert_method_ref_receiver!(context, "bar", "<Foo>")`
+    macro_rules! assert_method_ref_receiver {
+        ($context:expr, $method_name:expr, $expected_receiver:expr) => {{
+            let target = StringId::from($method_name);
+            let matches: Vec<_> = $context
+                .graph()
+                .method_references()
+                .values()
+                .filter(|method_ref| *method_ref.str() == target)
+                .collect();
+
+            assert_eq!(
+                matches.len(),
+                1,
+                "expected exactly one method reference for `{}`, found {}",
+                $method_name,
+                matches.len()
+            );
+
+            let method_ref = matches[0];
+            let receiver_id = method_ref
+                .receiver()
+                .unwrap_or_else(|| panic!("method reference for `{}` has no receiver", $method_name));
+            let receiver = $context.graph().names().get(&receiver_id).unwrap();
+
+            assert_eq!(
+                StringId::from($expected_receiver),
+                *receiver.str(),
+                "receiver mismatch for `{}`: expected `{}`, got `{}`",
+                $method_name,
+                $expected_receiver,
+                $context.graph().strings().get(receiver.str()).unwrap().as_str()
+            );
+        }};
+    }
+
+    #[test]
+    fn index_method_reference_constant_receiver() {
+        let context = index_source({
+            "
+            Foo.bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("bar"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_receiver_at_class_level() {
+        let context = index_source({
+            "
+            class Foo
+              self.bar
+              baz
+            end
+            Foo.qux
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_method_ref_receiver!(context, "bar", "<Foo>");
+        assert_method_ref_receiver!(context, "baz", "<Foo>");
+        assert_method_ref_receiver!(context, "qux", "<Foo>");
+    }
+
+    #[test]
+    fn index_method_receiver_self_at_module_level() {
+        let context = index_source({
+            "
+            module Foo
+              self.bar
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "<Foo>");
+    }
+
+    #[test]
+    fn index_method_receiver_inside_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                self.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "<<Foo>>");
+        assert_method_ref_receiver!(context, "baz", "<<Foo>>");
+    }
+
+    #[test]
+    fn index_method_receiver_at_top_level() {
+        let context = index_source({
+            "
+            self.bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "Object");
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                baz
+              end
+
+              def baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+        assert!(receiver.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_explicit_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                self.baz
+              end
+
+              def baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+        assert!(receiver.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver_in_method_ref_with_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def Bar.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Bar>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Bar"), *parent_scope.str());
+        assert!(parent_scope.parent_scope().is_none());
+
+        let nesting = context.graph().names().get(&parent_scope.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *nesting.str());
+        assert!(nesting.nesting().is_none());
+        assert!(nesting.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver_in_singleton_method() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.parent_scope().is_none());
+        assert!(parent_scope.nesting().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_singleton_class_receiver() {
+        let context = index_source({
+            "
+            Foo.singleton_class.bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("bar"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<<Foo>>"), *receiver.str(),);
+        assert!(receiver.nesting().is_none());
+
+        let singleton = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("<Foo>"), *singleton.str());
+        assert!(singleton.nesting().is_none());
+
+        let attached = context
+            .graph()
+            .names()
+            .get(&singleton.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *attached.str());
+        assert!(attached.nesting().is_none());
+        assert!(attached.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_and_node_constant_receiver() {
+        let context = index_source({
+            "
+            Foo && bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context
+            .graph()
+            .method_references()
+            .values()
+            .find(|r| *r.str() == StringId::from("&&"))
+            .unwrap();
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_or_node_constant_receiver() {
+        let context = index_source({
+            "
+            Foo || bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context
+            .graph()
+            .method_references()
+            .values()
+            .find(|r| *r.str() == StringId::from("||"))
+            .unwrap();
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
     }
 }
 
