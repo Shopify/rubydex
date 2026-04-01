@@ -169,9 +169,9 @@ pub unsafe extern "C" fn rdx_index_all(
     out_error_count: *mut usize,
 ) -> *const *const c_char {
     let file_paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(file_paths, count).unwrap() };
-    let (file_paths, listing_errors) = listing::collect_file_paths(file_paths);
 
     with_mut_graph(pointer, |graph| {
+        let (file_paths, listing_errors) = listing::collect_file_paths(file_paths, graph.excluded_paths());
         let indexing_errors = indexing::index_files(graph, file_paths);
 
         let all_errors: Vec<String> = listing_errors
