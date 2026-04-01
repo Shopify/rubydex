@@ -2163,6 +2163,66 @@ mod tests {
     }
 
     #[test]
+    fn find_member_in_ancestors_only_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "
+            class Parent
+              def foo; end
+            end
+            class Child < Parent
+              def foo; end
+              def bar; end
+            end
+        ");
+        context.resolve();
+
+        // own method is skipped with only_inherited
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("foo()"),
+            true,
+        );
+        assert_eq!(result, Some(DeclarationId::from("Parent#foo()")));
+
+        // method only in self returns None with only_inherited
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("bar()"),
+            true,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_member_in_ancestors_only_inherited_with_prepend() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "
+            module M
+              def foo; end
+            end
+            class Parent
+              def foo; end
+            end
+            class Child < Parent
+              prepend M
+              def foo; end
+            end
+        ");
+        context.resolve();
+
+        // prepended module and self are skipped, finds Parent's foo
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("foo()"),
+            true,
+        );
+        assert_eq!(result, Some(DeclarationId::from("Parent#foo()")));
+    }
+
+    #[test]
     fn find_member_in_ancestors_via_module() {
         let mut context = GraphTest::new();
         context.index_uri(
