@@ -186,162 +186,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_unresolved_constant_references() {
-    let context = index_source({
-        r##"
-        puts C1
-        puts C2::C3::C4
-        puts ignored0::IGNORED0
-        puts C6.foo
-        foo = C7
-        C8 << 42
-        C9 += 42
-        C10 ||= 42
-        C11 &&= 42
-        C12[C13]
-        C14::IGNORED1 = 42 # IGNORED1 is an assignment
-        C15::C16 << 42
-        C17::C18 += 42
-        C19::C20 ||= 42
-        C21::C22 &&= 42
-        puts "#{C23}"
-
-        ::IGNORED2 = 42 # IGNORED2 is an assignment
-        puts "IGNORED3"
-        puts :IGNORED4
-        "##
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
-            "parse-warning: assigned but unused variable - foo (5:1-5:4)",
-        ]
-    );
-
-    assert_constant_references_eq!(
-        &context,
-        [
-            "C1", "C2", "C3", "C4", "<C6>", "C6", "C7", "<C8>", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13", "C14",
-            "<C16>", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23"
-        ]
-    );
-}
-
-#[test]
-fn index_unresolved_constant_references_from_values() {
-    let context = index_source({
-        "
-        IGNORED1 = C1
-        IGNORED2 = [C2::C3]
-        C4 << C5
-        C6 += C7
-        C8 ||= C9
-        C10 &&= C11
-        C12[C13] = C14
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_constant_references_eq!(
-        &context,
-        [
-            "C1", "C2", "C3", "<C4>", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13", "C14"
-        ]
-    );
-}
-
-#[test]
-fn index_constant_path_and_write_visits_value() {
-    let context = index_source({
-        "
-        C1::C2 &&= C3
-        C4::C5 += C6
-        C7::C8 ||= C9
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_constant_references_eq!(&context, ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
-}
-
-#[test]
-fn index_unresolved_constant_references_for_classes() {
-    let context = index_source({
-        "
-        C1.new
-
-        class IGNORED < ::C2; end
-        class IGNORED < C3; end
-        class IGNORED < C4::C5; end
-        class IGNORED < ::C7::C6; end
-
-        class C8::IGNORED; end
-        class ::C9::IGNORED; end
-        class C10::C11::IGNORED; end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_constant_references_eq!(
-        &context,
-        [
-            "<C1>", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"
-        ]
-    );
-}
-
-#[test]
-fn index_unresolved_constant_references_for_modules() {
-    let context = index_source({
-        "
-        module X
-          include M1
-          include M2::M3
-          extend M4
-          extend M5::M6
-          prepend M7
-          prepend M8::M9
-        end
-
-        M10.include M11
-        M12.extend M13
-        M14.prepend M15
-
-        module M16::IGNORED; end
-        module ::M17::IGNORED; end
-        module M18::M19::IGNORED; end
-
-        module M20
-          include self
-        end
-
-        module M21
-          extend self
-        end
-
-        module M22
-          prepend self
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_constant_references_eq!(
-        &context,
-        [
-            "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16",
-            "M17", "M18", "M19", "M20", "M21", "M22",
-        ]
-    );
-}
-
-#[test]
 fn index_method_reference_references() {
     let context = index_source({
         "
@@ -4476,6 +4320,167 @@ mod attr_accessor_tests {
             assert_def_str_eq!(&context, def, "qux()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
+    }
+}
+
+mod constant_reference_tests {
+    use super::*;
+
+    #[test]
+    fn index_unresolved_constant_references() {
+        let context = index_source({
+            r##"
+            puts C1
+            puts C2::C3::C4
+            puts ignored0::IGNORED0
+            puts C6.foo
+            foo = C7
+            C8 << 42
+            C9 += 42
+            C10 ||= 42
+            C11 &&= 42
+            C12[C13]
+            C14::IGNORED1 = 42 # IGNORED1 is an assignment
+            C15::C16 << 42
+            C17::C18 += 42
+            C19::C20 ||= 42
+            C21::C22 &&= 42
+            puts "#{C23}"
+
+            ::IGNORED2 = 42 # IGNORED2 is an assignment
+            puts "IGNORED3"
+            puts :IGNORED4
+            "##
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
+                "parse-warning: assigned but unused variable - foo (5:1-5:4)",
+            ]
+        );
+
+        assert_constant_references_eq!(
+            &context,
+            [
+                "C1", "C2", "C3", "C4", "<C6>", "C6", "C7", "<C8>", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13",
+                "C14", "<C16>", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_from_values() {
+        let context = index_source({
+            "
+            IGNORED1 = C1
+            IGNORED2 = [C2::C3]
+            C4 << C5
+            C6 += C7
+            C8 ||= C9
+            C10 &&= C11
+            C12[C13] = C14
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_constant_references_eq!(
+            &context,
+            [
+                "C1", "C2", "C3", "<C4>", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13",
+                "C14"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_constant_path_and_write_visits_value() {
+        let context = index_source({
+            "
+            C1::C2 &&= C3
+            C4::C5 += C6
+            C7::C8 ||= C9
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_constant_references_eq!(&context, ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_for_classes() {
+        let context = index_source({
+            "
+            C1.new
+
+            class IGNORED < ::C2; end
+            class IGNORED < C3; end
+            class IGNORED < C4::C5; end
+            class IGNORED < ::C7::C6; end
+
+            class C8::IGNORED; end
+            class ::C9::IGNORED; end
+            class C10::C11::IGNORED; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_constant_references_eq!(
+            &context,
+            [
+                "<C1>", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_for_modules() {
+        let context = index_source({
+            "
+            module X
+              include M1
+              include M2::M3
+              extend M4
+              extend M5::M6
+              prepend M7
+              prepend M8::M9
+            end
+
+            M10.include M11
+            M12.extend M13
+            M14.prepend M15
+
+            module M16::IGNORED; end
+            module ::M17::IGNORED; end
+            module M18::M19::IGNORED; end
+
+            module M20
+              include self
+            end
+
+            module M21
+              extend self
+            end
+
+            module M22
+              prepend self
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_constant_references_eq!(
+            &context,
+            [
+                "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16",
+                "M17", "M18", "M19", "M20", "M21", "M22",
+            ]
+        );
     }
 }
 
