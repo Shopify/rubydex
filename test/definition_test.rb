@@ -204,6 +204,36 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_class_definition_superclass
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent; end
+        class Child < Parent; end
+        class NoSuperclass; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      defs = graph.documents.first.definitions
+
+      # Before resolution, the superclass should be an unresolved constant reference
+      child_def = defs.find { |d| d.name == "Child" }
+      superclass_ref = child_def.superclass
+      assert_instance_of(Rubydex::UnresolvedConstantReference, superclass_ref)
+
+      # A class with no superclass returns nil
+      no_super_def = defs.find { |d| d.name == "NoSuperclass" }
+      assert_nil(no_super_def.superclass)
+
+      # After resolution, the superclass should be a resolved constant reference
+      graph.resolve
+      superclass_ref = child_def.superclass
+      assert_instance_of(Rubydex::ResolvedConstantReference, superclass_ref)
+      assert_equal("Parent", superclass_ref.declaration.name)
+    end
+  end
+
   private
 
   # Comment locations on Windows include the carriage return. This means that the end column is off by one when compared

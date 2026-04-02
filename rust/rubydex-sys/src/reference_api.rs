@@ -221,3 +221,18 @@ pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, re
         create_location_for_uri_and_offset(graph, document, reference.offset())
     })
 }
+
+/// Frees a `CConstantReference` previously returned by an FFI function.
+///
+/// # Safety
+/// - `ptr` must be a valid pointer previously returned by an FFI function that allocates a `CConstantReference`, or
+///   NULL.
+/// - `ptr` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_c_constant_reference(ptr: *const CConstantReference) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = Box::from_raw(ptr.cast_mut());
+        }
+    }
+}

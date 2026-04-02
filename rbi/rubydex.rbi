@@ -138,7 +138,6 @@ end
 class Rubydex::AttrAccessorDefinition < Rubydex::Definition; end
 class Rubydex::AttrReaderDefinition < Rubydex::Definition; end
 class Rubydex::AttrWriterDefinition < Rubydex::Definition; end
-class Rubydex::ClassDefinition < Rubydex::Definition; end
 class Rubydex::ClassVariableDefinition < Rubydex::Definition; end
 class Rubydex::ConstantAliasDefinition < Rubydex::Definition; end
 class Rubydex::ConstantDefinition < Rubydex::Definition; end
@@ -149,6 +148,11 @@ class Rubydex::MethodAliasDefinition < Rubydex::Definition; end
 class Rubydex::MethodDefinition < Rubydex::Definition; end
 class Rubydex::ModuleDefinition < Rubydex::Definition; end
 class Rubydex::SingletonClassDefinition < Rubydex::Definition; end
+
+class Rubydex::ClassDefinition < Rubydex::Definition
+  sig { returns(T.nilable(Rubydex::ConstantReference)) }
+  def superclass; end
+end
 
 class Rubydex::Diagnostic
   sig { params(rule: Symbol, message: String, location: Rubydex::Location).void }
