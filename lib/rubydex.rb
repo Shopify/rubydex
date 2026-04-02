@@ -16,6 +16,7 @@ end
 require "rubydex/failures"
 require "rubydex/location"
 require "rubydex/comment"
+require "rubydex/signature"
 require "rubydex/diagnostic"
 require "rubydex/keyword"
 require "rubydex/keyword_parameter"

@@ -5,7 +5,9 @@ use rubydex::model::declaration::{Ancestor, Declaration, Namespace};
 use std::ffi::CString;
 use std::ptr;
 
-use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
+use crate::definition_api::{
+    DefinitionsIter, SignatureArray, SignatureEntry, collect_method_signatures, rdx_definitions_iter_new_from_ids,
+};
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::reference_api::{CReference, ReferenceKind, ReferencesIter};
 use crate::utils;
@@ -468,5 +470,44 @@ pub unsafe extern "C" fn rdx_declaration_references_iter_new(
             }
         };
         ReferencesIter::new(entries.into_boxed_slice())
+    })
+}
+
+/// Returns a newly allocated array of signatures for the given method declaration id.
+/// Aggregates signatures from all definitions. For alias definitions, resolves to the
+/// original method's signatures.
+/// Returns NULL if the declaration is not a method declaration.
+/// Caller must free the returned pointer with `rdx_definition_signatures_free`.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `declaration_id` must be a valid declaration id.
+///
+/// # Panics
+/// This function will panic if declarations or definitions cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_declaration_method_signatures(
+    pointer: GraphPointer,
+    declaration_id: u64,
+) -> *mut SignatureArray {
+    with_graph(pointer, |graph| {
+        let decl_id = DeclarationId::new(declaration_id);
+        let method_defs = rubydex::query::method_definitions(graph, decl_id);
+
+        if method_defs.is_empty() {
+            return ptr::null_mut();
+        }
+
+        let mut sig_entries: Vec<SignatureEntry> = Vec::new();
+        for method_def in &method_defs {
+            collect_method_signatures(graph, method_def, method_def.id().get(), &mut sig_entries);
+        }
+
+        let mut boxed = sig_entries.into_boxed_slice();
+        let len = boxed.len();
+        let items_ptr = boxed.as_mut_ptr();
+        std::mem::forget(boxed);
+
+        Box::into_raw(Box::new(SignatureArray { items: items_ptr, len }))
     })
 }

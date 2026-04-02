@@ -271,14 +271,16 @@ impl<'a> RBSIndexer<'a> {
 
         for (key, _value) in function_node.required_keywords().iter() {
             let name = self.source_at(&key.location());
-            let offset = Offset::from_rbs_location(&key.location());
+            // Extend offset by 1 to include the trailing colon, matching Ruby indexer behavior
+            let offset = Offset::from_rbs_location(&key.location()).extend_end(1);
             let str_id = self.local_graph.intern_string(name);
             parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(offset, str_id)));
         }
 
         for (key, _value) in function_node.optional_keywords().iter() {
             let name = self.source_at(&key.location());
-            let offset = Offset::from_rbs_location(&key.location());
+            // Extend offset by 1 to include the trailing colon, matching Ruby indexer behavior
+            let offset = Offset::from_rbs_location(&key.location()).extend_end(1);
             let str_id = self.local_graph.intern_string(name);
             parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(offset, str_id)));
         }
@@ -1257,12 +1259,12 @@ mod tests {
 
             assert_parameter!(&def.signatures().as_slice()[0][4], RequiredKeyword, |param| {
                 assert_string_eq!(context, param.str(), "name");
-                assert_offset_string!(context, param.offset(), "name");
+                assert_offset_string!(context, param.offset(), "name:");
             });
 
             assert_parameter!(&def.signatures().as_slice()[0][5], OptionalKeyword, |param| {
                 assert_string_eq!(context, param.str(), "age");
-                assert_offset_string!(context, param.offset(), "age");
+                assert_offset_string!(context, param.offset(), "age:");
             });
 
             assert_parameter!(&def.signatures().as_slice()[0][6], RestKeyword, |param| {
@@ -1298,12 +1300,12 @@ mod tests {
 
             assert_parameter!(&def.signatures().as_slice()[0][4], RequiredKeyword, |param| {
                 assert_string_eq!(context, param.str(), "name");
-                assert_offset_string!(context, param.offset(), "name");
+                assert_offset_string!(context, param.offset(), "name:");
             });
 
             assert_parameter!(&def.signatures().as_slice()[0][5], OptionalKeyword, |param| {
                 assert_string_eq!(context, param.str(), "age");
-                assert_offset_string!(context, param.offset(), "age");
+                assert_offset_string!(context, param.offset(), "age:");
             });
 
             assert_parameter!(&def.signatures().as_slice()[0][6], RestKeyword, |param| {
