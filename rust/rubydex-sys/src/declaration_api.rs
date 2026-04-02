@@ -7,7 +7,7 @@ use std::ptr;
 
 use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
-use crate::reference_api::{CReference, ReferenceKind, ReferencesIter};
+use crate::reference_api::{CConstantReference, CMethodReference, ConstantReferencesIter, MethodReferencesIter};
 use crate::utils;
 use rubydex::model::ids::{DeclarationId, StringId};
 
@@ -424,49 +424,62 @@ pub unsafe extern "C" fn rdx_declaration_members(pointer: GraphPointer, decl_id:
     DeclarationsIter::new(declarations.into_boxed_slice())
 }
 
-/// Creates a new iterator over references for a given declaration by snapshotting the current set of IDs.
+/// Creates a new iterator over constant references for a given declaration.
 ///
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - The returned pointer must be freed with `rdx_references_iter_free`.
+/// - The returned pointer must be freed with `rdx_constant_references_iter_free`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_declaration_references_iter_new(
+pub unsafe extern "C" fn rdx_declaration_constant_references_iter_new(
+    pointer: GraphPointer,
+    declaration_id: u64,
+) -> *mut ConstantReferencesIter {
+    with_graph(pointer, |graph| {
+        let decl_id_typed = DeclarationId::new(declaration_id);
+
+        let Some(decl) = graph.declarations().get(&decl_id_typed) else {
+            return ptr::null_mut();
+        };
+        let Some(constant_references) = decl.constant_references() else {
+            return ptr::null_mut();
+        };
+
+        let entries: Vec<_> = constant_references
+            .iter()
+            .map(|ref_id| CConstantReference {
+                id: **ref_id,
+                declaration_id,
+            })
+            .collect();
+
+        ConstantReferencesIter::new(entries.into_boxed_slice())
+    })
+}
+
+/// Creates a new iterator over method references for a given declaration.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - The returned pointer must be freed with `rdx_method_references_iter_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_declaration_method_references_iter_new(
     pointer: GraphPointer,
     decl_id: u64,
-) -> *mut ReferencesIter {
+) -> *mut MethodReferencesIter {
     with_graph(pointer, |graph| {
         let decl_id = DeclarationId::new(decl_id);
-
-        let Some(decl) = graph.declarations().get(&decl_id) else {
-            return ReferencesIter::new(Vec::new().into_boxed_slice());
+        let Some(Declaration::Method(decl)) = graph.declarations().get(&decl_id) else {
+            return ptr::null_mut();
         };
 
-        let entries: Vec<_> = match decl {
-            Declaration::Namespace(ns) => ns
-                .references()
-                .iter()
-                .map(|ref_id| CReference::new(**ref_id, ReferenceKind::Constant))
-                .collect(),
-            Declaration::Constant(c) => c
-                .references()
-                .iter()
-                .map(|ref_id| CReference::new(**ref_id, ReferenceKind::Constant))
-                .collect(),
-            Declaration::ConstantAlias(ca) => ca
-                .references()
-                .iter()
-                .map(|ref_id| CReference::new(**ref_id, ReferenceKind::Constant))
-                .collect(),
-            Declaration::Method(m) => m
-                .references()
-                .iter()
-                .map(|ref_id| CReference::new(**ref_id, ReferenceKind::Method))
-                .collect(),
-            Declaration::GlobalVariable(_) | Declaration::InstanceVariable(_) | Declaration::ClassVariable(_) => {
-                return ReferencesIter::new(Vec::new().into_boxed_slice());
-            }
-        };
-        ReferencesIter::new(entries.into_boxed_slice())
+        let entries: Vec<_> = decl
+            .references()
+            .iter()
+            .map(|ref_id| CMethodReference { id: **ref_id })
+            .collect();
+
+        MethodReferencesIter::new(entries.into_boxed_slice())
     })
 }

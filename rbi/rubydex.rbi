@@ -18,8 +18,21 @@ class Rubydex::ConstantReference < Rubydex::Reference
   sig { returns(Rubydex::Location) }
   def location; end
 
+  class << self
+    private
+
+    def new(*args); end
+  end
+end
+
+class Rubydex::UnresolvedConstantReference < Rubydex::ConstantReference
   sig { returns(String) }
   def name; end
+end
+
+class Rubydex::ResolvedConstantReference < Rubydex::ConstantReference
+  sig { returns(Rubydex::Declaration) }
+  def declaration; end
 end
 
 class Rubydex::Declaration
@@ -32,9 +45,6 @@ class Rubydex::Declaration
   sig { returns(Rubydex::Declaration) }
   def owner; end
 
-  sig { returns(T::Enumerable[Rubydex::Reference]) }
-  def references; end
-
   sig { returns(String) }
   def unqualified_name; end
 
@@ -45,14 +55,40 @@ class Rubydex::Declaration
   end
 end
 
-class Rubydex::GlobalVariable < Rubydex::Declaration; end
-class Rubydex::InstanceVariable < Rubydex::Declaration; end
-class Rubydex::Constant < Rubydex::Declaration; end
-class Rubydex::ConstantAlias < Rubydex::Declaration; end
-class Rubydex::ClassVariable < Rubydex::Declaration; end
-class Rubydex::Method < Rubydex::Declaration; end
+class Rubydex::GlobalVariable < Rubydex::Declaration
+  sig { returns(T::Array[T.untyped]) }
+  def references; end
+end
+
+class Rubydex::InstanceVariable < Rubydex::Declaration
+  sig { returns(T::Array[T.untyped]) }
+  def references; end
+end
+
+class Rubydex::Constant < Rubydex::Declaration
+  sig { returns(T::Enumerable[Rubydex::ConstantReference]) }
+  def references; end
+end
+
+class Rubydex::ConstantAlias < Rubydex::Declaration
+  sig { returns(T::Enumerable[Rubydex::ConstantReference]) }
+  def references; end
+end
+
+class Rubydex::ClassVariable < Rubydex::Declaration
+  sig { returns(T::Array[T.untyped]) }
+  def references; end
+end
+
+class Rubydex::Method < Rubydex::Declaration
+  sig { returns(T::Enumerable[Rubydex::MethodReference]) }
+  def references; end
+end
 
 class Rubydex::Namespace < Rubydex::Declaration
+  sig { returns(T::Enumerable[Rubydex::ConstantReference]) }
+  def references; end
+
   sig { returns(T::Enumerable[Rubydex::Namespace]) }
   def ancestors; end
 
