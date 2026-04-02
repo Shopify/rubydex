@@ -820,6 +820,55 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_exclude_paths_filters_nested_directories
+    with_context do |context|
+      context.write!("vendor/gems/foo.rb", "class Foo; end")
+      context.write!("vendor/bundle/bar.rb", "class Bar; end")
+
+      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph.exclude_paths([context.absolute_path_to("vendor/bundle")])
+
+      assert_includes(graph.excluded_paths, context.absolute_path_to("vendor/bundle"))
+
+      # vendor itself should be included since only vendor/bundle is excluded
+      paths = graph.workspace_paths
+      assert_includes(paths, context.absolute_path_to("vendor"))
+
+      # But when we index, files inside vendor/bundle should be skipped
+      graph.index_all(paths)
+      graph.resolve
+
+      refute_nil(graph["Foo"])
+      assert_nil(graph["Bar"])
+    end
+  end
+
+  def test_exclude_paths_with_invalid_arguments
+    graph = Rubydex::Graph.new
+
+    assert_raises(TypeError) do
+      graph.exclude_paths(123)
+    end
+
+    assert_raises(TypeError) do
+      graph.exclude_paths(["/valid/path", 456])
+    end
+  end
+
+  def test_default_ignored_directories_are_excluded
+    with_context do |context|
+      context.write!(".git/config", "")
+      context.write!("node_modules/pkg/index.js", "")
+      context.write!("lib/foo.rb", "class Foo; end")
+
+      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+
+      Rubydex::Graph::IGNORED_DIRECTORIES.each do |dir|
+        assert_includes(graph.excluded_paths, context.absolute_path_to(dir))
+      end
+    end
+  end
+
   private
 
   def assert_diagnostics(expected, actual)

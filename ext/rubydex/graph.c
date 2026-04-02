@@ -608,6 +608,46 @@ static VALUE rdxr_graph_complete_method_argument(VALUE self, VALUE name, VALUE n
     return completion_result_to_ruby_array(result, self);
 }
 
+// Graph#exclude_paths: (Array[String] paths) -> void
+// Excludes the given paths from file discovery during indexing.
+static VALUE rdxr_graph_exclude_paths(VALUE self, VALUE paths) {
+    Check_Type(paths, T_ARRAY);
+    rdxi_check_array_of_strings(paths);
+
+    size_t length = RARRAY_LEN(paths);
+    char **converted_paths = rdxi_str_array_to_char(paths, length);
+
+    void *graph;
+    TypedData_Get_Struct(self, void*, &graph_type, graph);
+
+    rdx_graph_exclude_paths(graph, (const char **)converted_paths, length);
+    rdxi_free_str_array(converted_paths, length);
+
+    return Qnil;
+}
+
+// Graph#excluded_paths: () -> Array[String]
+// Returns the list of paths currently excluded from file discovery.
+static VALUE rdxr_graph_excluded_paths(VALUE self) {
+    void *graph;
+    TypedData_Get_Struct(self, void*, &graph_type, graph);
+
+    size_t out_count = 0;
+    const char *const *results = rdx_graph_excluded_paths(graph, &out_count);
+
+    if (results == NULL) {
+        return rb_ary_new();
+    }
+
+    VALUE array = rb_ary_new_capa((long)out_count);
+    for (size_t i = 0; i < out_count; i++) {
+        rb_ary_push(array, rb_utf8_str_new_cstr(results[i]));
+    }
+
+    free_c_string_array(results, out_count);
+    return array;
+}
+
 void rdxi_initialize_graph(VALUE moduleRubydex) {
     mRubydex = moduleRubydex;
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
@@ -636,4 +676,6 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "complete_namespace_access", rdxr_graph_complete_namespace_access, 1);
     rb_define_method(cGraph, "complete_method_call", rdxr_graph_complete_method_call, 1);
     rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, 2);
+    rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
+    rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);
 }

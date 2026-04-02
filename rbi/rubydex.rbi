@@ -275,6 +275,12 @@ class Rubydex::Graph
 
   sig { params(paths: T::Array[String]).void }
   def add_workspace_dependency_paths(paths); end
+
+  sig { params(paths: T::Array[String]).void }
+  def exclude_paths(paths); end
+
+  sig { returns(T::Array[String]) }
+  def excluded_paths; end
 end
 
 class Rubydex::DisplayLocation < Rubydex::Location
