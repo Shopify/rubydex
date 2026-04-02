@@ -3,7 +3,8 @@
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
-use rubydex::model::definitions::{Definition, Parameter};
+use rubydex::model::definitions::{Definition, MethodDefinition, Parameter};
+use rubydex::model::graph::Graph;
 use rubydex::model::ids::DefinitionId;
 use std::ffi::CString;
 use std::ptr;
@@ -92,8 +93,8 @@ pub unsafe extern "C" fn rdx_definition_signatures(pointer: GraphPointer, defini
 
 /// Helper: build signature entries from a `MethodDefinition` and append them to the output vector.
 fn collect_method_signatures(
-    graph: &rubydex::model::graph::Graph,
-    method_def: &rubydex::model::definitions::MethodDefinition,
+    graph: &Graph,
+    method_def: &MethodDefinition,
     definition_id: u64,
     out: &mut Vec<SignatureEntry>,
 ) {
