@@ -459,7 +459,7 @@ class DefinitionTest < Minitest::Test
       assert_equal(1, params.length)
       assert_instance_of(Rubydex::Signature::ForwardParameter, params[0])
       assert_equal(:"...", params[0].name)
-      assert_equal("#{path}:1:9-1:12", params[0].location.to_display.to_s) # ...
+      assert_equal("#{path}:1:9-1:12", params[0].location.to_display.to_s)
     end
   end
 
