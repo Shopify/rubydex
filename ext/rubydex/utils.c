@@ -62,25 +62,47 @@ VALUE rdxi_declarations_ensure(VALUE args) {
     return Qnil;
 }
 
-// Yield body for iterating over references
-VALUE rdxi_references_yield(VALUE args) {
+// Yield body for iterating over constant references
+VALUE rdxi_constant_references_yield(VALUE args) {
     VALUE graph_obj = rb_ary_entry(args, 0);
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    CReference cref;
-    while (rdx_references_iter_next(iter, &cref)) {
-        VALUE ref_class = rdxi_reference_class_for_kind(cref.kind);
+    CConstantReference cref;
+    while (rdx_constant_references_iter_next(iter, &cref)) {
+        VALUE ref_class = (cref.declaration_id == 0)
+            ? cUnresolvedConstantReference
+            : cResolvedConstantReference;
         VALUE argv[] = {graph_obj, ULL2NUM(cref.id)};
         VALUE obj = rb_class_new_instance(2, argv, ref_class);
         rb_yield(obj);
     }
-
     return Qnil;
 }
 
-// Ensure function for iterating over references to always free the iterator
-VALUE rdxi_references_ensure(VALUE args) {
+// Ensure function for iterating over constant references to always free the iterator
+VALUE rdxi_constant_references_ensure(VALUE args) {
     void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
-    rdx_references_iter_free(iter);
+    rdx_constant_references_iter_free(iter);
+    return Qnil;
+}
+
+// Yield body for iterating over method references
+VALUE rdxi_method_references_yield(VALUE args) {
+    VALUE graph_obj = rb_ary_entry(args, 0);
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+
+    CMethodReference cref;
+    while (rdx_method_references_iter_next(iter, &cref)) {
+        VALUE argv[] = {graph_obj, ULL2NUM(cref.id)};
+        VALUE obj = rb_class_new_instance(2, argv, cMethodReference);
+        rb_yield(obj);
+    }
+    return Qnil;
+}
+
+// Ensure function for iterating over method references to always free the iterator
+VALUE rdxi_method_references_ensure(VALUE args) {
+    void *iter = (void *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+    rdx_method_references_iter_free(iter);
     return Qnil;
 }

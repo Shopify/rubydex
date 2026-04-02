@@ -1,63 +1,94 @@
 //! C API for exposing references through ID handles (like definitions)
 
 use std::ffi::CString;
+use std::ptr;
 
+use crate::declaration_api::CDeclaration;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
 use rubydex::model::ids::{ConstantReferenceId, MethodReferenceId};
+use rubydex::model::name::NameRef;
 
-/// Kind of reference for FFI dispatch
 #[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ReferenceKind {
-    Constant = 0,
-    Method = 1,
+#[derive(Debug, Clone, Copy)]
+pub struct CConstantReference {
+    pub id: u64,
+    pub declaration_id: u64,
+}
+
+#[derive(Debug)]
+pub struct ConstantReferencesIter {
+    entries: Box<[CConstantReference]>,
+    index: usize,
+}
+
+iterator!(ConstantReferencesIter, entries: CConstantReference);
+
+/// # Safety
+/// `iter` must be a valid pointer previously returned by `ConstantReferencesIter::new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_constant_references_iter_len(iter: *const ConstantReferencesIter) -> usize {
+    unsafe { ConstantReferencesIter::len(iter) }
+}
+
+/// # Safety
+/// - `iter` must be a valid pointer previously returned by `ConstantReferencesIter::new`.
+/// - `out` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_constant_references_iter_next(
+    iter: *mut ConstantReferencesIter,
+    out: *mut CConstantReference,
+) -> bool {
+    unsafe { ConstantReferencesIter::next(iter, out) }
+}
+
+/// # Safety
+/// - `iter` must be a pointer previously returned by `ConstantReferencesIter::new`.
+/// - `iter` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_constant_references_iter_free(iter: *mut ConstantReferencesIter) {
+    unsafe { ConstantReferencesIter::free(iter) }
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct CReference {
-    id: u64,
-    kind: ReferenceKind,
-}
-
-impl CReference {
-    #[must_use]
-    pub fn new(id: u64, kind: ReferenceKind) -> Self {
-        Self { id, kind }
-    }
+pub struct CMethodReference {
+    pub id: u64,
 }
 
 #[derive(Debug)]
-pub struct ReferencesIter {
-    entries: Box<[CReference]>,
+pub struct MethodReferencesIter {
+    entries: Box<[CMethodReference]>,
     index: usize,
 }
 
-iterator!(ReferencesIter, entries: CReference);
+iterator!(MethodReferencesIter, entries: CMethodReference);
 
 /// # Safety
-/// `iter` must be a valid pointer previously returned by `ReferencesIter::new`.
+/// `iter` must be a valid pointer previously returned by `MethodReferencesIter::new`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_references_iter_len(iter: *const ReferencesIter) -> usize {
-    unsafe { ReferencesIter::len(iter) }
+pub unsafe extern "C" fn rdx_method_references_iter_len(iter: *const MethodReferencesIter) -> usize {
+    unsafe { MethodReferencesIter::len(iter) }
 }
 
 /// # Safety
-/// - `iter` must be a valid pointer previously returned by `ReferencesIter::new`.
+/// - `iter` must be a valid pointer previously returned by `MethodReferencesIter::new`.
 /// - `out` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_references_iter_next(iter: *mut ReferencesIter, out: *mut CReference) -> bool {
-    unsafe { ReferencesIter::next(iter, out) }
+pub unsafe extern "C" fn rdx_method_references_iter_next(
+    iter: *mut MethodReferencesIter,
+    out: *mut CMethodReference,
+) -> bool {
+    unsafe { MethodReferencesIter::next(iter, out) }
 }
 
 /// # Safety
-/// - `iter` must be a pointer previously returned by `ReferencesIter::new`.
+/// - `iter` must be a pointer previously returned by `MethodReferencesIter::new`.
 /// - `iter` must not be used after being freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_references_iter_free(iter: *mut ReferencesIter) {
-    unsafe { ReferencesIter::free(iter) }
+pub unsafe extern "C" fn rdx_method_references_iter_free(iter: *mut MethodReferencesIter) {
+    unsafe { MethodReferencesIter::free(iter) }
 }
 
 /// Returns the UTF-8 name string for a constant reference id.
@@ -132,6 +163,37 @@ pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, 
             .expect("Document should exist");
 
         create_location_for_uri_and_offset(graph, document, reference.offset())
+    })
+}
+
+/// Returns the declaration that the given resolved constant reference points to. Returns NULL if the reference is
+/// unresolved. Caller must free with `free_c_declaration`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the reference cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_resolved_constant_reference_declaration(
+    pointer: GraphPointer,
+    reference_id: u64,
+) -> *const CDeclaration {
+    with_graph(pointer, |graph| {
+        let ref_id = ConstantReferenceId::new(reference_id);
+        let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
+        let name_ref = graph.names().get(reference.name_id()).expect("Name ID should exist");
+
+        match name_ref {
+            NameRef::Resolved(resolved) => {
+                let decl_id = *resolved.declaration_id();
+                let decl = graph.declarations().get(&decl_id).expect("Declaration not found");
+                Box::into_raw(Box::new(CDeclaration::from_declaration(decl_id, decl))).cast_const()
+            }
+            NameRef::Unresolved(_) => ptr::null(),
+        }
     })
 }
 
