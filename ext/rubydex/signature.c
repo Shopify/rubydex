@@ -39,7 +39,7 @@ VALUE rdxi_signatures_to_ruby(SignatureArray *arr) {
             ParameterEntry param_entry = sig_entry.parameters[j];
 
             VALUE param_class = parameter_class_for_kind(param_entry.kind);
-            VALUE name_sym = ID2SYM(rb_intern(param_entry.name));
+            VALUE name_sym = rb_str_intern(rb_utf8_str_new_cstr(param_entry.name));
             VALUE location = rdxi_build_location_value(param_entry.location);
             VALUE param_argv[] = {name_sym, location};
             VALUE param = rb_class_new_instance(2, param_argv, param_class);
