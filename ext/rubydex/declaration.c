@@ -2,7 +2,6 @@
 #include "definition.h"
 #include "graph.h"
 #include "handle.h"
-#include "reference.h"
 #include "rustbindings.h"
 #include "utils.h"
 
@@ -317,27 +316,30 @@ static VALUE rdxr_declaration_members(VALUE self) {
     return self;
 }
 
-// Size function for the Declaration#references enumerator
-static VALUE declaration_references_size(VALUE self, VALUE _args, VALUE _eobj) {
+// Size function for constant declaration references enumerator
+static VALUE constant_declaration_references_size(VALUE self, VALUE _args, VALUE _eobj) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
 
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    struct ReferencesIter *iter = rdx_declaration_references_iter_new(graph, data->id);
-    size_t len = rdx_references_iter_len(iter);
-    rdx_references_iter_free(iter);
+    struct ConstantReferencesIter *iter = rdx_declaration_constant_references_iter_new(graph, data->id);
+    if (iter == NULL) {
+        rb_raise(rb_eRuntimeError, "Declaration not found");
+    }
 
+    size_t len = rdx_constant_references_iter_len(iter);
+    rdx_constant_references_iter_free(iter);
     return SIZET2NUM(len);
 }
 
-// Returns an enumerator for all references to this declaration
-//
-// Declaration#references: () -> Enumerator[Reference]
-static VALUE rdxr_declaration_references(VALUE self) {
+// Namespace#references, Constant#references, ConstantAlias#references
+// Returns an enumerator that yields constant references to this declaration
+static VALUE rdxr_constant_declaration_references(VALUE self) {
     if (!rb_block_given_p()) {
-        return rb_enumeratorize_with_size(self, rb_str_new2("references"), 0, NULL, declaration_references_size);
+        return rb_enumeratorize_with_size(self, rb_str_new2("references"), 0, NULL,
+                                          constant_declaration_references_size);
     }
 
     HandleData *data;
@@ -346,11 +348,63 @@ static VALUE rdxr_declaration_references(VALUE self) {
     void *graph;
     TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
 
-    void *iter = rdx_declaration_references_iter_new(graph, data->id);
+    void *iter = rdx_declaration_constant_references_iter_new(graph, data->id);
+    if (iter == NULL) {
+        rb_raise(rb_eRuntimeError, "Declaration not found");
+    }
+
     VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
-    rb_ensure(rdxi_references_yield, args, rdxi_references_ensure, args);
+    rb_ensure(rdxi_constant_references_yield, args, rdxi_constant_references_ensure, args);
 
     return self;
+}
+
+// Size function for method declaration references enumerator
+static VALUE method_declaration_references_size(VALUE self, VALUE _args, VALUE _eobj) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    struct MethodReferencesIter *iter = rdx_declaration_method_references_iter_new(graph, data->id);
+    if (iter == NULL) {
+        rb_raise(rb_eRuntimeError, "Declaration not found");
+    }
+
+    size_t len = rdx_method_references_iter_len(iter);
+    rdx_method_references_iter_free(iter);
+    return SIZET2NUM(len);
+}
+
+// Method#references
+// Returns an enumerator that yields method references to this declaration
+static VALUE rdxr_method_declaration_references(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize_with_size(self, rb_str_new2("references"), 0, NULL,
+                                          method_declaration_references_size);
+    }
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    void *iter = rdx_declaration_method_references_iter_new(graph, data->id);
+    if (iter == NULL) {
+        rb_raise(rb_eRuntimeError, "Declaration not found");
+    }
+
+    VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
+    rb_ensure(rdxi_method_references_yield, args, rdxi_method_references_ensure, args);
+
+    return self;
+}
+
+// Placeholder for variable declarations that don't yet support references
+static VALUE rdxr_variable_declaration_references(VALUE self) {
+    return rb_ary_new();
 }
 
 void rdxi_initialize_declaration(VALUE mRubydex) {
@@ -372,16 +426,28 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     rb_define_method(cDeclaration, "name", rdxr_declaration_name, 0);
     rb_define_method(cDeclaration, "unqualified_name", rdxr_declaration_unqualified_name, 0);
     rb_define_method(cDeclaration, "definitions", rdxr_declaration_definitions, 0);
-    rb_define_method(cDeclaration, "references", rdxr_declaration_references, 0);
     rb_define_method(cDeclaration, "owner", rdxr_declaration_owner, 0);
 
     // Namespace only methods
+    rb_define_method(cNamespace, "references", rdxr_constant_declaration_references, 0);
     rb_define_method(cNamespace, "member", rdxr_declaration_member, 1);
     rb_define_method(cNamespace, "find_member", rdxr_declaration_find_member, -1);
     rb_define_method(cNamespace, "singleton_class", rdxr_declaration_singleton_class, 0);
     rb_define_method(cNamespace, "ancestors", rdxr_declaration_ancestors, 0);
     rb_define_method(cNamespace, "descendants", rdxr_declaration_descendants, 0);
     rb_define_method(cNamespace, "members", rdxr_declaration_members, 0);
+
+    // Constant and ConstantAlias have constant references
+    rb_define_method(cConstant, "references", rdxr_constant_declaration_references, 0);
+    rb_define_method(cConstantAlias, "references", rdxr_constant_declaration_references, 0);
+
+    // Method has method references
+    rb_define_method(cMethod, "references", rdxr_method_declaration_references, 0);
+
+    // Variable declarations don't yet support references
+    rb_define_method(cGlobalVariable, "references", rdxr_variable_declaration_references, 0);
+    rb_define_method(cInstanceVariable, "references", rdxr_variable_declaration_references, 0);
+    rb_define_method(cClassVariable, "references", rdxr_variable_declaration_references, 0);
 
     rb_funcall(rb_singleton_class(cDeclaration), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }

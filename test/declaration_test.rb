@@ -453,8 +453,8 @@ class DeclarationTest < Minitest::Test
       assert_equal(2, references.size)
 
       references.each do |ref|
-        assert_instance_of(Rubydex::ConstantReference, ref)
-        assert_equal("A", ref.name)
+        assert_kind_of(Rubydex::ResolvedConstantReference, ref)
+        assert_equal("A", ref.declaration.name)
         refute_nil(ref.location)
       end
     end
