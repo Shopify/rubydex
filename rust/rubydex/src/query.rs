@@ -470,6 +470,7 @@ fn method_argument_completion<'a>(
 }
 
 /// Result of dealiasing a single level of method alias.
+#[derive(Debug)]
 pub enum DealiasMethodResult {
     /// The alias target is a concrete method definition.
     Method(DefinitionId),
@@ -1845,6 +1846,20 @@ mod tests {
         assert!(!candidates.iter().any(|c| matches!(c, CompletionCandidate::Keyword(_))));
     }
 
+    macro_rules! assert_dealias_result_source {
+        ($context:expr, $result:expr, $expected:expr) => {
+            let def_id = match $result {
+                DealiasMethodResult::Method(id) | DealiasMethodResult::Alias(id) => id,
+            };
+            assert_eq!(
+                $context.source_at(def_id),
+                $expected,
+                "unexpected source for {:?}",
+                $result
+            );
+        };
+    }
+
     fn get_method_alias_id(graph: &Graph, decl_name: &str) -> DefinitionId {
         let decl = graph.declarations().get(&DeclarationId::from(decl_name)).unwrap();
         for def_id in decl.definitions() {
@@ -1873,6 +1888,7 @@ mod tests {
         let results = dealias_method(context.graph(), id).unwrap();
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+        assert_dealias_result_source!(&context, &results[0], "def foo(a, b); end");
     }
 
     #[test]
@@ -1895,12 +1911,14 @@ mod tests {
         let results = dealias_method(context.graph(), id).unwrap();
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], DealiasMethodResult::Alias(_)));
+        assert_dealias_result_source!(&context, &results[0], "alias bar foo");
 
         // bar -> foo: one more level returns the method definition
         let id = get_method_alias_id(context.graph(), "Foo#bar()");
         let results = dealias_method(context.graph(), id).unwrap();
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+        assert_dealias_result_source!(&context, &results[0], "def foo(x); end");
     }
 
     #[test]
@@ -1946,20 +1964,12 @@ mod tests {
         let id = get_method_alias_id(context.graph(), "Foo#bar()");
         let results = dealias_method(context.graph(), id).unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(
-            results
-                .iter()
-                .filter(|r| matches!(r, DealiasMethodResult::Method(_)))
-                .count(),
-            1
-        );
-        assert_eq!(
-            results
-                .iter()
-                .filter(|r| matches!(r, DealiasMethodResult::Alias(_)))
-                .count(),
-            1
-        );
+
+        let method = results.iter().find(|r| matches!(r, DealiasMethodResult::Method(_))).unwrap();
+        assert_dealias_result_source!(&context, method, "def foo(a); end");
+
+        let alias = results.iter().find(|r| matches!(r, DealiasMethodResult::Alias(_))).unwrap();
+        assert_dealias_result_source!(&context, alias, "alias foo baz");
     }
 
     #[test]
@@ -1981,7 +1991,7 @@ mod tests {
         let id = get_method_alias_id(context.graph(), "Child#bar()");
         let results = dealias_method(context.graph(), id).unwrap();
         assert_eq!(results.len(), 1);
-        assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+        assert_dealias_result_source!(&context, &results[0], "def foo(a); end");
     }
 
     #[test]
@@ -2019,10 +2029,13 @@ mod tests {
 
         // Method definition of `then` is found
         assert_eq!(result.method_ids.len(), 1);
+        assert_eq!(context.source_at(&result.method_ids[0]), "def then(a); end");
         // Circular chain via baz -> bar -> baz
         assert_eq!(result.circular_aliases.len(), 1);
+        assert_eq!(context.source_at(&result.circular_aliases[0]), "alias baz bar");
         // Unresolved alias to nonexistent
         assert_eq!(result.missing_targets.len(), 1);
+        assert_eq!(context.source_at(&result.missing_targets[0]), "alias then nonexistent");
     }
 
     #[test]
