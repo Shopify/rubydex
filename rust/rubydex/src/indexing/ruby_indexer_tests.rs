@@ -85,47 +85,6 @@ macro_rules! assert_method_references_eq {
     }};
 }
 
-/// Asserts that exactly one method reference with the given name has the expected receiver.
-///
-/// Panics if there isn't exactly one `MethodRef` with that name.
-///
-/// Usage:
-/// - `assert_method_ref_receiver!(context, "bar", "<Foo>")`
-macro_rules! assert_method_ref_receiver {
-    ($context:expr, $method_name:expr, $expected_receiver:expr) => {{
-        let target = StringId::from($method_name);
-        let matches: Vec<_> = $context
-            .graph()
-            .method_references()
-            .values()
-            .filter(|method_ref| *method_ref.str() == target)
-            .collect();
-
-        assert_eq!(
-            matches.len(),
-            1,
-            "expected exactly one method reference for `{}`, found {}",
-            $method_name,
-            matches.len()
-        );
-
-        let method_ref = matches[0];
-        let receiver_id = method_ref
-            .receiver()
-            .unwrap_or_else(|| panic!("method reference for `{}` has no receiver", $method_name));
-        let receiver = $context.graph().names().get(&receiver_id).unwrap();
-
-        assert_eq!(
-            StringId::from($expected_receiver),
-            *receiver.str(),
-            "receiver mismatch for `{}`: expected `{}`, got `{}`",
-            $method_name,
-            $expected_receiver,
-            $context.graph().strings().get(receiver.str()).unwrap().as_str()
-        );
-    }};
-}
-
 macro_rules! assert_promotable {
     ($def:expr) => {{
         assert!(
@@ -186,1038 +145,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_class_variable_in_singleton_class_definition() {
-    let context = index_source({
-        "
-        class Foo
-          class << self
-            @@var = 1
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // During indexing, lexical_nesting_id is the actual enclosing scope (singleton class).
-    // The resolution phase handles bypassing singleton classes for class variable ownership.
-    assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
-        assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@var");
-            assert_eq!(Some(singleton_class.id()), *def.lexical_nesting_id());
-        });
-    });
-}
-
-#[test]
-fn index_class_variable_in_nested_singleton_class_definition() {
-    let context = index_source({
-        "
-        class Foo
-          class << self
-            class << self
-              @@var = 1
-            end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // During indexing, lexical_nesting_id is the actual enclosing scope (innermost singleton class).
-    // The resolution phase handles bypassing singleton classes for class variable ownership.
-    assert_definition_at!(&context, "3:5-5:8", SingletonClass, |nested_singleton| {
-        assert_definition_at!(&context, "4:7-4:12", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@var");
-            assert_eq!(Some(nested_singleton.id()), *def.lexical_nesting_id());
-        });
-    });
-}
-
-#[test]
-fn index_class_variable_in_singleton_method_definition() {
-    let context = index_source({
-        "
-        class Foo
-          def self.bar
-            @@var = 1
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
-        assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@var");
-            assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
-        });
-    });
-}
-
-#[test]
-fn index_global_variable_definition() {
-    let context = index_source({
-        "
-        $foo = 1
-        $bar, $baz = 2, 3
-
-        class Foo
-          $qux = 2
-        end
-
-        $one &= 1
-        $two &&= 1
-        $three ||= 1
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_eq!(context.graph().definitions().len(), 8);
-
-    assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$foo");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:1-2:5", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$bar");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:7-2:11", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$baz");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "5:3-5:7", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$qux");
-
-        assert_definition_at!(&context, "4:1-6:4", Class, |parent_nesting| {
-            assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(parent_nesting.members()[0], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "8:1-8:5", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$one");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "9:1-9:5", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$two");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "10:1-10:7", GlobalVariable, |def| {
-        assert_def_str_eq!(&context, def, "$three");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-}
-
-#[test]
-fn index_instance_variable_definition() {
-    let context = index_source({
-        "
-        @foo = 1
-
-        class Foo
-          @bar = 2
-          @baz, @qux = 3, 4
-        end
-
-        @bar &= 5
-        @baz &&= 6
-        @qux ||= 7
-
-        class Bar
-          @foo &= 8
-          @bar &&= 9
-          @baz ||= 10
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@foo");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@bar");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[0], def.id());
-        });
-
-        assert_definition_at!(&context, "5:3-5:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@baz");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[1], def.id());
-        });
-
-        assert_definition_at!(&context, "5:9-5:13", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@qux");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[2], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "8:1-8:5", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@bar");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "9:1-9:5", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@baz");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "10:1-10:5", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@qux");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "12:1-16:4", Class, |bar_class_def| {
-        assert_definition_at!(&context, "13:3-13:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@foo");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[0], def.id());
-        });
-
-        assert_definition_at!(&context, "14:3-14:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@bar");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[1], def.id());
-        });
-
-        assert_definition_at!(&context, "15:3-15:7", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@baz");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[2], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_class_variable_definition() {
-    let context = index_source({
-        "
-        @@foo = 1
-
-        class Foo
-          @@bar = 2
-          @@baz, @@qux = 3, 4
-        end
-
-        @@bar &= 5
-        @@baz &&= 6
-        @@qux ||= 7
-
-        class Bar
-          @@foo &= 1
-          @@bar &&= 2
-          @@baz ||= 3
-
-          def set_foo
-            @@foo = 4
-          end
-        end
-        "
-    });
-
-    // This is actually not allowed in Ruby and will raise a runtime error
-    // But we should still index it so we can insert a diagnostic for it
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
-        assert_def_str_eq!(&context, def, "@@foo");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "4:3-4:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@bar");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[0], def.id());
-        });
-
-        assert_definition_at!(&context, "5:3-5:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@baz");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[1], def.id());
-        });
-
-        assert_definition_at!(&context, "5:10-5:15", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@qux");
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(foo_class_def.members()[2], def.id());
-        });
-    });
-
-    assert_definition_at!(&context, "8:1-8:6", ClassVariable, |def| {
-        assert_def_str_eq!(&context, def, "@@bar");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "9:1-9:6", ClassVariable, |def| {
-        assert_def_str_eq!(&context, def, "@@baz");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "10:1-10:6", ClassVariable, |def| {
-        assert_def_str_eq!(&context, def, "@@qux");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "12:1-20:4", Class, |bar_class_def| {
-        assert_definition_at!(&context, "13:3-13:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@foo");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[0], def.id());
-        });
-
-        assert_definition_at!(&context, "14:3-14:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@bar");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[1], def.id());
-        });
-
-        assert_definition_at!(&context, "15:3-15:8", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@baz");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[2], def.id());
-        });
-
-        // Method `set_foo` is members()[3], class variable inside method is members()[4]
-        assert_definition_at!(&context, "18:5-18:10", ClassVariable, |def| {
-            assert_def_str_eq!(&context, def, "@@foo");
-            assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-            assert_eq!(bar_class_def.members()[4], def.id());
-        });
-    });
-}
-
-#[test]
-fn index_unresolved_constant_references() {
-    let context = index_source({
-        r##"
-        puts C1
-        puts C2::C3::C4
-        puts ignored0::IGNORED0
-        puts C6.foo
-        foo = C7
-        C8 << 42
-        C9 += 42
-        C10 ||= 42
-        C11 &&= 42
-        C12[C13]
-        C14::IGNORED1 = 42 # IGNORED1 is an assignment
-        C15::C16 << 42
-        C17::C18 += 42
-        C19::C20 ||= 42
-        C21::C22 &&= 42
-        puts "#{C23}"
-
-        ::IGNORED2 = 42 # IGNORED2 is an assignment
-        puts "IGNORED3"
-        puts :IGNORED4
-        "##
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
-            "parse-warning: assigned but unused variable - foo (5:1-5:4)",
-        ]
-    );
-
-    assert_constant_references_eq!(
-        &context,
-        [
-            "C1", "C2", "C3", "C4", "<C6>", "C6", "C7", "<C8>", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13", "C14",
-            "<C16>", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23"
-        ]
-    );
-}
-
-#[test]
-fn index_unresolved_constant_references_from_values() {
-    let context = index_source({
-        "
-        IGNORED1 = C1
-        IGNORED2 = [C2::C3]
-        C4 << C5
-        C6 += C7
-        C8 ||= C9
-        C10 &&= C11
-        C12[C13] = C14
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_constant_references_eq!(
-        &context,
-        [
-            "C1", "C2", "C3", "<C4>", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13", "C14"
-        ]
-    );
-}
-
-#[test]
-fn index_constant_path_and_write_visits_value() {
-    let context = index_source({
-        "
-        C1::C2 &&= C3
-        C4::C5 += C6
-        C7::C8 ||= C9
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_constant_references_eq!(&context, ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
-}
-
-#[test]
-fn index_unresolved_constant_references_for_classes() {
-    let context = index_source({
-        "
-        C1.new
-
-        class IGNORED < ::C2; end
-        class IGNORED < C3; end
-        class IGNORED < C4::C5; end
-        class IGNORED < ::C7::C6; end
-
-        class C8::IGNORED; end
-        class ::C9::IGNORED; end
-        class C10::C11::IGNORED; end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_constant_references_eq!(
-        &context,
-        [
-            "<C1>", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"
-        ]
-    );
-}
-
-#[test]
-fn index_unresolved_constant_references_for_modules() {
-    let context = index_source({
-        "
-        module X
-          include M1
-          include M2::M3
-          extend M4
-          extend M5::M6
-          prepend M7
-          prepend M8::M9
-        end
-
-        M10.include M11
-        M12.extend M13
-        M14.prepend M15
-
-        module M16::IGNORED; end
-        module ::M17::IGNORED; end
-        module M18::M19::IGNORED; end
-
-        module M20
-          include self
-        end
-
-        module M21
-          extend self
-        end
-
-        module M22
-          prepend self
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_constant_references_eq!(
-        &context,
-        [
-            "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16",
-            "M17", "M18", "M19", "M20", "M21", "M22",
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_references() {
-    let context = index_source({
-        "
-        m1
-        m2(m3)
-        m4 m5
-        self.m6
-        self.m7(m8)
-        self.m9 m10
-        C.m11
-        C.m12(m13)
-        C.m14 m15
-        m16.m17
-        m18.m19(m20)
-        m21.m22 m23
-
-        m24.m25.m26
-
-        !m27 # The `!` is collected and will count as one more reference
-        m28&.m29
-        m30(&m31)
-        m32 { m33 }
-        m34 do m35 end
-        m36[m37] # The `[]` is collected and will count as one more reference
-
-        def foo(&block)
-            m38(&block)
-        end
-
-        m39(&:m40)
-        m41(&m42)
-        m43(m44, &m45(m46))
-        m47(x: m48, m49:)
-        m50(...)
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
-    );
-
-    assert_method_references_eq!(
-        &context,
-        [
-            "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16",
-            "m17", "m18", "m19", "m20", "m21", "m22", "m23", "m24", "m25", "m26", "!", "m27", "m28", "m29", "m30",
-            "m31", "m32", "m33", "m34", "m35", "m36", "[]", "m37", "m38", "m39", "m40", "m41", "m42", "m43", "m44",
-            "m45", "m46", "m47", "m48", "m49", "m50"
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_assign_references() {
-    let context = index_source({
-        "
-        self.m1 = m2
-        m3.m4.m5 = m6.m7.m8
-        self.m9, self.m10 = m11, m12
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_method_references_eq!(
-        &context,
-        [
-            "m1=", "m2", "m3", "m4", "m5=", "m6", "m7", "m8", "m9=", "m10=", "m11", "m12"
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_opassign_references() {
-    let context = index_source({
-        "
-        self.m1 += 42
-        self.m2 |= 42
-        self.m3 ||= 42
-        self.m4 &&= 42
-        m5.m6 += m7
-        m8.m9 ||= m10
-        m11.m12 &&= m13
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_method_references_eq!(
-        &context,
-        [
-            "m1", "m1=", "m2", "m2=", "m3", "m3=", "m4", "m4=", "m5", "m6", "m6=", "m7", "m8", "m9", "m9=", "m10",
-            "m11", "m12", "m12=", "m13",
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_operator_references() {
-    let context = index_source({
-        "
-        X != Y
-        X % Y
-        X & Y
-        X && Y
-        X * Y
-        X ** Y
-        X + Y
-        X - Y
-        X / Y
-        X << Y
-        X == Y
-        X === Y
-        X >> Y
-        X ^ Y
-        X | Y
-        X || Y
-        X <=> Y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "parse-warning: possibly useless use of != in void context (1:1-1:7)",
-            "parse-warning: possibly useless use of % in void context (2:1-2:6)",
-            "parse-warning: possibly useless use of & in void context (3:1-3:6)",
-            "parse-warning: possibly useless use of * in void context (5:1-5:6)",
-            "parse-warning: possibly useless use of ** in void context (6:1-6:7)",
-            "parse-warning: possibly useless use of + in void context (7:1-7:6)",
-            "parse-warning: possibly useless use of - in void context (8:1-8:6)",
-            "parse-warning: possibly useless use of / in void context (9:1-9:6)",
-            "parse-warning: possibly useless use of == in void context (11:1-11:7)",
-            "parse-warning: possibly useless use of ^ in void context (14:1-14:6)",
-            "parse-warning: possibly useless use of | in void context (15:1-15:6)",
-            "parse-warning: possibly useless use of <=> in void context (17:1-17:8)"
-        ]
-    );
-
-    assert_method_references_eq!(
-        &context,
-        [
-            "!=", "%", "&", "&&", "*", "**", "+", "-", "/", "<<", "==", "===", ">>", "^", "|", "||", "<=>",
-        ]
-    );
-}
-
-#[test]
-fn index_method_reference_lesser_than_operator_references() {
-    let context = index_source({
-        "
-        x < y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
-    );
-
-    assert_method_references_eq!(&context, ["x", "<", "<=>", "y"]);
-}
-
-#[test]
-fn index_method_reference_lesser_than_or_equal_to_operator_references() {
-    let context = index_source({
-        "
-        x <= y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
-    );
-
-    assert_method_references_eq!(&context, ["x", "<=", "<=>", "y"]);
-}
-
-#[test]
-fn index_method_reference_greater_than_operator_references() {
-    let context = index_source({
-        "
-        x > y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
-    );
-
-    assert_method_references_eq!(&context, ["x", "<=>", ">", "y"]);
-}
-
-#[test]
-fn index_method_reference_constant_receiver() {
-    let context = index_source({
-        "
-        Foo.bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("bar"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.nesting().is_none());
-    assert!(parent_scope.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_receiver_at_class_level() {
-    let context = index_source({
-        "
-        class Foo
-          self.bar
-          baz
-        end
-        Foo.qux
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_method_ref_receiver!(context, "bar", "<Foo>");
-    assert_method_ref_receiver!(context, "baz", "<Foo>");
-    assert_method_ref_receiver!(context, "qux", "<Foo>");
-}
-
-#[test]
-fn index_method_receiver_self_at_module_level() {
-    let context = index_source({
-        "
-        module Foo
-          self.bar
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_method_ref_receiver!(context, "bar", "<Foo>");
-}
-
-#[test]
-fn index_method_receiver_inside_singleton_class() {
-    let context = index_source({
-        "
-        class Foo
-          class << self
-            self.bar
-            baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_method_ref_receiver!(context, "bar", "<<Foo>>");
-    assert_method_ref_receiver!(context, "baz", "<<Foo>>");
-}
-
-#[test]
-fn index_method_receiver_at_top_level() {
-    let context = index_source({
-        "
-        self.bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_method_ref_receiver!(context, "bar", "Object");
-}
-
-#[test]
-fn index_method_reference_self_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def bar
-            baz
-          end
-
-          def baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("baz"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("Foo"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-    assert!(receiver.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_explicit_self_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def bar
-            self.baz
-          end
-
-          def baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("baz"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("Foo"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-    assert!(receiver.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_self_receiver_in_method_ref_with_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def Bar.bar
-            baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("baz"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Bar>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Bar"), *parent_scope.str());
-    assert!(parent_scope.parent_scope().is_none());
-
-    let nesting = context.graph().names().get(&parent_scope.nesting().unwrap()).unwrap();
-    assert_eq!(StringId::from("Foo"), *nesting.str());
-    assert!(nesting.nesting().is_none());
-    assert!(nesting.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_self_receiver_in_singleton_method() {
-    let context = index_source({
-        "
-        class Foo
-          def self.bar
-            baz
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("baz"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.parent_scope().is_none());
-    assert!(parent_scope.nesting().is_none());
-}
-
-#[test]
-fn index_method_reference_empty_message() {
-    // Indexing this method reference is necessary for triggering the creation of the singleton class and its
-    // ancestor linearization, which then triggers correct completion
-    let context = index_source({
-        "
-        Foo.
-        "
-    });
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from(""), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.nesting().is_none());
-    assert!(parent_scope.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_singleton_class_receiver() {
-    let context = index_source({
-        "
-        Foo.singleton_class.bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context.graph().method_references().values().next().unwrap();
-    assert_eq!(StringId::from("bar"), *method_ref.str());
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<<Foo>>"), *receiver.str(),);
-    assert!(receiver.nesting().is_none());
-
-    let singleton = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("<Foo>"), *singleton.str());
-    assert!(singleton.nesting().is_none());
-
-    let attached = context
-        .graph()
-        .names()
-        .get(&singleton.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *attached.str());
-    assert!(attached.nesting().is_none());
-    assert!(attached.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_greater_than_or_equal_to_operator_references() {
-    let context = index_source({
-        "
-        x >= y
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
-    );
-
-    assert_method_references_eq!(&context, ["x", "<=>", ">=", "y"]);
-}
-
-#[test]
-fn index_method_reference_and_node_constant_receiver() {
-    let context = index_source({
-        "
-        Foo && bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context
-        .graph()
-        .method_references()
-        .values()
-        .find(|r| *r.str() == StringId::from("&&"))
-        .unwrap();
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.nesting().is_none());
-    assert!(parent_scope.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_or_node_constant_receiver() {
-    let context = index_source({
-        "
-        Foo || bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let method_ref = context
-        .graph()
-        .method_references()
-        .values()
-        .find(|r| *r.str() == StringId::from("||"))
-        .unwrap();
-
-    let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
-    assert_eq!(StringId::from("<Foo>"), *receiver.str());
-    assert!(receiver.nesting().is_none());
-
-    let parent_scope = context
-        .graph()
-        .names()
-        .get(&receiver.parent_scope().expect("Should exist"))
-        .unwrap();
-    assert_eq!(StringId::from("Foo"), *parent_scope.str());
-    assert!(parent_scope.nesting().is_none());
-    assert!(parent_scope.parent_scope().is_none());
-}
-
-#[test]
-fn index_method_reference_alias_references() {
-    let context = index_source({
-        "
-        alias ignored m1
-        alias_method :ignored, :m2
-        alias_method :ignored, ignored
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    assert_method_references_eq!(&context, ["m1()", "m2()"]);
-}
-
-#[test]
 fn index_alias_method_ignores_method_nesting() {
     let context = index_source({
         "
@@ -1257,79 +184,6 @@ fn index_alias_ignores_method_nesting() {
             assert!(alias_method.receiver().is_none());
             assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
         });
-    });
-}
-
-#[test]
-fn superclasses_are_indexed_as_constant_ref_ids() {
-    let context = index_source({
-        "
-        class Foo < Bar; end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:21", Class, |def| {
-        assert_def_superclass_ref_eq!(&context, def, "Bar");
-    });
-}
-
-#[test]
-fn constant_path_superclasses() {
-    let context = index_source({
-        "
-        class Foo < Bar::Baz; end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let mut refs = context.graph().constant_references().values().collect::<Vec<_>>();
-    refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
-
-    assert_definition_at!(&context, "1:1-1:26", Class, |def| {
-        assert_def_superclass_ref_eq!(&context, def, "Bar::Baz");
-        assert_def_name_offset_eq!(&context, def, "1:7-1:10");
-    });
-}
-
-#[test]
-fn ignored_super_classes() {
-    let context = index_source({
-        "
-        class Foo < method_call; end
-        class Bar < 123; end
-        class MyMigration < ActiveRecord::Migration[8.0]; end
-        class Baz < foo::Bar; end
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
-            "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
-            "dynamic-ancestor: Dynamic superclass (3:21-3:49)",
-            "dynamic-constant-reference: Dynamic constant reference (4:13-4:16)",
-            "dynamic-ancestor: Dynamic superclass (4:13-4:21)",
-        ]
-    );
-
-    assert_definition_at!(&context, "1:1-1:29", Class, |def| {
-        assert!(def.superclass_ref().is_none(),);
-    });
-
-    assert_definition_at!(&context, "2:1-2:21", Class, |def| {
-        assert!(def.superclass_ref().is_none(),);
-    });
-
-    assert_definition_at!(&context, "3:1-3:54", Class, |def| {
-        assert!(def.superclass_ref().is_none(),);
-    });
-
-    assert_definition_at!(&context, "4:1-4:26", Class, |def| {
-        assert!(def.superclass_ref().is_none(),);
     });
 }
 
@@ -1525,102 +379,6 @@ fn index_mixins_self_at_top_level() {
     );
 
     assert_eq!(context.graph().definitions().len(), 0);
-}
-
-#[test]
-fn index_class_instance_variable() {
-    let context = index_source({
-        "
-        class Foo
-          @foo = 0
-
-          class << self
-            @bar = 1
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-7:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "2:3-2:7", InstanceVariable, |foo_var_def| {
-            assert_def_str_eq!(&context, foo_var_def, "@foo");
-            assert_eq!(foo_class_def.id(), foo_var_def.lexical_nesting_id().unwrap());
-        });
-
-        assert_definition_at!(&context, "4:3-6:6", SingletonClass, |foo_singleton_def| {
-            assert_definition_at!(&context, "5:5-5:9", InstanceVariable, |bar_var_def| {
-                assert_def_str_eq!(&context, bar_var_def, "@bar");
-                assert_eq!(foo_singleton_def.id(), bar_var_def.lexical_nesting_id().unwrap());
-            });
-        });
-    });
-}
-
-#[test]
-fn index_instance_variable_inside_methods_stay_instance_variable() {
-    let context = index_source({
-        "
-        class Foo
-          def initialize
-            @bar = 1
-          end
-
-          def self.class_method
-            @baz = 2
-          end
-
-          class << self
-            def singleton_method
-              @qux = 3
-            end
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@bar");
-    });
-
-    assert_definition_at!(&context, "7:5-7:9", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@baz");
-    });
-
-    assert_definition_at!(&context, "12:7-12:11", InstanceVariable, |def| {
-        assert_def_str_eq!(&context, def, "@qux");
-    });
-}
-
-#[test]
-fn index_instance_variable_in_method_with_non_self_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def String.bar
-            @var = 123
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // The instance variable is associated with the singleton class of String.
-    // During indexing, we can't know what String resolves to because we haven't
-    // resolved constants yet. The lexical nesting is the method definition.
-    assert_definition_at!(&context, "1:1-5:4", Class, |_foo_class_def| {
-        assert_definition_at!(&context, "2:3-4:6", Method, |method_def| {
-            assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |var_def| {
-                assert_def_str_eq!(&context, var_def, "@var");
-                // The lexical nesting of the ivar is the method
-                assert_eq!(method_def.id(), var_def.lexical_nesting_id().unwrap());
-            });
-        });
-    });
 }
 
 #[test]
@@ -2999,61 +1757,6 @@ fn index_comments_visibility() {
 }
 
 #[test]
-fn method_call_operators() {
-    let context = index_source({
-        "
-        Foo.bar ||= {}
-        Foo.bar += {}
-        Foo.bar &&= {}
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-    // We expect two constant references for `Foo` and `<Foo>` on each singleton method call
-    assert_eq!(6, context.graph().constant_references().len());
-}
-
-#[test]
-fn invoking_new_creates_singleton_reference() {
-    let context = index_source(
-        r"
-        class Foo; end
-        Foo.new.bar
-        ",
-    );
-
-    assert_no_local_diagnostics!(&context);
-    // We expect two constant references for `Foo` and `<Foo>` due to the new call
-    assert_eq!(2, context.graph().constant_references().len());
-}
-
-#[test]
-fn class_new_creates_singleton_reference() {
-    let context = index_source(
-        r"
-        CONST = Class.new
-        ",
-    );
-
-    assert_no_local_diagnostics!(&context);
-    // We expect two constant references for `Class` and `<Class>` due to the new call
-    assert_eq!(2, context.graph().constant_references().len());
-}
-
-#[test]
-fn module_new_creates_singleton_reference() {
-    let context = index_source(
-        r"
-        CONST = Module.new
-        ",
-    );
-
-    assert_no_local_diagnostics!(&context);
-    // We expect two constant references for `Module` and `<Module>` due to the new call
-    assert_eq!(2, context.graph().constant_references().len());
-}
-
-#[test]
 fn constant_with_call_value_is_promotable() {
     let context = index_source("Foo = some_call");
 
@@ -3293,6 +1996,423 @@ mod constant_tests {
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
+            });
+        });
+    }
+}
+
+mod variable_tests {
+    use super::*;
+
+    #[test]
+    fn index_global_variable_definition() {
+        let context = index_source({
+            "
+            $foo = 1
+            $bar, $baz = 2, 3
+
+            class Foo
+              $qux = 2
+            end
+
+            $one &= 1
+            $two &&= 1
+            $three ||= 1
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 8);
+
+        assert_definition_at!(&context, "1:1-1:5", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$foo");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:1-2:5", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$bar");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:7-2:11", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$baz");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "5:3-5:7", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$qux");
+
+            assert_definition_at!(&context, "4:1-6:4", Class, |parent_nesting| {
+                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(parent_nesting.members()[0], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "8:1-8:5", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$one");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "9:1-9:5", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$two");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "10:1-10:7", GlobalVariable, |def| {
+            assert_def_str_eq!(&context, def, "$three");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_definition() {
+        let context = index_source({
+            "
+            @foo = 1
+
+            class Foo
+              @bar = 2
+              @baz, @qux = 3, 4
+            end
+
+            @bar &= 5
+            @baz &&= 6
+            @qux ||= 7
+
+            class Bar
+              @foo &= 8
+              @bar &&= 9
+              @baz ||= 10
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:5", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@foo");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@bar");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "5:3-5:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@baz");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "5:9-5:13", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@qux");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[2], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "8:1-8:5", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@bar");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "9:1-9:5", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@baz");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "10:1-10:5", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@qux");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "12:1-16:4", Class, |bar_class_def| {
+            assert_definition_at!(&context, "13:3-13:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@foo");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "14:3-14:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@bar");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "15:3-15:7", InstanceVariable, |def| {
+                assert_def_str_eq!(&context, def, "@baz");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[2], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_instance_variable() {
+        let context = index_source({
+            "
+            class Foo
+              @foo = 0
+
+              class << self
+                @bar = 1
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "2:3-2:7", InstanceVariable, |foo_var_def| {
+                assert_def_str_eq!(&context, foo_var_def, "@foo");
+                assert_eq!(foo_class_def.id(), foo_var_def.lexical_nesting_id().unwrap());
+            });
+
+            assert_definition_at!(&context, "4:3-6:6", SingletonClass, |foo_singleton_def| {
+                assert_definition_at!(&context, "5:5-5:9", InstanceVariable, |bar_var_def| {
+                    assert_def_str_eq!(&context, bar_var_def, "@bar");
+                    assert_eq!(foo_singleton_def.id(), bar_var_def.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_inside_methods_stay_instance_variable() {
+        let context = index_source({
+            "
+            class Foo
+              def initialize
+                @bar = 1
+              end
+
+              def self.class_method
+                @baz = 2
+              end
+
+              class << self
+                def singleton_method
+                  @qux = 3
+                end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@bar");
+        });
+
+        assert_definition_at!(&context, "7:5-7:9", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@baz");
+        });
+
+        assert_definition_at!(&context, "12:7-12:11", InstanceVariable, |def| {
+            assert_def_str_eq!(&context, def, "@qux");
+        });
+    }
+
+    #[test]
+    fn index_instance_variable_in_method_with_non_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def String.bar
+                @var = 123
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // The instance variable is associated with the singleton class of String.
+        // During indexing, we can't know what String resolves to because we haven't
+        // resolved constants yet. The lexical nesting is the method definition.
+        assert_definition_at!(&context, "1:1-5:4", Class, |_foo_class_def| {
+            assert_definition_at!(&context, "2:3-4:6", Method, |method_def| {
+                assert_definition_at!(&context, "3:5-3:9", InstanceVariable, |var_def| {
+                    assert_def_str_eq!(&context, var_def, "@var");
+                    // The lexical nesting of the ivar is the method
+                    assert_eq!(method_def.id(), var_def.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_definition() {
+        let context = index_source({
+            "
+            @@foo = 1
+
+            class Foo
+              @@bar = 2
+              @@baz, @@qux = 3, 4
+            end
+
+            @@bar &= 5
+            @@baz &&= 6
+            @@qux ||= 7
+
+            class Bar
+              @@foo &= 1
+              @@bar &&= 2
+              @@baz ||= 3
+
+              def set_foo
+                @@foo = 4
+              end
+            end
+            "
+        });
+
+        // This is actually not allowed in Ruby and will raise a runtime error
+        // But we should still index it so we can insert a diagnostic for it
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:6", ClassVariable, |def| {
+            assert_def_str_eq!(&context, def, "@@foo");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "3:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@bar");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "5:3-5:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@baz");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "5:10-5:15", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@qux");
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(foo_class_def.members()[2], def.id());
+            });
+        });
+
+        assert_definition_at!(&context, "8:1-8:6", ClassVariable, |def| {
+            assert_def_str_eq!(&context, def, "@@bar");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "9:1-9:6", ClassVariable, |def| {
+            assert_def_str_eq!(&context, def, "@@baz");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "10:1-10:6", ClassVariable, |def| {
+            assert_def_str_eq!(&context, def, "@@qux");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "12:1-20:4", Class, |bar_class_def| {
+            assert_definition_at!(&context, "13:3-13:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@foo");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[0], def.id());
+            });
+
+            assert_definition_at!(&context, "14:3-14:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@bar");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[1], def.id());
+            });
+
+            assert_definition_at!(&context, "15:3-15:8", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@baz");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[2], def.id());
+            });
+
+            // Method `set_foo` is members()[3], class variable inside method is members()[4]
+            assert_definition_at!(&context, "18:5-18:10", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@foo");
+                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
+                assert_eq!(bar_class_def.members()[4], def.id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_in_singleton_class_definition() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                @@var = 1
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // During indexing, lexical_nesting_id is the actual enclosing scope (singleton class).
+        // The resolution phase handles bypassing singleton classes for class variable ownership.
+        assert_definition_at!(&context, "2:3-4:6", SingletonClass, |singleton_class| {
+            assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@var");
+                assert_eq!(Some(singleton_class.id()), *def.lexical_nesting_id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_in_nested_singleton_class_definition() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                class << self
+                  @@var = 1
+                end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // During indexing, lexical_nesting_id is the actual enclosing scope (innermost singleton class).
+        // The resolution phase handles bypassing singleton classes for class variable ownership.
+        assert_definition_at!(&context, "3:5-5:8", SingletonClass, |nested_singleton| {
+            assert_definition_at!(&context, "4:7-4:12", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@var");
+                assert_eq!(Some(nested_singleton.id()), *def.lexical_nesting_id());
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_variable_in_singleton_method_definition() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar
+                @@var = 1
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |class_def| {
+            assert_definition_at!(&context, "3:5-3:10", ClassVariable, |def| {
+                assert_def_str_eq!(&context, def, "@@var");
+                assert_eq!(Some(class_def.id()), def.lexical_nesting_id().clone());
             });
         });
     }
@@ -4471,6 +3591,907 @@ mod attr_accessor_tests {
         assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
             assert_def_str_eq!(&context, def, "qux()");
             assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+}
+
+mod constant_reference_tests {
+    use super::*;
+
+    #[test]
+    fn index_unresolved_constant_references() {
+        let context = index_source({
+            r##"
+            puts C1
+            puts C2::C3::C4
+            puts ignored0::IGNORED0
+            puts C6.foo
+            foo = C7
+            C8 << 42
+            C9 += 42
+            C10 ||= 42
+            C11 &&= 42
+            C12[C13]
+            C14::IGNORED1 = 42 # IGNORED1 is an assignment
+            C15::C16 << 42
+            C17::C18 += 42
+            C19::C20 ||= 42
+            C21::C22 &&= 42
+            puts "#{C23}"
+
+            ::IGNORED2 = 42 # IGNORED2 is an assignment
+            puts "IGNORED3"
+            puts :IGNORED4
+            "##
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "dynamic-constant-reference: Dynamic constant reference (3:6-3:14)",
+                "parse-warning: assigned but unused variable - foo (5:1-5:4)",
+            ]
+        );
+
+        assert_constant_references_eq!(
+            &context,
+            [
+                "C1", "C2", "C3", "C4", "<C6>", "C6", "C7", "<C8>", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13",
+                "C14", "<C16>", "C15", "C16", "C17", "C18", "C19", "C20", "C21", "C22", "C23"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_from_values() {
+        let context = index_source({
+            "
+            IGNORED1 = C1
+            IGNORED2 = [C2::C3]
+            C4 << C5
+            C6 += C7
+            C8 ||= C9
+            C10 &&= C11
+            C12[C13] = C14
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_constant_references_eq!(
+            &context,
+            [
+                "C1", "C2", "C3", "<C4>", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "<C12>", "C12", "C13",
+                "C14"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_constant_path_and_write_visits_value() {
+        let context = index_source({
+            "
+            C1::C2 &&= C3
+            C4::C5 += C6
+            C7::C8 ||= C9
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_constant_references_eq!(&context, ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]);
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_for_classes() {
+        let context = index_source({
+            "
+            C1.new
+
+            class IGNORED < ::C2; end
+            class IGNORED < C3; end
+            class IGNORED < C4::C5; end
+            class IGNORED < ::C7::C6; end
+
+            class C8::IGNORED; end
+            class ::C9::IGNORED; end
+            class C10::C11::IGNORED; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_constant_references_eq!(
+            &context,
+            [
+                "<C1>", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_unresolved_constant_references_for_modules() {
+        let context = index_source({
+            "
+            module X
+              include M1
+              include M2::M3
+              extend M4
+              extend M5::M6
+              prepend M7
+              prepend M8::M9
+            end
+
+            M10.include M11
+            M12.extend M13
+            M14.prepend M15
+
+            module M16::IGNORED; end
+            module ::M17::IGNORED; end
+            module M18::M19::IGNORED; end
+
+            module M20
+              include self
+            end
+
+            module M21
+              extend self
+            end
+
+            module M22
+              prepend self
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_constant_references_eq!(
+            &context,
+            [
+                "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16",
+                "M17", "M18", "M19", "M20", "M21", "M22",
+            ]
+        );
+    }
+}
+
+mod method_reference_tests {
+    use super::*;
+
+    #[test]
+    fn index_method_reference_references() {
+        let context = index_source({
+            "
+            m1
+            m2(m3)
+            m4 m5
+            self.m6
+            self.m7(m8)
+            self.m9 m10
+            C.m11
+            C.m12(m13)
+            C.m14 m15
+            m16.m17
+            m18.m19(m20)
+            m21.m22 m23
+
+            m24.m25.m26
+
+            !m27 # The `!` is collected and will count as one more reference
+            m28&.m29
+            m30(&m31)
+            m32 { m33 }
+            m34 do m35 end
+            m36[m37] # The `[]` is collected and will count as one more reference
+
+            def foo(&block)
+              m38(&block)
+            end
+
+            m39(&:m40)
+            m41(&m42)
+            m43(m44, &m45(m46))
+            m47(x: m48, m49:)
+            m50(...)
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-error: unexpected ... when the parent method is not forwarding (31:5-31:8)"]
+        );
+
+        assert_method_references_eq!(
+            &context,
+            [
+                "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16",
+                "m17", "m18", "m19", "m20", "m21", "m22", "m23", "m24", "m25", "m26", "!", "m27", "m28", "m29", "m30",
+                "m31", "m32", "m33", "m34", "m35", "m36", "[]", "m37", "m38", "m39", "m40", "m41", "m42", "m43", "m44",
+                "m45", "m46", "m47", "m48", "m49", "m50"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_method_reference_assign_references() {
+        let context = index_source({
+            "
+            self.m1 = m2
+            m3.m4.m5 = m6.m7.m8
+            self.m9, self.m10 = m11, m12
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_method_references_eq!(
+            &context,
+            [
+                "m1=", "m2", "m3", "m4", "m5=", "m6", "m7", "m8", "m9=", "m10=", "m11", "m12"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_method_reference_opassign_references() {
+        let context = index_source({
+            "
+            self.m1 += 42
+            self.m2 |= 42
+            self.m3 ||= 42
+            self.m4 &&= 42
+            m5.m6 += m7
+            m8.m9 ||= m10
+            m11.m12 &&= m13
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_method_references_eq!(
+            &context,
+            [
+                "m1", "m1=", "m2", "m2=", "m3", "m3=", "m4", "m4=", "m5", "m6", "m6=", "m7", "m8", "m9", "m9=", "m10",
+                "m11", "m12", "m12=", "m13",
+            ]
+        );
+    }
+
+    #[test]
+    fn index_method_reference_operator_references() {
+        let context = index_source({
+            "
+            X != Y
+            X % Y
+            X & Y
+            X && Y
+            X * Y
+            X ** Y
+            X + Y
+            X - Y
+            X / Y
+            X << Y
+            X == Y
+            X === Y
+            X >> Y
+            X ^ Y
+            X | Y
+            X || Y
+            X <=> Y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "parse-warning: possibly useless use of != in void context (1:1-1:7)",
+                "parse-warning: possibly useless use of % in void context (2:1-2:6)",
+                "parse-warning: possibly useless use of & in void context (3:1-3:6)",
+                "parse-warning: possibly useless use of * in void context (5:1-5:6)",
+                "parse-warning: possibly useless use of ** in void context (6:1-6:7)",
+                "parse-warning: possibly useless use of + in void context (7:1-7:6)",
+                "parse-warning: possibly useless use of - in void context (8:1-8:6)",
+                "parse-warning: possibly useless use of / in void context (9:1-9:6)",
+                "parse-warning: possibly useless use of == in void context (11:1-11:7)",
+                "parse-warning: possibly useless use of ^ in void context (14:1-14:6)",
+                "parse-warning: possibly useless use of | in void context (15:1-15:6)",
+                "parse-warning: possibly useless use of <=> in void context (17:1-17:8)"
+            ]
+        );
+
+        assert_method_references_eq!(
+            &context,
+            [
+                "!=", "%", "&", "&&", "*", "**", "+", "-", "/", "<<", "==", "===", ">>", "^", "|", "||", "<=>",
+            ]
+        );
+    }
+
+    #[test]
+    fn index_method_reference_lesser_than_operator_references() {
+        let context = index_source({
+            "
+            x < y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: possibly useless use of < in void context (1:1-1:6)"]
+        );
+
+        assert_method_references_eq!(&context, ["x", "<", "<=>", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_lesser_than_or_equal_to_operator_references() {
+        let context = index_source({
+            "
+            x <= y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: possibly useless use of <= in void context (1:1-1:7)"]
+        );
+
+        assert_method_references_eq!(&context, ["x", "<=", "<=>", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_greater_than_operator_references() {
+        let context = index_source({
+            "
+            x > y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: possibly useless use of > in void context (1:1-1:6)"]
+        );
+
+        assert_method_references_eq!(&context, ["x", "<=>", ">", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_greater_than_or_equal_to_operator_references() {
+        let context = index_source({
+            "
+            x >= y
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: possibly useless use of >= in void context (1:1-1:7)"]
+        );
+
+        assert_method_references_eq!(&context, ["x", "<=>", ">=", "y"]);
+    }
+
+    #[test]
+    fn index_method_reference_empty_message() {
+        // Indexing this method reference is necessary for triggering the creation of the singleton class and its
+        // ancestor linearization, which then triggers correct completion
+        let context = index_source({
+            "
+            Foo.
+            "
+        });
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from(""), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_alias_references() {
+        let context = index_source({
+            "
+            alias ignored m1
+            alias_method :ignored, :m2
+            alias_method :ignored, ignored
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_references_eq!(&context, ["m1()", "m2()"]);
+    }
+
+    #[test]
+    fn method_call_operators() {
+        let context = index_source({
+            "
+            Foo.bar ||= {}
+            Foo.bar += {}
+            Foo.bar &&= {}
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Foo` and `<Foo>` on each singleton method call
+        assert_eq!(6, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn invoking_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            class Foo; end
+            Foo.new.bar
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Foo` and `<Foo>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn class_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            CONST = Class.new
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Class` and `<Class>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
+    }
+
+    #[test]
+    fn module_new_creates_singleton_reference() {
+        let context = index_source(
+            r"
+            CONST = Module.new
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+        // We expect two constant references for `Module` and `<Module>` due to the new call
+        assert_eq!(2, context.graph().constant_references().len());
+    }
+}
+
+mod method_receiver_tests {
+    use super::*;
+
+    /// Asserts that exactly one method reference with the given name has the expected receiver.
+    ///
+    /// Panics if there isn't exactly one `MethodRef` with that name.
+    ///
+    /// Usage:
+    /// - `assert_method_ref_receiver!(context, "bar", "<Foo>")`
+    macro_rules! assert_method_ref_receiver {
+        ($context:expr, $method_name:expr, $expected_receiver:expr) => {{
+            let target = StringId::from($method_name);
+            let matches: Vec<_> = $context
+                .graph()
+                .method_references()
+                .values()
+                .filter(|method_ref| *method_ref.str() == target)
+                .collect();
+
+            assert_eq!(
+                matches.len(),
+                1,
+                "expected exactly one method reference for `{}`, found {}",
+                $method_name,
+                matches.len()
+            );
+
+            let method_ref = matches[0];
+            let receiver_id = method_ref
+                .receiver()
+                .unwrap_or_else(|| panic!("method reference for `{}` has no receiver", $method_name));
+            let receiver = $context.graph().names().get(&receiver_id).unwrap();
+
+            assert_eq!(
+                StringId::from($expected_receiver),
+                *receiver.str(),
+                "receiver mismatch for `{}`: expected `{}`, got `{}`",
+                $method_name,
+                $expected_receiver,
+                $context.graph().strings().get(receiver.str()).unwrap().as_str()
+            );
+        }};
+    }
+
+    #[test]
+    fn index_method_reference_constant_receiver() {
+        let context = index_source({
+            "
+            Foo.bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("bar"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_receiver_at_class_level() {
+        let context = index_source({
+            "
+            class Foo
+              self.bar
+              baz
+            end
+            Foo.qux
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_method_ref_receiver!(context, "bar", "<Foo>");
+        assert_method_ref_receiver!(context, "baz", "<Foo>");
+        assert_method_ref_receiver!(context, "qux", "<Foo>");
+    }
+
+    #[test]
+    fn index_method_receiver_self_at_module_level() {
+        let context = index_source({
+            "
+            module Foo
+              self.bar
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "<Foo>");
+    }
+
+    #[test]
+    fn index_method_receiver_inside_singleton_class() {
+        let context = index_source({
+            "
+            class Foo
+              class << self
+                self.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "<<Foo>>");
+        assert_method_ref_receiver!(context, "baz", "<<Foo>>");
+    }
+
+    #[test]
+    fn index_method_receiver_at_top_level() {
+        let context = index_source({
+            "
+            self.bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_method_ref_receiver!(context, "bar", "Object");
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                baz
+              end
+
+              def baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+        assert!(receiver.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_explicit_self_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                self.baz
+              end
+
+              def baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+        assert!(receiver.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver_in_method_ref_with_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def Bar.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Bar>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Bar"), *parent_scope.str());
+        assert!(parent_scope.parent_scope().is_none());
+
+        let nesting = context.graph().names().get(&parent_scope.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *nesting.str());
+        assert!(nesting.nesting().is_none());
+        assert!(nesting.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_self_receiver_in_singleton_method() {
+        let context = index_source({
+            "
+            class Foo
+              def self.bar
+                baz
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("baz"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.parent_scope().is_none());
+        assert!(parent_scope.nesting().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_singleton_class_receiver() {
+        let context = index_source({
+            "
+            Foo.singleton_class.bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context.graph().method_references().values().next().unwrap();
+        assert_eq!(StringId::from("bar"), *method_ref.str());
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<<Foo>>"), *receiver.str(),);
+        assert!(receiver.nesting().is_none());
+
+        let singleton = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("<Foo>"), *singleton.str());
+        assert!(singleton.nesting().is_none());
+
+        let attached = context
+            .graph()
+            .names()
+            .get(&singleton.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *attached.str());
+        assert!(attached.nesting().is_none());
+        assert!(attached.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_and_node_constant_receiver() {
+        let context = index_source({
+            "
+            Foo && bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context
+            .graph()
+            .method_references()
+            .values()
+            .find(|r| *r.str() == StringId::from("&&"))
+            .unwrap();
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+
+    #[test]
+    fn index_method_reference_or_node_constant_receiver() {
+        let context = index_source({
+            "
+            Foo || bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let method_ref = context
+            .graph()
+            .method_references()
+            .values()
+            .find(|r| *r.str() == StringId::from("||"))
+            .unwrap();
+
+        let receiver = context.graph().names().get(&method_ref.receiver().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *receiver.str());
+        assert!(receiver.nesting().is_none());
+
+        let parent_scope = context
+            .graph()
+            .names()
+            .get(&receiver.parent_scope().expect("Should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *parent_scope.str());
+        assert!(parent_scope.nesting().is_none());
+        assert!(parent_scope.parent_scope().is_none());
+    }
+}
+
+mod superclass_tests {
+    use super::*;
+
+    #[test]
+    fn superclasses_are_indexed_as_constant_ref_ids() {
+        let context = index_source({
+            "
+            class Foo < Bar; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:21", Class, |def| {
+            assert_def_superclass_ref_eq!(&context, def, "Bar");
+        });
+    }
+
+    #[test]
+    fn constant_path_superclasses() {
+        let context = index_source({
+            "
+            class Foo < Bar::Baz; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let mut refs = context.graph().constant_references().values().collect::<Vec<_>>();
+        refs.sort_by_key(|a| (a.offset().start(), a.offset().end()));
+
+        assert_definition_at!(&context, "1:1-1:26", Class, |def| {
+            assert_def_superclass_ref_eq!(&context, def, "Bar::Baz");
+            assert_def_name_offset_eq!(&context, def, "1:7-1:10");
+        });
+    }
+
+    #[test]
+    fn ignored_super_classes() {
+        let context = index_source({
+            "
+            class Foo < method_call; end
+            class Bar < 123; end
+            class MyMigration < ActiveRecord::Migration[8.0]; end
+            class Baz < foo::Bar; end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
+                "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
+                "dynamic-ancestor: Dynamic superclass (3:21-3:49)",
+                "dynamic-constant-reference: Dynamic constant reference (4:13-4:16)",
+                "dynamic-ancestor: Dynamic superclass (4:13-4:21)",
+            ]
+        );
+
+        assert_definition_at!(&context, "1:1-1:29", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
+
+        assert_definition_at!(&context, "2:1-2:21", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
+
+        assert_definition_at!(&context, "3:1-3:54", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
+        });
+
+        assert_definition_at!(&context, "4:1-4:26", Class, |def| {
+            assert!(def.superclass_ref().is_none(),);
         });
     }
 }
