@@ -4,9 +4,8 @@ use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use crate::reference_api::CConstantReference;
 use libc::c_char;
-use rubydex::model::definitions::Definition;
+use rubydex::model::definitions::{Definition, Mixin};
 use rubydex::model::ids::DefinitionId;
-use rubydex::model::name::NameRef;
 use std::ffi::CString;
 use std::ptr;
 
@@ -347,22 +346,96 @@ pub unsafe extern "C" fn rdx_class_definition_superclass(
             return ptr::null();
         };
 
-        let reference = graph
-            .constant_references()
-            .get(ref_id)
-            .expect("Superclass reference not found");
+        Box::into_raw(Box::new(CConstantReference::from_id(graph, *ref_id))).cast_const()
+    })
+}
 
-        let name_ref = graph.names().get(reference.name_id()).expect("Name ID should exist");
+/// C-compatible enum representing the kind of a mixin.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum MixinKind {
+    Include = 0,
+    Prepend = 1,
+    Extend = 2,
+}
 
-        let declaration_id = match name_ref {
-            NameRef::Resolved(resolved) => **resolved.declaration_id(),
-            NameRef::Unresolved(_) => 0,
+/// C-compatible struct representing a mixin (kind + constant reference).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CMixin {
+    pub kind: MixinKind,
+    pub constant_reference: CConstantReference,
+}
+
+#[derive(Debug)]
+pub struct MixinsIter {
+    entries: Box<[CMixin]>,
+    index: usize,
+}
+
+iterator!(MixinsIter, entries: CMixin);
+
+/// # Safety
+/// `iter` must be a valid pointer previously returned by `rdx_definition_mixins`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_mixins_iter_len(iter: *const MixinsIter) -> usize {
+    unsafe { MixinsIter::len(iter) }
+}
+
+/// # Safety
+/// - `iter` must be a valid pointer previously returned by `rdx_definition_mixins`.
+/// - `out` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_mixins_iter_next(iter: *mut MixinsIter, out: *mut CMixin) -> bool {
+    unsafe { MixinsIter::next(iter, out) }
+}
+
+/// # Safety
+/// - `iter` must be a pointer previously returned by `rdx_definition_mixins`.
+/// - `iter` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_mixins_iter_free(iter: *mut MixinsIter) {
+    unsafe { MixinsIter::free(iter) }
+}
+
+fn map_mixin_kind(mixin: &Mixin) -> MixinKind {
+    match mixin {
+        Mixin::Include(_) => MixinKind::Include,
+        Mixin::Prepend(_) => MixinKind::Prepend,
+        Mixin::Extend(_) => MixinKind::Extend,
+    }
+}
+
+/// Returns an iterator over the mixins for a definition (class, module, or singleton class).
+/// Returns NULL for definition types that do not support mixins.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `definition_id` must be a valid definition id.
+///
+/// # Panics
+/// This function will panic if the definition cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_definition_mixins(pointer: GraphPointer, definition_id: u64) -> *mut MixinsIter {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let defn = graph.definitions().get(&def_id).expect("Definition not found");
+
+        let mixins = match defn {
+            Definition::Class(class_def) => class_def.mixins(),
+            Definition::Module(mod_def) => mod_def.mixins(),
+            Definition::SingletonClass(singleton_def) => singleton_def.mixins(),
+            _ => return ptr::null_mut(),
         };
 
-        Box::into_raw(Box::new(CConstantReference {
-            id: **ref_id,
-            declaration_id,
-        }))
-        .cast_const()
+        let entries: Vec<CMixin> = mixins
+            .iter()
+            .map(|mixin| CMixin {
+                kind: map_mixin_kind(mixin),
+                constant_reference: CConstantReference::from_id(graph, *mixin.constant_reference_id()),
+            })
+            .collect();
+
+        MixinsIter::new(entries.into_boxed_slice())
     })
 }

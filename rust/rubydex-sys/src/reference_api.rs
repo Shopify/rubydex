@@ -7,6 +7,7 @@ use crate::declaration_api::CDeclaration;
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
+use rubydex::model::graph::Graph;
 use rubydex::model::ids::{ConstantReferenceId, MethodReferenceId};
 use rubydex::model::name::NameRef;
 
@@ -15,6 +16,34 @@ use rubydex::model::name::NameRef;
 pub struct CConstantReference {
     pub id: u64,
     pub declaration_id: u64,
+}
+
+impl CConstantReference {
+    /// Build a `CConstantReference` from a graph and reference ID. Sets `declaration_id` to 0 when the reference is
+    /// unresolved.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if there's inconsistent data in the graph
+    #[must_use]
+    pub fn from_id(graph: &Graph, ref_id: ConstantReferenceId) -> Self {
+        let reference = graph
+            .constant_references()
+            .get(&ref_id)
+            .expect("Constant reference not found");
+
+        let name_ref = graph.names().get(reference.name_id()).expect("Name ID should exist");
+
+        let declaration_id = match name_ref {
+            NameRef::Resolved(resolved) => **resolved.declaration_id(),
+            NameRef::Unresolved(_) => 0,
+        };
+
+        Self {
+            id: *ref_id,
+            declaration_id,
+        }
+    }
 }
 
 #[derive(Debug)]
