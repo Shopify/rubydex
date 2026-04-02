@@ -1,20 +1,27 @@
+use std::collections::HashMap;
+
 use super::normalize_indentation;
 #[cfg(test)]
 use crate::diagnostic::Rule;
 use crate::indexing::{self, LanguageId};
 use crate::model::graph::{Graph, NameDependent};
-use crate::model::ids::{NameId, StringId};
+use crate::model::ids::{DefinitionId, NameId, StringId};
+use crate::offset::Offset;
 use crate::resolution::Resolver;
 
 #[derive(Default)]
 pub struct GraphTest {
     graph: Graph,
+    sources: HashMap<String, String>,
 }
 
 impl GraphTest {
     #[must_use]
     pub fn new() -> Self {
-        Self { graph: Graph::new() }
+        Self {
+            graph: Graph::new(),
+            sources: HashMap::new(),
+        }
     }
 
     #[must_use]
@@ -31,12 +38,42 @@ impl GraphTest {
     pub fn index_uri(&mut self, uri: &str, source: &str) {
         let source = normalize_indentation(source);
         indexing::index_source(&mut self.graph, uri, &source, &LanguageId::Ruby);
+        self.sources.insert(uri.to_string(), source);
     }
 
     /// Indexes an RBS source
     pub fn index_rbs_uri(&mut self, uri: &str, source: &str) {
         let source = normalize_indentation(source);
         indexing::index_source(&mut self.graph, uri, &source, &LanguageId::Rbs);
+        self.sources.insert(uri.to_string(), source);
+    }
+
+    /// Returns the normalized source for the given URI.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the URI has not been indexed.
+    #[must_use]
+    pub fn source(&self, uri: &str) -> &str {
+        self.sources.get(uri).expect("source not found for URI")
+    }
+
+    /// Returns the source text for a definition, sliced by its offset.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the definition or its document does not exist.
+    #[must_use]
+    pub fn source_at(&self, definition_id: &DefinitionId) -> &str {
+        let def = self.graph.definitions().get(definition_id).unwrap();
+        self.source_at_offset(self.graph.documents().get(def.uri_id()).unwrap().uri(), def.offset())
+    }
+
+    /// Returns the source text at the given URI and offset.
+    #[must_use]
+    pub fn source_at_offset(&self, uri: &str, offset: &Offset) -> &str {
+        let source = self.source(uri);
+        &source[offset.start() as usize..offset.end() as usize]
     }
 
     pub fn delete_uri(&mut self, uri: &str) {

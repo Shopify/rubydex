@@ -9,7 +9,7 @@ use crate::model::declaration::{Ancestor, Declaration};
 use crate::model::definitions::{Definition, Parameter};
 use crate::model::graph::{Graph, OBJECT_ID};
 use crate::model::identity_maps::IdentityHashSet;
-use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, StringId, UriId};
 use crate::model::keywords::{self, Keyword};
 use crate::model::name::NameRef;
 
@@ -467,6 +467,160 @@ fn method_argument_completion<'a>(
     }
 
     Ok(candidates)
+}
+
+/// Result of dealiasing a single level of method alias.
+#[derive(Debug)]
+pub enum DealiasMethodResult {
+    /// The alias target is a concrete method definition.
+    Method(DefinitionId),
+    /// The alias target is another alias.
+    Alias(DefinitionId),
+}
+
+/// Dereferences a `MethodAliasDefinition` by one level, returning the definitions
+/// found under the aliased name. Returns `None` if the aliased method name is not
+/// found in the namespace or its ancestors.
+///
+/// # Panics
+///
+/// Panics if `alias_id` does not correspond to a `MethodAliasDefinition`
+/// or has no corresponding declaration in the graph.
+#[must_use]
+pub fn dealias_method(graph: &Graph, alias_id: DefinitionId) -> Option<Vec<DealiasMethodResult>> {
+    let Definition::MethodAlias(alias) = graph.definitions().get(&alias_id).expect("definition should exist") else {
+        panic!("expected a method alias definition");
+    };
+
+    let decl_id = graph.definition_id_to_declaration_id(alias_id).unwrap();
+    let alias_decl = graph.declarations().get(decl_id).unwrap();
+    let owner_id = *alias_decl.owner_id();
+
+    let method_decl_id = find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id(), false)?;
+    let method_decl = graph.declarations().get(&method_decl_id).unwrap();
+    assert!(matches!(method_decl, Declaration::Method(_)));
+
+    Some(
+        method_decl
+            .definitions()
+            .iter()
+            .filter_map(|def_id| match graph.definitions().get(def_id) {
+                Some(Definition::Method(_)) => Some(DealiasMethodResult::Method(*def_id)),
+                Some(Definition::MethodAlias(_)) => Some(DealiasMethodResult::Alias(*def_id)),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+/// Result of following a `MethodAliasDefinition` chain to completion.
+#[derive(Debug)]
+pub struct DeepDealiasMethodResult {
+    /// Successfully resolved method definition IDs.
+    pub method_ids: Vec<DefinitionId>,
+    /// `DefinitionId`s where circular alias chains were detected.
+    pub circular_aliases: Vec<DefinitionId>,
+    /// `DefinitionId`s of aliases whose target method could not be found.
+    pub missing_targets: Vec<DefinitionId>,
+}
+
+/// Follows a `MethodAliasDefinition` chain to completion, returning all resolved
+/// `MethodDefinition` IDs along with any errors encountered. Unlike `dealias_method`
+/// which resolves one level, this function keeps following alias chains until only
+/// method definitions remain.
+///
+/// # Panics
+///
+/// Panics if any alias definition in the chain has no corresponding declaration.
+#[must_use]
+pub fn deep_dealias_method(graph: &Graph, alias_id: DefinitionId) -> DeepDealiasMethodResult {
+    let mut result = DeepDealiasMethodResult {
+        method_ids: Vec::new(),
+        circular_aliases: Vec::new(),
+        missing_targets: Vec::new(),
+    };
+
+    let mut current_dealias_results = vec![DealiasMethodResult::Alias(alias_id)];
+    let mut visited = HashSet::new();
+
+    loop {
+        let mut next_aliases = Vec::new();
+
+        for item in &current_dealias_results {
+            match item {
+                DealiasMethodResult::Method(id) => {
+                    result.method_ids.push(*id);
+                }
+                DealiasMethodResult::Alias(id) => {
+                    if !visited.insert(*id) {
+                        result.circular_aliases.push(*id);
+                        continue;
+                    }
+                    match dealias_method(graph, *id) {
+                        Some(next) => next_aliases.extend(next),
+                        None => result.missing_targets.push(*id),
+                    }
+                }
+            }
+        }
+
+        if next_aliases.is_empty() {
+            let mut seen = HashSet::new();
+            result.method_ids.retain(|id| seen.insert(*id));
+            return result;
+        }
+
+        current_dealias_results = next_aliases;
+    }
+}
+
+/// Searches for a member by `StringId` in the given namespace's ancestor chain.
+///
+/// If `only_inherited` is true, all ancestors up to and including `namespace_id` itself
+/// are skipped, so only ancestors after the namespace are searched. This excludes
+/// the namespace's own members and any prepended modules.
+///
+/// # Panics
+///
+/// Panics if `namespace_id` does not exist in declarations, is not a namespace, or
+/// if `only_inherited` is true and `namespace_id` is not found in its own ancestor chain.
+#[must_use]
+pub fn find_member_in_ancestors(
+    graph: &Graph,
+    namespace_id: DeclarationId,
+    str_id: StringId,
+    only_inherited: bool,
+) -> Option<DeclarationId> {
+    let ns = graph
+        .declarations()
+        .get(&namespace_id)
+        .expect("namespace_id should exist in declarations")
+        .as_namespace()
+        .expect("namespace_id should be a namespace declaration");
+
+    let ancestors: Vec<_> = ns.ancestors().iter().collect();
+
+    let search_start = if only_inherited {
+        let pos = ancestors
+            .iter()
+            .position(|a| matches!(a, Ancestor::Complete(id) if *id == namespace_id))
+            .expect("namespace_id should be present in its own ancestor chain");
+        pos + 1
+    } else {
+        0
+    };
+
+    for ancestor in &ancestors[search_start..] {
+        if let Ancestor::Complete(ancestor_id) = ancestor {
+            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap();
+            let ancestor_ns = ancestor_decl.as_namespace().unwrap();
+            if let Some(&decl_id) = ancestor_ns.member(&str_id) {
+                return Some(decl_id);
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -1692,6 +1846,419 @@ mod tests {
         .unwrap();
 
         assert!(!candidates.iter().any(|c| matches!(c, CompletionCandidate::Keyword(_))));
+    }
+
+    macro_rules! assert_dealias_result_source {
+        ($context:expr, $result:expr, $expected:expr) => {
+            let def_id = match $result {
+                DealiasMethodResult::Method(id) | DealiasMethodResult::Alias(id) => id,
+            };
+            assert_eq!(
+                $context.source_at(def_id),
+                $expected,
+                "unexpected source for {:?}",
+                $result
+            );
+        };
+    }
+
+    fn get_method_alias_id(graph: &Graph, decl_name: &str) -> DefinitionId {
+        let decl = graph.declarations().get(&DeclarationId::from(decl_name)).unwrap();
+        for def_id in decl.definitions() {
+            if matches!(graph.definitions().get(def_id), Some(Definition::MethodAlias(_))) {
+                return *def_id;
+            }
+        }
+        panic!("No MethodAliasDefinition found for {decl_name}");
+    }
+
+    #[test]
+    fn dealias_method_basic() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def foo(a, b); end
+              alias bar foo
+            end
+        ",
+        );
+        context.resolve();
+
+        let id = get_method_alias_id(context.graph(), "Foo#bar()");
+        let results = dealias_method(context.graph(), id).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+        assert_dealias_result_source!(&context, &results[0], "def foo(a, b); end");
+    }
+
+    #[test]
+    fn dealias_method_chained() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def foo(x); end
+              alias bar foo
+              alias baz bar
+            end
+        ",
+        );
+        context.resolve();
+
+        // baz -> bar: one level returns the alias to bar
+        let id = get_method_alias_id(context.graph(), "Foo#baz()");
+        let results = dealias_method(context.graph(), id).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], DealiasMethodResult::Alias(_)));
+        assert_dealias_result_source!(&context, &results[0], "alias bar foo");
+
+        // bar -> foo: one more level returns the method definition
+        let id = get_method_alias_id(context.graph(), "Foo#bar()");
+        let results = dealias_method(context.graph(), id).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], DealiasMethodResult::Method(_)));
+        assert_dealias_result_source!(&context, &results[0], "def foo(x); end");
+    }
+
+    #[test]
+    fn dealias_method_unresolved() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              alias bar nonexistent
+            end
+        ",
+        );
+        context.resolve();
+
+        let id = get_method_alias_id(context.graph(), "Foo#bar()");
+        let result = dealias_method(context.graph(), id);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn dealias_method_multiple_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def foo(a); end
+            end
+        ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
+            class Foo
+              alias foo baz # another alias definition of #foo()
+              alias bar foo
+            end
+        ",
+        );
+        context.resolve();
+
+        let id = get_method_alias_id(context.graph(), "Foo#bar()");
+        let results = dealias_method(context.graph(), id).unwrap();
+        assert_eq!(results.len(), 2);
+
+        let method = results
+            .iter()
+            .find(|r| matches!(r, DealiasMethodResult::Method(_)))
+            .unwrap();
+        assert_dealias_result_source!(&context, method, "def foo(a); end");
+
+        let alias = results
+            .iter()
+            .find(|r| matches!(r, DealiasMethodResult::Alias(_)))
+            .unwrap();
+        assert_dealias_result_source!(&context, alias, "alias foo baz");
+    }
+
+    #[test]
+    fn dealias_method_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Parent
+              def foo(a); end
+            end
+            class Child < Parent
+              alias bar foo
+            end
+        ",
+        );
+        context.resolve();
+
+        let id = get_method_alias_id(context.graph(), "Child#bar()");
+        let results = dealias_method(context.graph(), id).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_dealias_result_source!(&context, &results[0], "def foo(a); end");
+    }
+
+    #[test]
+    fn deep_dealias_method_mixed() {
+        let mut context = GraphTest::new();
+        // `then` has three definitions:
+        //   - a Method (from file1)
+        //   - an alias to `baz` which is circular (from file2)
+        //   - an alias to `nonexistent` which is unresolved (from file2)
+        // `start` aliases `then`, so deep_dealias_method(start) sees all three.
+        context.index_uri(
+            "file:///foo1.rb",
+            "
+            class Foo
+              def then(a); end
+              alias bar baz
+              alias baz bar
+            end
+        ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
+            class Foo
+              alias then baz
+              alias then nonexistent
+              alias start then
+            end
+        ",
+        );
+        context.resolve();
+
+        let id = get_method_alias_id(context.graph(), "Foo#start()");
+        let result = deep_dealias_method(context.graph(), id);
+
+        // Method definition of `then` is found
+        assert_eq!(result.method_ids.len(), 1);
+        assert_eq!(context.source_at(&result.method_ids[0]), "def then(a); end");
+        // Circular chain via baz -> bar -> baz
+        assert_eq!(result.circular_aliases.len(), 1);
+        assert_eq!(context.source_at(&result.circular_aliases[0]), "alias baz bar");
+        // Unresolved alias to nonexistent
+        assert_eq!(result.missing_targets.len(), 1);
+        assert_eq!(context.source_at(&result.missing_targets[0]), "alias then nonexistent");
+    }
+
+    #[test]
+    fn deep_dealias_method_duplicated() {
+        let mut context = GraphTest::new();
+        // `then` has two identical method definitions in different files. Both should be returned by deep_dealias_method.
+        context.index_uri(
+            "file:///foo1.rb",
+            "
+            class Foo
+              def foo(a); end
+            end
+        ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
+            class Foo
+              alias bar foo
+              alias bar foo
+
+              alias start bar
+            end
+        ",
+        );
+        context.resolve();
+
+        let id = get_method_alias_id(context.graph(), "Foo#start()");
+        let result = deep_dealias_method(context.graph(), id);
+
+        assert_eq!(result.method_ids.len(), 1);
+        assert_eq!(context.source_at(&result.method_ids[0]), "def foo(a); end");
+    }
+
+    #[test]
+    fn find_member_in_ancestors_direct() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def bar; end
+            end
+        ",
+        );
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Foo"),
+            StringId::from("bar()"),
+            false,
+        );
+        assert_eq!(result, Some(DeclarationId::from("Foo#bar()")));
+    }
+
+    #[test]
+    fn find_member_in_ancestors_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Parent
+              def foo; end
+            end
+            class Child < Parent
+            end
+        ",
+        );
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("foo()"),
+            false,
+        );
+        assert_eq!(result, Some(DeclarationId::from("Parent#foo()")));
+    }
+
+    #[test]
+    fn find_member_in_ancestors_overridden() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Parent
+              def foo; end
+            end
+            class Child < Parent
+              def foo; end
+            end
+        ",
+        );
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("foo()"),
+            false,
+        );
+        assert_eq!(result, Some(DeclarationId::from("Child#foo()")));
+    }
+
+    #[test]
+    fn find_member_in_ancestors_not_found() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+            end
+        ",
+        );
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Foo"),
+            StringId::from("nonexistent()"),
+            false,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_member_in_ancestors_only_inherited() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Parent
+              def foo; end
+            end
+            class Child < Parent
+              def foo; end
+              def bar; end
+            end
+        ",
+        );
+        context.resolve();
+
+        // own method is skipped with only_inherited
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("foo()"),
+            true,
+        );
+        assert_eq!(result, Some(DeclarationId::from("Parent#foo()")));
+
+        // method only in self returns None with only_inherited
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("bar()"),
+            true,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_member_in_ancestors_only_inherited_with_prepend() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module M
+              def foo; end
+            end
+            class Parent
+              def foo; end
+            end
+            class Child < Parent
+              prepend M
+              def foo; end
+            end
+        ",
+        );
+        context.resolve();
+
+        // prepended module and self are skipped, finds Parent's foo
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Child"),
+            StringId::from("foo()"),
+            true,
+        );
+        assert_eq!(result, Some(DeclarationId::from("Parent#foo()")));
+    }
+
+    #[test]
+    fn find_member_in_ancestors_via_module() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Greetable
+              def greet; end
+            end
+            class Foo
+              include Greetable
+            end
+        ",
+        );
+        context.resolve();
+
+        let result = find_member_in_ancestors(
+            context.graph(),
+            DeclarationId::from("Foo"),
+            StringId::from("greet()"),
+            false,
+        );
+        assert_eq!(result, Some(DeclarationId::from("Greetable#greet()")));
     }
 
     #[test]
