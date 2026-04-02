@@ -565,6 +565,8 @@ pub fn deep_dealias_method(graph: &Graph, alias_id: DefinitionId) -> DeepDealias
         }
 
         if next_aliases.is_empty() {
+            let mut seen = HashSet::new();
+            result.method_ids.retain(|id| seen.insert(*id));
             return result;
         }
 
@@ -2036,6 +2038,38 @@ mod tests {
         // Unresolved alias to nonexistent
         assert_eq!(result.missing_targets.len(), 1);
         assert_eq!(context.source_at(&result.missing_targets[0]), "alias then nonexistent");
+    }
+
+    #[test]
+    fn deep_dealias_method_duplicated() {
+        let mut context = GraphTest::new();
+        // `then` has two identical method definitions in different files. Both should be returned by deep_dealias_method.
+        context.index_uri(
+            "file:///foo1.rb",
+            "
+            class Foo
+              def foo(a); end
+            end
+        ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
+            class Foo
+              alias bar foo
+              alias bar foo
+
+              alias start bar
+            end
+        ",
+        );
+        context.resolve();
+
+        let id = get_method_alias_id(context.graph(), "Foo#start()");
+        let result = deep_dealias_method(context.graph(), id);
+
+        assert_eq!(result.method_ids.len(), 1);
+        assert_eq!(context.source_at(&result.method_ids[0]), "def foo(a); end");
     }
 
     #[test]
