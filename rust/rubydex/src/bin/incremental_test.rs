@@ -37,6 +37,10 @@ struct Args {
     /// File listing URIs to skip during indexing (one per line, grown by --bisect)
     #[arg(long, value_name = "FILE")]
     skip_file: Option<String>,
+
+    /// Number of retries per bisect step (for non-deterministic failures)
+    #[arg(long, default_value = "1")]
+    retries: usize,
 }
 
 /// Delete percentage (hardcoded for now)
@@ -283,19 +287,27 @@ fn run_round(
     }
 }
 
-/// Returns true if the given configuration causes a mismatch.
+/// Returns true if the given configuration causes a mismatch or panic.
+/// Runs up to `retries` times — returns true if ANY attempt fails.
 fn round_fails(
     files: &[(String, String, LanguageId)],
     delete_indices: &[usize],
     indexed_indices: Option<&[usize]>,
+    retries: usize,
 ) -> bool {
-    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        run_round(files, delete_indices, indexed_indices, false)
-    }));
-    match result {
-        Ok(r) => !r.extras.is_empty() || !r.missing.is_empty() || !r.integrity_errors.is_empty(),
-        Err(_) => true, // panic = failure
+    for _ in 0..retries {
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            run_round(files, delete_indices, indexed_indices, false)
+        }));
+        let failed = match result {
+            Ok(r) => !r.extras.is_empty() || !r.missing.is_empty() || !r.integrity_errors.is_empty(),
+            Err(_) => true,
+        };
+        if failed {
+            return true;
+        }
     }
+    false
 }
 
 // --- Skip file I/O ---
@@ -412,13 +424,17 @@ where
 }
 
 /// Find minimum set of deleted files that still triggers the failure.
-fn bisect_deleted_files(files: &[(String, String, LanguageId)], delete_indices: &[usize]) -> Vec<usize> {
+fn bisect_deleted_files(
+    files: &[(String, String, LanguageId)],
+    delete_indices: &[usize],
+    retries: usize,
+) -> Vec<usize> {
     minimize_set(
         delete_indices,
         &HashSet::new(),
         "deleted files",
         files,
-        |candidate| round_fails(files, candidate, None),
+        |candidate| round_fails(files, candidate, None, retries),
         |_| {},
     )
 }
@@ -429,10 +445,11 @@ fn bisect_and_report(
     files: &[(String, String, LanguageId)],
     delete_indices: &[usize],
     skip_file: &str,
+    retries: usize,
     fresh_counts: &GraphCounts,
 ) {
     // Phase 1: minimize deleted files
-    let min_deleted = bisect_deleted_files(files, delete_indices);
+    let min_deleted = bisect_deleted_files(files, delete_indices, retries);
     println!(
         "\nPhase 1 complete: {} → {} deleted files",
         delete_indices.len(),
@@ -447,7 +464,7 @@ fn bisect_and_report(
     let mut indexed = compute_indexed_indices(files, &existing_skipped);
 
     // Verify the failure still reproduces with current skip list
-    if !round_fails(files, &min_deleted, Some(&indexed)) {
+    if !round_fails(files, &min_deleted, Some(&indexed), retries) {
         println!("\nRound passes with current skip list — cannot bisect indexed files.");
         println!("Try clearing {skip_file} and re-running.");
         return;
@@ -460,7 +477,7 @@ fn bisect_and_report(
         &protected,
         "indexed files",
         files,
-        |candidate| round_fails(files, &min_deleted, Some(candidate)),
+        |candidate| round_fails(files, &min_deleted, Some(candidate), retries),
         |current_indexed| {
             // Write skip file: all files NOT in current_indexed
             let indexed_set: HashSet<usize> = current_indexed.iter().copied().collect();
@@ -670,7 +687,7 @@ fn main() {
                         if args.skip_file.is_none() {
                             println!("\nNo --skip-file specified, using {skip_path}");
                         }
-                        bisect_and_report(&files, &delete_indices, skip_path, &fresh_counts);
+                        bisect_and_report(&files, &delete_indices, skip_path, args.retries, &fresh_counts);
                         break;
                     }
                 }
@@ -691,7 +708,7 @@ fn main() {
                     if args.skip_file.is_none() {
                         println!("\nNo --skip-file specified, using {skip_path}");
                     }
-                    bisect_and_report(&files, &delete_indices, skip_path, &fresh_counts);
+                    bisect_and_report(&files, &delete_indices, skip_path, args.retries, &fresh_counts);
                     break;
                 }
             }
