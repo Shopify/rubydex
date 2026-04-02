@@ -151,11 +151,8 @@ pub unsafe extern "C" fn rdx_method_alias_definition_signatures(
 ) -> *mut SignatureArray {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
-        let Definition::MethodAlias(alias) = graph.definitions().get(&def_id).expect("definition should exist") else {
-            panic!("expected a method alias definition");
-        };
 
-        let result = rubydex::query::deep_dealias_method(graph, alias, def_id);
+        let result = rubydex::query::deep_dealias_method(graph, def_id);
 
         let mut sig_entries: Vec<SignatureEntry> = Vec::new();
         for id in &result.method_ids {
