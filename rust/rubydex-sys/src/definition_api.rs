@@ -2,9 +2,11 @@
 
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
+use crate::reference_api::CConstantReference;
 use libc::c_char;
 use rubydex::model::definitions::Definition;
 use rubydex::model::ids::DefinitionId;
+use rubydex::model::name::NameRef;
 use std::ffi::CString;
 use std::ptr;
 
@@ -316,5 +318,51 @@ pub unsafe extern "C" fn rdx_definition_name_location(pointer: GraphPointer, def
         };
         let document = graph.documents().get(defn.uri_id()).expect("document should exist");
         create_location_for_uri_and_offset(graph, document, name_offset)
+    })
+}
+
+/// Returns the superclass constant reference for a class definition, or NULL if the class has no superclass. Caller
+/// must free with `free_c_constant_reference`.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `definition_id` must be a valid definition id for a class definition.
+///
+/// # Panics
+/// This function will panic if the definition cannot be found or is not a class definition.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_class_definition_superclass(
+    pointer: GraphPointer,
+    definition_id: u64,
+) -> *const CConstantReference {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let defn = graph.definitions().get(&def_id).expect("Definition not found");
+
+        let Definition::Class(class_def) = defn else {
+            panic!("Definition is not a class: {definition_id}");
+        };
+
+        let Some(ref_id) = class_def.superclass_ref() else {
+            return ptr::null();
+        };
+
+        let reference = graph
+            .constant_references()
+            .get(ref_id)
+            .expect("Superclass reference not found");
+
+        let name_ref = graph.names().get(reference.name_id()).expect("Name ID should exist");
+
+        let declaration_id = match name_ref {
+            NameRef::Resolved(resolved) => **resolved.declaration_id(),
+            NameRef::Unresolved(_) => 0,
+        };
+
+        Box::into_raw(Box::new(CConstantReference {
+            id: **ref_id,
+            declaration_id,
+        }))
+        .cast_const()
     })
 }

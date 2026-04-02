@@ -2,6 +2,7 @@
 #include "graph.h"
 #include "handle.h"
 #include "location.h"
+#include "reference.h"
 #include "ruby/internal/scan_args.h"
 #include "rustbindings.h"
 
@@ -164,6 +165,28 @@ static VALUE rdxr_definition_name_location(VALUE self) {
     return location;
 }
 
+// ClassDefinition#superclass -> ConstantReference?
+static VALUE rdxr_class_definition_superclass(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const CConstantReference *ref = rdx_class_definition_superclass(graph, data->id);
+    if (ref == NULL) {
+        return Qnil;
+    }
+
+    VALUE ref_class = (ref->declaration_id == 0)
+        ? cUnresolvedConstantReference
+        : cResolvedConstantReference;
+    VALUE argv[] = {data->graph_obj, ULL2NUM(ref->id)};
+    free_c_constant_reference(ref);
+
+    return rb_class_new_instance(2, argv, ref_class);
+}
+
 void rdxi_initialize_definition(VALUE mod) {
     mRubydex = mod;
 
@@ -180,6 +203,8 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cDefinition, "name_location", rdxr_definition_name_location, 0);
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
+    rb_define_method(cClassDefinition, "superclass", rdxr_class_definition_superclass, 0);
+
     cSingletonClassDefinition = rb_define_class_under(mRubydex, "SingletonClassDefinition", cDefinition);
     cModuleDefinition = rb_define_class_under(mRubydex, "ModuleDefinition", cDefinition);
     cConstantDefinition = rb_define_class_under(mRubydex, "ConstantDefinition", cDefinition);
