@@ -49,12 +49,20 @@ impl GraphTest {
     }
 
     /// Returns the normalized source for the given URI.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the URI has not been indexed.
     #[must_use]
     pub fn source(&self, uri: &str) -> &str {
         self.sources.get(uri).expect("source not found for URI")
     }
 
     /// Returns the source text for a definition, sliced by its offset.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the definition or its document does not exist.
     #[must_use]
     pub fn source_at(&self, definition_id: &DefinitionId) -> &str {
         let def = self.graph.definitions().get(definition_id).unwrap();
