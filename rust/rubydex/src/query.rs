@@ -1956,10 +1956,16 @@ mod tests {
         let results = dealias_method(context.graph(), id).unwrap();
         assert_eq!(results.len(), 2);
 
-        let method = results.iter().find(|r| matches!(r, DealiasMethodResult::Method(_))).unwrap();
+        let method = results
+            .iter()
+            .find(|r| matches!(r, DealiasMethodResult::Method(_)))
+            .unwrap();
         assert_dealias_result_source!(&context, method, "def foo(a); end");
 
-        let alias = results.iter().find(|r| matches!(r, DealiasMethodResult::Alias(_))).unwrap();
+        let alias = results
+            .iter()
+            .find(|r| matches!(r, DealiasMethodResult::Alias(_)))
+            .unwrap();
         assert_dealias_result_source!(&context, alias, "alias foo baz");
     }
 
