@@ -7,6 +7,9 @@
 #include "rustbindings.h"
 
 static VALUE mRubydex;
+static VALUE cInclude;
+static VALUE cPrepend;
+static VALUE cExtend;
 VALUE cComment;
 VALUE cDefinition;
 VALUE cClassDefinition;
@@ -165,6 +168,15 @@ static VALUE rdxr_definition_name_location(VALUE self) {
     return location;
 }
 
+static VALUE rdxi_build_constant_reference(VALUE graph_obj, const CConstantReference *cref) {
+    VALUE ref_class = (cref->declaration_id == 0)
+        ? cUnresolvedConstantReference
+        : cResolvedConstantReference;
+
+    VALUE argv[] = {graph_obj, ULL2NUM(cref->id)};
+    return rb_class_new_instance(2, argv, ref_class);
+}
+
 // ClassDefinition#superclass -> ConstantReference?
 static VALUE rdxr_class_definition_superclass(VALUE self) {
     HandleData *data;
@@ -178,17 +190,58 @@ static VALUE rdxr_class_definition_superclass(VALUE self) {
         return Qnil;
     }
 
-    VALUE ref_class = (ref->declaration_id == 0)
-        ? cUnresolvedConstantReference
-        : cResolvedConstantReference;
-    VALUE argv[] = {data->graph_obj, ULL2NUM(ref->id)};
+    VALUE result = rdxi_build_constant_reference(data->graph_obj, ref);
     free_c_constant_reference(ref);
+    return result;
+}
 
-    return rb_class_new_instance(2, argv, ref_class);
+static VALUE rdxi_mixin_class_for_kind(MixinKind kind) {
+    switch (kind) {
+    case MixinKind_Include:
+        return cInclude;
+    case MixinKind_Prepend:
+        return cPrepend;
+    case MixinKind_Extend:
+        return cExtend;
+    default:
+        rb_raise(rb_eRuntimeError, "Unknown MixinKind: %d", kind);
+    }
+}
+
+// Definition#mixins -> [Rubydex::Mixin]
+static VALUE rdxr_definition_mixins(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    MixinsIter *iter = rdx_definition_mixins(graph, data->id);
+    if (iter == NULL) {
+        rb_raise(rb_eRuntimeError, "Tried to get mixins for a definition that isn't a namespace");
+    }
+
+    size_t len = rdx_mixins_iter_len(iter);
+    VALUE ary = rb_ary_new_capa((long)len);
+
+    CMixin entry;
+    while (rdx_mixins_iter_next(iter, &entry)) {
+        VALUE constant_ref = rdxi_build_constant_reference(data->graph_obj, &entry.constant_reference);
+        VALUE mixin_class = rdxi_mixin_class_for_kind(entry.kind);
+        VALUE mixin = rb_class_new_instance(1, &constant_ref, mixin_class);
+        rb_ary_push(ary, mixin);
+    }
+
+    rdx_mixins_iter_free(iter);
+    return ary;
 }
 
 void rdxi_initialize_definition(VALUE mod) {
     mRubydex = mod;
+
+    cInclude = rb_const_get(mRubydex, rb_intern("Include"));
+    cPrepend = rb_const_get(mRubydex, rb_intern("Prepend"));
+    cExtend = rb_const_get(mRubydex, rb_intern("Extend"));
 
     cComment = rb_define_class_under(mRubydex, "Comment", rb_cObject);
 
@@ -204,9 +257,14 @@ void rdxi_initialize_definition(VALUE mod) {
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
     rb_define_method(cClassDefinition, "superclass", rdxr_class_definition_superclass, 0);
+    rb_define_method(cClassDefinition, "mixins", rdxr_definition_mixins, 0);
 
     cSingletonClassDefinition = rb_define_class_under(mRubydex, "SingletonClassDefinition", cDefinition);
+    rb_define_method(cSingletonClassDefinition, "mixins", rdxr_definition_mixins, 0);
+
     cModuleDefinition = rb_define_class_under(mRubydex, "ModuleDefinition", cDefinition);
+    rb_define_method(cModuleDefinition, "mixins", rdxr_definition_mixins, 0);
+
     cConstantDefinition = rb_define_class_under(mRubydex, "ConstantDefinition", cDefinition);
     cConstantAliasDefinition = rb_define_class_under(mRubydex, "ConstantAliasDefinition", cDefinition);
     cConstantVisibilityDefinition = rb_define_class_under(mRubydex, "ConstantVisibilityDefinition", cDefinition);
