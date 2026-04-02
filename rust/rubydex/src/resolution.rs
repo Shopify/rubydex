@@ -83,6 +83,12 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     pub fn resolve(&mut self) {
+        // Snapshot cleanup candidates from previous cycles. This includes both:
+        // - Declarations emptied during invalidation cascade (from unresolve_dependent_name / remove_document_data)
+        // - Orphan Todos from a previous resolve (from create_todo_for_parent)
+        // Items added during THIS resolve survive in the vec for the next cycle.
+        let cleanup_candidates = self.graph.take_pending_declaration_cleanup();
+
         let other_ids = self.prepare_units();
 
         loop {
@@ -125,14 +131,8 @@ impl<'a> Resolver<'a> {
 
         self.handle_remaining_definitions(other_ids);
 
-        // Post-resolution cleanup: declarations emptied during name cascade
-        // (unresolve_dependent_name) and never repopulated should be removed.
-        let mut cleanup_candidates = self.graph.take_pending_declaration_cleanup();
-        if !cleanup_candidates.is_empty() {
-            cleanup_candidates.sort_unstable();
-            cleanup_candidates.dedup();
-            self.graph.cleanup_empty_declarations(cleanup_candidates);
-        }
+        // Post-resolution cleanup: remove declarations that are still empty.
+        self.graph.cleanup_empty_declarations(cleanup_candidates);
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -1162,6 +1162,7 @@ impl<'a> Resolver<'a> {
                 parent_owner_id,
             )))));
             self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+            self.graph.mark_declaration_for_cleanup(declaration_id);
         }
 
         declaration_id
