@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -48,7 +48,7 @@ impl RubydexServer {
         let state = Arc::clone(&self.state);
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let (file_paths, errors) = rubydex::listing::collect_file_paths(vec![path]);
+                let (file_paths, errors) = rubydex::listing::collect_file_paths(vec![path], &HashSet::new());
                 for error in &errors {
                     eprintln!("Listing error: {error}");
                 }

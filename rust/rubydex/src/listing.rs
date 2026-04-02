@@ -4,7 +4,9 @@ use crate::{
 };
 use crossbeam_channel::{Sender, unbounded};
 use std::{
+    collections::HashSet,
     fs,
+    hash::BuildHasher,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -14,16 +16,24 @@ pub struct FileDiscoveryJob {
     queue: Arc<JobQueue>,
     paths_tx: Sender<PathBuf>,
     errors_tx: Sender<Errors>,
+    excluded_paths: Arc<HashSet<PathBuf>>,
 }
 
 impl FileDiscoveryJob {
     #[must_use]
-    pub fn new(path: PathBuf, queue: Arc<JobQueue>, paths_tx: Sender<PathBuf>, errors_tx: Sender<Errors>) -> Self {
+    pub fn new(
+        path: PathBuf,
+        queue: Arc<JobQueue>,
+        paths_tx: Sender<PathBuf>,
+        errors_tx: Sender<Errors>,
+        excluded_paths: Arc<HashSet<PathBuf>>,
+    ) -> Self {
         Self {
             path,
             queue,
             paths_tx,
             errors_tx,
+            excluded_paths,
         }
     }
 }
@@ -47,11 +57,16 @@ impl FileDiscoveryJob {
             return;
         };
 
+        if self.excluded_paths.contains(&canonicalized) {
+            return;
+        }
+
         self.queue.push(Box::new(FileDiscoveryJob::new(
             canonicalized,
             Arc::clone(&self.queue),
             self.paths_tx.clone(),
             self.errors_tx.clone(),
+            Arc::clone(&self.excluded_paths),
         )));
     }
 
@@ -87,11 +102,16 @@ impl Job for FileDiscoveryJob {
                 let kind = entry.file_type().unwrap();
 
                 if kind.is_dir() {
+                    if self.excluded_paths.contains(&entry.path()) {
+                        continue;
+                    }
+
                     self.queue.push(Box::new(FileDiscoveryJob::new(
                         entry.path(),
                         Arc::clone(&self.queue),
                         self.paths_tx.clone(),
                         self.errors_tx.clone(),
+                        Arc::clone(&self.excluded_paths),
                     )));
                 } else if kind.is_file() {
                     self.handle_file(&entry.path());
@@ -127,10 +147,16 @@ impl Job for FileDiscoveryJob {
 ///
 /// Panics if the errors receiver is dropped before the run completion
 #[must_use]
-pub fn collect_file_paths(paths: Vec<String>) -> (Vec<PathBuf>, Vec<Errors>) {
+pub fn collect_file_paths<S: BuildHasher>(
+    paths: Vec<String>,
+    excluded: &HashSet<PathBuf, S>,
+) -> (Vec<PathBuf>, Vec<Errors>) {
     let queue = Arc::new(JobQueue::new());
     let (files_tx, files_rx) = unbounded();
     let (errors_tx, errors_rx) = unbounded();
+
+    // Canonicalize the excluded paths since they may be symlinks
+    let excluded: Arc<HashSet<PathBuf>> = Arc::new(excluded.iter().filter_map(|p| fs::canonicalize(p).ok()).collect());
 
     for path in paths {
         let Ok(canonicalized) = fs::canonicalize(&path) else {
@@ -141,11 +167,16 @@ pub fn collect_file_paths(paths: Vec<String>) -> (Vec<PathBuf>, Vec<Errors>) {
             continue;
         };
 
+        if excluded.contains(&canonicalized) {
+            continue;
+        }
+
         queue.push(Box::new(FileDiscoveryJob::new(
             canonicalized,
             Arc::clone(&queue),
             files_tx.clone(),
             errors_tx.clone(),
+            Arc::clone(&excluded),
         )));
     }
 
@@ -163,11 +194,20 @@ mod tests {
     use crate::test_utils::Context;
 
     fn collect_document_paths(context: &Context, paths: &[&str]) -> (Vec<String>, Vec<Errors>) {
+        collect_document_paths_with_exclusions(context, paths, &HashSet::new())
+    }
+
+    fn collect_document_paths_with_exclusions(
+        context: &Context,
+        paths: &[&str],
+        excluded: &HashSet<PathBuf>,
+    ) -> (Vec<String>, Vec<Errors>) {
         let (files, errors) = collect_file_paths(
             paths
                 .iter()
                 .map(|p| context.absolute_path_to(p).to_string_lossy().into_owned())
                 .collect(),
+            excluded,
         );
 
         let mut files: Vec<String> = files
@@ -252,12 +292,15 @@ mod tests {
     fn collect_non_existing_paths() {
         let context = Context::new();
 
-        let (files, errors) = collect_file_paths(vec![
-            context
-                .absolute_path_to("non_existing_path")
-                .to_string_lossy()
-                .into_owned(),
-        ]);
+        let (files, errors) = collect_file_paths(
+            vec![
+                context
+                    .absolute_path_to("non_existing_path")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            &HashSet::new(),
+        );
 
         assert!(files.is_empty());
 
@@ -268,5 +311,61 @@ mod tests {
                 context.absolute_path_to("non_existing_path").display()
             ))]
         );
+    }
+
+    #[test]
+    fn collect_files_excludes_directories() {
+        let context = Context::new();
+        let included = PathBuf::from("included").join("foo.rb");
+        let excluded_file = PathBuf::from("excluded").join("bar.rb");
+        context.touch(&included);
+        context.touch(&excluded_file);
+
+        let mut excluded = HashSet::new();
+        excluded.insert(context.absolute_path_to("excluded"));
+
+        let (files, errors) = collect_document_paths_with_exclusions(&context, &["included", "excluded"], &excluded);
+
+        assert!(errors.is_empty());
+        assert_eq!(files, [included.to_str().unwrap().to_string()]);
+    }
+
+    #[test]
+    fn collect_files_excludes_nested_directories() {
+        let context = Context::new();
+        let kept = PathBuf::from("root").join("kept.rb");
+        let nested = PathBuf::from("root").join("skip").join("nested.rb");
+        context.touch(&kept);
+        context.touch(&nested);
+
+        let mut excluded = HashSet::new();
+        excluded.insert(context.absolute_path_to("root/skip"));
+
+        let (files, errors) = collect_document_paths_with_exclusions(&context, &["root"], &excluded);
+
+        assert!(errors.is_empty());
+        assert_eq!(files, [kept.to_str().unwrap().to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_excludes_symlinked_directories() {
+        let context = Context::new();
+        let included = PathBuf::from("included").join("foo.rb");
+        let excluded_file = PathBuf::from("real_dir").join("bar.rb");
+        context.touch(&included);
+        context.touch(&excluded_file);
+
+        // Create a symlink: link -> real_dir
+        std::os::unix::fs::symlink(context.absolute_path_to("real_dir"), context.absolute_path_to("link")).unwrap();
+
+        // Excluding the real directory while requesting to index the symlink should properly exclude the link
+        let mut excluded = HashSet::new();
+        excluded.insert(context.absolute_path_to("real_dir"));
+
+        let (files, errors) = collect_document_paths_with_exclusions(&context, &["included", "link"], &excluded);
+
+        assert!(errors.is_empty());
+        assert_eq!(files, [included.to_str().unwrap().to_string()]);
     }
 }

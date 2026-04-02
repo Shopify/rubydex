@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::collections::hash_map::Entry;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
@@ -82,6 +84,9 @@ pub struct Graph {
     /// Accumulated work items from update/delete operations.
     /// Drained by `take_pending_work()` before resolution.
     pending_work: Vec<Unit>,
+
+    /// Paths to exclude from file discovery during indexing.
+    excluded_paths: HashSet<PathBuf>,
 }
 
 impl Graph {
@@ -123,6 +128,7 @@ impl Graph {
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
+            excluded_paths: HashSet::new(),
         }
     }
 
@@ -136,6 +142,18 @@ impl Graph {
     #[must_use]
     pub fn declarations_mut(&mut self) -> &mut IdentityHashMap<DeclarationId, Declaration> {
         &mut self.declarations
+    }
+
+    /// Adds paths to exclude from file discovery during indexing. Excluded directories will be skipped entirely during
+    /// directory traversal.
+    pub fn exclude_paths(&mut self, paths: Vec<PathBuf>) {
+        self.excluded_paths.extend(paths);
+    }
+
+    /// Returns the set of paths excluded from file discovery.
+    #[must_use]
+    pub fn excluded_paths(&self) -> &HashSet<PathBuf> {
+        &self.excluded_paths
     }
 
     /// # Panics

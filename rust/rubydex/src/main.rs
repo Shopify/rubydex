@@ -1,5 +1,5 @@
 use clap::{Parser, ValueEnum};
-use std::mem;
+use std::{collections::HashSet, mem};
 
 use rubydex::{
     indexing, integrity, listing,
@@ -67,7 +67,7 @@ fn main() {
 
     // Listing
 
-    let (file_paths, errors) = time_it!(listing, { listing::collect_file_paths(args.paths) });
+    let (file_paths, errors) = time_it!(listing, { listing::collect_file_paths(args.paths, &HashSet::new()) });
 
     for error in errors {
         eprintln!("{error}");
