@@ -58,9 +58,14 @@ impl GraphTest {
     #[must_use]
     pub fn source_at(&self, definition_id: &DefinitionId) -> &str {
         let def = self.graph.definitions().get(definition_id).unwrap();
-        let uri = self.graph.documents().get(def.uri_id()).unwrap().uri();
+        self.source_at_offset(self.graph.documents().get(def.uri_id()).unwrap().uri(), def.offset())
+    }
+
+    /// Returns the source text at the given URI and offset.
+    #[must_use]
+    pub fn source_at_offset(&self, uri: &str, offset: &Offset) -> &str {
         let source = self.source(uri);
-        &source[def.offset().start() as usize..def.offset().end() as usize]
+        &source[offset.start() as usize..offset.end() as usize]
     }
 
     pub fn delete_uri(&mut self, uri: &str) {
