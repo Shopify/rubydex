@@ -3,7 +3,7 @@
 /// allocation of large collections when possible.
 ///
 /// Note: structs must be defined manually so that the cbindgen can see them. The actual methods are not extern "C" and
-/// so they can be expanded fromVthe macro.
+/// so they can be expanded from the macro.
 ///
 /// # Example
 ///
