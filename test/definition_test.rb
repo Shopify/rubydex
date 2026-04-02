@@ -234,6 +234,113 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_class_definition_mixins
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module M1; end
+        module M2; end
+        module M3; end
+
+        class WithMixins
+          include M1
+          prepend M2
+          extend M3
+        end
+
+        class NoMixins; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      defs = graph.documents.first.definitions
+
+      # No mixins returns empty array
+      no_mixins_def = defs.find { |d| d.name == "NoMixins" }
+      assert_empty(no_mixins_def.mixins)
+
+      # Before resolution, mixins have unresolved constant references in insertion order
+      with_mixins_def = defs.find { |d| d.name == "WithMixins" }
+      mixins = with_mixins_def.mixins
+      assert_equal(3, mixins.length)
+
+      assert_instance_of(Rubydex::Include, mixins[0])
+      assert_instance_of(Rubydex::UnresolvedConstantReference, mixins[0].constant_reference)
+
+      assert_instance_of(Rubydex::Prepend, mixins[1])
+      assert_instance_of(Rubydex::UnresolvedConstantReference, mixins[1].constant_reference)
+
+      assert_instance_of(Rubydex::Extend, mixins[2])
+      assert_instance_of(Rubydex::UnresolvedConstantReference, mixins[2].constant_reference)
+
+      # After resolution, mixins have resolved constant references
+      graph.resolve
+      mixins = with_mixins_def.mixins
+
+      assert_instance_of(Rubydex::Include, mixins[0])
+      assert_instance_of(Rubydex::ResolvedConstantReference, mixins[0].constant_reference)
+      assert_equal("M1", mixins[0].constant_reference.declaration.name)
+
+      assert_instance_of(Rubydex::Prepend, mixins[1])
+      assert_instance_of(Rubydex::ResolvedConstantReference, mixins[1].constant_reference)
+      assert_equal("M2", mixins[1].constant_reference.declaration.name)
+
+      assert_instance_of(Rubydex::Extend, mixins[2])
+      assert_instance_of(Rubydex::ResolvedConstantReference, mixins[2].constant_reference)
+      assert_equal("M3", mixins[2].constant_reference.declaration.name)
+    end
+  end
+
+  def test_module_definition_mixins
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module M1; end
+        module WithMixins
+          include M1
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      defs = graph.documents.first.definitions
+      mod_def = defs.find { |d| d.name == "WithMixins" }
+      mixins = mod_def.mixins
+
+      assert_equal(1, mixins.length)
+      assert_instance_of(Rubydex::Include, mixins[0])
+      assert_equal("M1", mixins[0].constant_reference.declaration.name)
+    end
+  end
+
+  def test_singleton_class_definition_mixins
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module M; end
+
+        class Foo
+          class << self
+            include M
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      defs = graph.documents.first.definitions
+      singleton_def = defs.find { |d| d.is_a?(Rubydex::SingletonClassDefinition) }
+      refute_nil(singleton_def)
+      mixins = singleton_def.mixins
+
+      assert_equal(1, mixins.length)
+      assert_instance_of(Rubydex::Include, mixins[0])
+      assert_equal("M", mixins[0].constant_reference.declaration.name)
+    end
+  end
+
   private
 
   # Comment locations on Windows include the carriage return. This means that the end column is off by one when compared

@@ -3,6 +3,7 @@
 require "bundler"
 require "uri"
 require "rubydex/version"
+require "rubydex/mixin"
 
 begin
   # Load the precompiled version of the library
