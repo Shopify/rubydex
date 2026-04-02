@@ -619,13 +619,20 @@ impl Graph {
         self.pending_work.extend(units);
     }
 
-    /// Post-resolution cleanup: removes declarations that were emptied during name
-    /// cascade and never repopulated by re-resolution. Runs `invalidate_graph` on
-    /// any that are still empty, which cascades to their members and singletons.
-    /// Post-resolution cleanup: removes declarations that were emptied during
-    /// invalidation cascade and never repopulated by re-resolution. Cascades
-    /// to members, singletons, and descendants via `invalidate_graph`.
-    pub(crate) fn cleanup_empty_declarations(&mut self, candidates: Vec<DeclarationId>) {
+    pub(crate) fn mark_declaration_for_cleanup(&mut self, decl_id: DeclarationId) {
+        self.pending_declaration_cleanup.push(decl_id);
+    }
+
+    /// Post-resolution cleanup: removes declarations that are still empty
+    /// (no definitions). Cascades to members, singletons, and descendants
+    /// via `invalidate_graph`.
+    pub(crate) fn cleanup_empty_declarations(&mut self, mut candidates: Vec<DeclarationId>) {
+        if candidates.is_empty() {
+            return;
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+
         let items: Vec<InvalidationItem> = candidates
             .into_iter()
             .filter(|decl_id| {
@@ -2362,7 +2369,8 @@ mod incremental_resolution_tests {
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
         assert_constant_reference_unresolved, assert_declaration_does_not_exist, assert_declaration_exists,
-        assert_declaration_references_count_eq, assert_members_eq, assert_no_constant_alias_target,
+        assert_declaration_kind_eq, assert_declaration_references_count_eq, assert_members_eq,
+        assert_no_constant_alias_target,
     };
 
     const NO_ANCESTORS: [&str; 0] = [];
@@ -3788,5 +3796,66 @@ mod incremental_resolution_tests {
         assert_declaration_exists!(context, "Foo");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#@x");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+    }
+
+    /// Regression test derived from Rails via `--bisect --skip-file`.
+    /// Deleting an unrelated file triggers re-resolution that creates an orphan
+    /// `<TODO>` declaration at the wrong scope. The bug depends on resolution
+    /// ordering (hash-based), so the specific definitions and `class << self`
+    /// block are required to trigger it.
+    #[test]
+    fn no_orphan_todo_for_compact_nested_class_after_unrelated_delete() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri(
+            "file:///a.rb",
+            "module A; module B; class C; end; def self.x; C.x; end; end; end",
+        );
+        incremental.index_uri(
+            "file:///b.rb",
+            "module A; module B; class C; def y; D.y; end; end; end; end",
+        );
+        incremental.index_uri(
+            "file:///c.rb",
+            "module A; module B; class C; class D; class << self; def y; end; end; end; end; end; end",
+        );
+        incremental.index_uri("file:///d.rb", "module A; end");
+        incremental.resolve();
+
+        assert_declaration_exists!(incremental, "A::B::C::D");
+
+        incremental.delete_uri("file:///d.rb");
+        incremental.resolve();
+
+        incremental.index_uri("file:///d.rb", "module A; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri(
+            "file:///a.rb",
+            "module A; module B; class C; end; def self.x; C.x; end; end; end",
+        );
+        fresh.index_uri(
+            "file:///b.rb",
+            "module A; module B; class C; def y; D.y; end; end; end; end",
+        );
+        fresh.index_uri(
+            "file:///c.rb",
+            "module A; module B; class C; class D; class << self; def y; end; end; end; end; end; end",
+        );
+        fresh.index_uri("file:///d.rb", "module A; end");
+        fresh.resolve();
+
+        let extras: Vec<_> = incremental
+            .graph()
+            .declarations()
+            .iter()
+            .filter(|(id, _)| !fresh.graph().declarations().contains_key(id))
+            .map(|(_, d)| format!("{} ({})", d.name(), d.kind()))
+            .collect();
+
+        assert!(
+            extras.is_empty(),
+            "Orphan declarations after unrelated file delete: {extras:?}"
+        );
     }
 } // mod incremental_resolution_tests
