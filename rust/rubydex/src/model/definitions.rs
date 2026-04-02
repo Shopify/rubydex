@@ -63,6 +63,7 @@ pub enum Definition {
     Constant(Box<ConstantDefinition>),
     ConstantAlias(Box<ConstantAliasDefinition>),
     ConstantVisibility(Box<ConstantVisibilityDefinition>),
+    MethodVisibility(Box<MethodVisibilityDefinition>),
     Method(Box<MethodDefinition>),
     AttrAccessor(Box<AttrAccessorDefinition>),
     AttrReader(Box<AttrReaderDefinition>),
@@ -84,6 +85,7 @@ macro_rules! all_definitions {
             Definition::Constant($var) => $expr,
             Definition::ConstantAlias($var) => $expr,
             Definition::ConstantVisibility($var) => $expr,
+            Definition::MethodVisibility($var) => $expr,
             Definition::GlobalVariable($var) => $expr,
             Definition::InstanceVariable($var) => $expr,
             Definition::ClassVariable($var) => $expr,
@@ -132,6 +134,7 @@ impl Definition {
             Definition::Constant(_) => "Constant",
             Definition::ConstantAlias(_) => "ConstantAlias",
             Definition::ConstantVisibility(_) => "ConstantVisibility",
+            Definition::MethodVisibility(_) => "MethodVisibility",
             Definition::Method(_) => "Method",
             Definition::AttrAccessor(_) => "AttrAccessor",
             Definition::AttrReader(_) => "AttrReader",
@@ -153,7 +156,8 @@ impl Definition {
             Definition::Constant(d) => Some(d.name_id()),
             Definition::ConstantAlias(d) => Some(d.name_id()),
             Definition::ConstantVisibility(d) => Some(d.name_id()),
-            Definition::GlobalVariable(_)
+            Definition::MethodVisibility(_)
+            | Definition::GlobalVariable(_)
             | Definition::InstanceVariable(_)
             | Definition::ClassVariable(_)
             | Definition::AttrAccessor(_)
@@ -712,7 +716,7 @@ pub struct ConstantVisibilityDefinition {
     uri_id: UriId,
     offset: Offset,
     flags: DefinitionFlags,
-    comments: Vec<Comment>,
+    comments: Box<[Comment]>,
     lexical_nesting_id: Option<DefinitionId>,
 }
 
@@ -723,7 +727,7 @@ impl ConstantVisibilityDefinition {
         visibility: Visibility,
         uri_id: UriId,
         offset: Offset,
-        comments: Vec<Comment>,
+        comments: Box<[Comment]>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
@@ -778,6 +782,82 @@ impl ConstantVisibilityDefinition {
         &self.flags
     }
 }
+assert_mem_size!(ConstantVisibilityDefinition, 56);
+
+#[derive(Debug)]
+pub struct MethodVisibilityDefinition {
+    str_id: StringId,
+    visibility: Visibility,
+    uri_id: UriId,
+    offset: Offset,
+    flags: DefinitionFlags,
+    comments: Box<[Comment]>,
+    lexical_nesting_id: Option<DefinitionId>,
+}
+
+impl MethodVisibilityDefinition {
+    #[must_use]
+    pub const fn new(
+        str_id: StringId,
+        visibility: Visibility,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Box<[Comment]>,
+        flags: DefinitionFlags,
+        lexical_nesting_id: Option<DefinitionId>,
+    ) -> Self {
+        Self {
+            str_id,
+            visibility,
+            uri_id,
+            offset,
+            flags,
+            comments,
+            lexical_nesting_id,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+    }
+
+    #[must_use]
+    pub fn str_id(&self) -> &StringId {
+        &self.str_id
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
+}
+assert_mem_size!(MethodVisibilityDefinition, 56);
 
 /// The signature of a method
 ///
