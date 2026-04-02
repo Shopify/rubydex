@@ -31,67 +31,33 @@ impl CReference {
 
 #[derive(Debug)]
 pub struct ReferencesIter {
-    pub entries: Box<[CReference]>,
-    pub index: usize,
+    entries: Box<[CReference]>,
+    index: usize,
 }
 
-impl ReferencesIter {
-    #[must_use]
-    pub fn new(entries: Box<[CReference]>) -> *mut ReferencesIter {
-        Box::into_raw(Box::new(ReferencesIter { entries, index: 0 }))
-    }
-}
+iterator!(ReferencesIter, entries: CReference);
 
-/// Returns the total number of entries in the iterator snapshot.
-///
 /// # Safety
-/// - `iter` must be a valid pointer previously returned by `ReferencesIter::new`.
+/// `iter` must be a valid pointer previously returned by `ReferencesIter::new`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_references_iter_len(iter: *const ReferencesIter) -> usize {
-    if iter.is_null() {
-        return 0;
-    }
-    unsafe { (&*iter).entries.len() }
+    unsafe { ReferencesIter::len(iter) }
 }
 
-/// Advances the iterator and writes the next entry into `out_ref`.
-/// Returns `true` if an entry was written, or `false` if the iterator is exhausted or inputs are invalid.
-///
 /// # Safety
 /// - `iter` must be a valid pointer previously returned by `ReferencesIter::new`.
-/// - `out_ref` must be a valid, writable pointer.
+/// - `out` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_references_iter_next(iter: *mut ReferencesIter, out_ref: *mut CReference) -> bool {
-    if iter.is_null() || out_ref.is_null() {
-        return false;
-    }
-
-    let it = unsafe { &mut *iter };
-    if it.index >= it.entries.len() {
-        return false;
-    }
-
-    let entry = it.entries[it.index];
-    it.index += 1;
-    unsafe {
-        *out_ref = entry;
-    }
-    true
+pub unsafe extern "C" fn rdx_references_iter_next(iter: *mut ReferencesIter, out: *mut CReference) -> bool {
+    unsafe { ReferencesIter::next(iter, out) }
 }
 
-/// Frees an iterator created by `ReferencesIter::new`.
-///
 /// # Safety
 /// - `iter` must be a pointer previously returned by `ReferencesIter::new`.
 /// - `iter` must not be used after being freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_references_iter_free(iter: *mut ReferencesIter) {
-    if iter.is_null() {
-        return;
-    }
-    unsafe {
-        let _ = Box::from_raw(iter);
-    }
+    unsafe { ReferencesIter::free(iter) }
 }
 
 /// Returns the UTF-8 name string for a constant reference id.

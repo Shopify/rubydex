@@ -8,6 +8,37 @@ use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use rubydex::model::ids::UriId;
 
+#[derive(Debug)]
+pub struct DocumentsIter {
+    entries: Box<[u64]>,
+    index: usize,
+}
+
+iterator!(DocumentsIter, entries: u64);
+
+/// # Safety
+/// `iter` must be a valid pointer previously returned by `DocumentsIter::new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_documents_iter_len(iter: *const DocumentsIter) -> usize {
+    unsafe { DocumentsIter::len(iter) }
+}
+
+/// # Safety
+/// - `iter` must be a valid pointer previously returned by `DocumentsIter::new`.
+/// - `out` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_documents_iter_next(iter: *mut DocumentsIter, out: *mut u64) -> bool {
+    unsafe { DocumentsIter::next(iter, out) }
+}
+
+/// # Safety
+/// - `iter` must be a pointer previously returned by `DocumentsIter::new`.
+/// - `iter` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_documents_iter_free(iter: *mut DocumentsIter) {
+    unsafe { DocumentsIter::free(iter) }
+}
+
 /// Returns the UTF-8 URI string for a document id.
 /// Caller must free with `free_c_string`.
 ///

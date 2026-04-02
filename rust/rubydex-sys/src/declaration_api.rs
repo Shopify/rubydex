@@ -70,41 +70,34 @@ impl CDeclaration {
 #[derive(Debug)]
 pub struct DeclarationsIter {
     /// The snapshot of declarations
-    declarations: Box<[CDeclaration]>,
+    entries: Box<[CDeclaration]>,
     /// The current index of the iterator
     index: usize,
 }
 
-impl DeclarationsIter {
-    #[must_use]
-    pub fn new(declarations: Box<[CDeclaration]>) -> Self {
-        Self { declarations, index: 0 }
-    }
+iterator!(DeclarationsIter, entries: CDeclaration);
 
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.declarations.len()
-    }
+/// # Safety
+/// `iter` must be a valid pointer previously returned by `DeclarationsIter::new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_declarations_iter_len(iter: *const DeclarationsIter) -> usize {
+    unsafe { DeclarationsIter::len(iter) }
+}
 
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.declarations.is_empty()
-    }
+/// # Safety
+/// - `iter` must be a valid pointer previously returned by `DeclarationsIter::new`.
+/// - `out` must be a valid, writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_declarations_iter_next(iter: *mut DeclarationsIter, out: *mut CDeclaration) -> bool {
+    unsafe { DeclarationsIter::next(iter, out) }
+}
 
-    /// # Safety
-    ///
-    /// Expects `out_id` to be a valid pointer
-    pub unsafe fn next(&mut self, out_decl: *mut CDeclaration) -> bool {
-        if self.index >= self.declarations.len() {
-            return false;
-        }
-
-        let next_decl = self.declarations[self.index];
-        self.index += 1;
-        unsafe { *out_decl = next_decl };
-
-        true
-    }
+/// # Safety
+/// - `iter` must be a pointer previously returned by `DeclarationsIter::new`.
+/// - `iter` must not be used after being freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_declarations_iter_free(iter: *mut DeclarationsIter) {
+    unsafe { DeclarationsIter::free(iter) }
 }
 
 /// Returns the UTF-8 name string for a declaration id.
@@ -372,7 +365,7 @@ pub unsafe extern "C" fn rdx_declaration_ancestors(pointer: GraphPointer, decl_i
             .collect::<Vec<_>>()
     });
 
-    Box::into_raw(Box::new(DeclarationsIter::new(declarations.into_boxed_slice())))
+    DeclarationsIter::new(declarations.into_boxed_slice())
 }
 
 /// Returns an iterator over the descendant declarations of a given declaration
@@ -400,7 +393,7 @@ pub unsafe extern "C" fn rdx_declaration_descendants(pointer: GraphPointer, decl
             .collect::<Vec<_>>()
     });
 
-    Box::into_raw(Box::new(DeclarationsIter::new(declarations.into_boxed_slice())))
+    DeclarationsIter::new(declarations.into_boxed_slice())
 }
 
 /// Returns an iterator over the member declarations of a given namespace declaration
@@ -428,7 +421,7 @@ pub unsafe extern "C" fn rdx_declaration_members(pointer: GraphPointer, decl_id:
             .collect::<Vec<_>>()
     });
 
-    Box::into_raw(Box::new(DeclarationsIter::new(declarations.into_boxed_slice())))
+    DeclarationsIter::new(declarations.into_boxed_slice())
 }
 
 /// Creates a new iterator over references for a given declaration by snapshotting the current set of IDs.
