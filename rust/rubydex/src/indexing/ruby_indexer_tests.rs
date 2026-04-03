@@ -145,331 +145,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_alias_method_ignores_method_nesting() {
-    let context = index_source({
-        "
-        class Foo
-          def bar
-            alias_method :new_to_s, :to_s
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
-        assert_definition_at!(&context, "3:5-3:34", MethodAlias, |alias_method| {
-            assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
-fn index_alias_ignores_method_nesting() {
-    let context = index_source({
-        "
-        class Foo
-          def bar
-            alias new_to_s to_s
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
-        assert_definition_at!(&context, "3:5-3:24", MethodAlias, |alias_method| {
-            assert!(alias_method.receiver().is_none());
-            assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
-fn index_alias_methods_nested() {
-    let context = index_source({
-        "
-        class Foo
-          alias foo bar
-          alias :baz :qux
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-4:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "2:3-2:16", MethodAlias, |def| {
-            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name.as_str(), "foo()");
-            assert_eq!(old_name.as_str(), "bar()");
-            assert!(def.receiver().is_none());
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-        });
-
-        assert_definition_at!(&context, "3:3-3:18", MethodAlias, |def| {
-            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name.as_str(), "baz()");
-            assert_eq!(old_name.as_str(), "qux()");
-            assert!(def.receiver().is_none());
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
-fn index_alias_methods_top_level() {
-    let context = index_source({
-        "
-        alias foo bar
-        alias :baz :qux
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:14", MethodAlias, |def| {
-        let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-        let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-        assert_eq!(new_name.as_str(), "foo()");
-        assert_eq!(old_name.as_str(), "bar()");
-        assert!(def.receiver().is_none());
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:1-2:16", MethodAlias, |def| {
-        let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-        let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-        assert_eq!(new_name.as_str(), "baz()");
-        assert_eq!(old_name.as_str(), "qux()");
-
-        assert!(def.lexical_nesting_id().is_none());
-    });
-}
-
-#[test]
-fn index_module_alias_method() {
-    let context = index_source({
-        r#"
-        alias_method :foo_symbol, :bar_symbol
-        alias_method "foo_string", "bar_string"
-
-        class Foo
-          alias_method :baz, :qux
-        end
-
-        alias_method :baz, ignored
-        alias_method ignored, :qux
-        alias_method ignored, ignored
-        "#
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:38", MethodAlias, |def| {
-        let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-        let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-        assert_eq!(new_name.as_str(), "foo_symbol()");
-        assert_eq!(old_name.as_str(), "bar_symbol()");
-        assert!(def.receiver().is_none());
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "2:1-2:40", MethodAlias, |def| {
-        let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-        let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-        assert_eq!(new_name.as_str(), "foo_string()");
-        assert_eq!(old_name.as_str(), "bar_string()");
-        assert!(def.receiver().is_none());
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "4:1-6:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "5:3-5:26", MethodAlias, |def| {
-            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name.as_str(), "baz()");
-            assert_eq!(old_name.as_str(), "qux()");
-            assert!(def.receiver().is_none());
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
-fn index_alias_method_with_self_receiver_maps_to_none() {
-    let context = index_source({
-        "
-        class Foo
-          self.alias_method :bar, :baz
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:3-2:31", MethodAlias, |def| {
-        assert!(def.receiver().is_none());
-    });
-}
-
-#[test]
-fn index_alias_method_with_constant_receiver() {
-    let context = index_source({
-        "
-        class Foo; end
-        Foo.alias_method :bar, :baz
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:1-2:28", MethodAlias, |def| {
-        assert_string_eq!(&context, def.new_name_str_id(), "bar()");
-        assert_string_eq!(&context, def.old_name_str_id(), "baz()");
-        assert_method_has_receiver!(&context, def, "Foo");
-    });
-}
-
-#[test]
-fn index_alias_method_in_singleton_class_has_no_receiver() {
-    let context = index_source({
-        "
-        class Foo
-          def self.find; end
-
-          class << self
-            alias_method :find_old, :find
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-7:4", Class, |_foo| {
-        assert_definition_at!(&context, "4:3-6:6", SingletonClass, |singleton| {
-            assert_definition_at!(&context, "5:5-5:34", MethodAlias, |def| {
-                assert_string_eq!(&context, def.new_name_str_id(), "find_old()");
-                assert_string_eq!(&context, def.old_name_str_id(), "find()");
-                assert!(def.receiver().is_none());
-                assert_eq!(singleton.id(), def.lexical_nesting_id().unwrap());
-            });
-        });
-    });
-}
-
-#[test]
-fn index_alias_keyword_in_singleton_class_has_no_receiver() {
-    // Same as above: `alias` inside `class << self` has no receiver.
-    let context = index_source({
-        "
-        class Foo
-          def self.find; end
-
-          class << self
-            alias find_old find
-          end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "4:3-6:6", SingletonClass, |singleton| {
-        assert_definition_at!(&context, "5:5-5:24", MethodAlias, |def| {
-            assert!(def.receiver().is_none());
-            assert_eq!(singleton.id(), def.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
-fn index_alias_method_with_nested_constant_receiver() {
-    let context = index_source({
-        "
-        module A
-          class B
-            def original; end
-          end
-        end
-
-        A::B.alias_method :new_name, :original
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "7:1-7:39", MethodAlias, |def| {
-        assert_string_eq!(&context, def.new_name_str_id(), "new_name()");
-        assert_method_has_receiver!(&context, def, "B");
-        assert!(def.lexical_nesting_id().is_none());
-    });
-}
-
-#[test]
-fn index_alias_method_with_dynamic_receiver_not_indexed() {
-    let context = index_source({
-        "
-        class Foo
-          def original; end
-        end
-
-        foo.alias_method :new_name, :original
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    let alias_count = context
-        .graph()
-        .definitions()
-        .values()
-        .filter(|def| matches!(def, Definition::MethodAlias(_)))
-        .count();
-    assert_eq!(0, alias_count);
-}
-
-#[test]
-fn index_alias_global_variables() {
-    let context = index_source({
-        "
-        alias $foo $bar
-
-        class Foo
-          alias $baz $qux
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-1:16", GlobalVariableAlias, |def| {
-        let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-        let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-        assert_eq!(new_name.as_str(), "$foo");
-        assert_eq!(old_name.as_str(), "$bar");
-
-        assert!(def.lexical_nesting_id().is_none());
-    });
-
-    assert_definition_at!(&context, "3:1-5:4", Class, |foo_class_def| {
-        assert_definition_at!(&context, "4:3-4:18", GlobalVariableAlias, |def| {
-            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
-            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
-            assert_eq!(new_name.as_str(), "$baz");
-            assert_eq!(old_name.as_str(), "$qux");
-
-            assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
 fn index_module_new() {
     let context = index_source({
         "
@@ -4497,6 +4172,335 @@ mod mixin_tests {
         );
 
         assert_eq!(context.graph().definitions().len(), 0);
+    }
+}
+
+mod alias_tests {
+    use super::*;
+
+    #[test]
+    fn index_alias_method_ignores_method_nesting() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                alias_method :new_to_s, :to_s
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "3:5-3:34", MethodAlias, |alias_method| {
+                assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_ignores_method_nesting() {
+        let context = index_source({
+            "
+            class Foo
+              def bar
+                alias new_to_s to_s
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Class, |foo| {
+            assert_definition_at!(&context, "3:5-3:24", MethodAlias, |alias_method| {
+                assert!(alias_method.receiver().is_none());
+                assert_eq!(foo.id(), alias_method.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_methods_nested() {
+        let context = index_source({
+            "
+            class Foo
+              alias foo bar
+              alias :baz :qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "2:3-2:16", MethodAlias, |def| {
+                let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+                let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+                assert_eq!(new_name.as_str(), "foo()");
+                assert_eq!(old_name.as_str(), "bar()");
+                assert!(def.receiver().is_none());
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+            });
+
+            assert_definition_at!(&context, "3:3-3:18", MethodAlias, |def| {
+                let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+                let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+                assert_eq!(new_name.as_str(), "baz()");
+                assert_eq!(old_name.as_str(), "qux()");
+                assert!(def.receiver().is_none());
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_methods_top_level() {
+        let context = index_source({
+            "
+            alias foo bar
+            alias :baz :qux
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:14", MethodAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name.as_str(), "foo()");
+            assert_eq!(old_name.as_str(), "bar()");
+            assert!(def.receiver().is_none());
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:1-2:16", MethodAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name.as_str(), "baz()");
+            assert_eq!(old_name.as_str(), "qux()");
+
+            assert!(def.lexical_nesting_id().is_none());
+        });
+    }
+
+    #[test]
+    fn index_module_alias_method() {
+        let context = index_source({
+            r#"
+            alias_method :foo_symbol, :bar_symbol
+            alias_method "foo_string", "bar_string"
+
+            class Foo
+              alias_method :baz, :qux
+            end
+
+            alias_method :baz, ignored
+            alias_method ignored, :qux
+            alias_method ignored, ignored
+            "#
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:38", MethodAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name.as_str(), "foo_symbol()");
+            assert_eq!(old_name.as_str(), "bar_symbol()");
+            assert!(def.receiver().is_none());
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "2:1-2:40", MethodAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name.as_str(), "foo_string()");
+            assert_eq!(old_name.as_str(), "bar_string()");
+            assert!(def.receiver().is_none());
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "4:1-6:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "5:3-5:26", MethodAlias, |def| {
+                let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+                let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+                assert_eq!(new_name.as_str(), "baz()");
+                assert_eq!(old_name.as_str(), "qux()");
+                assert!(def.receiver().is_none());
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_method_with_self_receiver_maps_to_none() {
+        let context = index_source({
+            "
+            class Foo
+              self.alias_method :bar, :baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:3-2:31", MethodAlias, |def| {
+            assert!(def.receiver().is_none());
+        });
+    }
+
+    #[test]
+    fn index_alias_method_with_constant_receiver() {
+        let context = index_source({
+            "
+            class Foo; end
+            Foo.alias_method :bar, :baz
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:28", MethodAlias, |def| {
+            assert_string_eq!(&context, def.new_name_str_id(), "bar()");
+            assert_string_eq!(&context, def.old_name_str_id(), "baz()");
+            assert_method_has_receiver!(&context, def, "Foo");
+        });
+    }
+
+    #[test]
+    fn index_alias_method_in_singleton_class_has_no_receiver() {
+        let context = index_source({
+            "
+            class Foo
+              def self.find; end
+
+              class << self
+                alias_method :find_old, :find
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Class, |_foo| {
+            assert_definition_at!(&context, "4:3-6:6", SingletonClass, |singleton| {
+                assert_definition_at!(&context, "5:5-5:34", MethodAlias, |def| {
+                    assert_string_eq!(&context, def.new_name_str_id(), "find_old()");
+                    assert_string_eq!(&context, def.old_name_str_id(), "find()");
+                    assert!(def.receiver().is_none());
+                    assert_eq!(singleton.id(), def.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_keyword_in_singleton_class_has_no_receiver() {
+        // Same as above: `alias` inside `class << self` has no receiver.
+        let context = index_source({
+            "
+            class Foo
+              def self.find; end
+
+              class << self
+                alias find_old find
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:3-6:6", SingletonClass, |singleton| {
+            assert_definition_at!(&context, "5:5-5:24", MethodAlias, |def| {
+                assert!(def.receiver().is_none());
+                assert_eq!(singleton.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_alias_method_with_nested_constant_receiver() {
+        let context = index_source({
+            "
+            module A
+              class B
+                def original; end
+              end
+            end
+
+            A::B.alias_method :new_name, :original
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "7:1-7:39", MethodAlias, |def| {
+            assert_string_eq!(&context, def.new_name_str_id(), "new_name()");
+            assert_method_has_receiver!(&context, def, "B");
+            assert!(def.lexical_nesting_id().is_none());
+        });
+    }
+
+    #[test]
+    fn index_alias_method_with_dynamic_receiver_not_indexed() {
+        let context = index_source({
+            "
+            class Foo
+              def original; end
+            end
+
+            foo.alias_method :new_name, :original
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        let alias_count = context
+            .graph()
+            .definitions()
+            .values()
+            .filter(|def| matches!(def, Definition::MethodAlias(_)))
+            .count();
+        assert_eq!(0, alias_count);
+    }
+
+    #[test]
+    fn index_alias_global_variables() {
+        let context = index_source({
+            "
+            alias $foo $bar
+
+            class Foo
+              alias $baz $qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-1:16", GlobalVariableAlias, |def| {
+            let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+            let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+            assert_eq!(new_name.as_str(), "$foo");
+            assert_eq!(old_name.as_str(), "$bar");
+
+            assert!(def.lexical_nesting_id().is_none());
+        });
+
+        assert_definition_at!(&context, "3:1-5:4", Class, |foo_class_def| {
+            assert_definition_at!(&context, "4:3-4:18", GlobalVariableAlias, |def| {
+                let new_name = context.graph().strings().get(def.new_name_str_id()).unwrap();
+                let old_name = context.graph().strings().get(def.old_name_str_id()).unwrap();
+                assert_eq!(new_name.as_str(), "$baz");
+                assert_eq!(old_name.as_str(), "$qux");
+
+                assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
     }
 }
 
