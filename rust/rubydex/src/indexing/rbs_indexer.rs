@@ -51,7 +51,7 @@ impl<'a> RBSIndexer<'a> {
     }
 
     pub fn index(&mut self) {
-        let Ok(signature) = node::parse(self.source.as_bytes()) else {
+        let Ok(signature) = node::parse(self.source) else {
             self.local_graph.add_diagnostic(
                 Rule::ParseError,
                 Offset::new(0, 0),
@@ -61,10 +61,6 @@ impl<'a> RBSIndexer<'a> {
         };
 
         self.visit(&signature.as_node());
-    }
-
-    fn bytes_to_string(name: &[u8]) -> String {
-        String::from_utf8_lossy(name).into_owned()
     }
 
     /// Converts an RBS `TypeNameNode` into a rubydex `NameId`.
@@ -84,14 +80,19 @@ impl<'a> RBSIndexer<'a> {
             let Node::Symbol(symbol) = path_node else {
                 continue;
             };
-            parent_scope = ParentScope::Some(self.intern_name(symbol.name(), parent_scope, nesting_name_id));
+            parent_scope = ParentScope::Some(self.intern_name(&symbol, parent_scope, nesting_name_id));
         }
 
-        self.intern_name(type_name.name().name(), parent_scope, nesting_name_id)
+        self.intern_name(&type_name.name(), parent_scope, nesting_name_id)
     }
 
-    fn intern_name(&mut self, name_bytes: &[u8], parent_scope: ParentScope, nesting_name_id: Option<NameId>) -> NameId {
-        let string_id = self.local_graph.intern_string(Self::bytes_to_string(name_bytes));
+    fn intern_name(
+        &mut self,
+        symbol: &node::SymbolNode,
+        parent_scope: ParentScope,
+        nesting_name_id: Option<NameId>,
+    ) -> NameId {
+        let string_id = self.local_graph.intern_string(symbol.as_str().to_owned());
         self.local_graph
             .add_name(Name::new(string_id, parent_scope, nesting_name_id))
     }
@@ -492,9 +493,7 @@ impl Visit for RBSIndexer<'_> {
     fn visit_global_node(&mut self, global_node: &GlobalNode) {
         let lexical_nesting_id = self.parent_lexical_scope_id();
 
-        let str_id = self
-            .local_graph
-            .intern_string(Self::bytes_to_string(global_node.name().name()));
+        let str_id = self.local_graph.intern_string(global_node.name().to_string());
         let offset = Offset::from_rbs_location(&global_node.location());
 
         let comments = self.collect_comments(global_node.comment());
@@ -537,8 +536,8 @@ impl Visit for RBSIndexer<'_> {
             AliasKind::Singleton => lexical_nesting_id.map(Receiver::SelfReceiver),
         };
 
-        let new_name = Self::bytes_to_string(alias_node.new_name().name());
-        let old_name = Self::bytes_to_string(alias_node.old_name().name());
+        let new_name = alias_node.new_name();
+        let old_name = alias_node.old_name();
 
         let new_name_str_id = self.local_graph.intern_string(format!("{new_name}()"));
         let old_name_str_id = self.local_graph.intern_string(format!("{old_name}()"));
@@ -561,9 +560,7 @@ impl Visit for RBSIndexer<'_> {
     }
 
     fn visit_method_definition_node(&mut self, def_node: &node::MethodDefinitionNode) {
-        let str_id = self
-            .local_graph
-            .intern_string(format!("{}()", Self::bytes_to_string(def_node.name().name())));
+        let str_id = self.local_graph.intern_string(format!("{}()", def_node.name()));
         let offset = Offset::from_rbs_location(&def_node.location());
         let comments = self.collect_comments(def_node.comment());
         let flags = Self::flags(&def_node.annotations());
@@ -955,7 +952,7 @@ mod tests {
     fn flags_test_deprecation() {
         fn extract_annotations<F: FnOnce(&NodeList)>(annots: &[u8], f: F) {
             let source = format!("{} module Foo end", std::str::from_utf8(annots).unwrap());
-            let Ok(signature) = node::parse(source.as_bytes()) else {
+            let Ok(signature) = node::parse(&source) else {
                 panic!("Failed to parse RBS source");
             };
             let decl = signature
