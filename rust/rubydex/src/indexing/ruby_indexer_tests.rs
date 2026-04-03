@@ -145,520 +145,6 @@ fn index_source_with_warnings() {
 }
 
 #[test]
-fn index_module_new() {
-    let context = index_source({
-        "
-        module Foo
-          Bar = Module.new do
-            include Baz
-
-            def qux
-              @var = 123
-            end
-            attr_reader :hello
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
-            assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                    assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                        assert_def_name_eq!(&context, bar, "Bar");
-                        assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                        assert_eq!(foo.members()[0], bar.id());
-
-                        assert_eq!(bar.members()[0], qux.id());
-                        assert_eq!(bar.members()[1], var.id());
-                        assert_eq!(bar.members()[2], hello.id());
-
-                        // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                        // produce a new lexical scope
-                        let include = bar.mixins().first().unwrap();
-                        let name = context
-                            .graph()
-                            .names()
-                            .get(
-                                context
-                                    .graph()
-                                    .constant_references()
-                                    .get(include.constant_reference_id())
-                                    .unwrap()
-                                    .name_id(),
-                            )
-                            .unwrap();
-
-                        assert_eq!(StringId::from("Baz"), *name.str());
-                        assert!(name.parent_scope().is_none());
-
-                        let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                        assert_eq!(StringId::from("Foo"), *nesting_name.str());
-                    });
-                });
-            });
-        });
-    });
-}
-
-#[test]
-fn index_module_new_with_constant_path() {
-    let context = index_source({
-        "
-        module Foo
-          Zip::Bar = Module.new do
-            include Baz
-
-            def qux
-              @var = 123
-            end
-            attr_reader :hello
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
-            assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                    assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                        assert_def_name_eq!(&context, bar, "Zip::Bar");
-                        assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                        assert_eq!(foo.members()[0], bar.id());
-
-                        assert_eq!(bar.members()[0], qux.id());
-                        assert_eq!(bar.members()[1], var.id());
-                        assert_eq!(bar.members()[2], hello.id());
-
-                        // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                        // produce a new lexical scope
-                        let include = bar.mixins().first().unwrap();
-                        let name = context
-                            .graph()
-                            .names()
-                            .get(
-                                context
-                                    .graph()
-                                    .constant_references()
-                                    .get(include.constant_reference_id())
-                                    .unwrap()
-                                    .name_id(),
-                            )
-                            .unwrap();
-
-                        assert_eq!(StringId::from("Baz"), *name.str());
-                        assert!(name.parent_scope().is_none());
-
-                        let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                        assert_eq!(StringId::from("Foo"), *nesting_name.str());
-                    });
-                });
-            });
-        });
-    });
-}
-
-#[test]
-fn index_class_new() {
-    let context = index_source({
-        "
-        module Foo
-          Bar = Class.new(Parent) do
-            include Baz
-
-            def qux
-              @var = 123
-            end
-            attr_reader :hello
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
-            assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                    assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                        assert_def_name_eq!(&context, bar, "Bar");
-                        assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                        assert_eq!(foo.members()[0], bar.id());
-
-                        assert_eq!(bar.members()[0], qux.id());
-                        assert_eq!(bar.members()[1], var.id());
-                        assert_eq!(bar.members()[2], hello.id());
-
-                        assert_def_superclass_ref_eq!(&context, bar, "Parent");
-
-                        // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                        // produce a new lexical scope
-                        let include = bar.mixins().first().unwrap();
-                        let name = context
-                            .graph()
-                            .names()
-                            .get(
-                                context
-                                    .graph()
-                                    .constant_references()
-                                    .get(include.constant_reference_id())
-                                    .unwrap()
-                                    .name_id(),
-                            )
-                            .unwrap();
-
-                        assert_eq!(StringId::from("Baz"), *name.str());
-                        assert!(name.parent_scope().is_none());
-
-                        let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                        assert_eq!(StringId::from("Foo"), *nesting_name.str());
-                    });
-                });
-            });
-        });
-    });
-}
-
-#[test]
-fn index_class_new_no_parent() {
-    let context = index_source({
-        "
-        module Foo
-          Bar = Class.new do
-            include Baz
-
-            def qux
-              @var = 123
-            end
-            attr_reader :hello
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
-            assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                    assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                        assert_def_name_eq!(&context, bar, "Bar");
-                        assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                        assert_eq!(foo.members()[0], bar.id());
-
-                        assert_eq!(bar.members()[0], qux.id());
-                        assert_eq!(bar.members()[1], var.id());
-                        assert_eq!(bar.members()[2], hello.id());
-
-                        // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                        // produce a new lexical scope
-                        let include = bar.mixins().first().unwrap();
-                        let name = context
-                            .graph()
-                            .names()
-                            .get(
-                                context
-                                    .graph()
-                                    .constant_references()
-                                    .get(include.constant_reference_id())
-                                    .unwrap()
-                                    .name_id(),
-                            )
-                            .unwrap();
-
-                        assert_eq!(StringId::from("Baz"), *name.str());
-                        assert!(name.parent_scope().is_none());
-
-                        let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                        assert_eq!(StringId::from("Foo"), *nesting_name.str());
-                    });
-                });
-            });
-        });
-    });
-}
-
-#[test]
-fn index_class_new_with_constant_path() {
-    let context = index_source({
-        "
-        module Foo
-          Zip::Bar = Class.new(Parent) do
-            include Baz
-
-            def qux
-              @var = 123
-            end
-            attr_reader :hello
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
-            assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
-                assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
-                    assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
-                        assert_def_name_eq!(&context, bar, "Zip::Bar");
-                        assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                        assert_eq!(foo.members()[0], bar.id());
-
-                        assert_eq!(bar.members()[0], qux.id());
-                        assert_eq!(bar.members()[1], var.id());
-                        assert_eq!(bar.members()[2], hello.id());
-
-                        assert_def_superclass_ref_eq!(&context, bar, "Parent");
-
-                        // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
-                        // produce a new lexical scope
-                        let include = bar.mixins().first().unwrap();
-                        let name = context
-                            .graph()
-                            .names()
-                            .get(
-                                context
-                                    .graph()
-                                    .constant_references()
-                                    .get(include.constant_reference_id())
-                                    .unwrap()
-                                    .name_id(),
-                            )
-                            .unwrap();
-
-                        assert_eq!(StringId::from("Baz"), *name.str());
-                        assert!(name.parent_scope().is_none());
-
-                        let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
-                        assert_eq!(StringId::from("Foo"), *nesting_name.str());
-                    });
-                });
-            });
-        });
-    });
-}
-
-#[test]
-fn index_top_level_class_and_module_new() {
-    let context = index_source({
-        "
-        module Foo
-          Bar = ::Class.new do
-          end
-
-          Baz = ::Module.new do
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-3:6", Class, |bar| {
-            assert_definition_at!(&context, "5:3-6:6", Module, |baz| {
-                assert_def_name_eq!(&context, bar, "Bar");
-                assert_def_name_eq!(&context, baz, "Baz");
-                assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-                assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
-                assert_eq!(foo.members()[0], bar.id());
-                assert_eq!(foo.members()[1], baz.id());
-            });
-        });
-    });
-}
-
-#[test]
-fn index_anonymous_class_and_module_new() {
-    let context = index_source({
-        "
-        module Foo
-          Class.new do
-            def bar; end
-          end
-
-          Module.new do
-            def baz; end
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-9:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-4:6", Class, |anonymous| {
-            assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
-
-            assert_definition_at!(&context, "3:5-3:17", Method, |bar| {
-                assert_eq!(anonymous.id(), bar.lexical_nesting_id().unwrap());
-            });
-        });
-
-        assert_definition_at!(&context, "6:3-8:6", Module, |anonymous| {
-            assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
-
-            assert_definition_at!(&context, "7:5-7:17", Method, |baz| {
-                assert_eq!(anonymous.id(), baz.lexical_nesting_id().unwrap());
-            });
-        });
-    });
-}
-
-#[test]
-fn index_nested_class_and_module_new() {
-    let context = index_source({
-        "
-        module Foo
-          Class.new do
-            Module.new do
-            end
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
-            assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
-
-            assert_definition_at!(&context, "3:5-4:8", Module, |anonymous_module| {
-                assert_eq!(foo.id(), anonymous_module.lexical_nesting_id().unwrap());
-            });
-        });
-    });
-}
-
-#[test]
-fn index_named_module_nested_inside_anonymous() {
-    let context = index_source({
-        "
-        module Foo
-          Class.new do
-            module Bar
-            end
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
-            assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
-
-            assert_definition_at!(&context, "3:5-4:8", Module, |bar| {
-                assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
-            });
-        });
-    });
-}
-
-#[test]
-fn index_anonymous_namespace_mixins() {
-    let context = index_source({
-        "
-        module Foo
-          Class.new do
-            include Bar
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Module, |foo| {
-        assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
-            assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
-
-            assert_def_mixins_eq!(&context, anonymous_class, Include, ["Bar"]);
-        });
-    });
-}
-
-#[test]
-fn index_singleton_method_in_class_new() {
-    let context = index_source({
-        "
-        module Foo
-          A = Class.new do
-            def self.bar
-            end
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
-        let Receiver::SelfReceiver(def_id) = bar.receiver().as_ref().unwrap() else {
-            panic!("Expected SelfReceiver for def self.bar in Class.new");
-        };
-        let def = context.graph().definitions().get(def_id).unwrap();
-        let name_id = def.name_id().expect("Owner definition should have a name_id");
-        let name_ref = context.graph().names().get(name_id).unwrap();
-        assert_eq!(StringId::from("A"), *name_ref.str());
-
-        let nesting_name = context.graph().names().get(&name_ref.nesting().unwrap()).unwrap();
-        assert_eq!(StringId::from("Foo"), *nesting_name.str());
-    });
-}
-
-#[test]
-fn index_class_variable_in_class_new() {
-    let context = index_source({
-        "
-        module Foo
-          A = Class.new do
-            def bar
-              @@var = 123
-            end
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
-        assert_definition_at!(&context, "4:7-4:12", ClassVariable, |var| {
-            assert_eq!(foo.id(), var.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
-fn index_singleton_method_in_anonymous_namespace() {
-    let context = index_source({
-        "
-        module Foo
-          Class.new do
-            def self.bar
-            end
-          end
-        end
-        "
-    });
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
-        let Receiver::SelfReceiver(def_id) = bar.receiver().as_ref().unwrap() else {
-            panic!("Expected SelfReceiver for def self.bar in anonymous Class.new");
-        };
-        let def = context.graph().definitions().get(def_id).unwrap();
-        let name_id = def.name_id().expect("Owner definition should have a name_id");
-        let name_ref = context.graph().names().get(name_id).unwrap();
-        let uri_id = UriId::from("file:///foo.rb");
-        assert_eq!(StringId::from(&format!("{uri_id}:13<anonymous>")), *name_ref.str());
-        assert!(name_ref.nesting().is_none());
-        assert!(name_ref.parent_scope().is_none());
-    });
-}
-
-#[test]
 fn index_constant_alias_simple() {
     let context = index_source({
         "
@@ -4500,6 +3986,524 @@ mod alias_tests {
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });
+        });
+    }
+}
+
+mod dynamic_namespace_tests {
+    use super::*;
+
+    #[test]
+    fn index_module_new() {
+        let context = index_source({
+            "
+            module Foo
+              Bar = Module.new do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_def_name_eq!(&context, bar, "Bar");
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_module_new_with_constant_path() {
+        let context = index_source({
+            "
+            module Foo
+              Zip::Bar = Module.new do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Module, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_def_name_eq!(&context, bar, "Zip::Bar");
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new() {
+        let context = index_source({
+            "
+            module Foo
+              Bar = Class.new(Parent) do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_def_name_eq!(&context, bar, "Bar");
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            assert_def_superclass_ref_eq!(&context, bar, "Parent");
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new_no_parent() {
+        let context = index_source({
+            "
+            module Foo
+              Bar = Class.new do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_def_name_eq!(&context, bar, "Bar");
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_class_new_with_constant_path() {
+        let context = index_source({
+            "
+            module Foo
+              Zip::Bar = Class.new(Parent) do
+                include Baz
+
+                def qux
+                  @var = 123
+                end
+                attr_reader :hello
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-10:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-9:6", Class, |bar| {
+                assert_definition_at!(&context, "5:5-7:8", Method, |qux| {
+                    assert_definition_at!(&context, "6:7-6:11", InstanceVariable, |var| {
+                        assert_definition_at!(&context, "8:18-8:23", AttrReader, |hello| {
+                            assert_def_name_eq!(&context, bar, "Zip::Bar");
+                            assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                            assert_eq!(foo.members()[0], bar.id());
+
+                            assert_eq!(bar.members()[0], qux.id());
+                            assert_eq!(bar.members()[1], var.id());
+                            assert_eq!(bar.members()[2], hello.id());
+
+                            assert_def_superclass_ref_eq!(&context, bar, "Parent");
+
+                            // We expect the `Baz` constant name to NOT be associated with `Bar` because `Module.new` does not
+                            // produce a new lexical scope
+                            let include = bar.mixins().first().unwrap();
+                            let name = context
+                                .graph()
+                                .names()
+                                .get(
+                                    context
+                                        .graph()
+                                        .constant_references()
+                                        .get(include.constant_reference_id())
+                                        .unwrap()
+                                        .name_id(),
+                                )
+                                .unwrap();
+
+                            assert_eq!(StringId::from("Baz"), *name.str());
+                            assert!(name.parent_scope().is_none());
+
+                            let nesting_name = context.graph().names().get(&name.nesting().unwrap()).unwrap();
+                            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_top_level_class_and_module_new() {
+        let context = index_source({
+            "
+            module Foo
+              Bar = ::Class.new do
+              end
+
+              Baz = ::Module.new do
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-3:6", Class, |bar| {
+                assert_definition_at!(&context, "5:3-6:6", Module, |baz| {
+                    assert_def_name_eq!(&context, bar, "Bar");
+                    assert_def_name_eq!(&context, baz, "Baz");
+                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                    assert_eq!(foo.id(), baz.lexical_nesting_id().unwrap());
+                    assert_eq!(foo.members()[0], bar.id());
+                    assert_eq!(foo.members()[1], baz.id());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_anonymous_class_and_module_new() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                def bar; end
+              end
+
+              Module.new do
+                def baz; end
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-9:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-4:6", Class, |anonymous| {
+                assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
+
+                assert_definition_at!(&context, "3:5-3:17", Method, |bar| {
+                    assert_eq!(anonymous.id(), bar.lexical_nesting_id().unwrap());
+                });
+            });
+
+            assert_definition_at!(&context, "6:3-8:6", Module, |anonymous| {
+                assert_eq!(foo.id(), anonymous.lexical_nesting_id().unwrap());
+
+                assert_definition_at!(&context, "7:5-7:17", Method, |baz| {
+                    assert_eq!(anonymous.id(), baz.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_nested_class_and_module_new() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                Module.new do
+                end
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
+                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
+
+                assert_definition_at!(&context, "3:5-4:8", Module, |anonymous_module| {
+                    assert_eq!(foo.id(), anonymous_module.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_named_module_nested_inside_anonymous() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                module Bar
+                end
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-6:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-5:6", Class, |anonymous_class| {
+                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
+
+                assert_definition_at!(&context, "3:5-4:8", Module, |bar| {
+                    assert_eq!(foo.id(), bar.lexical_nesting_id().unwrap());
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn index_anonymous_namespace_mixins() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                include Bar
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Module, |foo| {
+            assert_definition_at!(&context, "2:3-4:6", Class, |anonymous_class| {
+                assert_eq!(foo.id(), anonymous_class.lexical_nesting_id().unwrap());
+
+                assert_def_mixins_eq!(&context, anonymous_class, Include, ["Bar"]);
+            });
+        });
+    }
+
+    #[test]
+    fn index_singleton_method_in_class_new() {
+        let context = index_source({
+            "
+            module Foo
+              A = Class.new do
+                def self.bar
+                end
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
+            let Receiver::SelfReceiver(def_id) = bar.receiver().as_ref().unwrap() else {
+                panic!("Expected SelfReceiver for def self.bar in Class.new");
+            };
+            let def = context.graph().definitions().get(def_id).unwrap();
+            let name_id = def.name_id().expect("Owner definition should have a name_id");
+            let name_ref = context.graph().names().get(name_id).unwrap();
+            assert_eq!(StringId::from("A"), *name_ref.str());
+
+            let nesting_name = context.graph().names().get(&name_ref.nesting().unwrap()).unwrap();
+            assert_eq!(StringId::from("Foo"), *nesting_name.str());
+        });
+    }
+
+    #[test]
+    fn index_class_variable_in_class_new() {
+        let context = index_source({
+            "
+            module Foo
+              A = Class.new do
+                def bar
+                  @@var = 123
+                end
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Module, |foo| {
+            assert_definition_at!(&context, "4:7-4:12", ClassVariable, |var| {
+                assert_eq!(foo.id(), var.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_singleton_method_in_anonymous_namespace() {
+        let context = index_source({
+            "
+            module Foo
+              Class.new do
+                def self.bar
+                end
+              end
+            end
+            "
+        });
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:5-4:8", Method, |bar| {
+            let Receiver::SelfReceiver(def_id) = bar.receiver().as_ref().unwrap() else {
+                panic!("Expected SelfReceiver for def self.bar in anonymous Class.new");
+            };
+            let def = context.graph().definitions().get(def_id).unwrap();
+            let name_id = def.name_id().expect("Owner definition should have a name_id");
+            let name_ref = context.graph().names().get(name_id).unwrap();
+            let uri_id = UriId::from("file:///foo.rb");
+            assert_eq!(StringId::from(&format!("{uri_id}:13<anonymous>")), *name_ref.str());
+            assert!(name_ref.nesting().is_none());
+            assert!(name_ref.parent_scope().is_none());
         });
     }
 }
