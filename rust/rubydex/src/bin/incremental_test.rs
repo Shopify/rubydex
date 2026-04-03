@@ -592,6 +592,21 @@ fn main() {
         std::process::exit(1);
     }
 
+    let mut file_paths = file_paths;
+    file_paths.sort();
+    // Deterministic shuffle: use seed to permute file order so that different seeds
+    // explore different IdentityHashMap insertion orders (which affect resolution ordering).
+    let mut scored: Vec<(u64, _)> = file_paths
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let hash = xxhash_rust::xxh3::xxh3_64_with_seed(&i.to_le_bytes(), args.seed);
+            (hash, p)
+        })
+        .collect();
+    scored.sort_by_key(|(hash, _)| *hash);
+    let file_paths: Vec<_> = scored.into_iter().map(|(_, p)| p).collect();
+
     let files: Vec<(String, String, LanguageId)> = file_paths
         .into_iter()
         .filter_map(|path| {
