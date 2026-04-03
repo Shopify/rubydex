@@ -1027,9 +1027,9 @@ dependencies = [
 
 [[package]]
 name = "ruby-rbs"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc2fb89a0267deec0522bdcab206ffaff9c24ad82a77ca5c1018f82385c0f46c"
+checksum = "923050067d886173020f9fd428bddd135b535d16a1a8ac74ba16e67bb8ab27eb"
 dependencies = [
  "ruby-rbs-sys",
  "serde",
@@ -1038,9 +1038,9 @@ dependencies = [
 
 [[package]]
 name = "ruby-rbs-sys"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1ebaa36bc824abe177725cf7066db0a077d82708627b803f51c870887e0720d"
+checksum = "d6dd91ae70c8232a7426445e7a687e0055c3619157fdcf43ab13776d09eeb939"
 dependencies = [
  "bindgen",
  "cc",
