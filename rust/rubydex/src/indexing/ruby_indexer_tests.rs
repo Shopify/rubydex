@@ -89,43 +89,6 @@ fn index_source(source: &str) -> LocalGraphTest {
     LocalGraphTest::new("file:///foo.rb", source)
 }
 
-#[test]
-fn index_source_with_errors() {
-    let context = index_source({
-        "
-        class Foo
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "parse-error: expected an `end` to close the `class` statement (1:1-1:6)",
-            "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)"
-        ]
-    );
-
-    // We still index the definition, even though it has errors
-    assert_eq!(context.graph().definitions().len(), 1);
-    assert_definition_at!(&context, "1:1-2:1", Class, |def| {
-        assert_def_name_eq!(&context, def, "Foo");
-    });
-}
-
-#[test]
-fn index_source_with_warnings() {
-    let context = index_source({
-        "
-        foo = 42
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        ["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
-    );
-}
-
 mod constant_tests {
     use super::*;
 
@@ -4515,6 +4478,47 @@ mod dynamic_namespace_tests {
             assert!(name_ref.nesting().is_none());
             assert!(name_ref.parent_scope().is_none());
         });
+    }
+}
+
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn index_source_with_errors() {
+        let context = index_source({
+            "
+            class Foo
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "parse-error: expected an `end` to close the `class` statement (1:1-1:6)",
+                "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)"
+            ]
+        );
+
+        // We still index the definition, even though it has errors
+        assert_eq!(context.graph().definitions().len(), 1);
+        assert_definition_at!(&context, "1:1-2:1", Class, |def| {
+            assert_def_name_eq!(&context, def, "Foo");
+        });
+    }
+
+    #[test]
+    fn index_source_with_warnings() {
+        let context = index_source({
+            "
+            foo = 42
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
+        );
     }
 }
 
