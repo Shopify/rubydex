@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   # Trigger release flow through pushing tags
   push:
-    tags:
-      - v[0-9]+.[0-9]+.[0-9]+
-      - v[0-9]+.[0-9]+.[0-9]+.beta[0-9]*
 
 jobs:
   compile:
@@ -14,7 +11,7 @@ jobs:
     name: "Cross compile the gem on different ruby versions"
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04"]
+        os: ["ubuntu-22.04-arm"]
     runs-on: "${{ matrix.os }}"
     env:
       RELEASE: "true"
@@ -38,8 +35,8 @@ jobs:
     needs: compile
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04"]
-        rubies: ["3.2", "3.3", "3.4", "4.0"]
+        os: ["ubuntu-22.04-arm"]
+        rubies: ["4.0"]
         type: ["cross", "native"]
     runs-on: "${{ matrix.os }}"
     steps:
@@ -60,7 +57,7 @@ jobs:
     needs: test
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04"]
+        os: ["ubuntu-22.04-arm"]
     runs-on: "${{ matrix.os }}"
     steps:
       - name: "Setup Ruby"
@@ -71,40 +68,3 @@ jobs:
         uses: "shopify/cibuildgem/.github/actions/cibuildgem@main"
         with:
           step: "install"
-  release:
-    environment: release
-    permissions:
-      id-token: write
-      contents: read
-    timeout-minutes: 5
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    name: "Release all gems with RubyGems"
-    needs: install
-    runs-on: "ubuntu-latest"
-    steps:
-      - name: "Setup Ruby"
-        uses: ruby/setup-ruby@3ff19f5e2baf30647122352b96108b1fbe250c64 # v1.299.0
-        with:
-          ruby-version: "4.0.0"
-      - name: "Run cibuildgem"
-        uses: "shopify/cibuildgem/.github/actions/cibuildgem@main"
-        with:
-          step: "release"
-  release_github:
-    name: Create GitHub release
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Create GitHub release
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
-        with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
-          script: |
-            await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: "${{ github.ref }}",
-              name: "${{ github.ref_name }}",
-              generate_release_notes: true,
-              prerelease: "${{ github.ref_name }}".includes(".beta")
-            });
