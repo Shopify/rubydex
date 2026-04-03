@@ -2304,6 +2304,114 @@ mod tests {
         assert_owner_eq!(context, "Bar::<Bar>", "Bar");
     }
 
+    /// `definition_id_to_declaration_id` must map SelfReceiver methods to the
+    /// singleton method declaration, not the same-name instance method declaration.
+    #[test]
+    fn resolution_for_self_method_with_same_name_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.run; end
+              def run; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["run()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["run()"]);
+
+        let singleton_decl_id = DeclarationId::from("Foo::<Foo>#run()");
+        let instance_decl_id = DeclarationId::from("Foo#run()");
+
+        for def_id in context
+            .graph()
+            .declarations()
+            .get(&singleton_decl_id)
+            .unwrap()
+            .definitions()
+        {
+            assert_eq!(
+                context.graph().definition_id_to_declaration_id(*def_id),
+                Some(&singleton_decl_id),
+                "SelfReceiver definition should map to singleton declaration"
+            );
+        }
+
+        for def_id in context
+            .graph()
+            .declarations()
+            .get(&instance_decl_id)
+            .unwrap()
+            .definitions()
+        {
+            assert_eq!(
+                context.graph().definition_id_to_declaration_id(*def_id),
+                Some(&instance_decl_id),
+                "Instance method definition should map to instance declaration"
+            );
+        }
+    }
+
+    /// Same as above but for RBS `alias self.x self.y` — the alias definition
+    /// must map to the singleton declaration, not a same-name instance declaration.
+    #[test]
+    fn resolution_for_self_method_alias_with_same_name_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri(
+            "file:///foo.rbs",
+            r"
+            class Foo
+              def self.run: () -> void
+              def run: () -> void
+              alias self.execute self.run
+              alias execute run
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::<Foo>", ["execute()", "run()"]);
+        assert_members_eq!(context, "Foo", ["execute()", "run()"]);
+
+        let singleton_alias_id = DeclarationId::from("Foo::<Foo>#execute()");
+        let instance_alias_id = DeclarationId::from("Foo#execute()");
+
+        for def_id in context
+            .graph()
+            .declarations()
+            .get(&singleton_alias_id)
+            .unwrap()
+            .definitions()
+        {
+            assert_eq!(
+                context.graph().definition_id_to_declaration_id(*def_id),
+                Some(&singleton_alias_id),
+                "SelfReceiver alias definition should map to singleton declaration"
+            );
+        }
+
+        for def_id in context
+            .graph()
+            .declarations()
+            .get(&instance_alias_id)
+            .unwrap()
+            .definitions()
+        {
+            assert_eq!(
+                context.graph().definition_id_to_declaration_id(*def_id),
+                Some(&instance_alias_id),
+                "Instance alias definition should map to instance declaration"
+            );
+        }
+    }
+
     #[test]
     fn linearizing_super_classes() {
         let mut context = GraphTest::new();

@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, ClassDeclaration, Declaration, Namespace};
-use crate::model::definitions::Definition;
+use crate::model::definitions::{Definition, Receiver};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
@@ -382,14 +382,41 @@ impl Graph {
                 self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
                 it.str_id(),
             ),
-            Definition::Method(it) => (
-                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
-                it.str_id(),
-            ),
-            Definition::MethodAlias(it) => (
-                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
-                it.new_name_str_id(),
-            ),
+            Definition::Method(it) => {
+                if let Some(Receiver::SelfReceiver(def_id)) = it.receiver() {
+                    // SelfReceiver methods live in the singleton class, not the enclosing namespace.
+                    let owner_decl_id = self.definition_id_to_declaration_id(*def_id)?;
+                    let singleton_id = self
+                        .declarations
+                        .get(owner_decl_id)?
+                        .as_namespace()?
+                        .singleton_class()?;
+                    return self.declarations.get(singleton_id)?.as_namespace()?.member(it.str_id());
+                }
+                (
+                    self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                    it.str_id(),
+                )
+            }
+            Definition::MethodAlias(it) => {
+                if let Some(Receiver::SelfReceiver(def_id)) = it.receiver() {
+                    let owner_decl_id = self.definition_id_to_declaration_id(*def_id)?;
+                    let singleton_id = self
+                        .declarations
+                        .get(owner_decl_id)?
+                        .as_namespace()?
+                        .singleton_class()?;
+                    return self
+                        .declarations
+                        .get(singleton_id)?
+                        .as_namespace()?
+                        .member(it.new_name_str_id());
+                }
+                (
+                    self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                    it.new_name_str_id(),
+                )
+            }
         };
 
         let nesting_declaration_id = match nesting_name_id {
@@ -3857,5 +3884,34 @@ mod incremental_resolution_tests {
             extras.is_empty(),
             "Orphan declarations after unrelated file delete: {extras:?}"
         );
+    }
+
+    /// Regression test derived from rubygems via `--bisect --skip-file`.
+    /// When both `def self.run` and `def run` exist, `definition_id_to_declaration_id`
+    /// mapped the SelfReceiver method to the instance declaration (`Foo#run()`) instead
+    /// of the singleton declaration (`Foo::<Foo>#run()`), causing `pending_detachments`
+    /// to detach from the wrong place during invalidation.
+    #[test]
+    fn no_duplicate_definition_on_identical_file_delete_readd() {
+        let source = "class Foo; def self.run; end; def run; end; end";
+
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", source);
+        context.index_uri("file:///b.rb", source);
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>#run()");
+        assert_declaration_exists!(context, "Foo#run()");
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        context.index_uri("file:///a.rb", source);
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>#run()");
+        assert_declaration_exists!(context, "Foo#run()");
     }
 } // mod incremental_resolution_tests
