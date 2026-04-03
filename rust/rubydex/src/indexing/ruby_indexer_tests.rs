@@ -144,149 +144,6 @@ fn index_source_with_warnings() {
     );
 }
 
-#[test]
-fn index_constant_alias_simple() {
-    let context = index_source({
-        "
-        module Foo; end
-        ALIAS1 = Foo
-        ALIAS2 ||= Foo
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "ALIAS1");
-        assert_name_path_eq!(&context, "Foo", *def.target_name_id());
-    });
-    assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "ALIAS2");
-        assert_name_path_eq!(&context, "Foo", *def.target_name_id());
-    });
-}
-
-#[test]
-fn index_constant_alias_to_path() {
-    let context = index_source({
-        "
-        module Foo
-          module Bar; end
-        end
-        ALIAS = Foo::Bar
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "4:1-4:6", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "ALIAS");
-        assert_name_path_eq!(&context, "Foo::Bar", *def.target_name_id());
-    });
-
-    assert_constant_references_eq!(&context, ["Foo", "Bar"]);
-}
-
-#[test]
-fn index_constant_alias_nested() {
-    let context = index_source({
-        "
-        module Foo; end
-        module Bar
-          MyFoo = Foo
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:1-4:4", Module, |bar_module_def| {
-        assert_definition_at!(&context, "3:3-3:8", ConstantAlias, |def| {
-            assert_def_name_eq!(&context, def, "MyFoo");
-            assert_eq!(bar_module_def.id(), def.lexical_nesting_id().unwrap());
-        });
-    });
-}
-
-#[test]
-fn index_scoped_constant_alias() {
-    let context = index_source({
-        "
-        module Foo; end
-        module Bar; end
-        Bar::ALIAS = Foo
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "3:6-3:11", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "Bar::ALIAS");
-    });
-}
-
-#[test]
-fn index_chained_constant_alias() {
-    let context = index_source({
-        "
-        module Target; end
-        A = B = Target
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:1-2:2", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "A");
-        assert_name_path_eq!(&context, "Target", *def.target_name_id());
-    });
-    assert_definition_at!(&context, "2:5-2:6", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "B");
-        assert_name_path_eq!(&context, "Target", *def.target_name_id());
-    });
-
-    assert_constant_references_eq!(&context, ["Target"]);
-}
-
-#[test]
-fn index_constant_alias_to_top_level_constant() {
-    let context = index_source({
-        "
-        module Foo; end
-        ALIAS = ::Foo
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:1-2:6", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "ALIAS");
-        assert_name_path_eq!(&context, "Foo", *def.target_name_id());
-    });
-}
-
-#[test]
-fn index_constant_alias_chain() {
-    let context = index_source({
-        "
-        module Foo; end
-        ALIAS1 = Foo
-        ALIAS2 = ALIAS1
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "ALIAS1");
-        assert_name_path_eq!(&context, "Foo", *def.target_name_id());
-    });
-    assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
-        assert_def_name_eq!(&context, def, "ALIAS2");
-        assert_name_path_eq!(&context, "ALIAS1", *def.target_name_id());
-    });
-}
-
 // Comments
 
 #[test]
@@ -964,6 +821,153 @@ mod constant_tests {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
                 assert_eq!(parent_nesting.members()[2], def.id());
             });
+        });
+    }
+}
+
+mod constant_alias_tests {
+    use super::*;
+
+    #[test]
+    fn index_constant_alias_simple() {
+        let context = index_source({
+            "
+            module Foo; end
+            ALIAS1 = Foo
+            ALIAS2 ||= Foo
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "ALIAS1");
+            assert_name_path_eq!(&context, "Foo", *def.target_name_id());
+        });
+        assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "ALIAS2");
+            assert_name_path_eq!(&context, "Foo", *def.target_name_id());
+        });
+    }
+
+    #[test]
+    fn index_constant_alias_to_path() {
+        let context = index_source({
+            "
+            module Foo
+              module Bar; end
+            end
+            ALIAS = Foo::Bar
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:1-4:6", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "ALIAS");
+            assert_name_path_eq!(&context, "Foo::Bar", *def.target_name_id());
+        });
+
+        assert_constant_references_eq!(&context, ["Foo", "Bar"]);
+    }
+
+    #[test]
+    fn index_constant_alias_nested() {
+        let context = index_source({
+            "
+            module Foo; end
+            module Bar
+              MyFoo = Foo
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-4:4", Module, |bar_module_def| {
+            assert_definition_at!(&context, "3:3-3:8", ConstantAlias, |def| {
+                assert_def_name_eq!(&context, def, "MyFoo");
+                assert_eq!(bar_module_def.id(), def.lexical_nesting_id().unwrap());
+            });
+        });
+    }
+
+    #[test]
+    fn index_scoped_constant_alias() {
+        let context = index_source({
+            "
+            module Foo; end
+            module Bar; end
+            Bar::ALIAS = Foo
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:6-3:11", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "Bar::ALIAS");
+        });
+    }
+
+    #[test]
+    fn index_chained_constant_alias() {
+        let context = index_source({
+            "
+            module Target; end
+            A = B = Target
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:2", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "A");
+            assert_name_path_eq!(&context, "Target", *def.target_name_id());
+        });
+        assert_definition_at!(&context, "2:5-2:6", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "B");
+            assert_name_path_eq!(&context, "Target", *def.target_name_id());
+        });
+
+        assert_constant_references_eq!(&context, ["Target"]);
+    }
+
+    #[test]
+    fn index_constant_alias_to_top_level_constant() {
+        let context = index_source({
+            "
+            module Foo; end
+            ALIAS = ::Foo
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:6", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "ALIAS");
+            assert_name_path_eq!(&context, "Foo", *def.target_name_id());
+        });
+    }
+
+    #[test]
+    fn index_constant_alias_chain() {
+        let context = index_source({
+            "
+            module Foo; end
+            ALIAS1 = Foo
+            ALIAS2 = ALIAS1
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:7", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "ALIAS1");
+            assert_name_path_eq!(&context, "Foo", *def.target_name_id());
+        });
+        assert_definition_at!(&context, "3:1-3:7", ConstantAlias, |def| {
+            assert_def_name_eq!(&context, def, "ALIAS2");
+            assert_name_path_eq!(&context, "ALIAS1", *def.target_name_id());
         });
     }
 }
