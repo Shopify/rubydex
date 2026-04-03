@@ -85,24 +85,6 @@ macro_rules! assert_method_references_eq {
     }};
 }
 
-macro_rules! assert_promotable {
-    ($def:expr) => {{
-        assert!(
-            $def.flags().is_promotable(),
-            "expected definition to be promotable, but it was not"
-        );
-    }};
-}
-
-macro_rules! assert_not_promotable {
-    ($def:expr) => {{
-        assert!(
-            !$def.flags().is_promotable(),
-            "expected definition to not be promotable, but it was"
-        );
-    }};
-}
-
 fn index_source(source: &str) -> LocalGraphTest {
     LocalGraphTest::new("file:///foo.rb", source)
 }
@@ -142,51 +124,6 @@ fn index_source_with_warnings() {
         &context,
         ["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
     );
-}
-
-#[test]
-fn constant_with_call_value_is_promotable() {
-    let context = index_source("Foo = some_call");
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_promotable!(def);
-    });
-}
-
-#[test]
-fn constant_with_literal_value_is_not_promotable() {
-    let context = index_source("FOO = 42");
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_not_promotable!(def);
-    });
-}
-
-#[test]
-fn constant_with_operator_call_is_not_promotable() {
-    let context = index_source("FOO = 1 + 2");
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_not_promotable!(def);
-    });
-}
-
-#[test]
-fn constant_with_dot_call_is_promotable() {
-    let context = index_source("Foo = Bar.new");
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_promotable!(def);
-    });
-}
-
-#[test]
-fn constant_with_colon_colon_call_is_promotable() {
-    let context = index_source("Foo = Bar::new");
-
-    assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
-        assert_promotable!(def);
-    });
 }
 
 mod constant_tests {
@@ -3992,6 +3929,73 @@ mod comment_tests {
 
         assert_definition_at!(&context, "12:24-12:27", AttrReader, |def| {
             assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+    }
+}
+
+mod promotability_tests {
+    use super::*;
+
+    macro_rules! assert_promotable {
+        ($def:expr) => {{
+            assert!(
+                $def.flags().is_promotable(),
+                "expected definition to be promotable, but it was not"
+            );
+        }};
+    }
+
+    macro_rules! assert_not_promotable {
+        ($def:expr) => {{
+            assert!(
+                !$def.flags().is_promotable(),
+                "expected definition to not be promotable, but it was"
+            );
+        }};
+    }
+
+    #[test]
+    fn constant_with_call_value_is_promotable() {
+        let context = index_source("Foo = some_call");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_promotable!(def);
+        });
+    }
+
+    #[test]
+    fn constant_with_literal_value_is_not_promotable() {
+        let context = index_source("FOO = 42");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_not_promotable!(def);
+        });
+    }
+
+    #[test]
+    fn constant_with_operator_call_is_not_promotable() {
+        let context = index_source("FOO = 1 + 2");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_not_promotable!(def);
+        });
+    }
+
+    #[test]
+    fn constant_with_dot_call_is_promotable() {
+        let context = index_source("Foo = Bar.new");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_promotable!(def);
+        });
+    }
+
+    #[test]
+    fn constant_with_colon_colon_call_is_promotable() {
+        let context = index_source("Foo = Bar::new");
+
+        assert_definition_at!(&context, "1:1-1:4", Constant, |def| {
+            assert_promotable!(def);
         });
     }
 }
