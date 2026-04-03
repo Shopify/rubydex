@@ -144,442 +144,6 @@ fn index_source_with_warnings() {
     );
 }
 
-// Comments
-
-#[test]
-fn index_comments_attached_to_definitions() {
-    let context = index_source({
-        "
-        # Single comment
-        class Single; end
-
-        # Multi-line comment 1
-        # Multi-line comment 2
-        # Multi-line comment 3
-        module Multi; end
-
-        # Comment 1
-        #
-        # Comment 2
-        class EmptyCommentLine; end
-
-        # Comment directly above (no gap)
-        NoGap = 42
-
-        #: ()
-        #| -> void
-        def foo; end
-
-        # Comment with blank line
-
-        class BlankLine; end
-
-        # Too far away
-
-
-        class NoComment; end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:1-2:18", Class, |def| {
-        assert_def_name_eq!(&context, def, "Single");
-        assert_def_comments_eq!(&context, def, ["# Single comment"]);
-    });
-
-    assert_definition_at!(&context, "7:1-7:18", Module, |def| {
-        assert_def_name_eq!(&context, def, "Multi");
-        assert_def_comments_eq!(
-            &context,
-            def,
-            [
-                "# Multi-line comment 1",
-                "# Multi-line comment 2",
-                "# Multi-line comment 3"
-            ]
-        );
-    });
-
-    assert_definition_at!(&context, "12:1-12:28", Class, |def| {
-        assert_def_name_eq!(&context, def, "EmptyCommentLine");
-        assert_def_comments_eq!(&context, def, ["# Comment 1", "#", "# Comment 2"]);
-    });
-
-    assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
-        assert_def_name_eq!(&context, def, "NoGap");
-        assert_def_comments_eq!(&context, def, ["# Comment directly above (no gap)"]);
-    });
-
-    assert_definition_at!(&context, "19:1-19:13", Method, |def| {
-        assert_def_str_eq!(&context, def, "foo()");
-        assert_def_comments_eq!(&context, def, ["#: ()", "#| -> void"]);
-    });
-
-    assert_definition_at!(&context, "23:1-23:21", Class, |def| {
-        assert_def_name_eq!(&context, def, "BlankLine");
-        assert_def_comments_eq!(&context, def, ["# Comment with blank line"]);
-    });
-
-    assert_definition_at!(&context, "28:1-28:21", Class, |def| {
-        assert_def_name_eq!(&context, def, "NoComment");
-        assert!(def.comments().is_empty());
-    });
-}
-
-#[test]
-fn index_comments_indented_and_nested() {
-    let context = index_source({
-        "
-        # Outer class
-        class Outer
-          # Inner class at 2 spaces
-          class Inner
-            # Deep class at 4 spaces
-            class Deep; end
-          end
-
-          # Another inner class
-          # with multiple lines
-          class AnotherInner; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "2:1-12:4", Class, |def| {
-        assert_def_name_eq!(&context, def, "Outer");
-        assert_def_comments_eq!(&context, def, ["# Outer class"]);
-    });
-
-    assert_definition_at!(&context, "4:3-7:6", Class, |def| {
-        assert_def_name_eq!(&context, def, "Inner");
-        assert_def_comments_eq!(&context, def, ["# Inner class at 2 spaces"]);
-    });
-
-    assert_definition_at!(&context, "6:5-6:20", Class, |def| {
-        assert_def_name_eq!(&context, def, "Deep");
-        assert_def_comments_eq!(&context, def, ["# Deep class at 4 spaces"]);
-    });
-
-    assert_definition_at!(&context, "11:3-11:26", Class, |def| {
-        assert_def_name_eq!(&context, def, "AnotherInner");
-        assert_def_comments_eq!(&context, def, ["# Another inner class", "# with multiple lines"]);
-    });
-}
-
-#[test]
-fn index_comments_with_tags() {
-    let context = index_source({
-        "
-        # @deprecated
-        class Deprecated; end
-
-        class NotDeprecated; end
-
-        # Multi-line comment
-        # @deprecated Use something else
-        def deprecated_method; end
-
-        # Not @deprecated
-        def not_deprecated_method; end
-        "
-    });
-
-    assert!(context.definition_at("2:1-2:22").is_deprecated());
-    assert!(!context.definition_at("4:1-4:25").is_deprecated());
-    assert!(context.definition_at("8:1-8:27").is_deprecated());
-    assert!(!context.definition_at("11:1-11:31").is_deprecated());
-}
-
-#[test]
-fn index_comments_attr_accessor() {
-    let context = index_source({
-        "
-        class Foo
-          # Comment
-          attr_reader :foo
-
-          # Comment 1
-          # Comment 2
-          # Comment 3
-          attr_writer :bar
-
-          # Comment 1
-          # Comment 2
-          # Comment 3
-          attr_accessor :baz, :qux
-
-          # Comment
-          attr :quux, true
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "3:16-3:19", AttrReader, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment"]);
-    });
-
-    assert_definition_at!(&context, "8:16-8:19", AttrWriter, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
-    });
-
-    assert_definition_at!(&context, "13:18-13:21", AttrAccessor, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
-    });
-
-    assert_definition_at!(&context, "13:24-13:27", AttrAccessor, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
-    });
-
-    assert_definition_at!(&context, "16:9-16:13", AttrAccessor, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment"]);
-    });
-}
-
-#[test]
-fn index_comments_on_top_of_signature() {
-    let context = index_source({
-        "
-        class Foo
-          # Bar docs
-          # are here
-          sig { returns(Integer) }
-          attr_reader :bar
-
-          # Baz docs
-          # are in this other place
-          sig do
-            params(x: Integer).void
-          end
-          def baz(x); end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "5:16-5:19", AttrReader, |def| {
-        assert_def_comments_eq!(&context, def, ["# Bar docs", "# are here"]);
-    });
-
-    assert_definition_at!(&context, "12:3-12:18", Method, |def| {
-        assert_def_comments_eq!(&context, def, ["# Baz docs", "# are in this other place"]);
-    });
-}
-
-#[test]
-fn index_comments_on_top_of_multiple_attribute_signature() {
-    let context = index_source({
-        "
-        class Foo
-          # Docs
-          sig { returns(Integer) }
-          attr_reader :bar, :baz
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
-        assert_def_comments_eq!(&context, def, ["# Docs"]);
-    });
-
-    assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
-        assert_def_comments_eq!(&context, def, ["# Docs"]);
-    });
-}
-
-#[test]
-fn index_comments_on_sig_without_runtime() {
-    let context = index_source({
-        "
-        class Foo
-          # Docs
-          T::Sig::WithoutRuntime.sig { returns(Integer) }
-          def bar; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "4:3-4:15", Method, |def| {
-        assert_def_comments_eq!(&context, def, ["# Docs"]);
-    });
-}
-
-#[test]
-fn index_comments_blank_line_between_annotation_and_def() {
-    let context = index_source({
-        "
-        class Foo
-          # Docs
-          sig { returns(Integer) }
-
-          def bar; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "5:3-5:15", Method, |def| {
-        assert!(def.comments().is_empty());
-    });
-}
-
-#[test]
-fn index_double_line_between_comment_and_annotation() {
-    let context = index_source({
-        "
-        class Foo
-          # Docs for bar
-
-
-          sig { params(x: Integer).void }
-          def bar(x); end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "6:3-6:18", Method, |def| {
-        assert!(def.comments().is_empty());
-    });
-}
-
-#[test]
-fn index_line_between_comment_and_annotation() {
-    let context = index_source({
-        "
-        class Foo
-          # Docs for bar
-
-          sig { params(x: Integer).void }
-          def bar(x); end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "5:3-5:18", Method, |def| {
-        assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
-    });
-}
-
-#[test]
-fn index_anything_between_comment_and_annotation() {
-    let context = index_source({
-        "
-        class Foo
-          # Docs for bar
-          sig { params(x: Integer).void }
-          something_else
-          def bar(x); end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "5:3-5:18", Method, |def| {
-        assert!(def.comments().is_empty());
-    });
-}
-
-#[test]
-fn index_comments_annotation_does_not_leak_through_other_code() {
-    let context = index_source({
-        "
-        class Foo
-          # Should not leak
-          sig { returns(Integer) }
-          include SomeModule
-
-          # Docs for bar
-          def bar; end
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "7:3-7:15", Method, |def| {
-        assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
-    });
-}
-
-#[test]
-fn index_comments_decorator_above_private_def() {
-    let context = index_source({
-        "
-        class Foo
-          # Docs for foo
-          sig { params(x: Integer).void }
-          private def foo(x); end
-
-          # Docs for bar
-          sig { returns(Integer) }
-          private attr_reader :bar
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "4:11-4:26", Method, |def| {
-        assert_def_comments_eq!(&context, def, ["# Docs for foo"]);
-    });
-
-    assert_definition_at!(&context, "8:24-8:27", AttrReader, |def| {
-        assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
-    });
-}
-
-#[test]
-fn index_comments_visibility() {
-    let context = index_source({
-        "
-        class Foo
-          # Comment
-          private def foo; end
-
-          # Comment
-          protected def bar; end
-
-          # Comment
-          public def baz; end
-
-          # Comment
-          private attr_reader :qux
-        end
-        "
-    });
-
-    assert_definition_at!(&context, "3:11-3:23", Method, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment"]);
-    });
-
-    assert_definition_at!(&context, "6:13-6:25", Method, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment"]);
-    });
-
-    assert_definition_at!(&context, "9:10-9:22", Method, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment"]);
-    });
-
-    assert_definition_at!(&context, "12:24-12:27", AttrReader, |def| {
-        assert_def_comments_eq!(&context, def, ["# Comment"]);
-    });
-}
-
 #[test]
 fn constant_with_call_value_is_promotable() {
     let context = index_source("Foo = some_call");
@@ -3990,6 +3554,444 @@ mod alias_tests {
 
                 assert_eq!(foo_class_def.id(), def.lexical_nesting_id().unwrap());
             });
+        });
+    }
+}
+
+mod comment_tests {
+    use super::*;
+
+    #[test]
+    fn index_comments_attached_to_definitions() {
+        let context = index_source({
+            "
+            # Single comment
+            class Single; end
+
+            # Multi-line comment 1
+            # Multi-line comment 2
+            # Multi-line comment 3
+            module Multi; end
+
+            # Comment 1
+            #
+            # Comment 2
+            class EmptyCommentLine; end
+
+            # Comment directly above (no gap)
+            NoGap = 42
+
+            #: ()
+            #| -> void
+            def foo; end
+
+            # Comment with blank line
+
+            class BlankLine; end
+
+            # Too far away
+
+
+            class NoComment; end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-2:18", Class, |def| {
+            assert_def_name_eq!(&context, def, "Single");
+            assert_def_comments_eq!(&context, def, ["# Single comment"]);
+        });
+
+        assert_definition_at!(&context, "7:1-7:18", Module, |def| {
+            assert_def_name_eq!(&context, def, "Multi");
+            assert_def_comments_eq!(
+                &context,
+                def,
+                [
+                    "# Multi-line comment 1",
+                    "# Multi-line comment 2",
+                    "# Multi-line comment 3"
+                ]
+            );
+        });
+
+        assert_definition_at!(&context, "12:1-12:28", Class, |def| {
+            assert_def_name_eq!(&context, def, "EmptyCommentLine");
+            assert_def_comments_eq!(&context, def, ["# Comment 1", "#", "# Comment 2"]);
+        });
+
+        assert_definition_at!(&context, "15:1-15:6", Constant, |def| {
+            assert_def_name_eq!(&context, def, "NoGap");
+            assert_def_comments_eq!(&context, def, ["# Comment directly above (no gap)"]);
+        });
+
+        assert_definition_at!(&context, "19:1-19:13", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_def_comments_eq!(&context, def, ["#: ()", "#| -> void"]);
+        });
+
+        assert_definition_at!(&context, "23:1-23:21", Class, |def| {
+            assert_def_name_eq!(&context, def, "BlankLine");
+            assert_def_comments_eq!(&context, def, ["# Comment with blank line"]);
+        });
+
+        assert_definition_at!(&context, "28:1-28:21", Class, |def| {
+            assert_def_name_eq!(&context, def, "NoComment");
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
+    fn index_comments_indented_and_nested() {
+        let context = index_source({
+            "
+            # Outer class
+            class Outer
+              # Inner class at 2 spaces
+              class Inner
+                # Deep class at 4 spaces
+                class Deep; end
+              end
+
+              # Another inner class
+              # with multiple lines
+              class AnotherInner; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:1-12:4", Class, |def| {
+            assert_def_name_eq!(&context, def, "Outer");
+            assert_def_comments_eq!(&context, def, ["# Outer class"]);
+        });
+
+        assert_definition_at!(&context, "4:3-7:6", Class, |def| {
+            assert_def_name_eq!(&context, def, "Inner");
+            assert_def_comments_eq!(&context, def, ["# Inner class at 2 spaces"]);
+        });
+
+        assert_definition_at!(&context, "6:5-6:20", Class, |def| {
+            assert_def_name_eq!(&context, def, "Deep");
+            assert_def_comments_eq!(&context, def, ["# Deep class at 4 spaces"]);
+        });
+
+        assert_definition_at!(&context, "11:3-11:26", Class, |def| {
+            assert_def_name_eq!(&context, def, "AnotherInner");
+            assert_def_comments_eq!(&context, def, ["# Another inner class", "# with multiple lines"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_with_tags() {
+        let context = index_source({
+            "
+            # @deprecated
+            class Deprecated; end
+
+            class NotDeprecated; end
+
+            # Multi-line comment
+            # @deprecated Use something else
+            def deprecated_method; end
+
+            # Not @deprecated
+            def not_deprecated_method; end
+            "
+        });
+
+        assert!(context.definition_at("2:1-2:22").is_deprecated());
+        assert!(!context.definition_at("4:1-4:25").is_deprecated());
+        assert!(context.definition_at("8:1-8:27").is_deprecated());
+        assert!(!context.definition_at("11:1-11:31").is_deprecated());
+    }
+
+    #[test]
+    fn index_comments_attr_accessor() {
+        let context = index_source({
+            "
+            class Foo
+              # Comment
+              attr_reader :foo
+
+              # Comment 1
+              # Comment 2
+              # Comment 3
+              attr_writer :bar
+
+              # Comment 1
+              # Comment 2
+              # Comment 3
+              attr_accessor :baz, :qux
+
+              # Comment
+              attr :quux, true
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:16-3:19", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "8:16-8:19", AttrWriter, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "13:18-13:21", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "13:24-13:27", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
+        });
+
+        assert_definition_at!(&context, "16:9-16:13", AttrAccessor, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_on_top_of_signature() {
+        let context = index_source({
+            "
+            class Foo
+              # Bar docs
+              # are here
+              sig { returns(Integer) }
+              attr_reader :bar
+
+              # Baz docs
+              # are in this other place
+              sig do
+                params(x: Integer).void
+              end
+              def baz(x); end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:16-5:19", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Bar docs", "# are here"]);
+        });
+
+        assert_definition_at!(&context, "12:3-12:18", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Baz docs", "# are in this other place"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_on_top_of_multiple_attribute_signature() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs
+              sig { returns(Integer) }
+              attr_reader :bar, :baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:16-4:19", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs"]);
+        });
+
+        assert_definition_at!(&context, "4:22-4:25", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_on_sig_without_runtime() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs
+              T::Sig::WithoutRuntime.sig { returns(Integer) }
+              def bar; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:3-4:15", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_blank_line_between_annotation_and_def() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs
+              sig { returns(Integer) }
+
+              def bar; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:3-5:15", Method, |def| {
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
+    fn index_double_line_between_comment_and_annotation() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs for bar
+
+
+              sig { params(x: Integer).void }
+              def bar(x); end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "6:3-6:18", Method, |def| {
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
+    fn index_line_between_comment_and_annotation() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs for bar
+
+              sig { params(x: Integer).void }
+              def bar(x); end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:3-5:18", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
+        });
+    }
+
+    #[test]
+    fn index_anything_between_comment_and_annotation() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs for bar
+              sig { params(x: Integer).void }
+              something_else
+              def bar(x); end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "5:3-5:18", Method, |def| {
+            assert!(def.comments().is_empty());
+        });
+    }
+
+    #[test]
+    fn index_comments_annotation_does_not_leak_through_other_code() {
+        let context = index_source({
+            "
+            class Foo
+              # Should not leak
+              sig { returns(Integer) }
+              include SomeModule
+
+              # Docs for bar
+              def bar; end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "7:3-7:15", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_decorator_above_private_def() {
+        let context = index_source({
+            "
+            class Foo
+              # Docs for foo
+              sig { params(x: Integer).void }
+              private def foo(x); end
+
+              # Docs for bar
+              sig { returns(Integer) }
+              private attr_reader :bar
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:11-4:26", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs for foo"]);
+        });
+
+        assert_definition_at!(&context, "8:24-8:27", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Docs for bar"]);
+        });
+    }
+
+    #[test]
+    fn index_comments_visibility() {
+        let context = index_source({
+            "
+            class Foo
+              # Comment
+              private def foo; end
+
+              # Comment
+              protected def bar; end
+
+              # Comment
+              public def baz; end
+
+              # Comment
+              private attr_reader :qux
+            end
+            "
+        });
+
+        assert_definition_at!(&context, "3:11-3:23", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "6:13-6:25", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "9:10-9:22", Method, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
+        });
+
+        assert_definition_at!(&context, "12:24-12:27", AttrReader, |def| {
+            assert_def_comments_eq!(&context, def, ["# Comment"]);
         });
     }
 }
