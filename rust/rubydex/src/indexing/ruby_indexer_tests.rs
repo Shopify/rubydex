@@ -188,200 +188,6 @@ fn index_alias_ignores_method_nesting() {
 }
 
 #[test]
-fn index_includes_at_top_level() {
-    let context = index_source({
-        "
-        include Bar, Baz
-        include Qux
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // FIXME: This should be indexed
-    assert_eq!(context.graph().definitions().len(), 0);
-}
-
-#[test]
-fn index_includes_in_classes() {
-    let context = index_source({
-        "
-        class Foo
-          include Bar, Baz
-          include Qux
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-        assert_def_mixins_eq!(&context, def, Include, ["Baz", "Bar", "Qux"]);
-    });
-}
-
-#[test]
-fn index_includes_in_modules() {
-    let context = index_source({
-        "
-        module Foo
-          include Bar, Baz
-          include Qux
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-        assert_def_mixins_eq!(&context, def, Include, ["Baz", "Bar", "Qux"]);
-    });
-}
-
-#[test]
-fn index_prepends_at_top_level() {
-    let context = index_source({
-        "
-        prepend Bar, Baz
-        prepend Qux
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    // FIXME: This should be indexed
-    assert_eq!(context.graph().definitions().len(), 0);
-}
-
-#[test]
-fn index_prepends_in_classes() {
-    let context = index_source({
-        "
-        class Foo
-          prepend Bar, Baz
-          prepend Qux
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-4:4", Class, |def| {
-        assert_def_mixins_eq!(&context, def, Prepend, ["Baz", "Bar", "Qux"]);
-    });
-}
-
-#[test]
-fn index_prepends_in_modules() {
-    let context = index_source({
-        "
-        module Foo
-          prepend Bar, Baz
-          prepend Qux
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-4:4", Module, |def| {
-        assert_def_mixins_eq!(&context, def, Prepend, ["Baz", "Bar", "Qux"]);
-    });
-}
-
-#[test]
-fn index_extends_in_class() {
-    let context = index_source({
-        "
-        class Foo
-          extend Bar
-          extend Baz
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
-        assert_def_mixins_eq!(&context, class_def, Extend, ["Bar", "Baz"]);
-    });
-}
-
-#[test]
-fn index_mixins_self() {
-    let context = index_source({
-        "
-        module Foo
-          include self
-          prepend self
-          extend self
-        end
-        "
-    });
-
-    assert_no_local_diagnostics!(&context);
-
-    assert_definition_at!(&context, "1:1-5:4", Module, |def| {
-        assert_def_mixins_eq!(&context, def, Include, ["Foo"]);
-        assert_def_mixins_eq!(&context, def, Prepend, ["Foo"]);
-        assert_def_mixins_eq!(&context, def, Extend, ["Foo"]);
-    });
-}
-
-#[test]
-fn index_mixins_with_dynamic_constants() {
-    let context = index_source({
-        "
-        include foo::Bar
-        prepend foo::Baz
-        extend foo::Qux
-
-        include foo
-        prepend 123
-        extend 'x'
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "dynamic-constant-reference: Dynamic constant reference (1:9-1:12)",
-            "dynamic-ancestor: Dynamic mixin argument (1:9-1:17)",
-            "dynamic-constant-reference: Dynamic constant reference (2:9-2:12)",
-            "dynamic-ancestor: Dynamic mixin argument (2:9-2:17)",
-            "dynamic-constant-reference: Dynamic constant reference (3:8-3:11)",
-            "dynamic-ancestor: Dynamic mixin argument (3:8-3:16)",
-            "dynamic-ancestor: Dynamic mixin argument (5:9-5:12)",
-            "dynamic-ancestor: Dynamic mixin argument (6:9-6:12)",
-            "dynamic-ancestor: Dynamic mixin argument (7:8-7:11)"
-        ]
-    );
-    assert!(context.graph().definitions().is_empty());
-}
-
-#[test]
-fn index_mixins_self_at_top_level() {
-    let context = index_source({
-        "
-        include self
-        prepend self
-        extend self
-        "
-    });
-
-    assert_local_diagnostics_eq!(
-        &context,
-        [
-            "top-level-mixin-self: Top level mixin self (1:9-1:13)",
-            "top-level-mixin-self: Top level mixin self (2:9-2:13)",
-            "top-level-mixin-self: Top level mixin self (3:8-3:12)"
-        ]
-    );
-
-    assert_eq!(context.graph().definitions().len(), 0);
-}
-
-#[test]
 fn index_alias_methods_nested() {
     let context = index_source({
         "
@@ -4493,6 +4299,204 @@ mod superclass_tests {
         assert_definition_at!(&context, "4:1-4:26", Class, |def| {
             assert!(def.superclass_ref().is_none(),);
         });
+    }
+}
+
+mod mixin_tests {
+    use super::*;
+
+    #[test]
+    fn index_includes_at_top_level() {
+        let context = index_source({
+            "
+            include Bar, Baz
+            include Qux
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // FIXME: This should be indexed
+        assert_eq!(context.graph().definitions().len(), 0);
+    }
+
+    #[test]
+    fn index_includes_in_classes() {
+        let context = index_source({
+            "
+            class Foo
+              include Bar, Baz
+              include Qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |def| {
+            assert_def_mixins_eq!(&context, def, Include, ["Baz", "Bar", "Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_includes_in_modules() {
+        let context = index_source({
+            "
+            module Foo
+              include Bar, Baz
+              include Qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Module, |def| {
+            assert_def_mixins_eq!(&context, def, Include, ["Baz", "Bar", "Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_prepends_at_top_level() {
+        let context = index_source({
+            "
+            prepend Bar, Baz
+            prepend Qux
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        // FIXME: This should be indexed
+        assert_eq!(context.graph().definitions().len(), 0);
+    }
+
+    #[test]
+    fn index_prepends_in_classes() {
+        let context = index_source({
+            "
+            class Foo
+              prepend Bar, Baz
+              prepend Qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |def| {
+            assert_def_mixins_eq!(&context, def, Prepend, ["Baz", "Bar", "Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_prepends_in_modules() {
+        let context = index_source({
+            "
+            module Foo
+              prepend Bar, Baz
+              prepend Qux
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Module, |def| {
+            assert_def_mixins_eq!(&context, def, Prepend, ["Baz", "Bar", "Qux"]);
+        });
+    }
+
+    #[test]
+    fn index_extends_in_class() {
+        let context = index_source({
+            "
+            class Foo
+              extend Bar
+              extend Baz
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-4:4", Class, |class_def| {
+            assert_def_mixins_eq!(&context, class_def, Extend, ["Bar", "Baz"]);
+        });
+    }
+
+    #[test]
+    fn index_mixins_self() {
+        let context = index_source({
+            "
+            module Foo
+              include self
+              prepend self
+              extend self
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Module, |def| {
+            assert_def_mixins_eq!(&context, def, Include, ["Foo"]);
+            assert_def_mixins_eq!(&context, def, Prepend, ["Foo"]);
+            assert_def_mixins_eq!(&context, def, Extend, ["Foo"]);
+        });
+    }
+
+    #[test]
+    fn index_mixins_with_dynamic_constants() {
+        let context = index_source({
+            "
+            include foo::Bar
+            prepend foo::Baz
+            extend foo::Qux
+
+            include foo
+            prepend 123
+            extend 'x'
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "dynamic-constant-reference: Dynamic constant reference (1:9-1:12)",
+                "dynamic-ancestor: Dynamic mixin argument (1:9-1:17)",
+                "dynamic-constant-reference: Dynamic constant reference (2:9-2:12)",
+                "dynamic-ancestor: Dynamic mixin argument (2:9-2:17)",
+                "dynamic-constant-reference: Dynamic constant reference (3:8-3:11)",
+                "dynamic-ancestor: Dynamic mixin argument (3:8-3:16)",
+                "dynamic-ancestor: Dynamic mixin argument (5:9-5:12)",
+                "dynamic-ancestor: Dynamic mixin argument (6:9-6:12)",
+                "dynamic-ancestor: Dynamic mixin argument (7:8-7:11)"
+            ]
+        );
+        assert!(context.graph().definitions().is_empty());
+    }
+
+    #[test]
+    fn index_mixins_self_at_top_level() {
+        let context = index_source({
+            "
+            include self
+            prepend self
+            extend self
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            [
+                "top-level-mixin-self: Top level mixin self (1:9-1:13)",
+                "top-level-mixin-self: Top level mixin self (2:9-2:13)",
+                "top-level-mixin-self: Top level mixin self (3:8-3:12)"
+            ]
+        );
+
+        assert_eq!(context.graph().definitions().len(), 0);
     }
 }
 
