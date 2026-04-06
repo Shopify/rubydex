@@ -664,9 +664,18 @@ impl Graph {
         let items: Vec<InvalidationItem> = candidates
             .into_iter()
             .filter(|decl_id| {
-                self.declarations
-                    .get(decl_id)
-                    .is_some_and(Declaration::has_no_definitions)
+                self.declarations.get(decl_id).is_some_and(|decl| {
+                    // Skip synthetic declarations that acquired members during
+                    // resolution — they're actively serving as namespace parents.
+                    // TODOs from create_todo_for_parent and singletons from
+                    // get_or_create_singleton_class are both definition-less but
+                    // may hold child declarations or methods.
+                    let is_synthetic_with_members = matches!(
+                        decl,
+                        Declaration::Namespace(Namespace::Todo(_) | Namespace::SingletonClass(_))
+                    ) && decl.as_namespace().is_some_and(|ns| !ns.members().is_empty());
+                    decl.has_no_definitions() && !is_synthetic_with_members
+                })
             })
             .map(InvalidationItem::Declaration)
             .collect();
@@ -3908,6 +3917,87 @@ mod incremental_resolution_tests {
         assert!(
             extras.is_empty(),
             "Orphan declarations after unrelated file delete: {extras:?}"
+        );
+    }
+
+    /// Regression test from Core via `--bisect`: compact-notation class with deep
+    /// nesting loses declarations after deleting and re-adding a file that defines
+    /// a shared ancestor. The TODO placeholders created by `create_todo_for_parent`
+    /// were being cleaned up by `cleanup_empty_declarations` from a previous cycle
+    /// even though they now hold members.
+    #[test]
+    fn compact_class_declarations_restored_after_shared_ancestor_delete_readd() {
+        let a = "module Google; end; class Google::Protobuf; end";
+        let b = "class Google::Cloud::V2::Type < Google::Protobuf; end";
+
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///a.rb", a);
+        incremental.index_uri("file:///b.rb", b);
+        incremental.resolve();
+
+        assert_declaration_exists!(incremental, "Google::Cloud::V2::Type");
+
+        incremental.delete_uri("file:///a.rb");
+        incremental.resolve();
+
+        incremental.index_uri("file:///a.rb", a);
+        incremental.resolve();
+
+        assert_declaration_exists!(incremental, "Google");
+        assert_declaration_exists!(incremental, "Google::Protobuf");
+        assert_declaration_exists!(incremental, "Google::Cloud::V2::Type");
+    }
+
+    /// Regression test from Core via `--bisect`: compact-notation class with
+    /// `class << self` creates a singleton on a TODO placeholder. Double
+    /// resolve must not leak extra singleton declarations.
+    #[test]
+    fn no_leaked_singleton_on_todo_after_double_resolve() {
+        // Matches bisect: ActiveRecord::SessionStore::Session with class << self
+        // + module ActiveRecord from errors.rb + activesupport rbi
+        let session_rbi = r#"
+            class ActiveRecord::SessionStore::Session
+              class << self
+                def new(attributes = nil); end
+              end
+            end
+        "#;
+        let errors_rb = r#"
+            module ActiveRecord
+              class ActiveRecordError < StandardError; end
+            end
+        "#;
+
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///session.rbi", session_rbi);
+        incremental.index_uri("file:///errors.rb", errors_rb);
+        incremental.resolve();
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///session.rbi", session_rbi);
+        fresh.index_uri("file:///errors.rb", errors_rb);
+        fresh.resolve();
+
+        let extras: Vec<_> = incremental
+            .graph()
+            .declarations()
+            .iter()
+            .filter(|(id, _)| !fresh.graph().declarations().contains_key(id))
+            .map(|(_, d)| format!("{} ({})", d.name(), d.kind()))
+            .collect();
+
+        let missing: Vec<_> = fresh
+            .graph()
+            .declarations()
+            .iter()
+            .filter(|(id, _)| !incremental.graph().declarations().contains_key(id))
+            .map(|(_, d)| format!("{} ({})", d.name(), d.kind()))
+            .collect();
+
+        assert!(
+            extras.is_empty() && missing.is_empty(),
+            "Declaration mismatch after double resolve:\n  Extra: {extras:?}\n  Missing: {missing:?}"
         );
     }
 } // mod incremental_resolution_tests

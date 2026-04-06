@@ -682,6 +682,12 @@ impl<'a> Resolver<'a> {
             )))),
         );
 
+        // Mark for post-resolution cleanup: if the singleton stays empty
+        // (no members added during resolution), it was created speculatively
+        // and should be removed. This handles singletons created during
+        // incremental re-resolution when ancestor chains are temporarily broken.
+        self.graph.mark_declaration_for_cleanup(decl_id);
+
         // Queue ancestor linearization so the singleton's ancestor chain is
         // built — this cascades upward via singleton_parent_id, creating
         // parent singletons as needed.
