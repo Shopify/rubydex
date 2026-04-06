@@ -2295,6 +2295,48 @@ mod tests {
     }
 
     #[test]
+    fn resolution_for_self_method_with_same_name_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.run; end
+              def run; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["run()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["run()"]);
+    }
+
+    #[test]
+    fn resolution_for_self_method_alias_with_same_name_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri(
+            "file:///foo.rbs",
+            r"
+            class Foo
+              def self.run: () -> void
+              def run: () -> void
+              alias self.execute self.run
+              alias execute run
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::<Foo>", ["execute()", "run()"]);
+        assert_members_eq!(context, "Foo", ["execute()", "run()"]);
+    }
+
+    #[test]
     fn linearizing_super_classes() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
