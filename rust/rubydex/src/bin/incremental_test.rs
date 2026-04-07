@@ -8,7 +8,7 @@ use clap::Parser;
 use rubydex::{
     indexing::{self, LanguageId},
     integrity, listing,
-    model::graph::Graph,
+    model::graph::{Graph, TraceEvent},
     resolution::Resolver,
 };
 
@@ -41,6 +41,10 @@ struct Args {
     /// Number of retries per bisect step (for non-deterministic failures)
     #[arg(long, default_value = "1")]
     retries: usize,
+
+    /// Trace creation/removal of declarations whose name contains PATTERN
+    #[arg(long, value_name = "PATTERN")]
+    trace_declaration: Option<String>,
 }
 
 /// Delete percentage (hardcoded for now)
@@ -166,6 +170,19 @@ fn check_unmapped_definitions(graph: &Graph, uri: &str) -> Vec<String> {
     unmapped
 }
 
+fn set_trace_for_phase(graph: &mut Graph, pattern: &str, phase: &str) {
+    let pat = pattern.to_string();
+    let phase = phase.to_string();
+    graph.set_trace(move |event| {
+        let name = match &event {
+            TraceEvent::Created { name, .. } | TraceEvent::Removed { name, .. } => name,
+        };
+        if name.contains(pat.as_str()) {
+            eprintln!("[TRACE {phase}] {event}");
+        }
+    });
+}
+
 /// Result of comparing incremental vs fresh graphs.
 struct RoundResult {
     counts: GraphCounts,
@@ -182,6 +199,7 @@ fn run_round(
     delete_indices: &[usize],
     indexed_indices: Option<&[usize]>,
     verbose: bool,
+    trace_pattern: Option<&str>,
 ) -> RoundResult {
     let all_indices: Vec<usize> = (0..files.len()).collect();
     let active_indices = indexed_indices.unwrap_or(&all_indices);
@@ -190,6 +208,9 @@ fn run_round(
     for &i in active_indices {
         let (ref uri, ref source, ref lang) = files[i];
         indexing::index_source(&mut incremental, uri, source, lang);
+    }
+    if let Some(pat) = trace_pattern {
+        set_trace_for_phase(&mut incremental, pat, "initial");
     }
     resolve(&mut incremental);
 
@@ -225,6 +246,9 @@ fn run_round(
     if verbose {
         println!("  Resolving after delete...");
     }
+    if let Some(pat) = trace_pattern {
+        set_trace_for_phase(&mut incremental, pat, "post-delete");
+    }
     resolve(&mut incremental);
 
     for &i in delete_indices {
@@ -233,6 +257,9 @@ fn run_round(
 
     if verbose {
         println!("  Resolving after re-index...");
+    }
+    if let Some(pat) = trace_pattern {
+        set_trace_for_phase(&mut incremental, pat, "post-re-add");
     }
     resolve(&mut incremental);
 
@@ -243,6 +270,9 @@ fn run_round(
     for &i in active_indices {
         let (ref uri, ref source, ref lang) = files[i];
         indexing::index_source(&mut fresh, uri, source, lang);
+    }
+    if let Some(pat) = trace_pattern {
+        set_trace_for_phase(&mut fresh, pat, "fresh");
     }
     resolve(&mut fresh);
 
@@ -297,7 +327,7 @@ fn round_fails(
 ) -> bool {
     for _ in 0..retries {
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            run_round(files, delete_indices, indexed_indices, false)
+            run_round(files, delete_indices, indexed_indices, false, None)
         }));
         let failed = match result {
             Ok(r) => !r.extras.is_empty() || !r.missing.is_empty() || !r.integrity_errors.is_empty(),
@@ -508,7 +538,7 @@ fn bisect_and_report(
 
     // Final verification
     println!("\nFinal verification:");
-    let final_result = run_round(files, &min_deleted, Some(&indexed), true);
+    let final_result = run_round(files, &min_deleted, Some(&indexed), true, None);
     print_round_result(&final_result, fresh_counts);
 
     // Print the minimal reproduction
@@ -680,8 +710,9 @@ fn main() {
         let round_start = Instant::now();
 
         let idx_ref = indexed_indices.as_deref();
+        let trace_pat = args.trace_declaration.as_deref();
         let round_result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            run_round(&files, &delete_indices, idx_ref, true)
+            run_round(&files, &delete_indices, idx_ref, true, trace_pat)
         }));
 
         let elapsed = round_start.elapsed().as_secs_f64();

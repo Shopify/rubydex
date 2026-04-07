@@ -10,7 +10,7 @@ use crate::model::{
         Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
     definitions::{Definition, Mixin, Receiver},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, Unit},
+    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, TraceEvent, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
     ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
     name::{Name, NameRef, ParentScope},
@@ -674,6 +674,7 @@ impl<'a> Resolver<'a> {
         let decl_id = DeclarationId::from(&fully_qualified_name);
         namespace_decl.set_singleton_class_id(decl_id);
 
+        let trace_name = fully_qualified_name.clone();
         self.graph.declarations_mut().insert(
             decl_id,
             Declaration::Namespace(Namespace::SingletonClass(Box::new(SingletonClassDeclaration::new(
@@ -681,6 +682,11 @@ impl<'a> Resolver<'a> {
                 attached_id,
             )))),
         );
+        self.graph.emit_trace(TraceEvent::Created {
+            name: &trace_name,
+            kind: "SingletonClass",
+            caller: "get_or_create_singleton",
+        });
 
         // Mark for post-resolution cleanup: if the singleton stays empty
         // (no members added during resolution), it was created speculatively
@@ -1163,12 +1169,18 @@ impl<'a> Resolver<'a> {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
         if let Entry::Vacant(e) = self.graph.declarations_mut().entry(declaration_id) {
+            let trace_name = fully_qualified_name.clone();
             e.insert(Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(
                 fully_qualified_name,
                 parent_owner_id,
             )))));
             self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
             self.graph.mark_declaration_for_cleanup(declaration_id);
+            self.graph.emit_trace(TraceEvent::Created {
+                name: &trace_name,
+                kind: "Todo",
+                caller: "create_todo",
+            });
         }
 
         declaration_id

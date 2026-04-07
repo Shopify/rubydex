@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -15,6 +16,34 @@ use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::stats;
+
+/// Events emitted by the graph when declarations are created or removed.
+/// Used for debugging and tracing declaration lifecycle.
+pub enum TraceEvent<'a> {
+    Created {
+        name: &'a str,
+        kind: &'static str,
+        caller: &'static str,
+    },
+    Removed {
+        name: &'a str,
+        kind: &'static str,
+        caller: &'static str,
+    },
+}
+
+impl fmt::Display for TraceEvent<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TraceEvent::Created { name, kind, caller } => {
+                write!(f, "CREATED {name} ({kind}) by {caller}")
+            }
+            TraceEvent::Removed { name, kind, caller } => {
+                write!(f, "REMOVED {name} ({kind}) by {caller}")
+            }
+        }
+    }
+}
 
 /// An entity whose validity depends on a particular `NameId`.
 /// Used as the value type in the `name_dependents` reverse index.
@@ -56,7 +85,7 @@ pub enum Unit {
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Graph {
     // Map of declaration nodes
     declarations: IdentityHashMap<DeclarationId, Declaration>,
@@ -92,6 +121,10 @@ pub struct Graph {
     /// Deferred until after resolution — if the declaration was repopulated, skip it.
     /// Drained by `take_pending_declaration_cleanup()`.
     pending_declaration_cleanup: Vec<DeclarationId>,
+
+    /// Optional callback for tracing declaration lifecycle events (creation/removal).
+    #[allow(clippy::type_complexity)]
+    trace_fn: Option<Box<dyn Fn(TraceEvent<'_>)>>,
 }
 
 impl Graph {
@@ -122,7 +155,7 @@ impl Graph {
             )))),
         );
 
-        Self {
+        let graph = Self {
             declarations,
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
@@ -135,6 +168,35 @@ impl Graph {
             pending_work: Vec::default(),
             excluded_paths: HashSet::new(),
             pending_declaration_cleanup: Vec::default(),
+            trace_fn: None,
+        };
+
+        graph.emit_trace(TraceEvent::Created {
+            name: "Object",
+            kind: "Class",
+            caller: "bootstrap",
+        });
+        graph.emit_trace(TraceEvent::Created {
+            name: "Module",
+            kind: "Class",
+            caller: "bootstrap",
+        });
+        graph.emit_trace(TraceEvent::Created {
+            name: "Class",
+            kind: "Class",
+            caller: "bootstrap",
+        });
+
+        graph
+    }
+
+    pub fn set_trace(&mut self, f: impl Fn(TraceEvent<'_>) + 'static) {
+        self.trace_fn = Some(Box::new(f));
+    }
+
+    pub(crate) fn emit_trace(&self, event: TraceEvent<'_>) {
+        if let Some(ref f) = self.trace_fn {
+            f(event);
         }
     }
 
@@ -211,7 +273,14 @@ impl Graph {
             Entry::Vacant(vacant_entry) => {
                 let mut declaration = constructor(fully_qualified_name);
                 declaration.add_definition(definition_id);
+                let trace_name = declaration.name().to_string();
+                let trace_kind = declaration.kind();
                 vacant_entry.insert(declaration);
+                self.emit_trace(TraceEvent::Created {
+                    name: &trace_name,
+                    kind: trace_kind,
+                    caller: "add_declaration",
+                });
             }
         }
 
@@ -248,7 +317,14 @@ impl Graph {
         let mut new_decl = constructor(name, owner_id);
         new_decl.as_namespace_mut().unwrap().extend(old_decl);
 
+        let trace_name = new_decl.name().to_string();
+        let trace_kind = new_decl.kind();
         self.declarations.insert(declaration_id, new_decl);
+        self.emit_trace(TraceEvent::Created {
+            name: &trace_name,
+            kind: trace_kind,
+            caller: "promote",
+        });
     }
 
     #[must_use]
@@ -674,7 +750,15 @@ impl Graph {
                         decl,
                         Declaration::Namespace(Namespace::Todo(_) | Namespace::SingletonClass(_))
                     ) && decl.as_namespace().is_some_and(|ns| !ns.members().is_empty());
-                    decl.has_no_definitions() && !is_synthetic_with_members
+                    let should_remove = decl.has_no_definitions() && !is_synthetic_with_members;
+                    if should_remove {
+                        self.emit_trace(TraceEvent::Removed {
+                            name: decl.name(),
+                            kind: decl.kind(),
+                            caller: "cleanup",
+                        });
+                    }
+                    should_remove
                 })
             })
             .map(InvalidationItem::Declaration)
@@ -1185,6 +1269,14 @@ impl Graph {
             decl.has_no_backing_definitions(&decl_id) || !self.declarations.contains_key(decl.owner_id());
 
         if should_remove {
+            let trace_name = decl.name().to_string();
+            let trace_kind = decl.kind();
+            self.emit_trace(TraceEvent::Removed {
+                name: &trace_name,
+                kind: trace_kind,
+                caller: "invalidate",
+            });
+
             // Remove path: definitions came from a deleted/changed file and won't
             // re-resolve to this declaration. Removal must be immediate so child
             // declarations see a missing owner and cascade correctly.
