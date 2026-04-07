@@ -1,4 +1,5 @@
 #include "reference.h"
+#include "declaration.h"
 #include "graph.h"
 #include "handle.h"
 #include "location.h"
@@ -6,6 +7,8 @@
 
 VALUE cReference;
 VALUE cConstantReference;
+VALUE cUnresolvedConstantReference;
+VALUE cResolvedConstantReference;
 VALUE cMethodReference;
 
 // ConstantReference#name -> String
@@ -72,16 +75,24 @@ static VALUE rdxr_method_reference_location(VALUE self) {
     return location;
 }
 
-// Keep this in sync with unresolved_reference_api.rs
-VALUE rdxi_reference_class_for_kind(ReferenceKind kind) {
-    switch (kind) {
-    case ReferenceKind_Constant:
-        return cConstantReference;
-    case ReferenceKind_Method:
-        return cMethodReference;
-    default:
-        rb_raise(rb_eRuntimeError, "Unknown UnresolvedReferenceKind: %d", kind);
+// ResolvedConstantReference#declaration -> Declaration
+static VALUE rdxr_resolved_constant_reference_declaration(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const struct CDeclaration *decl = rdx_resolved_constant_reference_declaration(graph, data->id);
+    if (decl == NULL) {
+        rb_raise(rb_eRuntimeError, "Invalid declaration for a resolved constant reference");
     }
+
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {data->graph_obj, ULL2NUM(decl->id)};
+    free_c_declaration(decl);
+
+    return rb_class_new_instance(2, argv, decl_class);
 }
 
 void rdxi_initialize_reference(VALUE mRubydex) {
@@ -93,8 +104,16 @@ void rdxi_initialize_reference(VALUE mRubydex) {
     cConstantReference = rb_define_class_under(mRubydex, "ConstantReference", cReference);
     rb_define_alloc_func(cConstantReference, rdxr_handle_alloc);
     rb_define_method(cConstantReference, "initialize", rdxr_handle_initialize, 2);
-    rb_define_method(cConstantReference, "name", rdxr_constant_reference_name, 0);
     rb_define_method(cConstantReference, "location", rdxr_constant_reference_location, 0);
+    rb_funcall(rb_singleton_class(cConstantReference), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
+
+    cUnresolvedConstantReference = rb_define_class_under(mRubydex, "UnresolvedConstantReference", cConstantReference);
+    rb_define_alloc_func(cUnresolvedConstantReference, rdxr_handle_alloc);
+    rb_define_method(cUnresolvedConstantReference, "name", rdxr_constant_reference_name, 0);
+
+    cResolvedConstantReference = rb_define_class_under(mRubydex, "ResolvedConstantReference", cConstantReference);
+    rb_define_alloc_func(cResolvedConstantReference, rdxr_handle_alloc);
+    rb_define_method(cResolvedConstantReference, "declaration", rdxr_resolved_constant_reference_declaration, 0);
 
     cMethodReference = rb_define_class_under(mRubydex, "MethodReference", cReference);
     rb_define_alloc_func(cMethodReference, rdxr_handle_alloc);

@@ -248,9 +248,9 @@ static VALUE graph_constant_references_size(VALUE self, VALUE _args, VALUE _eobj
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    ReferencesIter *iter = rdx_graph_constant_references_iter_new(graph);
-    size_t len = rdx_references_iter_len(iter);
-    rdx_references_iter_free(iter);
+    struct ConstantReferencesIter *iter = rdx_graph_constant_references_iter_new(graph);
+    size_t len = rdx_constant_references_iter_len(iter);
+    rdx_constant_references_iter_free(iter);
 
     return SIZET2NUM(len);
 }
@@ -268,7 +268,7 @@ static VALUE rdxr_graph_constant_references(VALUE self) {
 
     void *iter = rdx_graph_constant_references_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
-    rb_ensure(rdxi_references_yield, args, rdxi_references_ensure, args);
+    rb_ensure(rdxi_constant_references_yield, args, rdxi_constant_references_ensure, args);
 
     return self;
 }
@@ -278,9 +278,9 @@ static VALUE graph_method_references_size(VALUE self, VALUE _args, VALUE _eobj) 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    ReferencesIter *iter = rdx_graph_method_references_iter_new(graph);
-    size_t len = rdx_references_iter_len(iter);
-    rdx_references_iter_free(iter);
+    struct MethodReferencesIter *iter = rdx_graph_method_references_iter_new(graph);
+    size_t len = rdx_method_references_iter_len(iter);
+    rdx_method_references_iter_free(iter);
 
     return SIZET2NUM(len);
 }
@@ -298,7 +298,7 @@ static VALUE rdxr_graph_method_references(VALUE self) {
 
     void *iter = rdx_graph_method_references_iter_new(graph);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
-    rb_ensure(rdxi_references_yield, args, rdxi_references_ensure, args);
+    rb_ensure(rdxi_method_references_yield, args, rdxi_method_references_ensure, args);
 
     return self;
 }

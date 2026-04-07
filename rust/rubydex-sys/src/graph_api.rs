@@ -3,13 +3,14 @@
 use crate::declaration_api::CDeclaration;
 use crate::declaration_api::DeclarationsIter;
 use crate::document_api::DocumentsIter;
-use crate::reference_api::{CReference, ReferenceKind, ReferencesIter};
+use crate::reference_api::{CConstantReference, CMethodReference, ConstantReferencesIter, MethodReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
 use rubydex::indexing::LanguageId;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::{DeclarationId, NameId};
+use rubydex::model::name::NameRef;
 use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
 use rubydex::resolution::Resolver;
 use rubydex::{indexing, integrity, listing, query};
@@ -408,37 +409,51 @@ pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: 
     })
 }
 
-/// Creates a new iterator over constant references by snapshotting the current set of (id, kind) pairs.
+/// Creates a new iterator over constant references by snapshotting the current set of IDs.
 ///
 /// # Safety
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
+pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPointer) -> *mut ConstantReferencesIter {
     with_graph(pointer, |graph| {
         let refs: Vec<_> = graph
             .constant_references()
-            .keys()
-            .map(|id| CReference::new(**id, ReferenceKind::Constant))
+            .iter()
+            .map(|(id, cref)| {
+                let declaration_id = graph
+                    .names()
+                    .get(cref.name_id())
+                    .and_then(|name_ref| match name_ref {
+                        NameRef::Resolved(resolved) => Some(**resolved.declaration_id()),
+                        NameRef::Unresolved(_) => None,
+                    })
+                    .unwrap_or(0);
+
+                CConstantReference {
+                    id: **id,
+                    declaration_id,
+                }
+            })
             .collect();
 
-        ReferencesIter::new(refs.into_boxed_slice())
+        ConstantReferencesIter::new(refs.into_boxed_slice())
     })
 }
 
-/// Creates a new iterator over method references by snapshotting the current set of (id, kind) pairs.
+/// Creates a new iterator over method references by snapshotting the current set of IDs.
 ///
 /// # Safety
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPointer) -> *mut ReferencesIter {
+pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPointer) -> *mut MethodReferencesIter {
     with_graph(pointer, |graph| {
         let refs: Vec<_> = graph
             .method_references()
             .keys()
-            .map(|id| CReference::new(**id, ReferenceKind::Method))
+            .map(|id| CMethodReference { id: **id })
             .collect();
 
-        ReferencesIter::new(refs.into_boxed_slice())
+        MethodReferencesIter::new(refs.into_boxed_slice())
     })
 }
 
