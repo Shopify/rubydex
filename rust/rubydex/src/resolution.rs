@@ -763,8 +763,10 @@ impl<'a> Resolver<'a> {
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
         let mut mixins = Vec::new();
 
+        let is_singleton_class = matches!(declaration, Declaration::Namespace(Namespace::SingletonClass(_)));
+
         // If we're linearizing a singleton class, add the extends of the attached class to the list of mixins to process
-        if let Declaration::Namespace(Namespace::SingletonClass(_)) = declaration {
+        if is_singleton_class {
             let attached_decl = self.graph.declarations().get(declaration.owner_id()).unwrap();
 
             mixins.extend(
@@ -777,15 +779,24 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        // Consider only prepends and includes for the current declaration
-        mixins.extend(
-            declaration
-                .definitions()
-                .iter()
-                .filter_map(|definition_id| self.mixins_of(*definition_id))
-                .flatten()
-                .filter(|mixin| matches!(mixin, Mixin::Prepend(_) | Mixin::Include(_))),
-        );
+        // Collect prepends and includes for the current declaration, noting if any extends exist
+        let mut has_extends = false;
+
+        for definition_id in declaration.definitions() {
+            if let Some(def_mixins) = self.mixins_of(*definition_id) {
+                for mixin in def_mixins {
+                    match mixin {
+                        Mixin::Prepend(_) | Mixin::Include(_) => mixins.push(mixin),
+                        Mixin::Extend(_) => has_extends = true,
+                    }
+                }
+            }
+        }
+
+        // Ensure that we create the singleton and enqueue it for linearization if we see an extend
+        if has_extends && !is_singleton_class {
+            self.get_or_create_singleton_class(declaration_id);
+        }
 
         let (linearized_prepends, linearized_includes) =
             self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
@@ -5916,6 +5927,97 @@ mod tests {
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
         assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:11:3-11:11");
         assert_constant_reference_unresolved!(context, "FOUND_ME", "file:///foo.rb:14:6-14:14");
+    }
+
+    #[test]
+    fn extend_creates_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar; end
+
+            class Foo
+              extend Bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Bar",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn extend_creates_singleton_class_with_existing_singleton_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar; end
+
+            class Foo
+              extend Bar
+
+              def self.baz; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Bar",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn extend_creates_singleton_class_on_module() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar; end
+
+            module Foo
+              extend Bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            ["Foo::<Foo>", "Bar", "Module", "Object", "Kernel", "BasicObject"]
+        );
     }
 }
 
