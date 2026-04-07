@@ -1143,11 +1143,16 @@ impl<'a> Resolver<'a> {
         let parent_owner_id = if parent_has_parent_scope {
             match self.name_owner_id(parent_scope) {
                 Outcome::Resolved(id, _) => id,
-                Outcome::Unresolved(None) => self.create_todo_for_parent(parent_scope),
-                _ => *OBJECT_ID,
+                _ => self.create_todo_for_parent(parent_scope),
             }
         } else {
             *OBJECT_ID
+        };
+
+        // Ensure we follow constant aliases if that's the parent
+        let parent_owner_id = match self.resolve_to_primary_namespace(parent_owner_id, None) {
+            Outcome::Resolved(id, _) => id,
+            _ => *OBJECT_ID,
         };
 
         let fully_qualified_name = if parent_owner_id == *OBJECT_ID {
@@ -1208,7 +1213,7 @@ impl<'a> Resolver<'a> {
             NameRef::Unresolved(name) => {
                 match name.parent_scope() {
                     ParentScope::TopLevel => {
-                        let result = self.search_top_level(*name.str());
+                        let result = self.search_ancestors(*OBJECT_ID, *name.str());
 
                         if let Outcome::Resolved(declaration_id, _) = result {
                             self.graph.record_resolved_name(name_id, declaration_id);
@@ -1374,7 +1379,6 @@ impl<'a> Resolver<'a> {
 
     fn run_resolution(&mut self, name: &Name) -> Outcome {
         let str_id = *name.str();
-        let mut missing_linearization_id = None;
 
         if let Some(nesting) = name.nesting() {
             let scope_outcome = self.search_lexical_scopes(name, str_id);
@@ -1384,11 +1388,11 @@ impl<'a> Resolver<'a> {
                 return scope_outcome;
             }
 
-            // Search inheritance chain, following alias chains to find the actual namespace
-            let ancestor_outcome = match self.graph.names().get(nesting).unwrap() {
+            let (ancestor_outcome, nesting_decl_id) = match self.graph.names().get(nesting).unwrap() {
                 NameRef::Resolved(nesting_name_ref) => {
                     let resolved_ids = self.resolve_alias_chains(*nesting_name_ref.declaration_id());
                     let mut result = Outcome::Unresolved(None);
+                    let mut decl_id = None;
 
                     for &id in &resolved_ids {
                         match self.graph.declarations().get(&id) {
@@ -1397,6 +1401,7 @@ impl<'a> Resolver<'a> {
                                 break;
                             }
                             Some(Declaration::Namespace(_)) => {
+                                decl_id = Some(id);
                                 result = self.search_ancestors(id, str_id);
                                 break;
                             }
@@ -1404,34 +1409,45 @@ impl<'a> Resolver<'a> {
                         }
                     }
 
-                    result
+                    (result, decl_id)
                 }
-                NameRef::Unresolved(_) => Outcome::Retry(None),
+                NameRef::Unresolved(_) => (Outcome::Retry(None), None),
             };
-            match ancestor_outcome {
-                Outcome::Resolved(_, _) | Outcome::Retry(None) => return ancestor_outcome,
-                Outcome::Retry(Some(needs_linearization_id)) | Outcome::Unresolved(Some(needs_linearization_id)) => {
-                    missing_linearization_id = Some(needs_linearization_id);
-                }
-                Outcome::Unresolved(None) => {}
+
+            if matches!(ancestor_outcome, Outcome::Resolved(..)) {
+                return ancestor_outcome;
             }
+
+            // Modules don't inherit from Object, but Ruby gives them a special fallback to Object's ancestors.
+            // For incomplete ancestor chains, we also try Object as a tentative resolution to avoid unnecessary retries.
+            let is_module = nesting_decl_id.is_some_and(|id| {
+                matches!(
+                    self.graph.declarations().get(&id),
+                    Some(Declaration::Namespace(Namespace::Module(_) | Namespace::Todo(_)))
+                )
+            });
+            let chain_incomplete = matches!(ancestor_outcome, Outcome::Retry(Some(_)) | Outcome::Unresolved(Some(_)));
+
+            if is_module || chain_incomplete {
+                let object_outcome = self.search_ancestors(*OBJECT_ID, str_id);
+
+                if let Outcome::Resolved(decl_id, _) = object_outcome {
+                    // Preserve the linearization ID so the chain gets re-checked once complete
+                    let linearization_id = match ancestor_outcome {
+                        Outcome::Retry(id) | Outcome::Unresolved(id) => id,
+                        Outcome::Resolved(..) => unreachable!("guarded by early return above"),
+                    };
+                    return Outcome::Resolved(decl_id, linearization_id);
+                }
+            }
+
+            return ancestor_outcome;
         }
 
-        // If it's a top level reference starting with `::` or if we didn't find the constant anywhere else, the
-        // fallback is the top level
-        let outcome = self.search_top_level(str_id);
-
-        if let Some(linearization_id) = missing_linearization_id {
-            match outcome {
-                Outcome::Resolved(id, _) => Outcome::Resolved(id, Some(linearization_id)),
-                Outcome::Unresolved(_) => Outcome::Unresolved(Some(linearization_id)),
-                Outcome::Retry(_) => {
-                    panic!("Retry shouldn't happen when searching the top level")
-                }
-            }
-        } else {
-            outcome
-        }
+        // When there's no nesting, we're working at the top level of a script. The top level is the magic `<main>`
+        // object, which is an instance of `Object`. To resolve constants at the top level, we need to search the
+        // ancestors of `Object`
+        self.search_ancestors(*OBJECT_ID, str_id)
     }
 
     /// Search for a member in a declaration's ancestor chain.
@@ -1506,22 +1522,6 @@ impl<'a> Resolver<'a> {
         }
 
         Outcome::Unresolved(None)
-    }
-
-    /// Look for the constant at the top level (member of Object)
-    fn search_top_level(&self, str_id: StringId) -> Outcome {
-        match self
-            .graph
-            .declarations()
-            .get(&OBJECT_ID)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
-            .member(&str_id)
-        {
-            Some(member_id) => Outcome::Resolved(*member_id, None),
-            None => Outcome::Unresolved(None),
-        }
     }
 
     /// Returns a complexity score for a given name, which is used to sort names for resolution. The complexity is based
@@ -5796,6 +5796,127 @@ mod tests {
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Kernel", "BasicObject"]);
     }
+
+    #[test]
+    fn constant_resolution_inside_basic_object() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class String; end
+
+            class Foo < BasicObject
+              String
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_unresolved!(context, "String");
+    }
+
+    #[test]
+    fn top_level_scope_searches_object_ancestors() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Kernel
+              FOUND_ME = true
+            end
+
+            class Object
+              include Kernel
+            end
+
+            class Foo
+              ::FOUND_ME
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:10:5-10:13");
+    }
+
+    #[test]
+    fn top_level_script_constant_resolution_searches_object_ancestors() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Kernel
+              FOUND_ME = true
+            end
+
+            class Object
+              include Kernel
+            end
+
+            FOUND_ME
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:9:1-9:9");
+    }
+
+    #[test]
+    fn module_own_ancestors_take_priority_over_object_fallback() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module MyConstants
+              CONST = 'mine'
+            end
+
+            module Kernel
+              CONST = 'kernel'
+            end
+
+            class Object
+              include Kernel
+            end
+
+            module Foo
+              include MyConstants
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_to!(context, "MyConstants::CONST", "file:///foo.rb:15:3-15:8");
+    }
+
+    #[test]
+    fn object_inherited_constant_inside_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Kernel
+              FOUND_ME = true
+            end
+
+            class Object
+              include Kernel
+            end
+
+            module Foo
+              # This is valid because of Object inheritance
+              FOUND_ME
+            end
+
+            Foo::FOUND_ME # this is not
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:11:3-11:11");
+        assert_constant_reference_unresolved!(context, "FOUND_ME", "file:///foo.rb:14:6-14:14");
+    }
 }
 
 #[cfg(test)]
@@ -6198,6 +6319,33 @@ mod todo_tests {
         assert_declaration_does_not_exist!(context, "Baz");
         // Baz::Qux should NOT exist at top level
         assert_declaration_does_not_exist!(context, "Baz::Qux");
+    }
+
+    #[test]
+    fn intermediate_todo_on_constant_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///alias.rb", {
+            r"
+            module Bar; end
+            module Foo; end
+            Foo::Bar = Bar
+            "
+        });
+        context.index_uri("file:///qux.rb", {
+            r"
+            class Foo::Bar::Baz::Qux
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_declaration_kind_eq!(context, "Foo::Bar", "ConstantAlias");
+        assert_declaration_kind_eq!(context, "Bar::Baz", "<TODO>");
+        assert_declaration_kind_eq!(context, "Bar::Baz::Qux", "Class");
     }
 
     #[test]
