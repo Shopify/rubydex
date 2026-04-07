@@ -146,13 +146,35 @@ class Rubydex::GlobalVariableDefinition < Rubydex::Definition; end
 class Rubydex::InstanceVariableDefinition < Rubydex::Definition; end
 class Rubydex::MethodAliasDefinition < Rubydex::Definition; end
 class Rubydex::MethodDefinition < Rubydex::Definition; end
-class Rubydex::ModuleDefinition < Rubydex::Definition; end
-class Rubydex::SingletonClassDefinition < Rubydex::Definition; end
+class Rubydex::ModuleDefinition < Rubydex::Definition
+  sig { returns(T::Array[Rubydex::Mixin]) }
+  def mixins; end
+end
+
+class Rubydex::SingletonClassDefinition < Rubydex::Definition
+  sig { returns(T::Array[Rubydex::Mixin]) }
+  def mixins; end
+end
 
 class Rubydex::ClassDefinition < Rubydex::Definition
   sig { returns(T.nilable(Rubydex::ConstantReference)) }
   def superclass; end
+
+  sig { returns(T::Array[Rubydex::Mixin]) }
+  def mixins; end
 end
+
+class Rubydex::Mixin
+  sig { returns(Rubydex::ConstantReference) }
+  attr_reader :constant_reference
+
+  sig { params(constant_reference: Rubydex::ConstantReference).void }
+  def initialize(constant_reference); end
+end
+
+class Rubydex::Include < Rubydex::Mixin; end
+class Rubydex::Prepend < Rubydex::Mixin; end
+class Rubydex::Extend < Rubydex::Mixin; end
 
 class Rubydex::Diagnostic
   sig { params(rule: Symbol, message: String, location: Rubydex::Location).void }
