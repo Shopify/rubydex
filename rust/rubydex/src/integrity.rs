@@ -1,8 +1,9 @@
 use std::fmt;
 
 use crate::model::{
+    built_in::{BASIC_OBJECT_ID, OBJECT_ID},
     declaration::{Declaration, Namespace},
-    graph::{BASIC_OBJECT_ID, Graph, OBJECT_ID},
+    graph::Graph,
     ids::DeclarationId,
 };
 

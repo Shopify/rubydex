@@ -22,9 +22,9 @@ class ReferencesTest < Minitest::Test
 
       enumerator = graph.constant_references
 
-      assert_equal(2, enumerator.size)
-      assert_equal(2, enumerator.count)
-      assert_equal(2, enumerator.to_a.size)
+      assert_equal(6, enumerator.size)
+      assert_equal(6, enumerator.count)
+      assert_equal(6, enumerator.to_a.size)
     end
   end
 
@@ -46,7 +46,7 @@ class ReferencesTest < Minitest::Test
       graph.constant_references do |unresolved_reference|
         references << unresolved_reference
       end
-      assert_equal(2, references.size)
+      assert_equal(6, references.size)
 
       references.sort_by!(&:location)
 
@@ -79,7 +79,10 @@ class ReferencesTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      references = graph.constant_references.to_a.sort_by(&:location)
+      file_uri = context.uri_to("file1.rb")
+      references = graph.constant_references.to_a
+        .select { |r| r.location.uri == file_uri }
+        .sort_by(&:location)
       assert_equal(2, references.size)
 
       ref1, ref2 = references
@@ -132,14 +135,15 @@ class ReferencesTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      refs = graph.constant_references.to_a
+      b_uri = context.uri_to("b.rb")
+      refs = graph.constant_references.to_a.select { |r| r.location.uri == b_uri }
       assert_equal(1, refs.size)
       assert_kind_of(Rubydex::ResolvedConstantReference, refs.first)
 
       graph.delete_document(context.uri_to("a.rb"))
       graph.resolve
 
-      refs = graph.constant_references.to_a
+      refs = graph.constant_references.to_a.select { |r| r.location.uri == b_uri }
       assert_equal(1, refs.size)
       assert_kind_of(Rubydex::UnresolvedConstantReference, refs.first)
       assert_equal("A", refs.first.name)
@@ -161,7 +165,10 @@ class ReferencesTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      references = graph.constant_references.to_a.sort_by(&:location)
+      file_uri = context.uri_to("file1.rb")
+      references = graph.constant_references.to_a
+        .select { |r| r.location.uri == file_uri }
+        .sort_by(&:location)
 
       resolved = references.select { |r| r.is_a?(Rubydex::ResolvedConstantReference) }
       unresolved = references.select { |r| r.is_a?(Rubydex::UnresolvedConstantReference) }

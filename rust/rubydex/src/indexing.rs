@@ -178,7 +178,7 @@ mod tests {
         let errors = index_files(&mut graph, vec![relative_to_pwd.clone()]);
 
         assert!(errors.is_empty());
-        assert_eq!(graph.documents().len(), 1);
+        assert_eq!(graph.documents().len(), 2);
     }
 
     #[test]
@@ -199,12 +199,12 @@ mod tests {
         let errors = index_files(&mut graph, vec![path]);
 
         assert!(errors.is_empty(), "Expected no errors, got: {errors:#?}");
-        assert_eq!(1, graph.definitions().len());
-        assert_eq!(1, graph.documents().len());
+        assert_eq!(6, graph.definitions().len());
+        assert_eq!(2, graph.documents().len());
 
         index_source(&mut graph, &uri, "", &LanguageId::Ruby);
 
-        assert_eq!(0, graph.definitions().len());
-        assert_eq!(1, graph.documents().len());
+        assert_eq!(5, graph.definitions().len());
+        assert_eq!(2, graph.documents().len());
     }
 }

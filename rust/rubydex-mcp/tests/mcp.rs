@@ -210,7 +210,7 @@ fn mcp_server_e2e() {
         // Wait for indexing readiness before asserting semantic tool results.
         let mut request_id = 3;
         let stats = wait_for_indexing_to_complete(&mut stdin, &mut reader, &mut request_id);
-        assert_eq!(stats["files"], 1);
+        assert_eq!(stats["files"], 2);
         assert!(stats["declarations"].as_u64().unwrap() > 0);
 
         // Semantic query: search declarations.

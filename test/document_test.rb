@@ -21,7 +21,7 @@ class DocumentTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      document = graph.documents.first
+      document = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }
       assert_instance_of(Rubydex::Document, document)
       assert_equal(context.uri_to("file1.rb"), document.uri)
     end
@@ -37,7 +37,7 @@ class DocumentTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      document = graph.documents.first
+      document = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }
       refute_nil(document)
 
       enumerator = document.definitions
@@ -57,7 +57,7 @@ class DocumentTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      document = graph.documents.first
+      document = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }
       refute_nil(document)
 
       definitions = []
