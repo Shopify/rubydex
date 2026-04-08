@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::declaration::{Ancestor, ClassDeclaration, Declaration, Namespace};
-use crate::model::definitions::Definition;
+use crate::model::definitions::{Definition, Receiver};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
@@ -376,14 +376,24 @@ impl Graph {
                 self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
                 it.str_id(),
             ),
-            Definition::Method(it) => (
-                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
-                it.str_id(),
-            ),
-            Definition::MethodAlias(it) => (
-                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
-                it.new_name_str_id(),
-            ),
+            Definition::Method(it) => {
+                if let Some(Receiver::SelfReceiver(def_id)) = it.receiver() {
+                    return self.find_self_receiver_declaration(*def_id, *it.str_id());
+                }
+                (
+                    self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                    it.str_id(),
+                )
+            }
+            Definition::MethodAlias(it) => {
+                if let Some(Receiver::SelfReceiver(def_id)) = it.receiver() {
+                    return self.find_self_receiver_declaration(*def_id, *it.new_name_str_id());
+                }
+                (
+                    self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                    it.new_name_str_id(),
+                )
+            }
         };
 
         let nesting_declaration_id = match nesting_name_id {
@@ -412,6 +422,24 @@ impl Graph {
         }
 
         None
+    }
+
+    /// Looks up the declaration for a `SelfReceiver` method/alias through the singleton class.
+    fn find_self_receiver_declaration(&self, def_id: DefinitionId, member_str_id: StringId) -> Option<&DeclarationId> {
+        let owner_decl_id = self.definition_id_to_declaration_id(def_id)?;
+        let singleton_id = self
+            .declarations
+            .get(owner_decl_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .singleton_class()?;
+        self.declarations
+            .get(singleton_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .member(&member_str_id)
     }
 
     #[must_use]
@@ -3685,5 +3713,29 @@ mod incremental_resolution_tests {
 
         assert_declaration_exists!(context, "Parent::Target");
         assert_declaration_exists!(context, "Parent::Target::<Target>");
+    }
+
+    #[test]
+    fn no_duplicate_definition_on_identical_file_delete_readd() {
+        let source = "class Foo; def self.run; end; def run; end; end";
+
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", source);
+        context.index_uri("file:///b.rb", source);
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>#run()");
+        assert_declaration_exists!(context, "Foo#run()");
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        context.index_uri("file:///a.rb", source);
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>#run()");
+        assert_declaration_exists!(context, "Foo#run()");
     }
 } // mod incremental_resolution_tests

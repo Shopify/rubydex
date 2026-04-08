@@ -2295,6 +2295,48 @@ mod tests {
     }
 
     #[test]
+    fn resolution_for_self_method_with_same_name_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.run; end
+              def run; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["run()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["run()"]);
+    }
+
+    #[test]
+    fn resolution_for_self_method_alias_with_same_name_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri(
+            "file:///foo.rbs",
+            r"
+            class Foo
+              def self.run: () -> void
+              def run: () -> void
+              alias self.execute self.run
+              alias execute run
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::<Foo>", ["execute()", "run()"]);
+        assert_members_eq!(context, "Foo", ["execute()", "run()"]);
+    }
+
+    #[test]
     fn linearizing_super_classes() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
@@ -2534,6 +2576,27 @@ mod tests {
 
         assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", ["@bar"]);
         assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", ["@baz"]);
+    }
+
+    #[test]
+    fn resolution_for_instance_variable_in_constant_receiver_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo; end
+
+            def Foo.bar
+              @bar = 1
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+        assert_instance_variables_eq!(context, "Foo::<Foo>", ["@bar"]);
     }
 
     #[test]
