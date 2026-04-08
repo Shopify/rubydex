@@ -1361,7 +1361,29 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
-            NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
+            NameRef::Resolved(resolved) => {
+                // For Attached names that were previously resolved to a non-singleton
+                // (stale from a previous cycle where the target was a TODO), ensure the
+                // singleton exists. Without this, the Unresolved→Attached path creates
+                // singletons during incremental re-resolution that this Resolved path
+                // skips in fresh, causing incremental/fresh divergence.
+                if matches!(resolved.name().parent_scope(), ParentScope::Attached(_)) {
+                    let decl_id = *resolved.declaration_id();
+                    let is_singleton = matches!(
+                        self.graph.declarations().get(&decl_id),
+                        Some(Declaration::Namespace(Namespace::SingletonClass(_)))
+                    );
+                    if !is_singleton {
+                        // The name was resolved to the target class, not its singleton.
+                        // Create the singleton — the reference handler will update the
+                        // resolution target via the returned Outcome.
+                        if let Some(singleton_id) = self.get_or_create_singleton_class(decl_id) {
+                            return Outcome::Resolved(singleton_id, Some(singleton_id));
+                        }
+                    }
+                }
+                Outcome::Resolved(*resolved.declaration_id(), None)
+            }
         }
     }
 

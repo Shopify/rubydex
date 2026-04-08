@@ -138,6 +138,16 @@ macro_rules! namespace_declaration {
                     Declaration::Namespace(namespace) => {
                         self.members.extend(namespace.members());
                         self.references.extend(namespace.references());
+                        // Transfer singleton_class_id if the old declaration had one
+                        // and we don't already have one. This happens during TODO
+                        // promotion: the TODO may have acquired a singleton via
+                        // get_or_create_singleton_class, and the new declaration
+                        // should inherit it.
+                        if self.singleton_class_id.is_none() {
+                            if let Some(&id) = namespace.singleton_class() {
+                                self.singleton_class_id = Some(id);
+                            }
+                        }
                     }
                     Declaration::Constant(constant) => {
                         self.references.extend(constant.references());
@@ -160,6 +170,14 @@ macro_rules! namespace_declaration {
 
             pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
                 self.singleton_class_id = Some(declaration_id);
+            }
+
+            /// Clears `singleton_class_id` only if it matches `expected`.
+            /// Prevents accidentally clearing a pointer to a re-created singleton.
+            pub fn clear_singleton_class_id(&mut self, expected: &DeclarationId) {
+                if self.singleton_class_id.as_ref() == Some(expected) {
+                    self.singleton_class_id = None;
+                }
             }
 
             pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
@@ -588,6 +606,10 @@ impl Namespace {
 
     pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
         all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
+    }
+
+    pub fn clear_singleton_class_id(&mut self, expected: &DeclarationId) {
+        all_namespaces!(self, it => it.clear_singleton_class_id(expected));
     }
 
     #[must_use]

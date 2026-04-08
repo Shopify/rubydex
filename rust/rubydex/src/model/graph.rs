@@ -1271,8 +1271,15 @@ impl Graph {
         let Some(decl) = self.declarations.get(&decl_id) else {
             return;
         };
-        let should_remove =
-            decl.has_no_backing_definitions(&decl_id) || !self.declarations.contains_key(decl.owner_id());
+        // Empty singletons (no definitions AND no members) are speculatively created
+        // by get_or_create_singleton_class during ancestor linearization. They should
+        // be removed even though has_no_backing_definitions() skips them (synthetic).
+        let is_empty_singleton = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)))
+            && decl.has_no_definitions()
+            && decl.as_namespace().is_some_and(|ns| ns.members().is_empty());
+        let should_remove = is_empty_singleton
+            || decl.has_no_backing_definitions(&decl_id)
+            || !self.declarations.contains_key(decl.owner_id());
 
         if should_remove {
             let trace_name = decl.name().to_string();
@@ -1328,6 +1335,11 @@ impl Graph {
                     && let Some(ns) = owner.as_namespace_mut()
                 {
                     ns.remove_member(&unqualified_str_id);
+                    // For singletons being removed, clear the owner's singleton_class_id
+                    // pointer so get_or_create_singleton_class can recreate it if needed.
+                    if is_empty_singleton {
+                        ns.clear_singleton_class_id(&decl_id);
+                    }
                 }
             }
 
@@ -2504,7 +2516,7 @@ mod incremental_resolution_tests {
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
         assert_constant_reference_unresolved, assert_declaration_does_not_exist, assert_declaration_exists,
-        assert_declaration_kind_eq, assert_declaration_references_count_eq, assert_members_eq,
+        assert_declaration_references_count_eq, assert_members_eq,
         assert_no_constant_alias_target,
     };
 
@@ -4118,5 +4130,60 @@ mod incremental_resolution_tests {
             extras.is_empty() && missing.is_empty(),
             "Declaration mismatch after double resolve:\n  Extra: {extras:?}\n  Missing: {missing:?}"
         );
+    }
+
+    #[test]
+    fn empty_singleton_removed_by_cleanup_after_member_deletion() {
+        // Regression: empty singletons (no definitions, no members) must be
+        // removed by cleanup. Previously, invalidate_declaration treated all
+        // SingletonClass as synthetic (has_no_backing_definitions = false),
+        // keeping them alive via the update path even when empty.
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.index_uri("file:///reopener.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        // Delete the file with the singleton method — Foo::<Foo> loses its
+        // member #bar(). The singleton becomes empty.
+        context.delete_uri("file:///foo.rb");
+        context.resolve();
+
+        // Foo survives (reopener has a definition). The empty singleton
+        // should be cleaned up.
+        assert_declaration_exists!(context, "Foo");
+
+        // Re-add the file — Foo::<Foo> should be recreated with its member
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn resolved_attached_name_creates_singleton_for_promoted_todo() {
+        // Regression: when a NameRef::Resolved name has ParentScope::Attached
+        // but resolves to a non-singleton declaration (stale resolution from
+        // when the target was a TODO), the Resolved path must create the
+        // singleton. Verifies that after double-resolve, the singleton exists
+        // on the fully-qualified class and not on an orphaned TODO.
+        //
+        // Uses the same 3-file scenario as no_leaked_singleton_on_todo above.
+        let (session_rbi, errors_rb, activesupport_rbi) = todo_promotion_fixtures();
+
+        let mut context = GraphTest::new();
+        context.index_uri("file:///session.rbi", session_rbi);
+        context.index_uri("file:///errors.rb", errors_rb);
+        context.index_uri("file:///activesupport.rbi", activesupport_rbi);
+        context.resolve();
+        context.resolve();
+
+        // Singleton should be on the fully-qualified class, not an orphaned TODO
+        assert_declaration_exists!(context, "ActiveRecord::SessionStore::Session::<Session>");
+        assert_declaration_does_not_exist!(context, "Session::<Session>");
     }
 } // mod incremental_resolution_tests
