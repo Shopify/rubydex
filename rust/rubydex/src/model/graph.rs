@@ -710,6 +710,12 @@ impl Graph {
         std::mem::take(&mut self.pending_work)
     }
 
+    /// Returns true if there are unprocessed work items from previous cycles.
+    #[must_use]
+    pub fn has_pending_work(&self) -> bool {
+        !self.pending_work.is_empty()
+    }
+
     /// Drains declarations that need post-resolution cleanup.
     pub(crate) fn take_pending_declaration_cleanup(&mut self) -> Vec<DeclarationId> {
         std::mem::take(&mut self.pending_declaration_cleanup)
@@ -4040,35 +4046,56 @@ mod incremental_resolution_tests {
         assert_declaration_exists!(incremental, "Google::Cloud::V2::Type");
     }
 
-    /// Regression test from Core via `--bisect`: compact-notation class with
-    /// `class << self` creates a singleton on a TODO placeholder. Double
-    /// resolve must not leak extra singleton declarations.
-    #[test]
-    fn no_leaked_singleton_on_todo_after_double_resolve() {
-        // Matches bisect: ActiveRecord::SessionStore::Session with class << self
-        // + module ActiveRecord from errors.rb + activesupport rbi
-        let session_rbi = r#"
+    /// Bisect found 3 files needed: session.rbi (compact class with class << self),
+    /// errors.rb (module ActiveRecord with include), and activesupport.rbi (defines
+    /// the included module). The third file changes resolution ordering so the TODO
+    /// promotion path diverges between single and double resolve.
+    fn todo_promotion_fixtures() -> (&'static str, &'static str, &'static str) {
+        (
+            // session.rbi: compact-notation class with class << self
+            r"
             class ActiveRecord::SessionStore::Session
               class << self
                 def new(attributes = nil); end
               end
             end
-        "#;
-        let errors_rb = r#"
+            ",
+            // errors.rb: real module with include (changes resolution order)
+            r"
             module ActiveRecord
+              include ActiveSupport::Deprecation::DeprecatedConstantAccessor
               class ActiveRecordError < StandardError; end
             end
-        "#;
+            ",
+            // activesupport.rbi: defines the included module chain
+            r"
+            module ActiveSupport
+              module Deprecation
+                module DeprecatedConstantAccessor; end
+              end
+            end
+            ",
+        )
+    }
+
+    /// Regression test from Core via `--bisect`: compact-notation class with
+    /// `class << self` creates a singleton on a TODO placeholder. Double
+    /// resolve must not leak extra singleton declarations.
+    #[test]
+    fn no_leaked_singleton_on_todo_after_double_resolve() {
+        let (session_rbi, errors_rb, activesupport_rbi) = todo_promotion_fixtures();
 
         let mut incremental = GraphTest::new();
         incremental.index_uri("file:///session.rbi", session_rbi);
         incremental.index_uri("file:///errors.rb", errors_rb);
+        incremental.index_uri("file:///activesupport.rbi", activesupport_rbi);
         incremental.resolve();
         incremental.resolve();
 
         let mut fresh = GraphTest::new();
         fresh.index_uri("file:///session.rbi", session_rbi);
         fresh.index_uri("file:///errors.rb", errors_rb);
+        fresh.index_uri("file:///activesupport.rbi", activesupport_rbi);
         fresh.resolve();
 
         let extras: Vec<_> = incremental

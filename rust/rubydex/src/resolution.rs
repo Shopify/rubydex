@@ -83,6 +83,41 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     pub fn resolve(&mut self) {
+        self.resolve_inner();
+
+        // After resolution + cleanup, orphan TODOs from create_todo_for_parent may
+        // remain. These are TODOs created during this resolve cycle for compact-
+        // notation qualifiers that never acquired definitions (the real namespace
+        // resolved elsewhere). Clean them up separately — they can't be included
+        // in the main cleanup pass because singletons created in the same cycle
+        // might not have acquired members yet. Non-TODO candidates (singletons)
+        // are intentionally discarded: empty singletons are caught by the
+        // is_empty_singleton check in invalidate_declaration during subsequent
+        // invalidation passes.
+        let current_cycle = self.graph.take_pending_declaration_cleanup();
+        let todo_only: Vec<_> = current_cycle
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    self.graph.declarations().get(id),
+                    Some(Declaration::Namespace(Namespace::Todo(_)))
+                )
+            })
+            .collect();
+        if !todo_only.is_empty() {
+            self.graph.cleanup_empty_declarations(todo_only);
+        }
+
+        // Both the main cleanup (inside resolve_inner) and the TODO cleanup above
+        // may have cascaded — removing empty singletons, unresolving names, and
+        // re-queuing dependent references. Run another resolve pass to process
+        // the resulting pending_work and recreate declarations at their correct FQN.
+        if self.graph.has_pending_work() {
+            self.resolve_inner();
+        }
+    }
+
+    fn resolve_inner(&mut self) {
         // Snapshot cleanup candidates from previous cycles. This includes both:
         // - Declarations emptied during invalidation cascade (from unresolve_dependent_name / remove_document_data)
         // - Orphan Todos from a previous resolve (from create_todo_for_parent)
