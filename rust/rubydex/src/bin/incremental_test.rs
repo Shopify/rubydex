@@ -476,7 +476,6 @@ fn bisect_and_report(
     delete_indices: &[usize],
     skip_file: &str,
     retries: usize,
-    fresh_counts: &GraphCounts,
 ) {
     // Phase 1: minimize deleted files
     let min_deleted = bisect_deleted_files(files, delete_indices, retries);
@@ -536,10 +535,19 @@ fn bisect_and_report(
     write_skip_file(skip_file, &final_skipped);
     println!("Skip file written to {skip_file}");
 
+    // Build fresh baseline from the minimized file set (not the original full baseline)
+    let mut fresh_minimized = Graph::new();
+    for &i in &indexed {
+        let (ref uri, ref source, ref lang) = files[i];
+        indexing::index_source(&mut fresh_minimized, uri, source, lang);
+    }
+    resolve(&mut fresh_minimized);
+    let minimized_fresh_counts = GraphCounts::from_graph(&fresh_minimized);
+
     // Final verification
     println!("\nFinal verification:");
     let final_result = run_round(files, &min_deleted, Some(&indexed), true, None);
-    print_round_result(&final_result, fresh_counts);
+    print_round_result(&final_result, &minimized_fresh_counts);
 
     // Print the minimal reproduction
     let surviving: Vec<usize> = indexed.iter().copied().filter(|i| !min_deleted.contains(i)).collect();
@@ -733,7 +741,7 @@ fn main() {
                         if args.skip_file.is_none() {
                             println!("\nNo --skip-file specified, using {skip_path}");
                         }
-                        bisect_and_report(&files, &delete_indices, skip_path, args.retries, &fresh_counts);
+                        bisect_and_report(&files, &delete_indices, skip_path, args.retries);
                         break;
                     }
                 }
@@ -754,7 +762,7 @@ fn main() {
                     if args.skip_file.is_none() {
                         println!("\nNo --skip-file specified, using {skip_path}");
                     }
-                    bisect_and_report(&files, &delete_indices, skip_path, args.retries, &fresh_counts);
+                    bisect_and_report(&files, &delete_indices, skip_path, args.retries);
                     break;
                 }
             }
