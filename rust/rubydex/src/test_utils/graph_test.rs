@@ -6,7 +6,6 @@ use crate::diagnostic::Rule;
 use crate::indexing::{self, LanguageId};
 use crate::model::graph::{Graph, NameDependent};
 use crate::model::ids::{DefinitionId, NameId, StringId};
-use crate::offset::Offset;
 use crate::resolution::Resolver;
 
 #[derive(Default)]
@@ -66,14 +65,8 @@ impl GraphTest {
     #[must_use]
     pub fn source_at(&self, definition_id: &DefinitionId) -> &str {
         let def = self.graph.definitions().get(definition_id).unwrap();
-        self.source_at_offset(self.graph.documents().get(def.uri_id()).unwrap().uri(), def.offset())
-    }
-
-    /// Returns the source text at the given URI and offset.
-    #[must_use]
-    pub fn source_at_offset(&self, uri: &str, offset: &Offset) -> &str {
-        let source = self.source(uri);
-        &source[offset.start() as usize..offset.end() as usize]
+        let uri = self.graph.documents().get(def.uri_id()).unwrap().uri();
+        def.offset().source_at(self.source(uri))
     }
 
     pub fn delete_uri(&mut self, uri: &str) {
