@@ -153,7 +153,7 @@ pub fn collect_file_paths<S: BuildHasher>(
     let mut stealers = Vec::with_capacity(worker_count);
 
     for _ in 0..worker_count {
-        let worker = Worker::new_fifo();
+        let worker = Worker::new_lifo();
         stealers.push(worker.stealer());
         workers.push(worker);
     }
