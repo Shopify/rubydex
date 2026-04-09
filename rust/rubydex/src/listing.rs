@@ -44,10 +44,10 @@ fn steal_path(
     None
 }
 
-/// Process a single directory entry within a worker thread.
+/// Process a single directory, pushing subdirectories to the worker's local queue for better locality.
 fn process_directory(
     path: &Path,
-    injector: &Injector<PathBuf>,
+    local: &Worker<PathBuf>,
     in_flight: &AtomicUsize,
     excluded: &HashSet<PathBuf>,
     files: &mut Vec<PathBuf>,
@@ -76,7 +76,7 @@ fn process_directory(
             let p = entry.path();
             if !excluded.contains(&p) {
                 in_flight.fetch_add(1, Ordering::Relaxed);
-                injector.push(p);
+                local.push(p);
             }
         } else if kind.is_file() {
             if has_ruby_extension(&entry.file_name()) {
@@ -94,7 +94,7 @@ fn process_directory(
 
             if !excluded.contains(&canonicalized) {
                 in_flight.fetch_add(1, Ordering::Relaxed);
-                injector.push(canonicalized);
+                local.push(canonicalized);
             }
         } else {
             errors.push(Errors::FileError(format!(
@@ -185,7 +185,7 @@ pub fn collect_file_paths<S: BuildHasher>(
                     if path.is_dir() {
                         process_directory(
                             &path,
-                            &injector,
+                            &worker,
                             &in_flight,
                             &excluded,
                             &mut local_files,
@@ -199,7 +199,7 @@ pub fn collect_file_paths<S: BuildHasher>(
                         if let Ok(canonicalized) = fs::canonicalize(&path) {
                             if !excluded.contains(&canonicalized) {
                                 in_flight.fetch_add(1, Ordering::Relaxed);
-                                injector.push(canonicalized);
+                                worker.push(canonicalized);
                             }
                         } else {
                             local_errors.push(Errors::FileError(format!(
