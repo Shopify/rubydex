@@ -61,6 +61,10 @@ fn process_directory(
         return;
     };
 
+    // Reuse a single path buffer for building child paths, avoiding repeated
+    // allocation of the parent prefix that entry.path() would do for each entry.
+    let mut child_path = path.to_path_buf();
+
     for result in read_dir {
         let Ok(entry) = result else {
             errors.push(Errors::FileError(format!(
@@ -70,37 +74,45 @@ fn process_directory(
             continue;
         };
 
+        let name = entry.file_name();
         let kind = entry.file_type().unwrap();
 
         if kind.is_dir() {
-            let p = entry.path();
-            if !excluded.contains(&p) {
+            child_path.push(&name);
+            if !excluded.contains(&child_path) {
                 in_flight.fetch_add(1, Ordering::Relaxed);
-                local.push(p);
+                local.push(child_path.clone());
             }
+            child_path.pop();
         } else if kind.is_file() {
-            if has_ruby_extension(&entry.file_name()) {
-                files.push(entry.path());
+            if has_ruby_extension(&name) {
+                child_path.push(&name);
+                files.push(child_path.clone());
+                child_path.pop();
             }
         } else if kind.is_symlink() {
-            let entry_path = entry.path();
-            let Ok(canonicalized) = fs::canonicalize(&entry_path) else {
+            child_path.push(&name);
+            let Ok(canonicalized) = fs::canonicalize(&child_path) else {
                 errors.push(Errors::FileError(format!(
                     "Failed to canonicalize symlink: `{}`",
-                    entry_path.display(),
+                    child_path.display(),
                 )));
+                child_path.pop();
                 continue;
             };
+            child_path.pop();
 
             if !excluded.contains(&canonicalized) {
                 in_flight.fetch_add(1, Ordering::Relaxed);
                 local.push(canonicalized);
             }
         } else {
+            child_path.push(&name);
             errors.push(Errors::FileError(format!(
                 "Path `{}` is not a file or directory",
-                entry.path().display()
+                child_path.display()
             )));
+            child_path.pop();
         }
     }
 }
