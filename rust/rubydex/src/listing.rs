@@ -143,8 +143,9 @@ pub fn collect_file_paths<S: BuildHasher>(
     }
 
     let worker_count = thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4);
+        .map(|n| n.get() / 2)
+        .unwrap_or(4)
+        .max(2);
 
     let mut all_files = Vec::new();
     let mut all_errors = initial_errors;
