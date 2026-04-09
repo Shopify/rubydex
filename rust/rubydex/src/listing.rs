@@ -1,137 +1,105 @@
-use crate::{
-    errors::Errors,
-    job_queue::{Job, JobQueue},
-};
-use crossbeam_channel::{Sender, unbounded};
+use crate::errors::Errors;
+use crossbeam_deque::{Injector, Steal, Stealer, Worker};
+use crossbeam_utils::Backoff;
 use std::{
     collections::HashSet,
+    ffi::OsStr,
     fs,
     hash::BuildHasher,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::atomic::{AtomicUsize, Ordering},
+    thread,
 };
 
-pub struct FileDiscoveryJob {
-    path: PathBuf,
-    queue: Arc<JobQueue>,
-    paths_tx: Sender<PathBuf>,
-    errors_tx: Sender<Errors>,
-    excluded_paths: Arc<HashSet<PathBuf>>,
+/// Check if a filename has a Ruby extension without allocating a PathBuf.
+fn has_ruby_extension(name: &OsStr) -> bool {
+    let bytes = name.as_encoded_bytes();
+    bytes.ends_with(b".rb") || bytes.ends_with(b".rbs")
 }
 
-impl FileDiscoveryJob {
-    #[must_use]
-    pub fn new(
-        path: PathBuf,
-        queue: Arc<JobQueue>,
-        paths_tx: Sender<PathBuf>,
-        errors_tx: Sender<Errors>,
-        excluded_paths: Arc<HashSet<PathBuf>>,
-    ) -> Self {
-        Self {
-            path,
-            queue,
-            paths_tx,
-            errors_tx,
-            excluded_paths,
-        }
+/// Try to steal a path from local queue, global injector, or peer workers.
+fn steal_path(
+    local: &Worker<PathBuf>,
+    injector: &Injector<PathBuf>,
+    stealers: &[Stealer<PathBuf>],
+) -> Option<PathBuf> {
+    if let Some(path) = local.pop() {
+        return Some(path);
     }
-}
 
-impl FileDiscoveryJob {
-    fn handle_file(&self, path: &Path) {
-        if path.extension().is_some_and(|ext| ext == "rb" || ext == "rbs") {
-            self.paths_tx
-                .send(path.to_path_buf())
-                .expect("file receiver dropped before run completion");
+    match injector.steal_batch_and_pop(local) {
+        Steal::Success(path) => return Some(path),
+        Steal::Retry => return None,
+        Steal::Empty => {}
+    }
+
+    for stealer in stealers {
+        match stealer.steal_batch_and_pop(local) {
+            Steal::Success(path) => return Some(path),
+            Steal::Retry => return None,
+            Steal::Empty => {}
         }
     }
 
-    fn handle_symlink(&self, path: &PathBuf) {
-        let Ok(canonicalized) = fs::canonicalize(path) else {
-            self.send_error(Errors::FileError(format!(
-                "Failed to canonicalize symlink: `{}`",
+    None
+}
+
+/// Process a single directory entry within a worker thread.
+fn process_directory(
+    path: &Path,
+    injector: &Injector<PathBuf>,
+    in_flight: &AtomicUsize,
+    excluded: &HashSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    errors: &mut Vec<Errors>,
+) {
+    let Ok(read_dir) = path.read_dir() else {
+        errors.push(Errors::FileError(format!(
+            "Failed to read directory `{}`",
+            path.display(),
+        )));
+        return;
+    };
+
+    for result in read_dir {
+        let Ok(entry) = result else {
+            errors.push(Errors::FileError(format!(
+                "Failed to read directory `{}`: {result:?}",
                 path.display(),
             )));
-
-            return;
+            continue;
         };
 
-        if self.excluded_paths.contains(&canonicalized) {
-            return;
-        }
+        let kind = entry.file_type().unwrap();
 
-        self.queue.push(Box::new(FileDiscoveryJob::new(
-            canonicalized,
-            Arc::clone(&self.queue),
-            self.paths_tx.clone(),
-            self.errors_tx.clone(),
-            Arc::clone(&self.excluded_paths),
-        )));
-    }
-
-    fn send_error(&self, error: Errors) {
-        self.errors_tx
-            .send(error)
-            .expect("error receiver dropped before run completion");
-    }
-}
-
-impl Job for FileDiscoveryJob {
-    fn run(&self) {
-        if self.path.is_dir() {
-            let Ok(read_dir) = self.path.read_dir() else {
-                self.send_error(Errors::FileError(format!(
-                    "Failed to read directory `{}`",
-                    self.path.display(),
+        if kind.is_dir() {
+            let p = entry.path();
+            if !excluded.contains(&p) {
+                in_flight.fetch_add(1, Ordering::Relaxed);
+                injector.push(p);
+            }
+        } else if kind.is_file() {
+            if has_ruby_extension(&entry.file_name()) {
+                files.push(entry.path());
+            }
+        } else if kind.is_symlink() {
+            let entry_path = entry.path();
+            let Ok(canonicalized) = fs::canonicalize(&entry_path) else {
+                errors.push(Errors::FileError(format!(
+                    "Failed to canonicalize symlink: `{}`",
+                    entry_path.display(),
                 )));
-
-                return;
+                continue;
             };
 
-            for result in read_dir {
-                let Ok(entry) = result else {
-                    self.send_error(Errors::FileError(format!(
-                        "Failed to read directory `{}`: {result:?}",
-                        self.path.display(),
-                    )));
-
-                    continue;
-                };
-
-                let kind = entry.file_type().unwrap();
-
-                if kind.is_dir() {
-                    if self.excluded_paths.contains(&entry.path()) {
-                        continue;
-                    }
-
-                    self.queue.push(Box::new(FileDiscoveryJob::new(
-                        entry.path(),
-                        Arc::clone(&self.queue),
-                        self.paths_tx.clone(),
-                        self.errors_tx.clone(),
-                        Arc::clone(&self.excluded_paths),
-                    )));
-                } else if kind.is_file() {
-                    self.handle_file(&entry.path());
-                } else if kind.is_symlink() {
-                    self.handle_symlink(&entry.path());
-                } else {
-                    self.send_error(Errors::FileError(format!(
-                        "Path `{}` is not a file or directory",
-                        entry.path().display()
-                    )));
-                }
+            if !excluded.contains(&canonicalized) {
+                in_flight.fetch_add(1, Ordering::Relaxed);
+                injector.push(canonicalized);
             }
-        } else if self.path.is_file() {
-            self.handle_file(&self.path);
-        } else if self.path.is_symlink() {
-            self.handle_symlink(&self.path);
         } else {
-            self.send_error(Errors::FileError(format!(
+            errors.push(Errors::FileError(format!(
                 "Path `{}` is not a file or directory",
-                self.path.display()
+                entry.path().display()
             )));
         }
     }
@@ -151,19 +119,18 @@ pub fn collect_file_paths<S: BuildHasher>(
     paths: Vec<String>,
     excluded: &HashSet<PathBuf, S>,
 ) -> (Vec<PathBuf>, Vec<Errors>) {
-    let queue = Arc::new(JobQueue::new());
-    let (files_tx, files_rx) = unbounded();
-    let (errors_tx, errors_rx) = unbounded();
+    let excluded: HashSet<PathBuf> = excluded
+        .iter()
+        .filter_map(|p| fs::canonicalize(p).ok())
+        .collect();
 
-    // Canonicalize the excluded paths since they may be symlinks
-    let excluded: Arc<HashSet<PathBuf>> = Arc::new(excluded.iter().filter_map(|p| fs::canonicalize(p).ok()).collect());
+    let injector: Injector<PathBuf> = Injector::new();
+    let in_flight = AtomicUsize::new(0);
+    let mut initial_errors = Vec::new();
 
     for path in paths {
         let Ok(canonicalized) = fs::canonicalize(&path) else {
-            errors_tx
-                .send(Errors::FileError(format!("Path `{path}` does not exist")))
-                .expect("errors receiver dropped before run completion");
-
+            initial_errors.push(Errors::FileError(format!("Path `{path}` does not exist")));
             continue;
         };
 
@@ -171,21 +138,97 @@ pub fn collect_file_paths<S: BuildHasher>(
             continue;
         }
 
-        queue.push(Box::new(FileDiscoveryJob::new(
-            canonicalized,
-            Arc::clone(&queue),
-            files_tx.clone(),
-            errors_tx.clone(),
-            Arc::clone(&excluded),
-        )));
+        in_flight.fetch_add(1, Ordering::Relaxed);
+        injector.push(canonicalized);
     }
 
-    JobQueue::run(&queue);
+    let worker_count = thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(4);
 
-    drop(files_tx);
-    drop(errors_tx);
+    let mut all_files = Vec::new();
+    let mut all_errors = initial_errors;
 
-    (files_rx.iter().collect(), errors_rx.iter().collect())
+    let mut workers = Vec::with_capacity(worker_count);
+    let mut stealers = Vec::with_capacity(worker_count);
+
+    for _ in 0..worker_count {
+        let worker = Worker::new_fifo();
+        stealers.push(worker.stealer());
+        workers.push(worker);
+    }
+
+    thread::scope(|s| {
+        let stealers = &stealers[..];
+        let injector = &injector;
+        let in_flight = &in_flight;
+        let excluded = &excluded;
+        let mut handles = Vec::with_capacity(worker_count);
+
+        for worker in workers {
+            handles.push(s.spawn(move || {
+                let mut local_files = Vec::new();
+                let mut local_errors = Vec::new();
+                let backoff = Backoff::new();
+
+                loop {
+                    let Some(path) = steal_path(&worker, &injector, stealers) else {
+                        if in_flight.load(Ordering::Acquire) == 0 {
+                            break;
+                        }
+                        backoff.snooze();
+                        continue;
+                    };
+
+                    backoff.reset();
+
+                    if path.is_dir() {
+                        process_directory(
+                            &path,
+                            &injector,
+                            &in_flight,
+                            &excluded,
+                            &mut local_files,
+                            &mut local_errors,
+                        );
+                    } else if path.is_file() {
+                        if path.extension().is_some_and(|ext| ext == "rb" || ext == "rbs") {
+                            local_files.push(path.clone());
+                        }
+                    } else if path.is_symlink() {
+                        if let Ok(canonicalized) = fs::canonicalize(&path) {
+                            if !excluded.contains(&canonicalized) {
+                                in_flight.fetch_add(1, Ordering::Relaxed);
+                                injector.push(canonicalized);
+                            }
+                        } else {
+                            local_errors.push(Errors::FileError(format!(
+                                "Failed to canonicalize symlink: `{}`",
+                                path.display(),
+                            )));
+                        }
+                    } else {
+                        local_errors.push(Errors::FileError(format!(
+                            "Path `{}` is not a file or directory",
+                            path.display()
+                        )));
+                    }
+
+                    in_flight.fetch_sub(1, Ordering::Release);
+                }
+
+                (local_files, local_errors)
+            }));
+        }
+
+        for handle in handles {
+            let (files, errors) = handle.join().unwrap();
+            all_files.extend(files);
+            all_errors.extend(errors);
+        }
+    });
+
+    (all_files, all_errors)
 }
 
 #[cfg(test)]
