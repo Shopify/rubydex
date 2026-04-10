@@ -1751,11 +1751,11 @@ impl<'a> Resolver<'a> {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
 
-                let (picked_parent, partial) = self.get_parent_class(&definition_ids);
+                let (picked_parent, unresolved_parent) = self.get_parent_class(&definition_ids);
                 (
                     self.get_or_create_singleton_class(picked_parent)
                         .expect("parent class should always be a namespace"),
-                    partial,
+                    unresolved_parent.is_some(),
                 )
             }
             _ => {
@@ -1766,9 +1766,9 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (DeclarationId, bool) {
+    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (DeclarationId, Option<NameId>) {
         let mut explicit_parents = Vec::new();
-        let mut partial = false;
+        let mut unresolved_parent = None;
 
         for definition_id in definition_ids {
             let definition = self.graph.definitions().get(definition_id).unwrap();
@@ -1776,11 +1776,8 @@ impl<'a> Resolver<'a> {
             if let Definition::Class(class) = definition
                 && let Some(superclass) = class.superclass_ref()
             {
-                let name = self
-                    .graph
-                    .names()
-                    .get(self.graph.constant_references().get(superclass).unwrap().name_id())
-                    .unwrap();
+                let constant_reference = self.graph.constant_references().get(superclass).unwrap();
+                let name = self.graph.names().get(constant_reference.name_id()).unwrap();
 
                 match name {
                     NameRef::Resolved(resolved) => {
@@ -1789,7 +1786,7 @@ impl<'a> Resolver<'a> {
                         }
                     }
                     NameRef::Unresolved(_) => {
-                        partial = true;
+                        unresolved_parent = Some(*constant_reference.name_id());
                     }
                 }
             }
@@ -1797,7 +1794,10 @@ impl<'a> Resolver<'a> {
 
         // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
         // mismatch error. TODO: We should add a diagnostic here
-        (explicit_parents.first().copied().unwrap_or(*OBJECT_ID), partial)
+        (
+            explicit_parents.first().copied().unwrap_or(*OBJECT_ID),
+            unresolved_parent,
+        )
     }
 
     fn linearize_parent_class(
@@ -1805,9 +1805,23 @@ impl<'a> Resolver<'a> {
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Ancestors {
-        let (picked_parent, partial) = self.get_parent_class(definition_ids);
-        let result = self.linearize_ancestors(picked_parent, context);
-        if partial { result.to_partial() } else { result }
+        let (picked_parent, unresolved_parent) = self.get_parent_class(definition_ids);
+        let mut result = self.linearize_ancestors(picked_parent, context);
+
+        if let Some(name_id) = unresolved_parent {
+            context.partial = true;
+
+            // Insert the unresolved parent as a Partial ancestor at the front of the chain, so it
+            // appears before the default Object ancestors
+            let ancestors = match &mut result {
+                Ancestors::Complete(ids) | Ancestors::Cyclic(ids) | Ancestors::Partial(ids) => ids,
+            };
+            ancestors.insert(0, Ancestor::Partial(name_id));
+
+            result.to_partial()
+        } else {
+            result
+        }
     }
 
     fn mixins_of(&self, definition_id: DefinitionId) -> Option<Vec<Mixin>> {
@@ -6018,6 +6032,35 @@ mod tests {
             "Foo::<Foo>",
             ["Foo::<Foo>", "Bar", "Module", "Object", "Kernel", "BasicObject"]
         );
+    }
+
+    #[test]
+    fn ancestors_for_unresolved_parent_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo < Bar; end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(
+            context,
+            "Foo",
+            ["Foo", Partial("Bar"), "Object", "Kernel", "BasicObject"]
+        );
+        assert!(matches!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo"))
+                .unwrap()
+                .as_namespace()
+                .unwrap()
+                .ancestors(),
+            Ancestors::Partial(_)
+        ));
     }
 }
 
