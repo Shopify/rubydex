@@ -7,8 +7,8 @@ use crate::model::definitions::{
     AttrAccessorDefinition, AttrReaderDefinition, AttrWriterDefinition, ClassDefinition, ClassVariableDefinition,
     ConstantAliasDefinition, ConstantDefinition, ConstantVisibilityDefinition, Definition, DefinitionFlags,
     ExtendDefinition, GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition,
-    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, Mixin, ModuleDefinition, Parameter,
-    ParameterStruct, PrependDefinition, Receiver, Signatures, SingletonClassDefinition,
+    InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, MethodVisibilityDefinition, Mixin,
+    ModuleDefinition, Parameter, ParameterStruct, PrependDefinition, Receiver, Signatures, SingletonClassDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -816,6 +816,15 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
+    fn current_nesting_is_module(&self) -> bool {
+        self.current_nesting_definition_id().is_some_and(|id| {
+            self.local_graph
+                .definitions()
+                .get(&id)
+                .is_some_and(|def| matches!(def, Definition::Module(_)))
+        })
+    }
+
     /// Indexes the final constant target from a value node, unwrapping chained assignments.
     ///
     /// For `A = B = C`, when processing `A`, the value is `ConstantWriteNode(B)`.
@@ -1240,7 +1249,7 @@ impl<'a> RubyIndexer<'a> {
                 visibility,
                 self.uri_id,
                 offset,
-                Vec::new(),
+                Box::default(),
                 DefinitionFlags::empty(),
                 self.current_nesting_definition_id(),
             )));
@@ -1249,6 +1258,93 @@ impl<'a> RubyIndexer<'a> {
 
             self.add_member_to_current_owner(definition_id);
         }
+    }
+
+    fn is_attr_call(arg: &ruby_prism::Node) -> bool {
+        arg.as_call_node().is_some_and(|call| {
+            let receiver = call.receiver();
+            let bare_or_self = receiver.is_none() || receiver.as_ref().is_some_and(|r| r.as_self_node().is_some());
+            bare_or_self
+                && matches!(
+                    call.name().as_slice(),
+                    b"attr" | b"attr_reader" | b"attr_writer" | b"attr_accessor"
+                )
+        })
+    }
+
+    /// Classifies each visibility argument and applies visibility left-to-right:
+    /// - `DefNode`: inline visibility (always valid)
+    /// - Sole attr_* call: inline visibility (multi-arg attr_* is unsupported — returns array)
+    /// - `SymbolNode`/`StringNode`: retroactive `MethodVisibilityDefinition`
+    /// - Anything else: per-arg diagnostic
+    fn handle_visibility_arguments(
+        &mut self,
+        arguments: &ruby_prism::ArgumentsNode,
+        visibility: Visibility,
+        call_offset: &Offset,
+        call_name: &str,
+    ) {
+        let args = arguments.arguments();
+        let arg_count = args.len();
+
+        for arg in &args {
+            if matches!(arg, ruby_prism::Node::DefNode { .. }) || (arg_count == 1 && Self::is_attr_call(&arg)) {
+                self.visibility_stack
+                    .push(VisibilityModifier::new(visibility, true, call_offset.clone()));
+                self.visit(&arg);
+                self.visibility_stack.pop();
+            } else if matches!(
+                arg,
+                ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. }
+            ) {
+                self.create_method_visibility_definition(&arg, visibility);
+            } else {
+                // Unsupported arg — diagnostic + visit for side effects.
+                let arg_offset = Offset::from_prism_location(&arg.location());
+                let message = if Self::is_attr_call(&arg) {
+                    format!("`{call_name}` with `attr_*` is only supported as a single argument")
+                } else {
+                    format!("`{call_name}` called with a non-literal argument")
+                };
+                self.local_graph
+                    .add_diagnostic(Rule::InvalidMethodVisibility, arg_offset, message);
+                self.visit(&arg);
+            }
+        }
+    }
+
+    fn create_method_visibility_definition(&mut self, arg: &ruby_prism::Node, visibility: Visibility) {
+        let (name, location) = match arg {
+            ruby_prism::Node::SymbolNode { .. } => {
+                let symbol = arg.as_symbol_node().unwrap();
+                if let Some(value_loc) = symbol.value_loc() {
+                    (Self::location_to_string(&value_loc), value_loc)
+                } else {
+                    return;
+                }
+            }
+            ruby_prism::Node::StringNode { .. } => {
+                let string = arg.as_string_node().unwrap();
+                let name = String::from_utf8_lossy(string.unescaped()).to_string();
+                (name, arg.location())
+            }
+            _ => return,
+        };
+
+        let str_id = self.local_graph.intern_string(format!("{name}()"));
+        let arg_offset = Offset::from_prism_location(&location);
+        let definition = Definition::MethodVisibility(Box::new(MethodVisibilityDefinition::new(
+            str_id,
+            visibility,
+            self.uri_id,
+            arg_offset,
+            Box::default(),
+            DefinitionFlags::empty(),
+            self.current_nesting_definition_id(),
+        )));
+
+        let definition_id = self.local_graph.add_definition(definition);
+        self.add_member_to_current_owner(definition_id);
     }
 }
 
@@ -1853,7 +1949,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
             "private" | "protected" | "public" | "module_function" => {
-                if let Some(_receiver) = node.receiver() {
+                if node.receiver().is_some() {
+                    let offset = Offset::from_prism_location(&node.location());
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidMethodVisibility,
+                        offset,
+                        format!("`{message}` cannot be called with an explicit receiver"),
+                    );
                     self.visit_call_node_parts(node);
                     return;
                 }
@@ -1862,27 +1964,20 @@ impl Visit<'_> for RubyIndexer<'_> {
                 let offset = Offset::from_prism_location(&node.location());
 
                 if let Some(arguments) = node.arguments() {
-                    // With this case:
-                    //
-                    // ```ruby
-                    // private def foo(bar); end
-                    // ```
-                    //
-                    // We push the new visibility to the stack and then pop it after visiting the arguments so it only affects the method definition.
-                    self.visibility_stack
-                        .push(VisibilityModifier::new(visibility, true, offset));
-                    self.visit_arguments_node(&arguments);
-                    self.visibility_stack.pop();
+                    if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
+                        self.local_graph.add_diagnostic(
+                            Rule::InvalidMethodVisibility,
+                            offset,
+                            "`module_function` can only be used in modules".to_string(),
+                        );
+                        self.visit_arguments_node(&arguments);
+                    } else {
+                        self.handle_visibility_arguments(&arguments, visibility, &offset, message.as_str());
+                    }
                 } else {
-                    // With this case:
+                    // Flag mode: `private` with no arguments
                     //
-                    // ```ruby
-                    // private
-                    //
-                    // def foo(bar); end
-                    // ```
-                    //
-                    // We replace the current visibility with the new one so it only affects all the subsequent method definitions.
+                    // Replace the current visibility so it affects all subsequent method definitions.
                     let last_visibility = self.visibility_stack.last_mut().unwrap();
                     *last_visibility = VisibilityModifier::new(visibility, false, offset);
                 }
