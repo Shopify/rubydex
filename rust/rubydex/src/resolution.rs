@@ -10,7 +10,7 @@ use crate::model::{
         Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
     definitions::{Definition, Mixin, Receiver},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, Unit},
+    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, TraceEvent, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
     ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
     name::{Name, NameRef, ParentScope},
@@ -83,6 +83,47 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     pub fn resolve(&mut self) {
+        self.resolve_inner();
+
+        // After resolution + cleanup, orphan TODOs from create_todo_for_parent may
+        // remain. These are TODOs created during this resolve cycle for compact-
+        // notation qualifiers that never acquired definitions (the real namespace
+        // resolved elsewhere). Clean them up separately — they can't be included
+        // in the main cleanup pass because singletons created in the same cycle
+        // might not have acquired members yet. Non-TODO candidates (singletons)
+        // are intentionally discarded: empty singletons are caught by the
+        // is_empty_singleton check in invalidate_declaration during subsequent
+        // invalidation passes.
+        let current_cycle = self.graph.take_pending_declaration_cleanup();
+        let todo_only: Vec<_> = current_cycle
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    self.graph.declarations().get(id),
+                    Some(Declaration::Namespace(Namespace::Todo(_)))
+                )
+            })
+            .collect();
+        if !todo_only.is_empty() {
+            self.graph.cleanup_empty_declarations(todo_only);
+        }
+
+        // Both the main cleanup (inside resolve_inner) and the TODO cleanup above
+        // may have cascaded — removing empty singletons, unresolving names, and
+        // re-queuing dependent references. Run another resolve pass to process
+        // the resulting pending_work and recreate declarations at their correct FQN.
+        if self.graph.has_pending_work() {
+            self.resolve_inner();
+        }
+    }
+
+    fn resolve_inner(&mut self) {
+        // Snapshot cleanup candidates from previous cycles. This includes both:
+        // - Declarations emptied during invalidation cascade (from unresolve_dependent_name / remove_document_data)
+        // - Orphan Todos from a previous resolve (from create_todo_for_parent)
+        // Items added during THIS resolve survive in the vec for the next cycle.
+        let cleanup_candidates = self.graph.take_pending_declaration_cleanup();
+
         let other_ids = self.prepare_units();
 
         loop {
@@ -124,6 +165,9 @@ impl<'a> Resolver<'a> {
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
 
         self.handle_remaining_definitions(other_ids);
+
+        // Post-resolution cleanup: remove declarations that are still empty.
+        self.graph.cleanup_empty_declarations(cleanup_candidates);
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -668,6 +712,7 @@ impl<'a> Resolver<'a> {
         let decl_id = DeclarationId::from(&fully_qualified_name);
         namespace_decl.set_singleton_class_id(decl_id);
 
+        let trace_name = fully_qualified_name.clone();
         self.graph.declarations_mut().insert(
             decl_id,
             Declaration::Namespace(Namespace::SingletonClass(Box::new(SingletonClassDeclaration::new(
@@ -675,6 +720,17 @@ impl<'a> Resolver<'a> {
                 attached_id,
             )))),
         );
+        self.graph.emit_trace(TraceEvent::Created {
+            name: &trace_name,
+            kind: "SingletonClass",
+            caller: "get_or_create_singleton",
+        });
+
+        // Mark for post-resolution cleanup: if the singleton stays empty
+        // (no members added during resolution), it was created speculatively
+        // and should be removed. This handles singletons created during
+        // incremental re-resolution when ancestor chains are temporarily broken.
+        self.graph.mark_declaration_for_cleanup(decl_id);
 
         // Queue ancestor linearization so the singleton's ancestor chain is
         // built — this cascades upward via singleton_parent_id, creating
@@ -1151,11 +1207,18 @@ impl<'a> Resolver<'a> {
         let declaration_id = DeclarationId::from(&fully_qualified_name);
 
         if let Entry::Vacant(e) = self.graph.declarations_mut().entry(declaration_id) {
+            let trace_name = fully_qualified_name.clone();
             e.insert(Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(
                 fully_qualified_name,
                 parent_owner_id,
             )))));
             self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+            self.graph.mark_declaration_for_cleanup(declaration_id);
+            self.graph.emit_trace(TraceEvent::Created {
+                name: &trace_name,
+                kind: "Todo",
+                caller: "create_todo",
+            });
         }
 
         declaration_id
@@ -1301,7 +1364,29 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
-            NameRef::Resolved(resolved) => Outcome::Resolved(*resolved.declaration_id(), None),
+            NameRef::Resolved(resolved) => {
+                // For Attached names that were previously resolved to a non-singleton
+                // (stale from a previous cycle where the target was a TODO), ensure the
+                // singleton exists. Without this, the Unresolved→Attached path creates
+                // singletons during incremental re-resolution that this Resolved path
+                // skips in fresh, causing incremental/fresh divergence.
+                if matches!(resolved.name().parent_scope(), ParentScope::Attached(_)) {
+                    let decl_id = *resolved.declaration_id();
+                    let is_singleton = matches!(
+                        self.graph.declarations().get(&decl_id),
+                        Some(Declaration::Namespace(Namespace::SingletonClass(_)))
+                    );
+                    if !is_singleton {
+                        // The name was resolved to the target class, not its singleton.
+                        // Create the singleton — the reference handler will update the
+                        // resolution target via the returned Outcome.
+                        if let Some(singleton_id) = self.get_or_create_singleton_class(decl_id) {
+                            return Outcome::Resolved(singleton_id, Some(singleton_id));
+                        }
+                    }
+                }
+                Outcome::Resolved(*resolved.declaration_id(), None)
+            }
         }
     }
 

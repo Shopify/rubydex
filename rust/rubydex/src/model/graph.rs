@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -15,6 +16,34 @@ use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::stats;
+
+/// Events emitted by the graph when declarations are created or removed.
+/// Used for debugging and tracing declaration lifecycle.
+pub enum TraceEvent<'a> {
+    Created {
+        name: &'a str,
+        kind: &'static str,
+        caller: &'static str,
+    },
+    Removed {
+        name: &'a str,
+        kind: &'static str,
+        caller: &'static str,
+    },
+}
+
+impl fmt::Display for TraceEvent<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TraceEvent::Created { name, kind, caller } => {
+                write!(f, "CREATED {name} ({kind}) by {caller}")
+            }
+            TraceEvent::Removed { name, kind, caller } => {
+                write!(f, "REMOVED {name} ({kind}) by {caller}")
+            }
+        }
+    }
+}
 
 /// An entity whose validity depends on a particular `NameId`.
 /// Used as the value type in the `name_dependents` reverse index.
@@ -56,7 +85,7 @@ pub enum Unit {
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Graph {
     // Map of declaration nodes
     declarations: IdentityHashMap<DeclarationId, Declaration>,
@@ -87,6 +116,15 @@ pub struct Graph {
 
     /// Paths to exclude from file discovery during indexing.
     excluded_paths: HashSet<PathBuf>,
+
+    /// Declarations that became empty during name cascade and may need removal.
+    /// Deferred until after resolution — if the declaration was repopulated, skip it.
+    /// Drained by `take_pending_declaration_cleanup()`.
+    pending_declaration_cleanup: Vec<DeclarationId>,
+
+    /// Optional callback for tracing declaration lifecycle events (creation/removal).
+    #[allow(clippy::type_complexity)]
+    trace_fn: Option<Box<dyn Fn(TraceEvent<'_>)>>,
 }
 
 impl Graph {
@@ -117,7 +155,7 @@ impl Graph {
             )))),
         );
 
-        Self {
+        let graph = Self {
             declarations,
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
@@ -129,6 +167,36 @@ impl Graph {
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
             excluded_paths: HashSet::new(),
+            pending_declaration_cleanup: Vec::default(),
+            trace_fn: None,
+        };
+
+        graph.emit_trace(TraceEvent::Created {
+            name: "Object",
+            kind: "Class",
+            caller: "bootstrap",
+        });
+        graph.emit_trace(TraceEvent::Created {
+            name: "Module",
+            kind: "Class",
+            caller: "bootstrap",
+        });
+        graph.emit_trace(TraceEvent::Created {
+            name: "Class",
+            kind: "Class",
+            caller: "bootstrap",
+        });
+
+        graph
+    }
+
+    pub fn set_trace(&mut self, f: impl Fn(TraceEvent<'_>) + 'static) {
+        self.trace_fn = Some(Box::new(f));
+    }
+
+    pub(crate) fn emit_trace(&self, event: TraceEvent<'_>) {
+        if let Some(ref f) = self.trace_fn {
+            f(event);
         }
     }
 
@@ -205,7 +273,14 @@ impl Graph {
             Entry::Vacant(vacant_entry) => {
                 let mut declaration = constructor(fully_qualified_name);
                 declaration.add_definition(definition_id);
+                let trace_name = declaration.name().to_string();
+                let trace_kind = declaration.kind();
                 vacant_entry.insert(declaration);
+                self.emit_trace(TraceEvent::Created {
+                    name: &trace_name,
+                    kind: trace_kind,
+                    caller: "add_declaration",
+                });
             }
         }
 
@@ -242,7 +317,14 @@ impl Graph {
         let mut new_decl = constructor(name, owner_id);
         new_decl.as_namespace_mut().unwrap().extend(old_decl);
 
+        let trace_name = new_decl.name().to_string();
+        let trace_kind = new_decl.kind();
         self.declarations.insert(declaration_id, new_decl);
+        self.emit_trace(TraceEvent::Created {
+            name: &trace_name,
+            kind: trace_kind,
+            caller: "promote",
+        });
     }
 
     #[must_use]
@@ -633,12 +715,69 @@ impl Graph {
         std::mem::take(&mut self.pending_work)
     }
 
+    /// Returns true if there are unprocessed work items from previous cycles.
+    #[must_use]
+    pub fn has_pending_work(&self) -> bool {
+        !self.pending_work.is_empty()
+    }
+
+    /// Drains declarations that need post-resolution cleanup.
+    pub(crate) fn take_pending_declaration_cleanup(&mut self) -> Vec<DeclarationId> {
+        std::mem::take(&mut self.pending_declaration_cleanup)
+    }
+
     fn push_work(&mut self, unit: Unit) {
         self.pending_work.push(unit);
     }
 
     pub(crate) fn extend_work(&mut self, units: impl IntoIterator<Item = Unit>) {
         self.pending_work.extend(units);
+    }
+
+    pub(crate) fn mark_declaration_for_cleanup(&mut self, decl_id: DeclarationId) {
+        self.pending_declaration_cleanup.push(decl_id);
+    }
+
+    /// Post-resolution cleanup: removes declarations that are still empty
+    /// (no definitions). Cascades to members, singletons, and descendants
+    /// via `invalidate_graph`.
+    pub(crate) fn cleanup_empty_declarations(&mut self, mut candidates: Vec<DeclarationId>) {
+        if candidates.is_empty() {
+            return;
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+
+        let items: Vec<InvalidationItem> = candidates
+            .into_iter()
+            .filter(|decl_id| {
+                self.declarations.get(decl_id).is_some_and(|decl| {
+                    // Skip synthetic declarations that acquired members during
+                    // resolution — they're actively serving as namespace parents.
+                    // TODOs from create_todo_for_parent and singletons from
+                    // get_or_create_singleton_class are both definition-less but
+                    // may hold child declarations or methods.
+                    let is_synthetic_with_members = matches!(
+                        decl,
+                        Declaration::Namespace(Namespace::Todo(_) | Namespace::SingletonClass(_))
+                    ) && decl.as_namespace().is_some_and(|ns| !ns.members().is_empty());
+                    let should_remove = decl.has_no_definitions() && !is_synthetic_with_members;
+                    if should_remove {
+                        self.emit_trace(TraceEvent::Removed {
+                            name: decl.name(),
+                            kind: decl.kind(),
+                            caller: "cleanup",
+                        });
+                    }
+                    should_remove
+                })
+            })
+            .map(InvalidationItem::Declaration)
+            .collect();
+
+        if !items.is_empty() {
+            self.invalidate_graph(items, IdentityHashMap::default());
+        }
     }
 
     /// Converts a `Resolved` `NameRef` back to `Unresolved`, preserving the original `Name` data.
@@ -1044,9 +1183,13 @@ impl Graph {
             .collect();
 
         if !missed_def_ids.is_empty() {
-            for declaration in self.declarations.values_mut() {
+            for (decl_id, declaration) in &mut self.declarations {
+                let had_definitions = !declaration.definitions().is_empty();
                 for def_id in &missed_def_ids {
                     declaration.remove_definition(def_id);
+                }
+                if had_definitions && declaration.has_no_backing_definitions(decl_id) {
+                    self.pending_declaration_cleanup.push(*decl_id);
                 }
             }
         }
@@ -1062,8 +1205,11 @@ impl Graph {
         }
     }
 
-    /// Unified invalidation worklist. Processes declaration and name items in a single loop,
+    /// Invalidation worklist. Processes declaration, name, and reference items in a loop,
     /// where processing one item can push new items back onto the queue.
+    ///
+    /// `pending_detachments` maps declarations to definitions that need to be detached
+    /// before deciding whether to remove or update each declaration.
     fn invalidate_graph(
         &mut self,
         items: Vec<InvalidationItem>,
@@ -1131,10 +1277,28 @@ impl Graph {
         let Some(decl) = self.declarations.get(&decl_id) else {
             return;
         };
-        let should_remove = decl.has_no_definitions() || !self.declarations.contains_key(decl.owner_id());
+        // Empty singletons (no definitions AND no members) are speculatively created
+        // by get_or_create_singleton_class during ancestor linearization. They should
+        // be removed even though has_no_backing_definitions() skips them (synthetic).
+        let is_empty_singleton = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)))
+            && decl.has_no_definitions()
+            && decl.as_namespace().is_some_and(|ns| ns.members().is_empty());
+        let should_remove = is_empty_singleton
+            || decl.has_no_backing_definitions(&decl_id)
+            || !self.declarations.contains_key(decl.owner_id());
 
         if should_remove {
-            // Queue members + singleton for removal
+            let trace_name = decl.name().to_string();
+            let trace_kind = decl.kind();
+            self.emit_trace(TraceEvent::Removed {
+                name: &trace_name,
+                kind: trace_kind,
+                caller: "invalidate",
+            });
+
+            // Remove path: definitions came from a deleted/changed file and won't
+            // re-resolve to this declaration. Removal must be immediate so child
+            // declarations see a missing owner and cascade correctly.
             if let Some(ns) = decl.as_namespace() {
                 if let Some(singleton_id) = ns.singleton_class() {
                     queue.push(InvalidationItem::Declaration(*singleton_id));
@@ -1177,6 +1341,11 @@ impl Graph {
                     && let Some(ns) = owner.as_namespace_mut()
                 {
                     ns.remove_member(&unqualified_str_id);
+                    // For singletons being removed, clear the owner's singleton_class_id
+                    // pointer so get_or_create_singleton_class can recreate it if needed.
+                    if is_empty_singleton {
+                        ns.clear_singleton_class_id(&decl_id);
+                    }
                 }
             }
 
@@ -1242,12 +1411,18 @@ impl Graph {
                             decl.remove_definition(def_id);
                         }
 
+                        // Defer cleanup: unlike the remove path in invalidate_declaration
+                        // (where definitions are from a deleted file and won't return),
+                        // this definition is from a surviving file — it was re-queued and
+                        // will likely re-resolve to the same declaration. Removing now
+                        // would destroy accumulated state (singleton, members) that can't
+                        // be rebuilt. Post-resolution cleanup removes it if still empty.
                         if self
                             .declarations
                             .get(&old_decl_id)
-                            .is_some_and(Declaration::has_no_definitions)
+                            .is_some_and(|decl| decl.has_no_backing_definitions(&old_decl_id))
                         {
-                            queue.push(InvalidationItem::Declaration(old_decl_id));
+                            self.pending_declaration_cleanup.push(old_decl_id);
                         }
                     }
                     NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
@@ -2347,7 +2522,8 @@ mod incremental_resolution_tests {
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
         assert_constant_reference_unresolved, assert_declaration_does_not_exist, assert_declaration_exists,
-        assert_declaration_references_count_eq, assert_members_eq, assert_no_constant_alias_target,
+        assert_declaration_references_count_eq, assert_members_eq,
+        assert_no_constant_alias_target,
     };
 
     const NO_ANCESTORS: [&str; 0] = [];
@@ -3677,6 +3853,58 @@ mod incremental_resolution_tests {
     }
 
     #[test]
+    fn singleton_class_survives_when_reopener_is_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.index_uri("file:///reopener.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///reopener.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn class_inside_singleton_scope_instance_methods_only_survives_cascade() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///main.rb",
+            r"
+            module Outer
+              class << self
+                class Inner
+                  def initialize; end
+                end
+
+                def run
+                  Inner.new
+                end
+              end
+            end
+            ",
+        );
+        context.index_uri("file:///reopener.rb", "module Outer; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner::<Inner>");
+
+        context.delete_uri("file:///reopener.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner::<Inner>");
+    }
+
+    #[test]
     fn singleton_class_preserved_after_delete_and_reindex() {
         let mut context = GraphTest::new();
 
@@ -3698,27 +3926,29 @@ mod incremental_resolution_tests {
     }
 
     #[test]
-    fn singleton_recreated_when_reference_nested_in_compact_class() {
+    fn singleton_members_cleaned_up_after_file_deletion() {
         let mut context = GraphTest::new();
-
-        context.index_uri("file:///parent.rb", "module Parent; end");
-        context.index_uri("file:///target.rb", "class Parent::Target; end");
-        context.index_uri("file:///caller.rb", "class Parent::Caller; Parent::Target.new; end");
+        context.index_uri(
+            "file:///a.rb",
+            "
+            class Foo
+              @x = 1
+              def self.bar; end
+            end
+            ",
+        );
+        context.index_uri("file:///b.rb", "class Foo; end");
         context.resolve();
 
-        assert_declaration_exists!(context, "Parent::Target");
-        assert_declaration_exists!(context, "Parent::Target::<Target>");
+        assert_declaration_exists!(context, "Foo::<Foo>#@x");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
 
-        context.delete_uri("file:///parent.rb");
-        context.delete_uri("file:///target.rb");
+        context.delete_uri("file:///a.rb");
         context.resolve();
 
-        context.index_uri("file:///parent.rb", "module Parent; end");
-        context.index_uri("file:///target.rb", "class Parent::Target; end");
-        context.resolve();
-
-        assert_declaration_exists!(context, "Parent::Target");
-        assert_declaration_exists!(context, "Parent::Target::<Target>");
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#@x");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
     }
 
     #[test]
@@ -3743,5 +3973,223 @@ mod incremental_resolution_tests {
         assert_declaration_exists!(context, "Foo");
         assert_declaration_exists!(context, "Foo::<Foo>#run()");
         assert_declaration_exists!(context, "Foo#run()");
+    }
+
+    /// Regression test derived from Rails via `--bisect --skip-file`.
+    /// Deleting an unrelated file triggers re-resolution that creates an orphan
+    /// `<TODO>` declaration at the wrong scope. The bug depends on resolution
+    /// ordering (hash-based), so the specific definitions and `class << self`
+    /// block are required to trigger it.
+    #[test]
+    fn no_orphan_todo_for_compact_nested_class_after_unrelated_delete() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri(
+            "file:///a.rb",
+            "module A; module B; class C; end; def self.x; C.x; end; end; end",
+        );
+        incremental.index_uri(
+            "file:///b.rb",
+            "module A; module B; class C; def y; D.y; end; end; end; end",
+        );
+        incremental.index_uri(
+            "file:///c.rb",
+            "module A; module B; class C; class D; class << self; def y; end; end; end; end; end; end",
+        );
+        incremental.index_uri("file:///d.rb", "module A; end");
+        incremental.resolve();
+
+        assert_declaration_exists!(incremental, "A::B::C::D");
+
+        incremental.delete_uri("file:///d.rb");
+        incremental.resolve();
+
+        incremental.index_uri("file:///d.rb", "module A; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri(
+            "file:///a.rb",
+            "module A; module B; class C; end; def self.x; C.x; end; end; end",
+        );
+        fresh.index_uri(
+            "file:///b.rb",
+            "module A; module B; class C; def y; D.y; end; end; end; end",
+        );
+        fresh.index_uri(
+            "file:///c.rb",
+            "module A; module B; class C; class D; class << self; def y; end; end; end; end; end; end",
+        );
+        fresh.index_uri("file:///d.rb", "module A; end");
+        fresh.resolve();
+
+        let extras: Vec<_> = incremental
+            .graph()
+            .declarations()
+            .iter()
+            .filter(|(id, _)| !fresh.graph().declarations().contains_key(id))
+            .map(|(_, d)| format!("{} ({})", d.name(), d.kind()))
+            .collect();
+
+        assert!(
+            extras.is_empty(),
+            "Orphan declarations after unrelated file delete: {extras:?}"
+        );
+    }
+
+    /// Regression test from Core via `--bisect`: compact-notation class with deep
+    /// nesting loses declarations after deleting and re-adding a file that defines
+    /// a shared ancestor. The TODO placeholders created by `create_todo_for_parent`
+    /// were being cleaned up by `cleanup_empty_declarations` from a previous cycle
+    /// even though they now hold members.
+    #[test]
+    fn compact_class_declarations_restored_after_shared_ancestor_delete_readd() {
+        let a = "module Google; end; class Google::Protobuf; end";
+        let b = "class Google::Cloud::V2::Type < Google::Protobuf; end";
+
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///a.rb", a);
+        incremental.index_uri("file:///b.rb", b);
+        incremental.resolve();
+
+        assert_declaration_exists!(incremental, "Google::Cloud::V2::Type");
+
+        incremental.delete_uri("file:///a.rb");
+        incremental.resolve();
+
+        incremental.index_uri("file:///a.rb", a);
+        incremental.resolve();
+
+        assert_declaration_exists!(incremental, "Google");
+        assert_declaration_exists!(incremental, "Google::Protobuf");
+        assert_declaration_exists!(incremental, "Google::Cloud::V2::Type");
+    }
+
+    /// Bisect found 3 files needed: session.rbi (compact class with class << self),
+    /// errors.rb (module ActiveRecord with include), and activesupport.rbi (defines
+    /// the included module). The third file changes resolution ordering so the TODO
+    /// promotion path diverges between single and double resolve.
+    fn todo_promotion_fixtures() -> (&'static str, &'static str, &'static str) {
+        (
+            // session.rbi: compact-notation class with class << self
+            r"
+            class ActiveRecord::SessionStore::Session
+              class << self
+                def new(attributes = nil); end
+              end
+            end
+            ",
+            // errors.rb: real module with include (changes resolution order)
+            r"
+            module ActiveRecord
+              include ActiveSupport::Deprecation::DeprecatedConstantAccessor
+              class ActiveRecordError < StandardError; end
+            end
+            ",
+            // activesupport.rbi: defines the included module chain
+            r"
+            module ActiveSupport
+              module Deprecation
+                module DeprecatedConstantAccessor; end
+              end
+            end
+            ",
+        )
+    }
+
+    /// Regression test from Core via `--bisect`: compact-notation class with
+    /// `class << self` creates a singleton on a TODO placeholder. Double
+    /// resolve must not leak extra singleton declarations.
+    #[test]
+    fn no_leaked_singleton_on_todo_after_double_resolve() {
+        let (session_rbi, errors_rb, activesupport_rbi) = todo_promotion_fixtures();
+
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///session.rbi", session_rbi);
+        incremental.index_uri("file:///errors.rb", errors_rb);
+        incremental.index_uri("file:///activesupport.rbi", activesupport_rbi);
+        incremental.resolve();
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///session.rbi", session_rbi);
+        fresh.index_uri("file:///errors.rb", errors_rb);
+        fresh.index_uri("file:///activesupport.rbi", activesupport_rbi);
+        fresh.resolve();
+
+        let extras: Vec<_> = incremental
+            .graph()
+            .declarations()
+            .iter()
+            .filter(|(id, _)| !fresh.graph().declarations().contains_key(id))
+            .map(|(_, d)| format!("{} ({})", d.name(), d.kind()))
+            .collect();
+
+        let missing: Vec<_> = fresh
+            .graph()
+            .declarations()
+            .iter()
+            .filter(|(id, _)| !incremental.graph().declarations().contains_key(id))
+            .map(|(_, d)| format!("{} ({})", d.name(), d.kind()))
+            .collect();
+
+        assert!(
+            extras.is_empty() && missing.is_empty(),
+            "Declaration mismatch after double resolve:\n  Extra: {extras:?}\n  Missing: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn empty_singleton_removed_by_cleanup_after_member_deletion() {
+        // Regression: empty singletons (no definitions, no members) must be
+        // removed by cleanup. Previously, invalidate_declaration treated all
+        // SingletonClass as synthetic (has_no_backing_definitions = false),
+        // keeping them alive via the update path even when empty.
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.index_uri("file:///reopener.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        // Delete the file with the singleton method — Foo::<Foo> loses its
+        // member #bar(). The singleton becomes empty.
+        context.delete_uri("file:///foo.rb");
+        context.resolve();
+
+        // Foo survives (reopener has a definition). The empty singleton
+        // should be cleaned up.
+        assert_declaration_exists!(context, "Foo");
+
+        // Re-add the file — Foo::<Foo> should be recreated with its member
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn resolved_attached_name_creates_singleton_for_promoted_todo() {
+        // Regression: when a NameRef::Resolved name has ParentScope::Attached
+        // but resolves to a non-singleton declaration (stale resolution from
+        // when the target was a TODO), the Resolved path must create the
+        // singleton. Verifies that after double-resolve, the singleton exists
+        // on the fully-qualified class and not on an orphaned TODO.
+        //
+        // Uses the same 3-file scenario as no_leaked_singleton_on_todo above.
+        let (session_rbi, errors_rb, activesupport_rbi) = todo_promotion_fixtures();
+
+        let mut context = GraphTest::new();
+        context.index_uri("file:///session.rbi", session_rbi);
+        context.index_uri("file:///errors.rb", errors_rb);
+        context.index_uri("file:///activesupport.rbi", activesupport_rbi);
+        context.resolve();
+        context.resolve();
+
+        // Singleton should be on the fully-qualified class, not an orphaned TODO
+        assert_declaration_exists!(context, "ActiveRecord::SessionStore::Session::<Session>");
+        assert_declaration_does_not_exist!(context, "Session::<Session>");
     }
 } // mod incremental_resolution_tests
