@@ -185,7 +185,7 @@ impl<'a> Resolver<'a> {
                 };
                 let str_id = *method.str_id();
                 match self.graph.definition_id_to_declaration_id(*def_id) {
-                    Some(&owner_decl_id) => match self.get_or_create_singleton_class(owner_decl_id) {
+                    Some(&owner_decl_id) => match self.get_or_create_singleton_class(owner_decl_id, false) {
                         Some(singleton_id) => {
                             self.create_declaration(str_id, id, singleton_id, |name| {
                                 Declaration::Method(Box::new(MethodDeclaration::new(name, singleton_id)))
@@ -291,7 +291,7 @@ impl<'a> Resolver<'a> {
                                 }
                             };
 
-                            let Some(singleton_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
+                            let Some(singleton_id) = self.get_or_create_singleton_class(receiver_decl_id, true) else {
                                 continue;
                             };
 
@@ -383,7 +383,7 @@ impl<'a> Resolver<'a> {
                                 };
 
                                 // Instance variable in singleton method - owned by the receiver's singleton class
-                                let Some(owner_id) = self.get_or_create_singleton_class(receiver_decl_id) else {
+                                let Some(owner_id) = self.get_or_create_singleton_class(receiver_decl_id, true) else {
                                     continue;
                                 };
                                 {
@@ -440,7 +440,7 @@ impl<'a> Resolver<'a> {
                                 .copied()
                                 .unwrap_or(*OBJECT_ID);
 
-                            let Some(owner_id) = self.get_or_create_singleton_class(nesting_decl_id) else {
+                            let Some(owner_id) = self.get_or_create_singleton_class(nesting_decl_id, true) else {
                                 continue;
                             };
                             {
@@ -467,7 +467,7 @@ impl<'a> Resolver<'a> {
                                 .copied()
                                 .unwrap_or(*OBJECT_ID);
                             let owner_id = self
-                                .get_or_create_singleton_class(singleton_class_decl_id)
+                                .get_or_create_singleton_class(singleton_class_decl_id, true)
                                 .expect("singleton class nesting should always be a namespace");
                             {
                                 debug_assert!(
@@ -507,7 +507,7 @@ impl<'a> Resolver<'a> {
                                 .graph
                                 .definition_id_to_declaration_id(*def_id)
                                 .expect("SelfReceiver definition should have a declaration");
-                            let Some(owner_id) = self.get_or_create_singleton_class(decl_id) else {
+                            let Some(owner_id) = self.get_or_create_singleton_class(decl_id, true) else {
                                 continue;
                             };
                             owner_id
@@ -640,13 +640,19 @@ impl<'a> Resolver<'a> {
     /// If the declaration is a `Constant` with all-promotable definitions, it is automatically promoted to a `Class`
     /// namespace before creating the singleton. Returns `None` if the declaration is not a namespace and cannot be
     /// promoted (e.g., `FOO = 42`).
-    fn get_or_create_singleton_class(&mut self, attached_id: DeclarationId) -> Option<DeclarationId> {
+    /// When `eager_ancestors` is `true`, ancestor chains are linearized inline (used after the convergence loop when all
+    /// namespaces are resolved). When `false`, a `Unit::Ancestors` item is enqueued for the convergence loop to process.
+    fn get_or_create_singleton_class(
+        &mut self,
+        attached_id: DeclarationId,
+        eager_ancestors: bool,
+    ) -> Option<DeclarationId> {
         let attached_decl = self.graph.declarations().get(&attached_id).unwrap();
 
         // If the attached object is a constant alias, follow the alias chain to find the actual namespace
         if matches!(attached_decl, Declaration::ConstantAlias(_)) {
             return match self.resolve_to_namespace(attached_id) {
-                Some(id) => self.get_or_create_singleton_class(id),
+                Some(id) => self.get_or_create_singleton_class(id, eager_ancestors),
                 None => None,
             };
         }
@@ -657,7 +663,11 @@ impl<'a> Resolver<'a> {
                     Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
                 });
 
-                self.unit_queue.push_back(Unit::Ancestors(attached_id));
+                if eager_ancestors {
+                    let _ = self.ancestors_of(attached_id);
+                } else {
+                    self.unit_queue.push_back(Unit::Ancestors(attached_id));
+                }
             } else {
                 return None;
             }
@@ -685,10 +695,11 @@ impl<'a> Resolver<'a> {
             )))),
         );
 
-        // Queue ancestor linearization so the singleton's ancestor chain is
-        // built — this cascades upward via singleton_parent_id, creating
-        // parent singletons as needed.
-        self.unit_queue.push_back(Unit::Ancestors(decl_id));
+        if eager_ancestors {
+            let _ = self.ancestors_of(decl_id);
+        } else {
+            self.unit_queue.push_back(Unit::Ancestors(decl_id));
+        }
 
         Some(decl_id)
     }
@@ -795,7 +806,7 @@ impl<'a> Resolver<'a> {
 
         // Ensure that we create the singleton and enqueue it for linearization if we see an extend
         if has_extends && !is_singleton_class {
-            self.get_or_create_singleton_class(declaration_id);
+            self.get_or_create_singleton_class(declaration_id, false);
         }
 
         let (linearized_prepends, linearized_includes) =
@@ -1262,7 +1273,7 @@ impl<'a> Resolver<'a> {
 
                         // If we found a singleton reference with a resolved attached object parent scope, we
                         // automatically create the singleton class
-                        let Some(singleton_id) = self.get_or_create_singleton_class(target_decl_id) else {
+                        let Some(singleton_id) = self.get_or_create_singleton_class(target_decl_id, false) else {
                             return Outcome::Unresolved(None);
                         };
                         self.graph.record_resolved_name(name_id, singleton_id);
@@ -1742,7 +1753,7 @@ impl<'a> Resolver<'a> {
 
                 let (inner_parent, partial) = self.singleton_parent_id(owner_id);
                 (
-                    self.get_or_create_singleton_class(inner_parent)
+                    self.get_or_create_singleton_class(inner_parent, false)
                         .expect("singleton parent should always be a namespace"),
                     partial,
                 )
@@ -1753,7 +1764,7 @@ impl<'a> Resolver<'a> {
 
                 let (picked_parent, unresolved_parent) = self.get_parent_class(&definition_ids);
                 (
-                    self.get_or_create_singleton_class(picked_parent)
+                    self.get_or_create_singleton_class(picked_parent, false)
                         .expect("parent class should always be a namespace"),
                     unresolved_parent.is_some(),
                 )
