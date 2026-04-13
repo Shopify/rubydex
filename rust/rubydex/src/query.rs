@@ -513,32 +513,17 @@ pub fn dealias_method(graph: &Graph, alias_id: DefinitionId) -> Option<Vec<Deali
     )
 }
 
-/// Result of following a `MethodAliasDefinition` chain to completion.
-#[derive(Debug)]
-pub struct DeepDealiasMethodResult {
-    /// Successfully resolved method definition IDs.
-    pub method_ids: Vec<DefinitionId>,
-    /// `DefinitionId`s where circular alias chains were detected.
-    pub circular_aliases: Vec<DefinitionId>,
-    /// `DefinitionId`s of aliases whose target method could not be found.
-    pub missing_targets: Vec<DefinitionId>,
-}
-
-/// Follows a `MethodAliasDefinition` chain to completion, returning all resolved
-/// `MethodDefinition` IDs along with any errors encountered. Unlike `dealias_method`
-/// which resolves one level, this function keeps following alias chains until only
-/// method definitions remain.
+/// Recursively follows alias chains starting from `alias_id`, collecting all
+/// resolved `MethodDefinition` IDs. Unlike `dealias_method` which resolves one
+/// level, this function keeps following aliases until all chains are fully resolved.
+/// Circular aliases and missing targets are silently ignored.
 ///
 /// # Panics
 ///
 /// Panics if any alias definition in the chain has no corresponding declaration.
 #[must_use]
-pub fn deep_dealias_method(graph: &Graph, alias_id: DefinitionId) -> DeepDealiasMethodResult {
-    let mut result = DeepDealiasMethodResult {
-        method_ids: Vec::new(),
-        circular_aliases: Vec::new(),
-        missing_targets: Vec::new(),
-    };
+pub fn deep_dealias_method(graph: &Graph, alias_id: DefinitionId) -> Vec<DefinitionId> {
+    let mut method_ids = Vec::new();
 
     let mut current_dealias_results = vec![DealiasMethodResult::Alias(alias_id)];
     let mut visited = HashSet::new();
@@ -549,25 +534,24 @@ pub fn deep_dealias_method(graph: &Graph, alias_id: DefinitionId) -> DeepDealias
         for item in &current_dealias_results {
             match item {
                 DealiasMethodResult::Method(id) => {
-                    result.method_ids.push(*id);
+                    method_ids.push(*id);
                 }
                 DealiasMethodResult::Alias(id) => {
                     if !visited.insert(*id) {
-                        result.circular_aliases.push(*id);
                         continue;
                     }
-                    match dealias_method(graph, *id) {
-                        Some(next) => next_aliases.extend(next),
-                        None => result.missing_targets.push(*id),
+                    if let Some(next) = dealias_method(graph, *id) {
+                        next_aliases.extend(next);
                     }
                 }
             }
         }
 
         if next_aliases.is_empty() {
+            // Dedup the method ids
             let mut seen = HashSet::new();
-            result.method_ids.retain(|id| seen.insert(*id));
-            return result;
+            method_ids.retain(|id| seen.insert(*id));
+            return method_ids;
         }
 
         current_dealias_results = next_aliases;
@@ -2007,8 +1991,8 @@ mod tests {
         let mut context = GraphTest::new();
         // `then` has three definitions:
         //   - a Method (from file1)
-        //   - an alias to `baz` which is circular (from file2)
-        //   - an alias to `nonexistent` which is unresolved (from file2)
+        //   - ignored: an alias to `baz` which is circular (from file2)
+        //   - ignored: an alias to `nonexistent` which is unresolved (from file2)
         // `start` aliases `then`, so deep_dealias_method(start) sees all three.
         context.index_uri(
             "file:///foo1.rb",
@@ -2033,17 +2017,11 @@ mod tests {
         context.resolve();
 
         let id = get_method_alias_id(context.graph(), "Foo#start()");
-        let result = deep_dealias_method(context.graph(), id);
+        let method_ids = deep_dealias_method(context.graph(), id);
 
         // Method definition of `then` is found
-        assert_eq!(result.method_ids.len(), 1);
-        assert_eq!(context.source_at(&result.method_ids[0]), "def then(a); end");
-        // Circular chain via baz -> bar -> baz
-        assert_eq!(result.circular_aliases.len(), 1);
-        assert_eq!(context.source_at(&result.circular_aliases[0]), "alias baz bar");
-        // Unresolved alias to nonexistent
-        assert_eq!(result.missing_targets.len(), 1);
-        assert_eq!(context.source_at(&result.missing_targets[0]), "alias then nonexistent");
+        assert_eq!(method_ids.len(), 1);
+        assert_eq!(context.source_at(&method_ids[0]), "def then(a); end");
     }
 
     #[test]
@@ -2072,10 +2050,10 @@ mod tests {
         context.resolve();
 
         let id = get_method_alias_id(context.graph(), "Foo#start()");
-        let result = deep_dealias_method(context.graph(), id);
+        let method_ids = deep_dealias_method(context.graph(), id);
 
-        assert_eq!(result.method_ids.len(), 1);
-        assert_eq!(context.source_at(&result.method_ids[0]), "def foo(a); end");
+        assert_eq!(method_ids.len(), 1);
+        assert_eq!(context.source_at(&method_ids[0]), "def foo(a); end");
     }
 
     #[test]

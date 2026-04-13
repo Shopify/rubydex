@@ -151,10 +151,10 @@ pub unsafe extern "C" fn rdx_method_alias_definition_signatures(
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
 
-        let result = rubydex::query::deep_dealias_method(graph, def_id);
+        let resolved = rubydex::query::deep_dealias_method(graph, def_id);
 
         let mut sig_entries: Vec<SignatureEntry> = Vec::new();
-        for id in &result.method_ids {
+        for id in &resolved {
             if let Some(Definition::Method(method_def)) = graph.definitions().get(id) {
                 collect_method_signatures(graph, method_def, id.get(), &mut sig_entries);
             }
