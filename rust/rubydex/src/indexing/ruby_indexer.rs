@@ -644,13 +644,30 @@ impl<'a> RubyIndexer<'a> {
         let (comments, flags) = self.find_comments_for(offset.start());
         let lexical_nesting_id = self.parent_lexical_scope_id();
         let superclass = superclass_node.as_ref().and_then(|n| {
-            self.index_constant_reference(n, false).map(|id| {
-                self.local_graph.add_constant_reference(ConstantReference::new(
+            // Try direct constant reference first
+            if let Some(id) = self.index_constant_reference(n, false) {
+                return Some(self.local_graph.add_constant_reference(ConstantReference::new(
                     id,
                     self.uri_id,
                     Offset::from_prism_location(&n.location()),
-                ))
-            })
+                )));
+            }
+
+            // For call nodes (e.g. `ActiveRecord::Migration[7.0]`), try the receiver constant
+            if let ruby_prism::Node::CallNode { .. } = n {
+                let call = n.as_call_node().unwrap();
+                if let Some(receiver) = call.receiver()
+                    && let Some(id) = self.index_constant_reference(&receiver, false)
+                {
+                    return Some(self.local_graph.add_constant_reference(ConstantReference::new(
+                        id,
+                        self.uri_id,
+                        Offset::from_prism_location(&receiver.location()),
+                    )));
+                }
+            }
+
+            None
         });
 
         if let Some(superclass_node) = superclass_node
