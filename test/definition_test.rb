@@ -364,6 +364,42 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_method_definition_signatures_from_ruby
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def foo(x) = x
+
+          def self.bar(y) = y
+        end
+      RUBY
+
+      path = context.absolute_path_to("file1.rb")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      graph["Foo#foo()"].definitions.flat_map(&:signatures).tap do |signatures|
+        assert_equal(1, signatures.size)
+        signatures[0].parameters[0].tap do |param|
+          assert_instance_of(Rubydex::Signature::PositionalParameter, param)
+          assert_equal(:x, param.name)
+          assert_equal("#{path}:2:11-2:12", param.location.to_display.to_s) # a
+        end
+      end
+
+      graph["Foo::<Foo>#bar()"].definitions.flat_map(&:signatures).tap do |signatures|
+        assert_equal(1, signatures.size)
+        signatures[0].parameters[0].tap do |param|
+          assert_instance_of(Rubydex::Signature::PositionalParameter, param)
+          assert_equal(:y, param.name)
+          assert_equal("#{path}:4:16-4:17", param.location.to_display.to_s) # a
+        end
+      end
+    end
+  end
+
   def test_method_definition_signatures_with_various_parameter_kinds
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
