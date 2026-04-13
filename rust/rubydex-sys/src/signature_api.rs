@@ -62,7 +62,6 @@ pub struct SignatureArray {
 }
 
 /// Returns a newly allocated array of signatures for the given method definition id.
-/// Returns NULL if the definition is not a method definition.
 /// Caller must free the returned pointer with `rdx_definition_signatures_free`.
 ///
 /// # Safety
@@ -70,7 +69,7 @@ pub struct SignatureArray {
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
-/// This function will panic if a definition or document cannot be found.
+/// Panics if `definition_id` does not exist or is not a `MethodDefinition`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_definition_signatures(pointer: GraphPointer, definition_id: u64) -> *mut SignatureArray {
     with_graph(pointer, |graph| {
