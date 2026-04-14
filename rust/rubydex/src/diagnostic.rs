@@ -107,4 +107,5 @@ rules! {
     InvalidMethodVisibility;
 
     // Resolution
+    UndefinedMethodVisibilityTarget;
 }

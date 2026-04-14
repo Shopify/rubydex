@@ -4699,3 +4699,226 @@ mod todo_tests {
         assert_members_eq!(context, "Foo::<Foo>", ["bar()", "baz()"]);
     }
 }
+
+mod visibility_resolution_tests {
+    use super::*;
+    use crate::model::visibility::Visibility;
+
+    macro_rules! assert_visibility_eq {
+        ($context:expr, $declaration_name:expr, $expected_visibility:expr) => {
+            let decl_id = crate::model::ids::DeclarationId::from($declaration_name);
+            let actual = $context
+                .graph()
+                .visibility(&decl_id)
+                .unwrap_or_else(|| panic!("No visibility found for `{}`", $declaration_name));
+            assert_eq!(
+                actual, $expected_visibility,
+                "Expected `{}` to have visibility {}, got {}",
+                $declaration_name, $expected_visibility, actual
+            );
+        };
+    }
+
+    #[test]
+    fn retroactive_visibility_on_direct_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def bar; end
+              private :bar
+
+              def baz; end
+              protected :baz
+
+              private def qux; end
+              public :qux
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#baz()", Visibility::Protected);
+        assert_visibility_eq!(context, "Foo#qux()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_visibility_on_attr_methods() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              attr_reader :reader_method
+              private :reader_method
+
+              attr_writer :writer_method
+              protected :writer_method
+
+              attr_accessor :accessor_method
+              private :accessor_method
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#reader_method()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#writer_method()", Visibility::Protected);
+        assert_visibility_eq!(context, "Foo#accessor_method()", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_visibility_on_inherited_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Parent
+              def foo; end
+            end
+
+            class Child < Parent
+              private :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Child#foo()");
+        assert_members_eq!(context, "Child", ["foo()"]);
+        assert_owner_eq!(context, "Child#foo()", "Child");
+        assert_visibility_eq!(context, "Child#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "Parent#foo()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_visibility_on_grandparent_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class GrandParent
+              def greet; end
+            end
+
+            class Parent < GrandParent; end
+
+            class Child < Parent
+              private :greet
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_owner_eq!(context, "Child#greet()", "Child");
+        assert_visibility_eq!(context, "Child#greet()", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_visibility_on_included_module_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Greetable
+              def greet; end
+            end
+
+            class Foo
+              include Greetable
+              private :greet
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_owner_eq!(context, "Foo#greet()", "Foo");
+        assert_visibility_eq!(context, "Foo#greet()", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_visibility_on_undefined_method_emits_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              private :nonexistent
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &[
+                "undefined-method-visibility-target: undefined method `nonexistent()` for visibility change in `Foo` (2:12-2:23)"
+            ]
+        );
+    }
+
+    #[test]
+    fn retroactive_visibility_across_reopened_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            class Foo
+              def bar; end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            class Foo
+              private :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_visibility_resolves_when_ancestor_discovered_incrementally() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///child.rb",
+            r"
+            class Child
+              include M
+              private :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "Child#foo()");
+
+        context.index_uri(
+            "file:///module.rb",
+            r"
+            module M
+              def foo; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Child#foo()");
+        assert_owner_eq!(context, "Child#foo()", "Child");
+        assert_visibility_eq!(context, "Child#foo()", Visibility::Private);
+    }
+}
