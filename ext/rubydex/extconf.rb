@@ -8,7 +8,18 @@ unless system("cargo", "--version", out: File::NULL, err: File::NULL)
 end
 
 gem_dir = Pathname.new("../..").expand_path(__dir__)
-release = ENV["RELEASE"] || !gem_dir.join(".git").exist?
+
+# Use release mode for the compilation if:
+# - The RELEASE environment variable is set
+# - We're not working on Rubydex (BUNDLE_GEMFILE doesn't point to Rubydex's own Gemfile)
+#
+# We only need debug builds when working on Rubydex itself and on CI. This approach also lets people install Rubydex
+# from the git source and get a release mode build
+
+bundle_gemfile = ENV["BUNDLE_GEMFILE"]
+developing_rubydex = bundle_gemfile && Pathname.new(bundle_gemfile).expand_path.dirname == gem_dir
+release = ENV["RELEASE"] || !developing_rubydex
+
 root_dir = gem_dir.join("rust")
 target_dir = root_dir.join("target")
 target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
