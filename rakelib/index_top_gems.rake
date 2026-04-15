@@ -10,6 +10,8 @@ task index_top_gems: :compile do
   require "yaml"
   require "json"
 
+  $stdout.sync = true
+
   class GemIndexer
     attr_reader :errors
 
@@ -51,13 +53,20 @@ task index_top_gems: :compile do
 
             # Index the gem's files and yield errors back to the main Ractor
             graph = Rubydex::Graph.new
-            indexing_errors = graph.index_all(Dir.glob("#{gem_dir}/**/*.rb"))
+            rb_files = Dir.glob("#{gem_dir}/**/*.rb")
+            puts "  [#{gem}] Indexing #{rb_files.size} files..."
+            indexing_errors = graph.index_all(rb_files)
+            puts "  [#{gem}] Resolving..."
             graph.resolve
+            puts "  [#{gem}] Checking integrity..."
 
             errors = indexing_errors + graph.check_integrity.map(&:message)
-            next if errors.empty?
-
-            @mutex.synchronize { @errors << "#{gem} => #{errors.join(", ")}" }
+            if errors.empty?
+              puts "  [#{gem}] Done"
+            else
+              puts "  [#{gem}] Done with #{errors.size} errors"
+              @mutex.synchronize { @errors << "#{gem} => #{errors.join(", ")}" }
+            end
           end
         end
       end
