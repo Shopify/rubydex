@@ -162,6 +162,14 @@ macro_rules! namespace_declaration {
                 self.singleton_class_id = Some(declaration_id);
             }
 
+            /// Clears `singleton_class_id` only if it matches `expected`.
+            /// Prevents accidentally clearing a pointer to a re-created singleton.
+            pub fn clear_singleton_class_id(&mut self, expected: &DeclarationId) {
+                if self.singleton_class_id.as_ref() == Some(expected) {
+                    self.singleton_class_id = None;
+                }
+            }
+
             pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
                 self.singleton_class_id.as_ref()
             }
@@ -328,6 +336,14 @@ impl Declaration {
     }
 
     #[must_use]
+    pub fn as_singleton_class(&self) -> Option<&Namespace> {
+        match self {
+            Declaration::Namespace(ns @ Namespace::SingletonClass(_)) => Some(ns),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn as_namespace_mut(&mut self) -> Option<&mut Namespace> {
         match self {
             Declaration::Namespace(namespace) => Some(namespace),
@@ -343,6 +359,24 @@ impl Declaration {
     #[must_use]
     pub fn has_no_definitions(&self) -> bool {
         all_declarations!(self, it => it.definition_ids.is_empty())
+    }
+
+    /// Returns true if this declaration has no backing definitions and is eligible
+    /// for removal. Built-in declarations are never removable. Singleton classes
+    /// delegate to `Namespace::is_empty` — they are only removable when they
+    /// have no definitions AND no members (populated singletons serve as
+    /// namespace parents for class-level methods).
+    #[must_use]
+    pub fn has_no_backing_definitions(&self, decl_id: &DeclarationId) -> bool {
+        if super::built_in::is_built_in(decl_id) {
+            return false;
+        }
+
+        if let Some(singleton_class) = self.as_singleton_class() {
+            return singleton_class.is_empty();
+        }
+
+        self.has_no_definitions()
     }
 
     pub fn add_definition(&mut self, definition_id: DefinitionId) {
@@ -466,6 +500,12 @@ impl Namespace {
         }
     }
 
+    /// Returns true if this namespace has no definitions and no members.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        all_namespaces!(self, it => it.definition_ids.is_empty() && it.members.is_empty())
+    }
+
     #[must_use]
     pub fn references(&self) -> &IdentityHashSet<ConstantReferenceId> {
         all_namespaces!(self, it => &it.references)
@@ -576,6 +616,10 @@ impl Namespace {
 
     pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
         all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
+    }
+
+    pub fn clear_singleton_class_id(&mut self, expected: &DeclarationId) {
+        all_namespaces!(self, it => it.clear_singleton_class_id(expected));
     }
 
     #[must_use]

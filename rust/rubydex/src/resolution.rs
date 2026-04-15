@@ -81,27 +81,22 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are computed:
-    ///
-    /// 1. Declarations for all definitions
-    /// 2. Members and ownership for all declarations
-    /// 3. Resolution of all constant references
-    /// 4. Inheritance relationships between declarations
+    /// Resolves all pending work and cleans up synthetic declarations.
+    /// `prepare_units()` classifies pending work into the namespace/reference
+    /// fixpoint (`unit_queue`) and non-namespace definitions (`other_ids`).
+    /// When the fixpoint stalls, leftovers are spilled back to `pending_work`,
+    /// `other_ids` are handled, then cleanup runs. If cleanup cascades and
+    /// produces more work, `prepare_units()` reclassifies before continuing.
     ///
     /// # Panics
     ///
     /// Can panic if there's inconsistent data in the graph
     pub fn resolve(&mut self) {
-        let other_ids = self.prepare_units();
+        let mut other_ids = self.prepare_units();
 
         loop {
-            // Flag to ensure the end of the resolution loop. We go through all items in the queue based on its current
-            // length. If we made any progress in this pass of the queue, we can continue because we're unlocking more work
-            // to be done
             self.made_progress = false;
 
-            // Loop through the current length of the queue, which won't change during this pass. Retries pushed to the back
-            // are only processed in the next pass, so that we can assess whether we made any progress
             for _ in 0..self.unit_queue.len() {
                 let Some(unit_id) = self.unit_queue.pop_front() else {
                     break;
@@ -120,19 +115,24 @@ impl<'a> Resolver<'a> {
                 }
             }
 
-            if !self.made_progress || self.unit_queue.is_empty() {
+            if self.made_progress && !self.unit_queue.is_empty() {
+                continue;
+            }
+
+            // Fixpoint stalled. Spill unresolvable leftovers back to
+            // pending_work so they survive to the next resolve() call,
+            // then handle non-namespace definitions before cleanup.
+            self.graph.extend_work(std::mem::take(&mut self.unit_queue));
+            self.handle_remaining_definitions(std::mem::take(&mut other_ids));
+
+            if !self.graph.cleanup_empty_declarations() {
                 break;
             }
+
+            // Cleanup cascaded — reclassify new work through prepare_units()
+            // so regular methods/attrs/variables are routed correctly.
+            other_ids = self.prepare_units();
         }
-
-        // unit_queue is ephemeral (lives on Resolver), but pending_work persists
-        // on Graph across resolve() calls. With incremental invalidation, items
-        // can be temporarily unresolvable (e.g. a reference whose target was just
-        // deleted but will be re-added). Drain leftovers back to pending_work so
-        // they're retried on the next resolve() call.
-        self.graph.extend_work(std::mem::take(&mut self.unit_queue));
-
-        self.handle_remaining_definitions(other_ids);
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by

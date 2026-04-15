@@ -17,6 +17,17 @@ pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
 pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
 
+/// Returns true if `decl_id` is a built-in declaration that should never be
+/// removed from the graph, even when it has no backing definitions.
+#[must_use]
+pub fn is_built_in(decl_id: &DeclarationId) -> bool {
+    *decl_id == *KERNEL_ID
+        || *decl_id == *BASIC_OBJECT_ID
+        || *decl_id == *OBJECT_ID
+        || *decl_id == *MODULE_ID
+        || *decl_id == *CLASS_ID
+}
+
 /// Adds core classes and modules data to the graph so that resolution can provide correct results even when not
 /// indexing the complete RBS core definitions
 ///
