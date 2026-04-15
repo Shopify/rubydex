@@ -58,8 +58,9 @@ pub struct Resolver<'a> {
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
     /// Deferred descendant propagation: (`descendant_id`, `ancestor_id`) pairs.
-    /// Descendants are write-only during resolution (read only during invalidation),
-    /// so we batch propagation at the end of `resolve()` for efficiency.
+    /// Descendants are not read during the resolution loop (only during invalidation
+    /// and MCP queries, both of which happen after `resolve()` returns), so we batch
+    /// propagation at the end of `resolve()` for efficiency.
     deferred_descendants: Vec<(DeclarationId, DeclarationId)>,
 }
 
@@ -124,10 +125,10 @@ impl<'a> Resolver<'a> {
         // they're retried on the next resolve() call.
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
 
-        // Batch propagate all descendant relationships. During linearization, we defer
-        // descendant tracking because descendants are write-only during resolution (read
-        // only during invalidation). This avoids the O(ancestors × descendants) cost on
-        // every cache hit during recursive linearization.
+        // Batch propagate all descendant relationships. Descendants are not read during the
+        // resolution loop (only during invalidation and MCP queries, both after resolve()
+        // returns), so deferring avoids the O(ancestors × descendants) cost on every cache
+        // hit during recursive linearization.
         for (descendant_id, ancestor_id) in std::mem::take(&mut self.deferred_descendants) {
             if let Some(ns) = self
                 .graph
