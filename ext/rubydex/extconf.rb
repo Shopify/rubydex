@@ -38,6 +38,13 @@ end
 append_cflags("-Werror=unused-but-set-variable")
 append_cflags("-Werror=implicit-function-declaration")
 
+# There's an error on Windows with function pointer types not matching. This has been fixed and backported in Ruby, but
+# it seems that RubyInstaller sometimes picks an older patch version on CI and it breaks compilation. This isn't
+# actually a problem, so we're ignoring it temporarily only on Windows
+if Gem.win_platform? && RUBY_VERSION < "4.0"
+  append_cflags("-Wno-incompatible-pointer-types")
+end
+
 if Gem.win_platform?
   $LDFLAGS << " #{target_dir.join("librubydex_sys.a")}"
 
