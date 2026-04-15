@@ -385,6 +385,58 @@ macro_rules! assert_constant_reference_unresolved {
             $unqualified_name
         );
     };
+    ($context:expr, $unqualified_name:expr, $location:expr) => {
+        let mut all_references = $context
+            .graph()
+            .constant_references()
+            .values()
+            .map(|reference| {
+                (
+                    reference,
+                    format!(
+                        "{}:{}",
+                        $context.graph().documents().get(&reference.uri_id()).unwrap().uri(),
+                        reference
+                            .offset()
+                            .to_display_range($context.graph().documents().get(&reference.uri_id()).unwrap())
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        all_references.sort_by_key(|(_, reference_location)| reference_location.clone());
+
+        let reference_at_location = all_references
+            .iter()
+            .find(|(_, reference_location)| reference_location == $location)
+            .map(|(reference, _)| reference)
+            .expect(&format!(
+                "No constant reference at `{}`, found references at {:?}",
+                $location,
+                all_references
+                    .iter()
+                    .map(|(_reference, reference_location)| reference_location)
+                    .collect::<Vec<_>>()
+            ));
+
+        let reference_name = $context.graph().names().get(reference_at_location.name_id()).unwrap();
+        assert!(
+            matches!(reference_name, $crate::model::name::NameRef::Unresolved(_)),
+            "Expected constant reference at `{}` to be unresolved, but it was resolved to `{}`",
+            $location,
+            if let $crate::model::name::NameRef::Resolved(resolved) = reference_name {
+                $context
+                    .graph()
+                    .declarations()
+                    .get(resolved.declaration_id())
+                    .unwrap()
+                    .name()
+                    .to_string()
+            } else {
+                String::new()
+            }
+        );
+    };
 }
 
 #[cfg(test)]
