@@ -8,7 +8,7 @@ Use the available subagents to help the user accomplish the requested task:
 
 ## Project Overview
 
-This Ruby gem and companion Rust crate provide a modern, high performance and low memory usage code indexing and
+This Ruby gem and companion Rust crate provide a modern, high-performance and low-memory-usage code indexing and
 static analysis tools for hyper scale Ruby projects. The Rust crate is a library that implements all of the indexing
 and static analysis logic. The Ruby gem is a native extension written in C that connects to that Rust library and
 exposes a Ruby level API to interact with the logic.
