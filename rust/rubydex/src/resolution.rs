@@ -57,9 +57,9 @@ pub struct Resolver<'a> {
     unit_queue: VecDeque<Unit>,
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
-    /// Deferred descendant propagation: (descendant_id, ancestor_id) pairs.
+    /// Deferred descendant propagation: (`descendant_id`, `ancestor_id`) pairs.
     /// Descendants are write-only during resolution (read only during invalidation),
-    /// so we batch propagation at the end of resolve() for efficiency.
+    /// so we batch propagation at the end of `resolve()` for efficiency.
     deferred_descendants: Vec<(DeclarationId, DeclarationId)>,
 }
 
