@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashSet, VecDeque, hash_map::Entry},
-    hash::BuildHasher,
-};
+use std::collections::{HashSet, VecDeque, hash_map::Entry};
 
 use crate::model::{
     built_in::{BASIC_OBJECT_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
@@ -39,7 +36,6 @@ impl Outcome {
 }
 
 struct LinearizationContext {
-    descendants: IdentityHashSet<DeclarationId>,
     seen_ids: IdentityHashSet<DeclarationId>,
     cyclic: bool,
     partial: bool,
@@ -48,19 +44,10 @@ struct LinearizationContext {
 impl LinearizationContext {
     fn new() -> Self {
         Self {
-            descendants: IdentityHashSet::default(),
             seen_ids: IdentityHashSet::default(),
             cyclic: false,
             partial: false,
         }
-    }
-
-    /// Finalize this linearization context for the given declaration. This is intended to be invoked whenever we finish
-    /// the linearization algorithm, regardless of whether we are returning a cached result or a freshly built ancestor
-    /// chain
-    fn finalize(&mut self, declaration_id: DeclarationId) {
-        self.descendants.remove(&declaration_id);
-        self.seen_ids.remove(&declaration_id);
     }
 }
 
@@ -70,6 +57,10 @@ pub struct Resolver<'a> {
     unit_queue: VecDeque<Unit>,
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
+    /// Deferred descendant propagation: (descendant_id, ancestor_id) pairs.
+    /// Descendants are write-only during resolution (read only during invalidation),
+    /// so we batch propagation at the end of resolve() for efficiency.
+    deferred_descendants: Vec<(DeclarationId, DeclarationId)>,
 }
 
 impl<'a> Resolver<'a> {
@@ -78,6 +69,7 @@ impl<'a> Resolver<'a> {
             graph,
             unit_queue: VecDeque::new(),
             made_progress: false,
+            deferred_descendants: Vec::new(),
         }
     }
 
@@ -131,6 +123,21 @@ impl<'a> Resolver<'a> {
         // deleted but will be re-added). Drain leftovers back to pending_work so
         // they're retried on the next resolve() call.
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
+
+        // Batch propagate all descendant relationships. During linearization, we defer
+        // descendant tracking because descendants are write-only during resolution (read
+        // only during invalidation). This avoids the O(ancestors × descendants) cost on
+        // every cache hit during recursive linearization.
+        for (descendant_id, ancestor_id) in std::mem::take(&mut self.deferred_descendants) {
+            if let Some(ns) = self
+                .graph
+                .declarations_mut()
+                .get_mut(&ancestor_id)
+                .and_then(|d| d.as_namespace_mut())
+            {
+                ns.add_descendant(descendant_id);
+            }
+        }
 
         self.handle_remaining_definitions(other_ids);
     }
@@ -712,18 +719,13 @@ impl<'a> Resolver<'a> {
     #[must_use]
     fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
         {
-            let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
-
-            // Add this declaration to the descendants so that we capture transitive descendant relationships
-            context.descendants.insert(declaration_id);
+            let declaration = self.graph.declarations().get(&declaration_id).unwrap();
 
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
             // again
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().clone_ancestors();
-                self.propagate_descendants(&mut context.descendants, &cached);
-
-                context.finalize(declaration_id);
+                context.seen_ids.remove(&declaration_id);
                 return cached;
             }
 
@@ -732,30 +734,22 @@ impl<'a> Resolver<'a> {
                 // still approximate features by assuming that it must inherit from `Object` at some point (which is what most
                 // classes/modules inherit from). This is not 100% correct, but it allows us to provide a bit better IDE support
                 // for these cases
+                context.cyclic = true;
                 let estimated_ancestors = if matches!(declaration, Declaration::Namespace(Namespace::Class(_))) {
                     Ancestors::Cyclic(vec![Ancestor::Complete(*OBJECT_ID)])
                 } else {
                     Ancestors::Cyclic(vec![])
                 };
-                declaration
-                    .as_namespace_mut()
-                    .unwrap()
-                    .set_ancestors(estimated_ancestors.clone());
-
-                context.finalize(declaration_id);
-                return estimated_ancestors;
-            }
-
-            // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
-            // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
-            for descendant in &context.descendants {
                 self.graph
                     .declarations_mut()
                     .get_mut(&declaration_id)
                     .unwrap()
                     .as_namespace_mut()
                     .unwrap()
-                    .add_descendant(*descendant);
+                    .set_ancestors(estimated_ancestors.clone());
+
+                context.seen_ids.remove(&declaration_id);
+                return estimated_ancestors;
             }
         }
 
@@ -810,6 +804,13 @@ impl<'a> Resolver<'a> {
             ancestors.extend(parents);
         }
 
+        // Defer descendant propagation to batch pass at end of resolve()
+        for ancestor in &ancestors {
+            if let Ancestor::Complete(ancestor_id) = ancestor {
+                self.deferred_descendants.push((declaration_id, *ancestor_id));
+            }
+        }
+
         let result = if context.cyclic {
             Ancestors::Cyclic(ancestors)
         } else if context.partial {
@@ -826,7 +827,7 @@ impl<'a> Resolver<'a> {
             .unwrap()
             .set_ancestors(result.clone());
 
-        context.finalize(declaration_id);
+        context.seen_ids.remove(&declaration_id);
         result
     }
 
@@ -986,29 +987,6 @@ impl<'a> Resolver<'a> {
         }
 
         (linearized_prepends, linearized_includes)
-    }
-
-    /// Propagate descendants to all cached ancestors
-    fn propagate_descendants<S: BuildHasher>(
-        &mut self,
-        descendants: &mut HashSet<DeclarationId, S>,
-        cached: &Ancestors,
-    ) {
-        if !descendants.is_empty() {
-            for ancestor in cached {
-                if let Ancestor::Complete(ancestor_id) = ancestor {
-                    for descendant in descendants.iter() {
-                        self.graph
-                            .declarations_mut()
-                            .get_mut(ancestor_id)
-                            .unwrap()
-                            .as_namespace_mut()
-                            .unwrap()
-                            .add_descendant(*descendant);
-                    }
-                }
-            }
-        }
     }
 
     // Handles the resolution of the namespace name, the creation of the declaration and membership
