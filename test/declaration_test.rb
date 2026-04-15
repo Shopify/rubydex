@@ -301,7 +301,7 @@ class DeclarationTest < Minitest::Test
       graph.resolve
 
       child = graph["Child"]
-      assert_equal(["Bar", "Child", "Foo", "Parent", "Object"], child.ancestors.map(&:name))
+      assert_equal(["Bar", "Child", "Foo", "Parent", "Object", "Kernel", "BasicObject"], child.ancestors.map(&:name))
     end
   end
 

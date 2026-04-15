@@ -1115,13 +1115,13 @@ mod tests {
         let s = server_with_sources(&[(&a, "class Animal; end"), (&b, "module Greetable; end")]);
         let res = parse(&s.codebase_stats());
 
-        assert_eq!(res["files"], 2);
-        assert_json_int!(res, "declarations", 5);
-        assert_json_int!(res, "definitions", 2);
+        assert_eq!(res["files"], 3);
+        assert_json_int!(res, "declarations", 7);
+        assert_json_int!(res, "definitions", 7);
 
         let breakdown = &res["breakdown_by_kind"];
-        assert_json_int!(breakdown, "Class", 4);
-        assert_json_int!(breakdown, "Module", 1);
+        assert_json_int!(breakdown, "Class", 5);
+        assert_json_int!(breakdown, "Module", 2);
     }
 
     // -- error states --

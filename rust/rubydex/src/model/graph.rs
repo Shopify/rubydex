@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::declaration::{Ancestor, ClassDeclaration, Declaration, Namespace};
+use crate::model::built_in::{OBJECT_ID, add_built_in_data};
+use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, Receiver};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
@@ -37,11 +37,6 @@ enum InvalidationItem {
     /// Ancestor context changed — unresolve references under this name but keep the name resolved.
     References(NameId),
 }
-
-pub static BASIC_OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("BasicObject"));
-pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Object"));
-pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
-pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
 
 /// A work item produced by graph mutations (update/delete) that needs resolution.
 #[derive(Debug)]
@@ -92,33 +87,8 @@ pub struct Graph {
 impl Graph {
     #[must_use]
     pub fn new() -> Self {
-        let mut declarations = IdentityHashMap::default();
-
-        // Built-in declarations that always exist in the Ruby object model
-        declarations.insert(
-            *OBJECT_ID,
-            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                "Object".to_string(),
-                *OBJECT_ID,
-            )))),
-        );
-        declarations.insert(
-            *MODULE_ID,
-            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                "Module".to_string(),
-                *OBJECT_ID,
-            )))),
-        );
-        declarations.insert(
-            *CLASS_ID,
-            Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(
-                "Class".to_string(),
-                *OBJECT_ID,
-            )))),
-        );
-
-        Self {
-            declarations,
+        let mut graph = Self {
+            declarations: IdentityHashMap::default(),
             definitions: IdentityHashMap::default(),
             documents: IdentityHashMap::default(),
             strings: IdentityHashMap::default(),
@@ -129,7 +99,10 @@ impl Graph {
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
             excluded_paths: HashSet::new(),
-        }
+        };
+
+        add_built_in_data(&mut graph);
+        graph
     }
 
     // Returns an immutable reference to the declarations map
@@ -1459,7 +1432,10 @@ mod tests {
     use crate::model::comment::Comment;
     use crate::model::declaration::Ancestors;
     use crate::test_utils::GraphTest;
-    use crate::{assert_dependents, assert_descendants, assert_members_eq, assert_no_diagnostics, assert_no_members};
+    use crate::{
+        assert_declaration_does_not_exist, assert_dependents, assert_descendants, assert_members_eq,
+        assert_no_diagnostics, assert_no_members,
+    };
 
     #[test]
     fn deleting_a_uri() {
@@ -1469,9 +1445,8 @@ mod tests {
         context.delete_uri("file:///foo.rb");
         context.resolve();
 
-        assert!(context.graph().documents.is_empty());
-        assert!(context.graph().definitions.is_empty());
-        // Object is left
+        assert!(!context.graph().documents.contains_key(&UriId::from("file:///foo.rb")));
+        assert_declaration_does_not_exist!(context, "Foo");
         assert!(
             context
                 .graph()
@@ -1536,16 +1511,15 @@ mod tests {
 
         context.index_uri("file:///foo.rb", "module Foo; end");
 
-        assert_eq!(context.graph().definitions.len(), 1);
-        assert_eq!(context.graph().documents.len(), 1);
+        let original_definition_length = context.graph().definitions.len();
+        let original_document_length = context.graph().documents.len();
 
         // Update with empty content to remove definitions but keep the URI
         context.index_uri("file:///foo.rb", "");
 
-        assert!(context.graph().definitions.is_empty());
-
         // URI remains if the file was not deleted, but definitions got erased
-        assert_eq!(context.graph().documents.len(), 1);
+        assert_eq!(original_definition_length - 1, context.graph().definitions.len());
+        assert_eq!(original_document_length, context.graph().documents.len());
     }
 
     #[test]
@@ -1555,35 +1529,31 @@ mod tests {
         context.index_uri("file:///foo.rb", "module Foo; end");
         context.resolve();
 
-        assert_eq!(context.graph().definitions.len(), 1);
-        assert_eq!(context.graph().documents.len(), 1);
+        let original_definition_length = context.graph().definitions.len();
+        let original_document_length = context.graph().documents.len();
 
-        {
-            assert!(
-                context
-                    .graph()
-                    .declarations()
-                    .get(&DeclarationId::from("Foo"))
-                    .is_some()
-            );
-        }
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo"))
+                .is_some()
+        );
 
         // Update with empty content to remove definitions but keep the URI
         context.index_uri("file:///foo.rb", "");
 
-        assert!(context.graph().definitions.is_empty());
         // URI remains if the file was not deleted, but definitions and declarations got erased
-        assert_eq!(context.graph().documents.len(), 1);
+        assert_eq!(original_definition_length - 1, context.graph().definitions.len());
+        assert_eq!(original_document_length, context.graph().documents.len());
 
-        {
-            assert!(
-                context
-                    .graph()
-                    .declarations()
-                    .get(&DeclarationId::from("Foo"))
-                    .is_none()
-            );
-        }
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1601,9 +1571,9 @@ mod tests {
         );
         context.resolve();
 
-        assert_eq!(context.graph().documents.len(), 2);
+        assert_eq!(context.graph().documents.len(), 3);
         assert_eq!(context.graph().method_references.len(), 1);
-        assert_eq!(context.graph().constant_references.len(), 2);
+        assert_eq!(context.graph().constant_references.len(), 6);
         {
             let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
             assert_eq!(declaration.as_namespace().unwrap().references().len(), 1);
@@ -1613,9 +1583,9 @@ mod tests {
         context.index_uri("file:///references.rb", "");
 
         // URI remains if the file was not deleted, but references got erased
-        assert_eq!(context.graph().documents.len(), 2);
+        assert_eq!(context.graph().documents.len(), 3);
         assert!(context.graph().method_references.is_empty());
-        assert!(context.graph().constant_references.is_empty());
+        assert_eq!(context.graph().constant_references.len(), 4);
         {
             let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
             assert!(declaration.as_namespace().unwrap().references().is_empty());
@@ -1701,8 +1671,14 @@ mod tests {
         context.index_uri("file:///foo3.rb", "Foo");
         context.resolve();
 
-        assert_eq!(context.graph().names().len(), 1);
-        let name_ref = context.graph().names().values().next().unwrap();
+        assert_eq!(context.graph().names().len(), 7);
+        let foo_str_id = StringId::from("Foo");
+        let name_ref = context
+            .graph()
+            .names()
+            .values()
+            .find(|n| *n.str() == foo_str_id)
+            .unwrap();
         assert_eq!(name_ref.ref_count(), 3);
     }
 
@@ -1755,15 +1731,28 @@ mod tests {
         context.index_uri("file:///bar.rb", "Foo");
         context.resolve();
 
-        assert_eq!(context.graph().names().len(), 1);
-        assert_eq!(context.graph().names().values().next().unwrap().ref_count(), 2);
+        assert_eq!(context.graph().names().len(), 7);
+        let foo_str_id = StringId::from("Foo");
+        let foo_name = context
+            .graph()
+            .names()
+            .values()
+            .find(|n| *n.str() == foo_str_id)
+            .unwrap();
+        assert_eq!(foo_name.ref_count(), 2);
 
         context.delete_uri("file:///foo.rb");
-        assert_eq!(context.graph().names().len(), 1);
-        assert_eq!(context.graph().names().values().next().unwrap().ref_count(), 1);
+        assert_eq!(context.graph().names().len(), 7);
+        let foo_name = context
+            .graph()
+            .names()
+            .values()
+            .find(|n| *n.str() == foo_str_id)
+            .unwrap();
+        assert_eq!(foo_name.ref_count(), 1);
 
         context.delete_uri("file:///bar.rb");
-        assert!(context.graph().names().is_empty());
+        assert_eq!(context.graph().names().len(), 6);
     }
 
     #[test]
@@ -1799,7 +1788,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "module Foo; end");
         context.resolve();
 
-        assert_eq!(context.graph().definitions.len(), 1);
+        assert_eq!(context.graph().definitions.len(), 6);
         let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         let document = context.graph().documents.get(&UriId::from("file:///foo.rb")).unwrap();
@@ -1817,7 +1806,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "\n\n\n\n\n\nmodule Foo; end");
         context.resolve();
 
-        assert_eq!(context.graph().definitions.len(), 1);
+        assert_eq!(context.graph().definitions.len(), 6);
         let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
         assert_eq!(declaration.name(), "Foo");
         assert_eq!(
@@ -2236,19 +2225,19 @@ mod tests {
         ";
 
         context.index_uri("file:///foo.rb", source);
-        assert_eq!(44, context.graph().definitions.len());
-        assert_eq!(9, context.graph().constant_references.len());
+        assert_eq!(49, context.graph().definitions.len());
+        assert_eq!(13, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
-        assert_eq!(1, context.graph().documents.len());
-        assert_eq!(13, context.graph().names.len());
-        assert_eq!(42, context.graph().strings.len());
+        assert_eq!(2, context.graph().documents.len());
+        assert_eq!(19, context.graph().names.len());
+        assert_eq!(47, context.graph().strings.len());
         context.index_uri("file:///foo.rb", source);
-        assert_eq!(44, context.graph().definitions.len());
-        assert_eq!(9, context.graph().constant_references.len());
+        assert_eq!(49, context.graph().definitions.len());
+        assert_eq!(13, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
-        assert_eq!(1, context.graph().documents.len());
-        assert_eq!(13, context.graph().names.len());
-        assert_eq!(42, context.graph().strings.len());
+        assert_eq!(2, context.graph().documents.len());
+        assert_eq!(19, context.graph().names.len());
+        assert_eq!(47, context.graph().strings.len());
     }
 
     #[test]
@@ -2401,7 +2390,7 @@ mod incremental_resolution_tests {
         assert_ancestors_eq!(
             context,
             "Foo::Bar::Baz::Qux",
-            ["Foo::Bar::Baz::Qux", "Foo::Bar", "Object"]
+            ["Foo::Bar::Baz::Qux", "Foo::Bar", "Object", "Kernel", "BasicObject"]
         );
 
         context.index_uri(
@@ -2427,7 +2416,13 @@ mod incremental_resolution_tests {
         assert_ancestors_eq!(
             context,
             "Foo::Bar::Baz::Qux",
-            ["Foo::Bar::Baz::Qux", "Foo::Bar::Baz::Bar", "Object"]
+            [
+                "Foo::Bar::Baz::Qux",
+                "Foo::Bar::Baz::Bar",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
         );
     }
 
@@ -2459,7 +2454,7 @@ mod incremental_resolution_tests {
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:3-6:8");
         assert_declaration_references_count_eq!(context, "Foo::CONST", 1);
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object", "Kernel", "BasicObject"]);
 
         context.delete_uri("file:///bar.rb");
 
@@ -2471,7 +2466,7 @@ mod incremental_resolution_tests {
 
         // Bar no longer includes Foo, so CONST is unresolvable
         assert_constant_reference_unresolved!(context, "CONST");
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -2663,7 +2658,7 @@ mod incremental_resolution_tests {
         context.index_uri("file:///bar.rb", "class Bar; end");
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
 
         // A new file reopens Foo with a superclass -- ancestors must be invalidated
         context.index_uri(
@@ -2678,7 +2673,7 @@ mod incremental_resolution_tests {
 
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -2714,8 +2709,8 @@ mod incremental_resolution_tests {
         context.resolve();
 
         assert_constant_reference_to!(context, "M::CONST", "file:///a.rb:3:3-3:8");
-        assert_ancestors_eq!(context, "A", ["A", "M", "Object"]);
-        assert_ancestors_eq!(context, "B", ["B", "M", "Object"]);
+        assert_ancestors_eq!(context, "A", ["A", "M", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(context, "B", ["B", "M", "Object", "Kernel", "BasicObject"]);
 
         context.delete_uri("file:///m.rb");
 
@@ -2725,8 +2720,8 @@ mod incremental_resolution_tests {
         context.resolve();
 
         // M is gone, but `include M` still exists in the source — M is Partial (unresolvable)
-        assert_ancestors_eq!(context, "A", ["A", Partial("M"), "Object"]);
-        assert_ancestors_eq!(context, "B", ["B", Partial("M"), "Object"]);
+        assert_ancestors_eq!(context, "A", ["A", Partial("M"), "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(context, "B", ["B", Partial("M"), "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_unresolved!(context, "CONST");
     }
 
@@ -2799,7 +2794,7 @@ mod incremental_resolution_tests {
         );
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_to!(context, "Bar::CONST", "file:///ref.rb:2:3-2:8");
 
         context.index_uri(
@@ -2815,7 +2810,7 @@ mod incremental_resolution_tests {
 
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_to!(context, "Baz::CONST", "file:///ref.rb:2:3-2:8");
     }
 
@@ -2838,7 +2833,11 @@ mod incremental_resolution_tests {
         context.resolve();
 
         assert_declaration_exists!(context, "Foo");
-        assert_members_eq!(context, "Object", ["Foo"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            ["BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
+        );
     }
 
     #[test]
@@ -2874,7 +2873,7 @@ mod incremental_resolution_tests {
         );
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "M2", "M1", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M2", "M1", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_to!(context, "M1::CONST1", "file:///foo.rb:4:3-4:9");
         assert_constant_reference_to!(context, "M2::CONST2", "file:///foo.rb:5:3-5:9");
 
@@ -2885,7 +2884,11 @@ mod incremental_resolution_tests {
 
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", Partial("M2"), Partial("M1"), "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Foo",
+            ["Foo", Partial("M2"), Partial("M1"), "Object", "Kernel", "BasicObject"]
+        );
         assert_declaration_does_not_exist!(context, "M1");
         assert_declaration_does_not_exist!(context, "M2");
         assert_constant_reference_unresolved!(context, "CONST1");
@@ -3053,7 +3056,7 @@ mod incremental_resolution_tests {
         context.resolve();
 
         assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:3:3-3:8");
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object", "Kernel", "BasicObject"]);
 
         context.index_uri(
             "file:///bar.rb",
@@ -3066,7 +3069,7 @@ mod incremental_resolution_tests {
         );
         context.resolve();
         assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:3:3-3:8");
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -3247,7 +3250,7 @@ mod incremental_resolution_tests {
         // After re-resolve, CONST should now resolve through Foo -> Bar
         context.resolve();
         assert_constant_reference_to!(context, "Bar::CONST", "file:///foo.rb:2:3-2:8");
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -3275,7 +3278,7 @@ mod incremental_resolution_tests {
         context.resolve();
 
         assert_declaration_exists!(context, "Foo::Bar");
-        assert_ancestors_eq!(context, "Foo::Bar", ["Foo::Bar", "Object"]);
+        assert_ancestors_eq!(context, "Foo::Bar", ["Foo::Bar", "Object", "Kernel", "BasicObject"]);
         assert_members_eq!(context, "Foo::Bar", ["bar()"]);
 
         context.index_uri(
@@ -3293,7 +3296,11 @@ mod incremental_resolution_tests {
         context.resolve();
 
         assert_declaration_exists!(context, "M::Foo::Bar");
-        assert_ancestors_eq!(context, "M::Foo::Bar", ["M::Foo::Bar", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "M::Foo::Bar",
+            ["M::Foo::Bar", "Object", "Kernel", "BasicObject"]
+        );
         assert_members_eq!(context, "M::Foo::Bar", ["bar()"]);
     }
 
@@ -3322,7 +3329,7 @@ mod incremental_resolution_tests {
 
         assert_declaration_exists!(context, "Foo");
         assert_declaration_exists!(context, "Foo::Bar");
-        assert_ancestors_eq!(context, "Foo::Bar", ["Foo::Bar", "Object"]);
+        assert_ancestors_eq!(context, "Foo::Bar", ["Foo::Bar", "Object", "Kernel", "BasicObject"]);
         assert_members_eq!(context, "Foo", ["Bar"]);
         assert_members_eq!(context, "Foo::Bar", ["bar()"]);
 
@@ -3341,8 +3348,8 @@ mod incremental_resolution_tests {
         context.resolve();
 
         assert_declaration_exists!(context, "Baz::Bar");
-        assert_ancestors_eq!(context, "Baz", ["Baz", "Object"]);
-        assert_ancestors_eq!(context, "Baz::Bar", ["Baz::Bar", "Object"]);
+        assert_ancestors_eq!(context, "Baz", ["Baz", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(context, "Baz::Bar", ["Baz::Bar", "Object", "Kernel", "BasicObject"]);
         assert_members_eq!(context, "Baz", ["Bar"]);
         assert_members_eq!(context, "Baz::Bar", ["bar()"]);
     }
@@ -3372,7 +3379,7 @@ mod incremental_resolution_tests {
         );
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "M1", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M1", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_to!(context, "M1::CONST", "file:///foo.rb:3:3-3:8");
 
         context.index_uri(
@@ -3392,7 +3399,7 @@ mod incremental_resolution_tests {
 
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "M2", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M2", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_to!(context, "M2::CONST", "file:///foo.rb:3:3-3:8");
     }
 
@@ -3418,7 +3425,7 @@ mod incremental_resolution_tests {
         );
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_to!(context, "Bar::CONST", "file:///foo.rb:2:3-2:8");
 
         context.index_uri(
@@ -3436,7 +3443,7 @@ mod incremental_resolution_tests {
 
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_unresolved!(context, "CONST");
     }
 
@@ -3508,7 +3515,7 @@ mod incremental_resolution_tests {
         );
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object", "Kernel", "BasicObject"]);
 
         context.index_uri(
             "file:///foo.rb",
@@ -3525,7 +3532,7 @@ mod incremental_resolution_tests {
 
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object", "Kernel", "BasicObject"]);
     }
     #[test]
     fn adding_mixin_to_multi_definition_declaration_updates_ancestors() {
@@ -3558,7 +3565,7 @@ mod incremental_resolution_tests {
         );
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
 
         // Re-index foo2.rb to add a mixin. Foo survives (foo1.rb still defines it)
         // and enters the update path, pushing Unit::Ancestors.
@@ -3573,7 +3580,7 @@ mod incremental_resolution_tests {
         );
         context.resolve();
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object", "Kernel", "BasicObject"]);
     }
     /// Verifies that incremental resolution produces identical results to a fresh
     /// full resolution by building the same final state through two different paths.
@@ -3643,8 +3650,8 @@ mod incremental_resolution_tests {
         fresh.resolve();
 
         // Compare: both paths should produce identical resolved state
-        assert_ancestors_eq!(incremental, "Bar", ["Bar", "Baz", "Object"]);
-        assert_ancestors_eq!(fresh, "Bar", ["Bar", "Baz", "Object"]);
+        assert_ancestors_eq!(incremental, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(fresh, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
 
         assert_constant_reference_to!(incremental, "Baz::CONST", "file:///foo.rb:6:3-6:8");
         assert_constant_reference_to!(fresh, "Baz::CONST", "file:///foo.rb:6:3-6:8");

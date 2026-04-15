@@ -30,12 +30,12 @@ fn paths_argument_variants() {
     rdx(&[])
         .success()
         .stderr(predicate::str::is_empty())
-        .stdout(predicate::str::contains("Indexed 0 files"));
+        .stdout(predicate::str::contains("Indexed 1 files"));
 
     rdx(&["."])
         .success()
         .stderr(predicate::str::is_empty())
-        .stdout(predicate::str::contains("Indexed 0 files"));
+        .stdout(predicate::str::contains("Indexed 1 files"));
 
     with_context(|context| {
         context.write("dir1/file1.rb", "class Class1\nend\n");
@@ -49,7 +49,7 @@ fn paths_argument_variants() {
         ])
         .success()
         .stderr(predicate::str::is_empty())
-        .stdout(predicate::str::contains("Indexed 3 files"));
+        .stdout(predicate::str::contains("Indexed 4 files"));
     });
 }
 
@@ -62,9 +62,9 @@ fn prints_index_metrics() {
         rdx(&[context.absolute_path().to_str().unwrap()])
             .success()
             .stderr(predicate::str::is_empty())
-            .stdout(predicate::str::contains("Indexed 2 files"))
-            .stdout(predicate::str::contains("Found 5 names"))
-            .stdout(predicate::str::contains("Found 2 definitions"));
+            .stdout(predicate::str::contains("Indexed 3 files"))
+            .stdout(predicate::str::contains("Found 7 names"))
+            .stdout(predicate::str::contains("Found 7 definitions"));
     });
 }
 
@@ -95,16 +95,34 @@ fn visualize_simple_class() {
             digraph {
                 rankdir=TB;
 
+                "Name:BasicObject" [label="BasicObject",shape=hexagon];
+                "Name:BasicObject" -> "def_<ID>" [dir=both];
                 "Name:Class" [label="Class",shape=hexagon];
+                "Name:Class" -> "def_<ID>" [dir=both];
+                "Name:Kernel" [label="Kernel",shape=hexagon];
+                "Name:Kernel" -> "def_<ID>" [dir=both];
                 "Name:Module" [label="Module",shape=hexagon];
+                "Name:Module" -> "def_<ID>" [dir=both];
                 "Name:Object" [label="Object",shape=hexagon];
+                "Name:Object" -> "def_<ID>" [dir=both];
                 "Name:SimpleClass" [label="SimpleClass",shape=hexagon];
                 "Name:SimpleClass" -> "def_<ID>" [dir=both];
 
+                "def_<ID>" [label="Class(BasicObject)",shape=ellipse];
+                "def_<ID>" [label="Class(Class)",shape=ellipse];
+                "def_<ID>" [label="Class(Module)",shape=ellipse];
+                "def_<ID>" [label="Class(Object)",shape=ellipse];
                 "def_<ID>" [label="Class(SimpleClass)",shape=ellipse];
+                "def_<ID>" [label="Module(Kernel)",shape=ellipse];
 
                 "file://<PATH>/simple.rb" [label="simple.rb",shape=box];
                 "def_<ID>" -> "file://<PATH>/simple.rb";
+                "rubydex:built-in" [label="rubydex:built-in",shape=box];
+                "def_<ID>" -> "rubydex:built-in";
+                "def_<ID>" -> "rubydex:built-in";
+                "def_<ID>" -> "rubydex:built-in";
+                "def_<ID>" -> "rubydex:built-in";
+                "def_<ID>" -> "rubydex:built-in";
 
             }
 

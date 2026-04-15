@@ -92,10 +92,10 @@ class GraphTest < Minitest::Test
 
       enumerator = graph.declarations
 
-      # Object, Class, Module + the indexed files
-      assert_equal(5, enumerator.size)
-      assert_equal(5, enumerator.count)
-      assert_equal(5, enumerator.to_a.size)
+      # Object, Class, Module, BasicObject, Kernel + the indexed files
+      assert_equal(7, enumerator.size)
+      assert_equal(7, enumerator.count)
+      assert_equal(7, enumerator.to_a.size)
     end
   end
 
@@ -113,7 +113,7 @@ class GraphTest < Minitest::Test
         declarations << declaration
       end
 
-      assert_equal(5, declarations.size)
+      assert_equal(7, declarations.size)
     end
   end
 
@@ -127,9 +127,9 @@ class GraphTest < Minitest::Test
 
       enumerator = graph.documents
 
-      assert_equal(2, enumerator.size)
-      assert_equal(2, enumerator.count)
-      assert_equal(2, enumerator.to_a.size)
+      assert_equal(3, enumerator.size)
+      assert_equal(3, enumerator.count)
+      assert_equal(3, enumerator.to_a.size)
     end
   end
 
@@ -146,7 +146,7 @@ class GraphTest < Minitest::Test
         documents << document
       end
 
-      assert_equal(2, documents.size)
+      assert_equal(3, documents.size)
     end
   end
 
@@ -430,7 +430,7 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal(2, graph.documents.count)
+      assert_equal(3, graph.documents.count)
       foo = graph["Foo"]
 
       deleted = graph.delete_document(context.uri_to("foo.rb"))
@@ -440,8 +440,9 @@ class GraphTest < Minitest::Test
       assert_empty(foo.definitions.to_a)
       assert_nil(graph["Foo"])
 
-      assert_equal(1, graph.documents.count)
-      assert_equal("Bar", graph.documents.first.definitions.first.name)
+      assert_equal(2, graph.documents.count)
+      bar_doc = graph.documents.find { |d| d.uri == context.uri_to("bar.rb") }
+      assert_equal("Bar", bar_doc.definitions.first.name)
     end
   end
 
@@ -463,7 +464,7 @@ class GraphTest < Minitest::Test
     graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
     graph.resolve
 
-    assert_equal(1, graph.documents.count)
+    assert_equal(2, graph.documents.count)
     refute_nil(graph["Foo"])
   end
 
@@ -471,7 +472,7 @@ class GraphTest < Minitest::Test
     graph = Rubydex::Graph.new
     graph.index_source("file:///foo.rbs", "class Foo\nend", "rbs")
 
-    assert_equal(1, graph.documents.count)
+    assert_equal(2, graph.documents.count)
   end
 
   def test_index_source_with_unknown_language_id
@@ -511,7 +512,7 @@ class GraphTest < Minitest::Test
     graph.index_source("file:///foo.rb", "class Bar; end", "ruby")
     graph.resolve
 
-    assert_equal(1, graph.documents.count)
+    assert_equal(2, graph.documents.count)
     assert_nil(graph["Foo"])
     refute_nil(graph["Bar"])
   end

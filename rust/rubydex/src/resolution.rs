@@ -4,13 +4,14 @@ use std::{
 };
 
 use crate::model::{
+    built_in::{BASIC_OBJECT_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
         Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
     definitions::{Definition, Mixin, Receiver},
-    graph::{CLASS_ID, Graph, MODULE_ID, OBJECT_ID, Unit},
+    graph::{Graph, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
     ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
     name::{Name, NameRef, ParentScope},
@@ -52,6 +53,14 @@ impl LinearizationContext {
             cyclic: false,
             partial: false,
         }
+    }
+
+    /// Finalize this linearization context for the given declaration. This is intended to be invoked whenever we finish
+    /// the linearization algorithm, regardless of whether we are returning a cached result or a freshly built ancestor
+    /// chain
+    fn finalize(&mut self, declaration_id: DeclarationId) {
+        self.descendants.remove(&declaration_id);
+        self.seen_ids.remove(&declaration_id);
     }
 }
 
@@ -713,7 +722,8 @@ impl<'a> Resolver<'a> {
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().clone_ancestors();
                 self.propagate_descendants(&mut context.descendants, &cached);
-                context.descendants.remove(&declaration_id);
+
+                context.finalize(declaration_id);
                 return cached;
             }
 
@@ -731,7 +741,8 @@ impl<'a> Resolver<'a> {
                     .as_namespace_mut()
                     .unwrap()
                     .set_ancestors(estimated_ancestors.clone());
-                context.descendants.remove(&declaration_id);
+
+                context.finalize(declaration_id);
                 return estimated_ancestors;
             }
 
@@ -795,6 +806,7 @@ impl<'a> Resolver<'a> {
         } else {
             Ancestors::Complete(ancestors)
         };
+
         self.graph
             .declarations_mut()
             .get_mut(&declaration_id)
@@ -803,7 +815,7 @@ impl<'a> Resolver<'a> {
             .unwrap()
             .set_ancestors(result.clone());
 
-        context.descendants.remove(&declaration_id);
+        context.finalize(declaration_id);
         result
     }
 
@@ -812,7 +824,7 @@ impl<'a> Resolver<'a> {
         declaration_id: DeclarationId,
         context: &mut LinearizationContext,
     ) -> Option<Vec<Ancestor>> {
-        if declaration_id == *OBJECT_ID {
+        if declaration_id == *BASIC_OBJECT_ID {
             return None;
         }
 
@@ -1601,7 +1613,7 @@ impl<'a> Resolver<'a> {
         let mut others = Vec::with_capacity(estimated);
         let mut singleton_methods = Vec::new();
         let mut const_refs = Vec::new();
-        let mut ancestors = Vec::new();
+        let mut ancestors = vec![*BASIC_OBJECT_ID, *KERNEL_ID, *OBJECT_ID, *MODULE_ID, *CLASS_ID];
         let names = self.graph.names();
         let depths = Self::compute_name_depths(names);
 
@@ -1703,8 +1715,8 @@ impl<'a> Resolver<'a> {
     /// - Class: parent is the singleton class of the original parent class
     /// - Singleton class: recurse as many times as necessary to wrap the original attached object's parent class
     fn singleton_parent_id(&mut self, attached_id: DeclarationId) -> (DeclarationId, bool) {
-        // Base case: if we reached `Object`, then the parent is `Class`
-        if attached_id == *OBJECT_ID {
+        // Base case: if we reached `BasicObject`, then the parent is `Class`
+        if attached_id == *BASIC_OBJECT_ID {
             return (*CLASS_ID, false);
         }
 
@@ -1806,11 +1818,11 @@ mod tests {
     use crate::test_utils::GraphTest;
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_alias_target_eq,
-        assert_constant_reference_to, assert_declaration_definitions_count_eq, assert_declaration_does_not_exist,
-        assert_declaration_exists, assert_declaration_kind_eq, assert_declaration_references_count_eq,
-        assert_descendants, assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq,
-        assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members, assert_owner_eq,
-        assert_singleton_class_eq,
+        assert_constant_reference_to, assert_constant_reference_unresolved, assert_declaration_definitions_count_eq,
+        assert_declaration_does_not_exist, assert_declaration_exists, assert_declaration_kind_eq,
+        assert_declaration_references_count_eq, assert_descendants, assert_diagnostics_eq,
+        assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target, assert_no_diagnostics,
+        assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     };
 
     #[test]
@@ -1912,13 +1924,7 @@ mod tests {
         context.resolve();
 
         assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-        let reference = context.graph().constant_references().values().next().unwrap();
-
-        match context.graph().names().get(reference.name_id()) {
-            Some(NameRef::Unresolved(_)) => {}
-            _ => panic!("expected unresolved constant reference"),
-        }
+        assert_constant_reference_unresolved!(context, "Foo");
     }
 
     #[test]
@@ -2057,14 +2063,22 @@ mod tests {
         });
 
         let depths = Resolver::compute_name_depths(context.graph().names());
-        let mut names = context.graph().names().iter().collect::<Vec<_>>();
+        let mut names = context
+            .graph()
+            .names()
+            .iter()
+            .filter(|(_, n)| {
+                !["Kernel", "BasicObject", "Object", "Module", "Class"]
+                    .contains(&context.graph().strings().get(n.str()).unwrap().as_str())
+            })
+            .collect::<Vec<_>>();
         assert_eq!(10, names.len());
 
         names.sort_by_key(|(id, _)| depths.get(id).unwrap());
 
         assert_eq!(
             [
-                "Top", "Foo", "Qux", "AfterTop", "Bar", "Baz", "Zip", "Zap", "Zop", "Boop"
+                "Top", "Foo", "Bar", "Qux", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
             ],
             names
                 .iter()
@@ -2354,7 +2368,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Qux", ["Qux", "Baz", "Bar", "Foo", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Qux",
+            ["Qux", "Baz", "Bar", "Foo", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -2768,7 +2786,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Object", ["$bar", "$foo"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            ["$bar", "$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
+        );
     }
 
     #[test]
@@ -2788,7 +2810,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Baz", ["Baz", "Foo::Bar", "Object"]);
+        assert_ancestors_eq!(context, "Baz", ["Baz", "Foo::Bar", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -2833,7 +2855,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Baz", ["Foo::Bar", "Foo", "Baz", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Baz",
+            ["Foo::Bar", "Foo", "Baz", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -2857,7 +2883,11 @@ mod tests {
 
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
         assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
-        assert_ancestors_eq!(context, "Qux", ["Qux", "Foo", "Bar", "Baz", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Qux",
+            ["Qux", "Foo", "Bar", "Baz", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -2886,7 +2916,7 @@ mod tests {
         assert_ancestors_eq!(context, "B", ["B"]);
         // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
         //assert_ancestors_eq!(context, "A", Vec::<&str>::new());
-        assert_ancestors_eq!(context, "C", ["B", "C", "Object"]);
+        assert_ancestors_eq!(context, "C", ["B", "C", "Object", "Kernel", "BasicObject"]);
         assert_ancestors_eq!(context, "D", ["B", "D"]);
     }
 
@@ -2998,7 +3028,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Foo", ["A", "B", "Foo", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["A", "B", "Foo", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -3059,7 +3089,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Child", ["A", "B", "Child", "A", "B", "Parent", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Child",
+            ["A", "B", "Child", "A", "B", "Parent", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -3126,7 +3160,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Baz", ["Baz", "Foo::Bar", "Foo", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Baz",
+            ["Baz", "Foo::Bar", "Foo", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -3150,7 +3188,11 @@ mod tests {
 
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
         assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
-        assert_ancestors_eq!(context, "Qux", ["Qux", "Foo", "Bar", "Baz", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Qux",
+            ["Qux", "Foo", "Bar", "Baz", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -3179,7 +3221,7 @@ mod tests {
         assert_ancestors_eq!(context, "B", ["B"]);
         // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
         //assert_ancestors_eq!(context, "A", Vec::<&str>::new());
-        assert_ancestors_eq!(context, "C", ["C", "B", "Object"]);
+        assert_ancestors_eq!(context, "C", ["C", "B", "Object", "Kernel", "BasicObject"]);
         assert_ancestors_eq!(context, "D", ["D", "B"]);
     }
 
@@ -3310,7 +3352,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Child", ["Child", "Parent", "B", "A", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Child",
+            ["Child", "Parent", "B", "A", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -3386,8 +3432,8 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Foo", ["A", "Foo", "Object"]);
-        assert_ancestors_eq!(context, "Bar", ["A", "Bar", "A", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["A", "Foo", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(context, "Bar", ["A", "Bar", "A", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -3432,10 +3478,26 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Foo", ["B", "A", "Foo", "A", "C", "Object"]);
-        assert_ancestors_eq!(context, "Bar", ["B", "A", "Bar", "C", "A", "Object"]);
-        assert_ancestors_eq!(context, "Baz", ["B", "A", "Baz", "C", "Object"]);
-        assert_ancestors_eq!(context, "Qux", ["B", "A", "Qux", "C", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Foo",
+            ["B", "A", "Foo", "A", "C", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Bar",
+            ["B", "A", "Bar", "C", "A", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Baz",
+            ["B", "A", "Baz", "C", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Qux",
+            ["B", "A", "Qux", "C", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -3462,8 +3524,16 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Foo", ["A", "Foo", "Parent", "A", "Object"]);
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Parent", "A", "Object"]);
+        assert_ancestors_eq!(
+            context,
+            "Foo",
+            ["A", "Foo", "Parent", "A", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Bar",
+            ["Bar", "Parent", "A", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -3483,7 +3553,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "A", "B", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "A", "B", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -3535,7 +3605,6 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        // Note: the commented out parts require RBS indexing
         assert_ancestors_eq!(
             context,
             "Baz::<Baz>",
@@ -3545,12 +3614,12 @@ mod tests {
                 "Foo",
                 "Bar::<Bar>",
                 "Object::<Object>",
-                // "BasicObject::<BasicObject>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                // "Module",
+                "Module",
                 "Object",
-                // "Kernel",
-                // "BasicObject"
+                "Kernel",
+                "BasicObject"
             ]
         );
 
@@ -3562,16 +3631,16 @@ mod tests {
                 "Zip",
                 "Bar::<Bar>::<<Bar>>",
                 "Object::<Object>::<<Object>>",
-                // "BasicObject::<BasicObject>::<<BasicObject>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
                 "Class::<Class>",
-                // "Module::<Module>",
+                "Module::<Module>",
                 "Object::<Object>",
-                // "BasicObject::<BasicObject>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                // "Module",
+                "Module",
                 "Object",
-                // "Kernel",
-                // "BasicObject"
+                "Kernel",
+                "BasicObject"
             ]
         );
     }
@@ -3603,19 +3672,10 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        // Note: the commented out parts require RBS indexing
         assert_ancestors_eq!(
             context,
             "Baz::<Baz>",
-            [
-                "Baz::<Baz>",
-                "Qux",
-                "Foo",
-                "Module",
-                "Object",
-                // "Kernel",
-                // "BasicObject"
-            ]
+            ["Baz::<Baz>", "Qux", "Foo", "Module", "Object", "Kernel", "BasicObject"]
         );
         assert_ancestors_eq!(
             context,
@@ -3625,12 +3685,12 @@ mod tests {
                 "Zip",
                 "Module::<Module>",
                 "Object::<Object>",
-                // "BasicObject::<BasicObject>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                // "Module",
+                "Module",
                 "Object",
-                // "Kernel",
-                // "BasicObject"
+                "Kernel",
+                "BasicObject"
             ]
         );
     }
@@ -3661,7 +3721,6 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        // TODO: the commented out parts require RBS indexing
         assert_ancestors_eq!(
             context,
             "Bar::<Bar>",
@@ -3670,12 +3729,12 @@ mod tests {
                 "Bar::<Bar>",
                 "Foo",
                 "Object::<Object>",
-                // "BasicObject::<BasicObject>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                // "Module",
+                "Module",
                 "Object",
-                // "Kernel",
-                // "BasicObject"
+                "Kernel",
+                "BasicObject"
             ]
         );
 
@@ -3688,12 +3747,12 @@ mod tests {
                 "Bar::<Bar>",
                 "Foo",
                 "Object::<Object>",
-                // "BasicObject::<BasicObject>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                // "Module",
+                "Module",
                 "Object",
-                // "Kernel",
-                // "BasicObject"
+                "Kernel",
+                "BasicObject"
             ]
         );
         assert_ancestors_eq!(
@@ -3703,16 +3762,16 @@ mod tests {
                 "Baz::<Baz>::<<Baz>>",
                 "Bar::<Bar>::<<Bar>>",
                 "Object::<Object>::<<Object>>",
-                // "BasicObject::<BasicObject>::<<BasicObject>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
                 "Class::<Class>",
-                // "Module::<Module>",
+                "Module::<Module>",
                 "Object::<Object>",
-                // "BasicObject::<BasicObject>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                // "Module",
+                "Module",
                 "Object",
-                // "Kernel",
-                // "BasicObject"
+                "Kernel",
+                "BasicObject"
             ]
         );
     }
@@ -3734,7 +3793,11 @@ mod tests {
         assert_no_diagnostics!(&context);
 
         // Global variable aliases should still be owned by Object, regardless of where defined
-        assert_members_eq!(context, "Object", ["$bar", "Foo"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            ["$bar", "BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
+        );
     }
 
     #[test]
@@ -4504,7 +4567,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "C", ["C", "A", "B", "Object"]);
+        assert_ancestors_eq!(context, "C", ["C", "A", "B", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_to!(context, "A::X", "file:///1.rb:8:3-8:4");
     }
 
@@ -4538,7 +4601,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object"]);
+        assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object", "Kernel", "BasicObject"]);
         assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:7:3-7:4");
     }
 
@@ -4560,7 +4623,16 @@ mod tests {
         assert_ancestors_eq!(
             context,
             "Foo::<Foo>",
-            &["Foo::<Foo>", "Object::<Object>", "Class", "Object"]
+            [
+                "Foo::<Foo>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
         );
     }
 
@@ -4582,15 +4654,23 @@ mod tests {
         assert_ancestors_eq!(
             context,
             "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
-            &[
+            [
                 "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
                 "Object::<Object>::<<Object>>::<<<Object>>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>::<<<BasicObject>>>",
                 "Class::<Class>::<<Class>>",
+                "Module::<Module>::<<Module>>",
                 "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
                 "Class::<Class>",
+                "Module::<Module>",
                 "Object::<Object>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                "Object"
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
             ]
         );
     }
@@ -4615,13 +4695,19 @@ mod tests {
         assert_ancestors_eq!(
             context,
             "Foo::Bar::<Bar>::<<Bar>>",
-            &[
+            [
                 "Foo::Bar::<Bar>::<<Bar>>",
                 "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
                 "Class::<Class>",
+                "Module::<Module>",
                 "Object::<Object>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                "Object"
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
             ]
         );
     }
@@ -4647,13 +4733,19 @@ mod tests {
         assert_ancestors_eq!(
             context,
             "Foo::<Foo>::<<Foo>>",
-            &[
+            [
                 "Foo::<Foo>::<<Foo>>",
                 "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
                 "Class::<Class>",
+                "Module::<Module>",
                 "Object::<Object>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                "Object"
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
             ]
         );
     }
@@ -4793,8 +4885,12 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object"]);
-        assert_ancestors_eq!(context, "Baz::Child", ["Baz::Child", "Baz::Base", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(
+            context,
+            "Baz::Child",
+            ["Baz::Child", "Baz::Base", "Object", "Kernel", "BasicObject"]
+        );
     }
 
     #[test]
@@ -4836,7 +4932,11 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_members_eq!(context, "Object", ["$foo"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            ["$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
+        );
     }
 
     #[test]
@@ -4860,7 +4960,7 @@ mod tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -4926,7 +5026,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -4956,7 +5056,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -4973,7 +5073,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -4990,7 +5090,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -5016,12 +5116,12 @@ mod tests {
             [
                 "Bar::<Bar>",
                 "Object::<Object>",
-                // "BasicObject::<BasicObject>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                // "Module",
+                "Module",
                 "Object",
-                // "Kernel",
-                // "BasicObject"
+                "Kernel",
+                "BasicObject"
             ]
         );
     }
@@ -5076,7 +5176,7 @@ mod tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -5351,7 +5451,7 @@ mod tests {
         });
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Base", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Base", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -5368,7 +5468,7 @@ mod tests {
         });
         context.resolve();
         assert_no_diagnostics!(&context);
-        assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -5439,7 +5539,7 @@ mod tests {
         });
 
         context.resolve();
-        assert_ancestors_eq!(context, "Baz", ["Baz", "Object"]);
+        assert_ancestors_eq!(context, "Baz", ["Baz", "Object", "Kernel", "BasicObject"]);
     }
 
     #[test]
@@ -5619,10 +5719,82 @@ mod tests {
                 "Bar::<Bar>",
                 "Foo::<Foo>",
                 "Object::<Object>",
+                "BasicObject::<BasicObject>",
                 "Class",
-                "Object"
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
             ]
         );
+    }
+
+    #[test]
+    fn ancestors_with_missing_core() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar; end
+
+            class Foo
+              include Bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
+        assert_descendants!(context, "Bar", ["Foo"]);
+    }
+
+    #[test]
+    fn ancestor_patches_to_object_are_correctly_processed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo; end
+
+            module Kernel
+              include Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Object", ["Object", "Kernel", "Foo", "BasicObject"]);
+    }
+
+    #[test]
+    fn basic_object_ancestors() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo < BasicObject
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "BasicObject"]);
+    }
+
+    #[test]
+    fn basic_object_ancestors_including_kernel() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo < BasicObject
+              include Kernel
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Kernel", "BasicObject"]);
     }
 }
 
@@ -5651,7 +5823,11 @@ mod todo_tests {
 
         assert_declaration_kind_eq!(context, "Foo", "<TODO>");
 
-        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            vec!["BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
+        );
         assert_members_eq!(context, "Foo", vec!["Bar"]);
         assert_members_eq!(context, "Foo::Bar", vec!["Baz"]);
         assert_no_members!(context, "Foo::Bar::Baz");
@@ -5679,7 +5855,11 @@ mod todo_tests {
 
         assert_declaration_kind_eq!(context, "Foo", "<TODO>");
 
-        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            vec!["BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
+        );
         assert_members_eq!(context, "Foo", vec!["Bar", "Baz"]);
         assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
         assert_members_eq!(context, "Foo::Baz", vec!["baz()"]);
@@ -5740,7 +5920,11 @@ mod todo_tests {
         // Foo was initially created as a Todo (from class Foo::Bar), then promoted to Class
         assert_declaration_kind_eq!(context, "Foo", "Class");
 
-        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            vec!["BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
+        );
         assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
         assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
     }
@@ -5774,7 +5958,11 @@ mod todo_tests {
         // Foo was promoted from Todo to Class after the second resolution
         assert_declaration_kind_eq!(context, "Foo", "Class");
 
-        assert_members_eq!(context, "Object", vec!["Foo"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            vec!["BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
+        );
         assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
         assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
     }
@@ -5795,7 +5983,11 @@ mod todo_tests {
         assert_declaration_kind_eq!(context, "A", "<TODO>");
         assert_declaration_kind_eq!(context, "A::B", "<TODO>");
         assert_declaration_kind_eq!(context, "A::B::C", "Class");
-        assert_members_eq!(context, "Object", vec!["A"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            vec!["A", "BasicObject", "Class", "Kernel", "Module", "Object"]
+        );
         assert_members_eq!(context, "A", vec!["B"]);
         assert_members_eq!(context, "A::B", vec!["C"]);
         assert_members_eq!(context, "A::B::C", vec!["foo()"]);
@@ -5818,7 +6010,11 @@ mod todo_tests {
         assert_declaration_kind_eq!(context, "A::B", "<TODO>");
         assert_declaration_kind_eq!(context, "A::B::C", "<TODO>");
         assert_declaration_kind_eq!(context, "A::B::C::D", "Class");
-        assert_members_eq!(context, "Object", vec!["A"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            vec!["A", "BasicObject", "Class", "Kernel", "Module", "Object"]
+        );
         assert_members_eq!(context, "A", vec!["B"]);
         assert_members_eq!(context, "A::B", vec!["C"]);
         assert_members_eq!(context, "A::B::C", vec!["D"]);
@@ -5869,7 +6065,11 @@ mod todo_tests {
         assert_declaration_kind_eq!(context, "A::B", "<TODO>");
         assert_declaration_kind_eq!(context, "A::B::C", "Class");
         assert_declaration_kind_eq!(context, "A::B::D", "Class");
-        assert_members_eq!(context, "Object", vec!["A"]);
+        assert_members_eq!(
+            context,
+            "Object",
+            vec!["A", "BasicObject", "Class", "Kernel", "Module", "Object"]
+        );
         assert_members_eq!(context, "A", vec!["B"]);
         assert_members_eq!(context, "A::B", vec!["C", "D"]);
         assert_members_eq!(context, "A::B::C", vec!["c_method()"]);

@@ -5,9 +5,10 @@ use std::thread;
 
 use url::Url;
 
+use crate::model::built_in::OBJECT_ID;
 use crate::model::declaration::{Ancestor, Declaration};
 use crate::model::definitions::{Definition, Parameter};
-use crate::model::graph::{Graph, OBJECT_ID};
+use crate::model::graph::Graph;
 use crate::model::identity_maps::IdentityHashSet;
 use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
 use crate::model::keywords::{self, Keyword};
@@ -762,9 +763,14 @@ mod tests {
             context,
             CompletionReceiver::Expression(name_id),
             [
+                "Class",
+                "BasicObject",
                 "Child",
-                "Foo",
                 "Parent",
+                "Kernel",
+                "Module",
+                "Foo",
+                "Object",
                 "Child#baz()",
                 "Foo::CONST",
                 "Foo#bar()",
@@ -802,7 +808,17 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
-            ["Child", "Foo", "Parent", "Child#bar()"]
+            [
+                "Class",
+                "BasicObject",
+                "Child",
+                "Parent",
+                "Kernel",
+                "Module",
+                "Foo",
+                "Object",
+                "Child#bar()"
+            ]
         );
     }
 
@@ -838,7 +854,19 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
-            ["Baz", "Foo", "Bar", "Foo#foo_m()", "Baz#baz_m()", "Bar#bar_m()"]
+            [
+                "Foo",
+                "Class",
+                "BasicObject",
+                "Object",
+                "Kernel",
+                "Module",
+                "Baz",
+                "Bar",
+                "Foo#foo_m()",
+                "Baz#baz_m()",
+                "Bar#bar_m()"
+            ]
         );
     }
 
@@ -873,14 +901,34 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
-            ["Foo", "Bar", "Foo::<Foo>#do_something()", "Foo#@@foo_var"]
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Foo::<Foo>#do_something()",
+                "Foo#@@foo_var"
+            ]
         );
 
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
-            ["Foo", "Bar", "Bar#baz()", "Foo#@@foo_var"]
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Bar#baz()",
+                "Foo#@@foo_var"
+            ]
         );
     }
 
@@ -919,14 +967,35 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
-            ["Foo::CONST_A", "Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"]
+            [
+                "Foo::CONST_A",
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Bar#bar_m()",
+                "Bar#bar_m2()"
+            ]
         );
 
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
-            ["Foo", "Bar", "Bar#bar_m()", "Bar#bar_m2()"]
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Bar#bar_m()",
+                "Bar#bar_m2()"
+            ]
         );
     }
 
@@ -957,7 +1026,17 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
-            ["Foo::CONST", "Foo::Bar", "Foo", "Foo::Bar#baz()"]
+            [
+                "Foo::CONST",
+                "Foo::Bar",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Module",
+                "Foo::Bar#baz()"
+            ]
         );
     }
 
@@ -991,7 +1070,18 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
-            ["Foo::Bar", "$var", "Foo", "$var2", "Foo::Bar#bar_m()"]
+            [
+                "Foo::Bar",
+                "$var2",
+                "$var",
+                "BasicObject",
+                "Object",
+                "Kernel",
+                "Module",
+                "Foo",
+                "Class",
+                "Foo::Bar#bar_m()"
+            ]
         );
     }
 
@@ -1473,7 +1563,17 @@ mod tests {
                 self_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#greet()"),
             },
-            ["Foo", "Foo#greet()", "name:", "greeting:"]
+            [
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Module",
+                "Foo#greet()",
+                "name:",
+                "greeting:"
+            ]
         );
     }
 
@@ -1498,7 +1598,7 @@ mod tests {
                 self_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
-            ["Foo", "Foo#bar()"]
+            ["Class", "Object", "BasicObject", "Kernel", "Foo", "Module", "Foo#bar()"]
         );
     }
 
@@ -1524,7 +1624,17 @@ mod tests {
                 method_decl_id: DeclarationId::from("Foo#search()"),
             },
             // Only RequiredKeyword and OptionalKeyword, not RestKeyword (**opts)
-            ["Foo", "Foo#search()", "limit:", "offset:"]
+            [
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Module",
+                "Foo#search()",
+                "limit:",
+                "offset:"
+            ]
         );
     }
 
@@ -1556,7 +1666,17 @@ mod tests {
                 self_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
-            ["Foo", "Foo#bar()", "first:", "second:"]
+            [
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Module",
+                "Foo#bar()",
+                "first:",
+                "second:"
+            ]
         );
     }
 
@@ -1571,7 +1691,12 @@ mod tests {
             context,
             CompletionReceiver::Expression(name_id),
             [
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
                 "Foo",
+                "Module",
                 "BEGIN",
                 "END",
                 "__ENCODING__",
@@ -1631,7 +1756,12 @@ mod tests {
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
             [
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
                 "Foo",
+                "Module",
                 "Foo#bar()",
                 "BEGIN",
                 "END",

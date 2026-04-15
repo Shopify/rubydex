@@ -109,7 +109,7 @@ fn write_document_nodes(output: &mut String, graph: &Graph) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::GraphTest;
+    use crate::{model::ids::DeclarationId, test_utils::GraphTest};
 
     fn create_test_graph() -> GraphTest {
         let mut graph_test = GraphTest::new();
@@ -127,45 +127,61 @@ mod tests {
         graph_test
     }
 
+    /// Finds the first definition ID for the declaration with the given name.
+    fn def_id_for(graph: &Graph, name: &str) -> String {
+        let decl = graph.declarations().get(&DeclarationId::from(name)).unwrap();
+        decl.definitions().first().unwrap().to_string()
+    }
+
     #[test]
     fn test_dot_generation() {
         let context = create_test_graph();
         let dot_output = generate(context.graph());
 
-        let class_def_id = context
-            .graph()
-            .definitions()
-            .iter()
-            .find(|(_, def)| matches!(def, crate::model::definitions::Definition::Class(_)))
-            .map(|(id, _)| id.to_string())
-            .unwrap();
-
-        let module_def_id = context
-            .graph()
-            .definitions()
-            .iter()
-            .find(|(_, def)| matches!(def, crate::model::definitions::Definition::Module(_)))
-            .map(|(id, _)| id.to_string())
-            .unwrap();
+        let basic_object_def = def_id_for(context.graph(), "BasicObject");
+        let class_def = def_id_for(context.graph(), "Class");
+        let kernel_def = def_id_for(context.graph(), "Kernel");
+        let module_def = def_id_for(context.graph(), "Module");
+        let object_def = def_id_for(context.graph(), "Object");
+        let test_class_def = def_id_for(context.graph(), "TestClass");
+        let test_module_def = def_id_for(context.graph(), "TestModule");
 
         let expected = format!(
             r#"digraph {{
     rankdir=TB;
 
+    "Name:BasicObject" [label="BasicObject",shape=hexagon];
+    "Name:BasicObject" -> "def_{basic_object_def}" [dir=both];
     "Name:Class" [label="Class",shape=hexagon];
+    "Name:Class" -> "def_{class_def}" [dir=both];
+    "Name:Kernel" [label="Kernel",shape=hexagon];
+    "Name:Kernel" -> "def_{kernel_def}" [dir=both];
     "Name:Module" [label="Module",shape=hexagon];
+    "Name:Module" -> "def_{module_def}" [dir=both];
     "Name:Object" [label="Object",shape=hexagon];
+    "Name:Object" -> "def_{object_def}" [dir=both];
     "Name:TestClass" [label="TestClass",shape=hexagon];
-    "Name:TestClass" -> "def_{class_def_id}" [dir=both];
+    "Name:TestClass" -> "def_{test_class_def}" [dir=both];
     "Name:TestModule" [label="TestModule",shape=hexagon];
-    "Name:TestModule" -> "def_{module_def_id}" [dir=both];
+    "Name:TestModule" -> "def_{test_module_def}" [dir=both];
 
-    "def_{class_def_id}" [label="Class(TestClass)",shape=ellipse];
-    "def_{module_def_id}" [label="Module(TestModule)",shape=ellipse];
+    "def_{basic_object_def}" [label="Class(BasicObject)",shape=ellipse];
+    "def_{class_def}" [label="Class(Class)",shape=ellipse];
+    "def_{module_def}" [label="Class(Module)",shape=ellipse];
+    "def_{object_def}" [label="Class(Object)",shape=ellipse];
+    "def_{test_class_def}" [label="Class(TestClass)",shape=ellipse];
+    "def_{kernel_def}" [label="Module(Kernel)",shape=ellipse];
+    "def_{test_module_def}" [label="Module(TestModule)",shape=ellipse];
 
     "file:///test.rb" [label="test.rb",shape=box];
-    "def_{class_def_id}" -> "file:///test.rb";
-    "def_{module_def_id}" -> "file:///test.rb";
+    "def_{test_class_def}" -> "file:///test.rb";
+    "def_{test_module_def}" -> "file:///test.rb";
+    "rubydex:built-in" [label="rubydex:built-in",shape=box];
+    "def_{basic_object_def}" -> "rubydex:built-in";
+    "def_{kernel_def}" -> "rubydex:built-in";
+    "def_{object_def}" -> "rubydex:built-in";
+    "def_{module_def}" -> "rubydex:built-in";
+    "def_{class_def}" -> "rubydex:built-in";
 
 }}
 "#

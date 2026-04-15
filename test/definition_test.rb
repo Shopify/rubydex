@@ -82,7 +82,7 @@ class DefinitionTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      def_a = graph.documents.first.definitions.find { |d| d.name == "A" }
+      def_a = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions.find { |d| d.name == "A" }
       refute_nil(def_a)
       location = def_a.location.to_display
       refute_nil(location)
@@ -93,7 +93,7 @@ class DefinitionTest < Minitest::Test
       assert_equal(3, location.end_line)
       assert_equal(4, location.end_column)
 
-      def_foo = graph.documents.first.definitions.find { |d| d.name == "foo()" }
+      def_foo = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions.find { |d| d.name == "foo()" }
       refute_nil(def_foo)
       location = def_foo.location.to_display
       refute_nil(location)
@@ -120,7 +120,7 @@ class DefinitionTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      foo_comments = graph.documents.first.definitions.find { |d| d.name == "Foo" }.comments
+      foo_comments = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions.find { |d| d.name == "Foo" }.comments
       assert_equal(
         [
           "# This is a class comment (#{context.absolute_path_to("file1.rb")}:1:1-1:26)",
@@ -129,7 +129,7 @@ class DefinitionTest < Minitest::Test
         foo_comments.map { |c| "#{c.string} (#{normalized_comment_location(c)})" },
       )
 
-      bar_comments = graph.documents.first.definitions.find { |d| d.name == "bar()" }.comments
+      bar_comments = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions.find { |d| d.name == "bar()" }.comments
       assert_equal(
         ["# Method comment (#{context.absolute_path_to("file1.rb")}:4:3-4:19)"],
         bar_comments.map { |c| "#{c.string} (#{normalized_comment_location(c)})" },
@@ -160,11 +160,14 @@ class DefinitionTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      assert(graph.documents.first.definitions.find { |d| d.name == "Deprecated" }.deprecated?)
-      refute(graph.documents.first.definitions.find { |d| d.name == "NotDeprecated" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "deprecated_method()" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "also_deprecated_method()" }.deprecated?)
-      refute(graph.documents.first.definitions.find { |d| d.name == "not_deprecated_method()" }.deprecated?)
+      document = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }
+      definitions = document.definitions
+
+      assert(definitions.find { |d| d.name == "Deprecated" }.deprecated?)
+      refute(definitions.find { |d| d.name == "NotDeprecated" }.deprecated?)
+      assert(definitions.find { |d| d.name == "deprecated_method()" }.deprecated?)
+      assert(definitions.find { |d| d.name == "also_deprecated_method()" }.deprecated?)
+      refute(definitions.find { |d| d.name == "not_deprecated_method()" }.deprecated?)
     end
   end
 
@@ -196,11 +199,14 @@ class DefinitionTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      assert(graph.documents.first.definitions.find { |d| d.name == "DeprecatedWithBlank" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "DeprecatedWithMessage" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "deprecated_method()" }.deprecated?)
-      assert(graph.documents.first.definitions.find { |d| d.name == "also_deprecated_method()" }.deprecated?)
-      refute(graph.documents.first.definitions.find { |d| d.name == "NotDeprecated" }.deprecated?)
+      document = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }
+      definitions = document.definitions
+
+      assert(definitions.find { |d| d.name == "DeprecatedWithBlank" }.deprecated?)
+      assert(definitions.find { |d| d.name == "DeprecatedWithMessage" }.deprecated?)
+      assert(definitions.find { |d| d.name == "deprecated_method()" }.deprecated?)
+      assert(definitions.find { |d| d.name == "also_deprecated_method()" }.deprecated?)
+      refute(definitions.find { |d| d.name == "NotDeprecated" }.deprecated?)
     end
   end
 
@@ -215,7 +221,7 @@ class DefinitionTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      defs = graph.documents.first.definitions
+      defs = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions
 
       # Before resolution, the superclass should be an unresolved constant reference
       child_def = defs.find { |d| d.name == "Child" }
@@ -253,7 +259,7 @@ class DefinitionTest < Minitest::Test
       graph = Rubydex::Graph.new
       graph.index_all(context.glob("**/*.rb"))
 
-      defs = graph.documents.first.definitions
+      defs = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions
 
       # No mixins returns empty array
       no_mixins_def = defs.find { |d| d.name == "NoMixins" }
@@ -304,7 +310,7 @@ class DefinitionTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      defs = graph.documents.first.definitions
+      defs = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions
       mod_def = defs.find { |d| d.name == "WithMixins" }
       mixins = mod_def.mixins
 
@@ -326,7 +332,7 @@ class DefinitionTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      defs = graph.documents.first.definitions
+      defs = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions
       mod_def = defs.find { |d| d.is_a?(Rubydex::ModuleDefinition) }
       refute_nil(mod_def)
       mixins = mod_def.mixins
@@ -353,7 +359,7 @@ class DefinitionTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      defs = graph.documents.first.definitions
+      defs = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions
       singleton_def = defs.find { |d| d.is_a?(Rubydex::SingletonClassDefinition) }
       refute_nil(singleton_def)
       mixins = singleton_def.mixins
