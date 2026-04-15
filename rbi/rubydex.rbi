@@ -45,6 +45,9 @@ class Rubydex::Declaration
   sig { returns(Rubydex::Declaration) }
   def owner; end
 
+  sig { returns(T::Enumerable[Rubydex::Reference]) }
+  def references; end
+
   sig { returns(String) }
   def unqualified_name; end
 
