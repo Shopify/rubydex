@@ -4865,26 +4865,25 @@ mod superclass_tests {
             [
                 "dynamic-ancestor: Dynamic superclass (1:13-1:24)",
                 "dynamic-ancestor: Dynamic superclass (2:13-2:16)",
-                "dynamic-ancestor: Dynamic superclass (3:21-3:49)",
                 "dynamic-constant-reference: Dynamic constant reference (4:13-4:16)",
                 "dynamic-ancestor: Dynamic superclass (4:13-4:21)",
             ]
         );
 
         assert_definition_at!(&context, "1:1-1:29", Class, |def| {
-            assert!(def.superclass_ref().is_none(),);
+            assert!(def.superclass_ref().is_none());
         });
 
         assert_definition_at!(&context, "2:1-2:21", Class, |def| {
-            assert!(def.superclass_ref().is_none(),);
+            assert!(def.superclass_ref().is_none());
         });
 
         assert_definition_at!(&context, "3:1-3:54", Class, |def| {
-            assert!(def.superclass_ref().is_none(),);
+            assert!(def.superclass_ref().is_some());
         });
 
         assert_definition_at!(&context, "4:1-4:26", Class, |def| {
-            assert!(def.superclass_ref().is_none(),);
+            assert!(def.superclass_ref().is_none());
         });
     }
 }
