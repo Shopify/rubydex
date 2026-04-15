@@ -14,7 +14,7 @@ jobs:
     name: "Cross compile the gem on different ruby versions"
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
+        os: ["macos-latest", "macos-26-intel", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
     runs-on: "${{ matrix.os }}"
     env:
       RELEASE: "true"
@@ -38,7 +38,7 @@ jobs:
     needs: compile
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
+        os: ["macos-latest", "macos-26-intel", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
         rubies: ["3.2", "3.3", "3.4", "4.0"]
         type: ["cross", "native"]
     runs-on: "${{ matrix.os }}"
@@ -60,7 +60,7 @@ jobs:
     needs: test
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
+        os: ["macos-latest", "macos-26-intel", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
     runs-on: "${{ matrix.os }}"
     steps:
       - name: "Setup Ruby"
