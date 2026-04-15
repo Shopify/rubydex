@@ -1206,12 +1206,29 @@ Resolution depends on:
 
 ### Top-Level Constant References
 
-Constants prefixed with `::` always refer to top-level constants:
+Constants prefixed with `::` are resolved by searching the ancestors of `Object`. This means they can find constants defined in `Kernel` or other modules included into `Object`, not just constants owned by `Object` directly:
 
 ```ruby
+module Kernel
+  FOO = 1
+end
+
 module Foo
-  ::Bar  # Always top-level Bar, never Foo::Bar
-  Baz    # Could be Foo::Baz or top-level Baz (searches lexical chain)
+  ::FOO  # Found through Object's ancestors (Kernel)
+  ::Bar  # Always defined through the ancestors of `Object`
+  Baz    # Could be defined in `Foo` or in the ancestors of `Object`
+end
+```
+
+This works even inside classes that don't inherit from `Object`:
+
+```ruby
+module Kernel
+  FOO = 1
+end
+
+class Bar < BasicObject
+  ::FOO  # Resolves through Object's ancestors, not through Bar's
 end
 ```
 
@@ -1232,11 +1249,12 @@ class Bar
 end
 ```
 
-**Resolution order for unqualified constants (like `String` above):**
+**Lexical scope resolution for unqualified constants (like `String` above):**
 
 1. Current namespace (Foo::Bar::String)
 2. Each enclosing lexical scope (Foo::String)
-3. Top-level (::String)
+
+After lexical scopes are exhausted, Ruby searches the ancestor chain. See [Constant Resolution Through Inheritance](#constant-resolution-through-inheritance) for the full algorithm.
 
 ### Inheritance Chain Resolution
 
@@ -1282,7 +1300,7 @@ puts Bar.ancestors.to_s
 
 ### Constant Resolution Through Inheritance
 
-Ruby also searches the inheritance chain when resolving constants:
+Ruby also searches the ancestor chain when resolving constants:
 
 ```ruby
 class Parent
@@ -1300,9 +1318,35 @@ Child.new.show  # => "from parent"
 
 **Resolution order:**
 
-1. Lexical scope
-2. [Inheritance chain](#inheritance-chain-resolution)
-3. Top-level
+1. Lexical scopes (current namespace, then each enclosing scope)
+2. [Ancestor chain](#inheritance-chain-resolution) of the innermost enclosing class or module
+3. For modules only: ancestors of `Object`
+
+There is no separate "top-level fallback" for classes. Top-level constants like `String` are owned by `Object`, which appears in the ancestor chain of most classes. This can be confirmed because a class inheriting from `BasicObject` (which does not have `Object` in its ancestors) cannot resolve top-level constants:
+
+```ruby
+class Foo < BasicObject
+  String  # NameError: Foo doesn't have Object in its ancestor chain
+end
+```
+
+When using constants at the top level of a script, they resolve because `<main>` is an instance of `Object`:
+
+```ruby
+String  # Works because <main> is Object. Resolved through inheritance
+```
+
+The module fallback searches the full ancestor chain of `Object`, not just `Object` directly:
+
+```ruby
+module Kernel
+  FOO = 1
+end
+
+module Bar
+  FOO  # Resolves through Object's ancestors (Kernel)
+end
+```
 
 **Example with modules:**
 
