@@ -107,7 +107,7 @@ macro_rules! namespace_declaration {
             /// declaration inherits from
             ancestors: Ancestors,
             /// The set of declarations that inherit from this declaration
-            descendants: IdentityHashSet<DeclarationId>,
+            immediate_descendants: IdentityHashSet<DeclarationId>,
             /// The singleton class associated with this declaration
             singleton_class_id: Option<DeclarationId>,
             /// Diagnostics associated with this declaration
@@ -124,7 +124,7 @@ macro_rules! namespace_declaration {
                     references: IdentityHashSet::default(),
                     owner_id,
                     ancestors: Ancestors::Partial(Vec::new()),
-                    descendants: IdentityHashSet::default(),
+                    immediate_descendants: IdentityHashSet::default(),
                     singleton_class_id: None,
                     diagnostics: Vec::new(),
                 }
@@ -206,20 +206,20 @@ macro_rules! namespace_declaration {
                 matches!(&self.ancestors, Ancestors::Complete(_) | Ancestors::Cyclic(_))
             }
 
-            pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
-                self.descendants.insert(descendant_id);
+            pub fn add_immediate_descendant(&mut self, descendant_id: DeclarationId) {
+                self.immediate_descendants.insert(descendant_id);
             }
 
-            fn remove_descendant(&mut self, descendant_id: &DeclarationId) {
-                self.descendants.remove(descendant_id);
+            fn remove_immediate_descendant(&mut self, descendant_id: &DeclarationId) {
+                self.immediate_descendants.remove(descendant_id);
             }
 
-            pub fn clear_descendants(&mut self) {
-                self.descendants.clear();
+            pub fn clear_immediate_descendants(&mut self) {
+                self.immediate_descendants.clear();
             }
 
-            pub fn descendants(&self) -> &IdentityHashSet<DeclarationId> {
-                &self.descendants
+            pub fn immediate_descendants(&self) -> &IdentityHashSet<DeclarationId> {
+                &self.immediate_descendants
             }
         }
     };
@@ -526,16 +526,16 @@ impl Namespace {
     }
 
     #[must_use]
-    pub fn descendants(&self) -> &IdentityHashSet<DeclarationId> {
-        all_namespaces!(self, it => it.descendants())
+    pub fn immediate_descendants(&self) -> &IdentityHashSet<DeclarationId> {
+        all_namespaces!(self, it => it.immediate_descendants())
     }
 
-    pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
-        all_namespaces!(self, it => it.add_descendant(descendant_id));
+    pub fn add_immediate_descendant(&mut self, descendant_id: DeclarationId) {
+        all_namespaces!(self, it => it.add_immediate_descendant(descendant_id));
     }
 
-    pub fn remove_descendant(&mut self, descendant_id: &DeclarationId) {
-        all_namespaces!(self, it => it.remove_descendant(descendant_id));
+    pub fn remove_immediate_descendant(&mut self, descendant_id: &DeclarationId) {
+        all_namespaces!(self, it => it.remove_immediate_descendant(descendant_id));
     }
 
     pub fn for_each_ancestor<F>(&self, mut f: F)
@@ -545,19 +545,12 @@ impl Namespace {
         all_namespaces!(self, it => it.ancestors().iter().for_each(&mut f));
     }
 
-    pub fn for_each_descendant<F>(&self, mut f: F)
-    where
-        F: FnMut(&DeclarationId),
-    {
-        all_namespaces!(self, it => it.descendants().iter().for_each(&mut f));
-    }
-
     pub fn clear_ancestors(&mut self) {
         all_namespaces!(self, it => it.set_ancestors(Ancestors::Partial(vec![])));
     }
 
-    pub fn clear_descendants(&mut self) {
-        all_namespaces!(self, it => it.clear_descendants());
+    pub fn clear_immediate_descendants(&mut self) {
+        all_namespaces!(self, it => it.clear_immediate_descendants());
     }
 
     #[must_use]

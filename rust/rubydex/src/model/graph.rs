@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 
@@ -1107,7 +1108,6 @@ impl Graph {
         let should_remove = decl.has_no_definitions() || !self.declarations.contains_key(decl.owner_id());
 
         if should_remove {
-            // Queue members + singleton for removal
             if let Some(ns) = decl.as_namespace() {
                 if let Some(singleton_id) = ns.singleton_class() {
                     queue.push(InvalidationItem::Declaration(*singleton_id));
@@ -1115,9 +1115,7 @@ impl Graph {
                 for member_decl_id in ns.members().values() {
                     queue.push(InvalidationItem::Declaration(*member_decl_id));
                 }
-                for descendant_id in ns.descendants() {
-                    queue.push(InvalidationItem::Declaration(*descendant_id));
-                }
+                queue.extend(self.transitive_descendants(decl_id).map(InvalidationItem::Declaration));
             }
 
             // Unresolve names and cascade. Reference dependents from surviving
@@ -1166,24 +1164,31 @@ impl Graph {
                 return;
             };
 
-            // Remove self from each ancestor's descendant set
-            for ancestor in &namespace.clone_ancestors() {
-                if let Ancestor::Complete(ancestor_id) = ancestor
-                    && let Some(anc_decl) = self.declarations.get_mut(ancestor_id)
+            // Only direct parents actually contain `decl_id`; walking the full chain
+            // does O(chain_len) hash-miss no-ops on non-direct ancestors, which is cheap.
+            let ancestor_ids: Vec<DeclarationId> = namespace
+                .ancestors()
+                .into_iter()
+                .filter_map(|a| match a {
+                    Ancestor::Complete(id) => Some(*id),
+                    Ancestor::Partial(_) => None,
+                })
+                .collect();
+
+            for ancestor_id in ancestor_ids {
+                if let Some(anc_decl) = self.declarations.get_mut(&ancestor_id)
                     && let Some(ns) = anc_decl.as_namespace_mut()
                 {
-                    ns.remove_descendant(&decl_id);
+                    ns.remove_immediate_descendant(&decl_id);
                 }
             }
 
+            queue.extend(self.transitive_descendants(decl_id).map(InvalidationItem::Declaration));
+
             let namespace = self.declarations.get_mut(&decl_id).unwrap().as_namespace_mut().unwrap();
 
-            namespace.for_each_descendant(|descendant_id| {
-                queue.push(InvalidationItem::Declaration(*descendant_id));
-            });
-
             namespace.clear_ancestors();
-            namespace.clear_descendants();
+            namespace.clear_immediate_descendants();
 
             self.push_work(Unit::Ancestors(decl_id));
 
@@ -1426,6 +1431,58 @@ impl Graph {
     }
 }
 
+impl Graph {
+    /// Yields `root` first, then every transitively reachable descendant exactly once, in
+    /// BFS order. Useful anywhere the caller would otherwise need a full transitive set.
+    #[must_use]
+    pub fn transitive_descendants(&self, root: DeclarationId) -> TransitiveDescendants<'_> {
+        TransitiveDescendants::new(self, root)
+    }
+}
+
+/// BFS iterator over the direct-child DAG rooted at a namespace, yielding `root`
+/// first and then every transitively reachable descendant exactly once.
+///
+/// Construct via [`Graph::transitive_descendants`]. The visited set dedups when
+/// the same declaration is reachable via multiple paths (e.g. inheritance plus
+/// direct include of a shared module).
+pub struct TransitiveDescendants<'a> {
+    graph: &'a Graph,
+    queue: VecDeque<DeclarationId>,
+    visited: IdentityHashSet<DeclarationId>,
+}
+
+impl<'a> TransitiveDescendants<'a> {
+    fn new(graph: &'a Graph, root: DeclarationId) -> Self {
+        let mut queue = VecDeque::new();
+        queue.push_back(root);
+        Self {
+            graph,
+            queue,
+            visited: IdentityHashSet::default(),
+        }
+    }
+}
+
+impl Iterator for TransitiveDescendants<'_> {
+    type Item = DeclarationId;
+
+    fn next(&mut self) -> Option<DeclarationId> {
+        while let Some(id) = self.queue.pop_front() {
+            if !self.visited.insert(id) {
+                continue;
+            }
+            if let Some(ns) = self.graph.declarations().get(&id).and_then(|d| d.as_namespace()) {
+                self.queue.extend(ns.immediate_descendants().iter().copied());
+            }
+            return Some(id);
+        }
+        None
+    }
+}
+
+impl std::iter::FusedIterator for TransitiveDescendants<'_> {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1433,8 +1490,8 @@ mod tests {
     use crate::model::declaration::Ancestors;
     use crate::test_utils::GraphTest;
     use crate::{
-        assert_declaration_does_not_exist, assert_dependents, assert_descendants, assert_members_eq,
-        assert_no_diagnostics, assert_no_members,
+        assert_declaration_does_not_exist, assert_dependents, assert_descendants, assert_immediate_descendants,
+        assert_members_eq, assert_no_diagnostics, assert_no_members,
     };
 
     #[test]
@@ -1633,7 +1690,7 @@ mod tests {
                 panic!("Expected Foo to be a class");
             };
             assert!(matches!(foo.ancestors(), Ancestors::Partial(a) if a.is_empty()));
-            assert!(foo.descendants().is_empty());
+            assert!(foo.immediate_descendants().is_empty());
 
             let Declaration::Namespace(Namespace::Class(baz)) =
                 context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap()
@@ -1641,14 +1698,14 @@ mod tests {
                 panic!("Expected Baz to be a class");
             };
             assert!(matches!(baz.ancestors(), Ancestors::Partial(a) if a.is_empty()));
-            assert!(baz.descendants().is_empty());
+            assert!(baz.immediate_descendants().is_empty());
 
             let Declaration::Namespace(Namespace::Module(bar)) =
                 context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
             else {
                 panic!("Expected Bar to be a module");
             };
-            assert!(!bar.descendants().contains(&DeclarationId::from("Foo")));
+            assert!(!bar.immediate_descendants().contains(&DeclarationId::from("Foo")));
         }
 
         context.resolve();
@@ -2325,6 +2382,124 @@ mod tests {
         assert!(
             context.graph().names().get(&bar_name_id).is_none(),
             "Bar name should be removed from the names map"
+        );
+    }
+
+    #[test]
+    fn transitive_descendants_yields_root_first_then_chain() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M; end
+            class A; include M; end
+            class B < A; end
+            "
+        });
+        context.resolve();
+
+        let ids: Vec<_> = context
+            .graph()
+            .transitive_descendants(DeclarationId::from("M"))
+            .collect();
+
+        assert_eq!(ids.first().copied(), Some(DeclarationId::from("M")));
+        assert!(ids.contains(&DeclarationId::from("A")));
+        assert!(ids.contains(&DeclarationId::from("B")));
+        let mut uniq = ids.clone();
+        uniq.sort_by_key(DeclarationId::get);
+        uniq.dedup();
+        assert_eq!(uniq.len(), ids.len(), "iterator must not yield duplicates");
+    }
+
+    #[test]
+    fn transitive_descendants_dedups_across_multiple_paths() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M; end
+            class A; include M; end
+            class B < A
+              include M
+            end
+            "
+        });
+        context.resolve();
+
+        let ids: Vec<_> = context
+            .graph()
+            .transitive_descendants(DeclarationId::from("M"))
+            .collect();
+
+        // B is reachable via M -> A -> B and via M -> B. Must appear exactly once.
+        let b_count = ids.iter().filter(|id| **id == DeclarationId::from("B")).count();
+        assert_eq!(
+            b_count, 1,
+            "B must be yielded exactly once, got {b_count} (ids: {ids:?})"
+        );
+    }
+
+    #[test]
+    fn transitive_descendants_leaf_returns_only_root() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Leaf; end");
+        context.resolve();
+
+        let ids: Vec<_> = context
+            .graph()
+            .transitive_descendants(DeclarationId::from("Leaf"))
+            .collect();
+
+        assert_eq!(ids, vec![DeclarationId::from("Leaf")]);
+    }
+
+    #[test]
+    fn transitive_descendants_include_chain() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+            module B; include A; end
+            class C; include B; end
+            "
+        });
+        context.resolve();
+
+        let ids: Vec<_> = context
+            .graph()
+            .transitive_descendants(DeclarationId::from("A"))
+            .collect();
+
+        assert!(ids.contains(&DeclarationId::from("A")));
+        assert!(ids.contains(&DeclarationId::from("B")));
+        assert!(ids.contains(&DeclarationId::from("C")));
+    }
+
+    #[test]
+    fn immediate_descendants_are_direct_only() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar < Foo; end
+            class Baz < Bar; end
+            "
+        });
+        context.resolve();
+
+        // Foo directly parents Bar (not Baz).
+        assert_immediate_descendants!(context, "Foo", ["Bar"]);
+        // Bar directly parents Baz.
+        assert_immediate_descendants!(context, "Bar", ["Baz"]);
+
+        // Negative assertion: Baz is a transitive descendant of Foo (via Bar),
+        // not an immediate one. Guards against regression to transitive storage.
+        let foo = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
+        assert!(
+            !foo.as_namespace()
+                .unwrap()
+                .immediate_descendants()
+                .contains(&DeclarationId::from("Baz")),
+            "Baz is transitive of Foo (via Bar), not an immediate descendant",
         );
     }
 }

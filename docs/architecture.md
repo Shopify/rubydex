@@ -97,6 +97,14 @@ Rubydex represents the codebase as a graph, where entities are nodes and relatio
 - `model/declaration.rs`: Global declarations produced during resolution
 - `model/graph.rs`: The main graph structure containing all entities
 
+### Inheritance edges
+
+Each namespace stores only its **immediate** descendants — the declarations that directly inherit from, include, or prepend it. For singleton classes, the edge is recorded against the singleton from an `extend`.
+
+Transitive descendants are computed on demand via `Graph::transitive_descendants(root)`, a BFS iterator over the direct-child DAG with visited-set dedup.
+
+Use the iterator (not the stored field) anywhere you need the full transitive set — the stored field is intentionally the direct-edge subset to keep memory bounded.
+
 ### ID Types
 
 Connections between nodes use hashed IDs defined in `ids.rs`:

@@ -520,23 +520,8 @@ macro_rules! assert_ancestors_eq {
 #[macro_export]
 macro_rules! assert_descendants {
     ($context:expr, $parent:expr, $descendants:expr) => {
-        let parent = $context
-            .graph()
-            .declarations()
-            .get(&$crate::model::ids::DeclarationId::from($parent))
-            .unwrap();
-        let actual = match parent {
-            $crate::model::declaration::Declaration::Namespace($crate::model::declaration::Namespace::Class(class)) => {
-                class.descendants().iter().cloned().collect::<Vec<_>>()
-            }
-            $crate::model::declaration::Declaration::Namespace($crate::model::declaration::Namespace::Module(
-                module,
-            )) => module.descendants().iter().cloned().collect::<Vec<_>>(),
-            $crate::model::declaration::Declaration::Namespace(
-                $crate::model::declaration::Namespace::SingletonClass(singleton),
-            ) => singleton.descendants().iter().cloned().collect::<Vec<_>>(),
-            _ => panic!("Tried to get descendants for a declaration that isn't a namespace"),
-        };
+        let parent_id = $crate::model::ids::DeclarationId::from($parent);
+        let actual: Vec<_> = $context.graph().transitive_descendants(parent_id).collect();
 
         for descendant in &$descendants {
             let descendant_id = $crate::model::ids::DeclarationId::from(*descendant);
@@ -545,7 +530,36 @@ macro_rules! assert_descendants {
                 actual.contains(&descendant_id),
                 "Expected '{}' to be a descendant of '{}'",
                 $context.graph().declarations().get(&descendant_id).unwrap().name(),
-                parent.name()
+                $context.graph().declarations().get(&parent_id).unwrap().name()
+            );
+        }
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_immediate_descendants {
+    ($context:expr, $parent:expr, $descendants:expr) => {
+        let parent_id = $crate::model::ids::DeclarationId::from($parent);
+        let parent = $context
+            .graph()
+            .declarations()
+            .get(&parent_id)
+            .expect("parent declaration exists");
+        let ns = parent.as_namespace().expect("parent is a namespace");
+        let actual: Vec<_> = ns.immediate_descendants().iter().copied().collect();
+
+        for descendant in &$descendants {
+            let descendant_id = $crate::model::ids::DeclarationId::from(*descendant);
+            assert!(
+                actual.contains(&descendant_id),
+                "Expected '{}' to be an IMMEDIATE descendant of '{}' (actual: {:?})",
+                $context.graph().declarations().get(&descendant_id).unwrap().name(),
+                parent.name(),
+                actual
+                    .iter()
+                    .map(|id| $context.graph().declarations().get(id).unwrap().name())
+                    .collect::<Vec<_>>(),
             );
         }
     };

@@ -382,14 +382,16 @@ pub unsafe extern "C" fn rdx_declaration_descendants(pointer: GraphPointer, decl
     let declarations = with_graph(pointer, |graph| {
         let declaration_id = DeclarationId::new(decl_id);
 
-        let Some(Declaration::Namespace(declaration)) = graph.declarations().get(&declaration_id) else {
+        if !matches!(
+            graph.declarations().get(&declaration_id),
+            Some(Declaration::Namespace(_))
+        ) {
             return Vec::new();
-        };
+        }
 
-        declaration
-            .descendants()
-            .iter()
-            .map(|id| CDeclaration::from_declaration(*id, graph.declarations().get(id).unwrap()))
+        graph
+            .transitive_descendants(declaration_id)
+            .map(|id| CDeclaration::from_declaration(id, graph.declarations().get(&id).unwrap()))
             .collect::<Vec<_>>()
     });
 
