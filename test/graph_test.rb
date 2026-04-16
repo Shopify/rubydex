@@ -870,6 +870,30 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_accessing_keyword_information
+    graph = Rubydex::Graph.new
+    keyword = graph.keyword("break")
+
+    assert_equal("break", keyword.name)
+    assert_equal("Exits from a loop or block, optionally returning a value. Syntax: `break` or `break value`.", keyword.documentation)
+  end
+
+  def test_keyword_returns_nil_for_non_keyword
+    graph = Rubydex::Graph.new
+    assert_nil(graph.keyword("not_a_keyword"))
+  end
+
+  def test_keyword_returns_nil_for_empty_string
+    graph = Rubydex::Graph.new
+    assert_nil(graph.keyword(""))
+  end
+
+  def test_keyword_raises_type_error_for_non_string
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) { graph.keyword(123) }
+    assert_raises(TypeError) { graph.keyword(nil) }
+  end
+
   private
 
   def assert_diagnostics(expected, actual)

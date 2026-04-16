@@ -648,6 +648,25 @@ static VALUE rdxr_graph_excluded_paths(VALUE self) {
     return array;
 }
 
+// Graph#keyword: (String name) -> Keyword?
+// Returns a Keyword object for the given keyword name, or nil if it is not a keyword.
+static VALUE rdxr_graph_keyword(VALUE self, VALUE name) {
+    Check_Type(name, T_STRING);
+
+    const CKeyword *kw = rdx_keyword_get(StringValueCStr(name));
+    if (kw == NULL) {
+        return Qnil;
+    }
+
+    VALUE argv[2] = {
+        rb_utf8_str_new_cstr(kw->name),
+        rb_utf8_str_new_cstr(kw->documentation),
+    };
+
+    rdx_keyword_free(kw);
+    return rb_class_new_instance(2, argv, cKeyword);
+}
+
 void rdxi_initialize_graph(VALUE moduleRubydex) {
     mRubydex = moduleRubydex;
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
@@ -678,4 +697,5 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, 2);
     rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
     rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);
+    rb_define_method(cGraph, "keyword", rdxr_graph_keyword, 1);
 }
