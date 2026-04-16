@@ -82,12 +82,12 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are computed:
-    ///
-    /// 1. Declarations for all definitions
-    /// 2. Members and ownership for all declarations
-    /// 3. Resolution of all constant references
-    /// 4. Inheritance relationships between declarations
+    /// Resolves all pending work and cleans up synthetic declarations.
+    /// `prepare_units()` classifies pending work into the namespace/reference
+    /// fixpoint (`unit_queue`) and non-namespace definitions (`other_ids`).
+    /// After the fixpoint stalls, any leftovers spill back to `pending_work`
+    /// for the next `resolve()` call, `other_ids` are handled, and finally
+    /// `cleanup_stale_todos` sweeps orphan TODOs.
     ///
     /// # Panics
     ///
@@ -134,6 +134,9 @@ impl<'a> Resolver<'a> {
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
 
         self.handle_remaining_definitions(other_ids);
+
+        // See `Graph::tracked_todos` for why this runs here.
+        self.graph.cleanup_stale_todos();
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -1226,17 +1229,17 @@ impl<'a> Resolver<'a> {
         let str_id = *name_ref.str();
 
         let outcome = match self.name_owner_id(name_id, singleton) {
-            // name_owner_id returns Unresolved(None) only when the parent scope is genuinely unknown
-            // (e.g., `class A::B::C` where `A` doesn't exist). This definition needs an owner, so
-            // create Todo placeholders for the missing parent chain. Todos get promoted when real
-            // definitions appear later.
+            // name_owner_id returns Unresolved(None) only when the parent scope is genuinely
+            // unknown (e.g., `class A::B::C` where `A` doesn't exist). For regular declarations
+            // we create Todo placeholders for the missing parent chain so `B::C` can still be
+            // placed; Todos get promoted when real definitions appear later.
             //
             // Singleton classes are the exception: `class << UndefinedReceiver` attaches via
             // `set_singleton_class_id`, not `add_member`, so a TODO receiver would never gain a
             // member. Emit Retry so the unit is preserved for a later resolve where the receiver
             // may exist.
             Outcome::Unresolved(None) if singleton => Outcome::Retry(None),
-            Outcome::Unresolved(None) => Outcome::Resolved(self.create_todo_for_parent(name_id), None),
+            Outcome::Unresolved(None) if !singleton => Outcome::Resolved(self.create_todo_for_parent(name_id), None),
             other => other,
         };
 
@@ -1395,6 +1398,7 @@ impl<'a> Resolver<'a> {
                 parent_owner_id,
             )))));
             self.graph.add_member(&parent_owner_id, declaration_id, parent_str_id);
+            self.graph.track_todo(declaration_id);
         }
 
         declaration_id
