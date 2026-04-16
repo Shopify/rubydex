@@ -688,6 +688,49 @@ class GraphTest < Minitest::Test
     refute_empty(if_keyword.documentation)
   end
 
+  def test_complete_expression_inside_singleton_class_block
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      $global_var = 1
+      class Foo
+        @ivar = 1
+        @@class_var = 1
+
+        class << self
+          def bar
+          end
+        end
+      end
+    RUBY
+    graph.resolve
+
+    candidates = graph.complete_expression(["Foo", "<Foo>"])
+
+    # Singleton methods defined in the singleton class block
+    methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
+    assert(methods.any? { |c| c.name == "Foo::<Foo>#bar()" })
+
+    # Instance variables belong to the singleton class
+    ivars = candidates.select { |c| c.is_a?(Rubydex::InstanceVariable) }
+    assert(ivars.any? { |c| c.name == "Foo::<Foo>\#@ivar" })
+
+    # Class variables from the attached object
+    cvars = candidates.select { |c| c.is_a?(Rubydex::ClassVariable) }
+    assert(cvars.any? { |c| c.name == "Foo\#@@class_var" })
+
+    # Global variables are accessible everywhere
+    globals = candidates.select { |c| c.is_a?(Rubydex::GlobalVariable) }
+    assert(globals.any? { |c| c.name == "$global_var" })
+
+    # Top-level constants are accessible
+    declarations = candidates.select { |c| c.is_a?(Rubydex::Declaration) }
+    assert(declarations.any? { |c| c.name == "Foo" })
+
+    # Keywords are always available
+    keywords = candidates.select { |c| c.is_a?(Rubydex::Keyword) }
+    assert(keywords.any? { |c| c.name == "if" })
+  end
+
   def test_complete_expression_with_empty_nesting
     graph = Rubydex::Graph.new
     graph.index_source("file:///foo.rb", "class Object; end\nclass Foo; end", "ruby")

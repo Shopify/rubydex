@@ -23,8 +23,22 @@ pub fn nesting_stack_to_name_id(
                 continue;
             }
 
+            // Singleton class names (e.g., `<Foo>`) use Attached parent scope and are always created with nesting=None
+            // by the indexer. When the singleton is a standalone nesting entry, current_name is None (reset between
+            // entries), so fall back to current_nesting for the attachment point.
+            let (parent_scope, nesting_for_part) = if part.starts_with('<') {
+                let attached = match current_name {
+                    ParentScope::Some(id) | ParentScope::Attached(id) => ParentScope::Attached(id),
+                    _ => current_nesting.map_or(ParentScope::None, ParentScope::Attached),
+                };
+
+                (attached, None)
+            } else {
+                (current_name, current_nesting)
+            };
+
             let str_id = graph.intern_string(part);
-            let name_id = graph.add_name(Name::new(str_id, current_name, current_nesting));
+            let name_id = graph.add_name(Name::new(str_id, parent_scope, nesting_for_part));
             names_to_untrack.push(name_id);
             current_name = ParentScope::Some(name_id);
         }
@@ -39,8 +53,22 @@ pub fn nesting_stack_to_name_id(
             continue;
         }
 
+        // Singleton class names use Attached parent scope and nesting=None.
+        // When the singleton name is the first (or only) part of const_name, current_name is None
+        // (reset after the nesting loop), so we fall back to current_nesting for the attachment point.
+        let (parent_scope, nesting_for_part) = if part.starts_with('<') {
+            let attached = match current_name {
+                ParentScope::Some(id) | ParentScope::Attached(id) => ParentScope::Attached(id),
+                _ => current_nesting.map_or(ParentScope::None, ParentScope::Attached),
+            };
+
+            (attached, None)
+        } else {
+            (current_name, current_nesting)
+        };
+
         let str_id = graph.intern_string(part);
-        let name_id = graph.add_name(Name::new(str_id, current_name, current_nesting));
+        let name_id = graph.add_name(Name::new(str_id, parent_scope, nesting_for_part));
         names_to_untrack.push(name_id);
         current_name = ParentScope::Some(name_id);
     }
@@ -113,6 +141,30 @@ mod tests {
         assert_eq!(StringId::from("Foo"), *foo_name.str());
         assert!(foo_name.nesting().is_none());
         assert!(foo_name.parent_scope().is_none());
+    }
+
+    #[test]
+    fn singleton_class_names_use_attached_parent_scope() {
+        let mut graph = Graph::new();
+
+        let (name_id, _) = nesting_stack_to_name_id(&mut graph, "CONST", vec!["Foo".into(), "<Foo>".into()]).unwrap();
+
+        let const_name = graph.names().get(&name_id).unwrap();
+        assert_eq!(StringId::from("CONST"), *const_name.str());
+
+        // The nesting should be <Foo> with an Attached parent scope
+        let singleton_name = graph.names().get(&const_name.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("<Foo>"), *singleton_name.str());
+        assert!(
+            matches!(singleton_name.parent_scope(), ParentScope::Attached(_)),
+            "Expected ParentScope::Attached, got {}",
+            singleton_name.parent_scope()
+        );
+
+        // The attached parent should be Foo
+        let foo_id = singleton_name.parent_scope().expect("Attached should have an id");
+        let foo_name = graph.names().get(&foo_id).unwrap();
+        assert_eq!(StringId::from("Foo"), *foo_name.str());
     }
 
     #[test]
