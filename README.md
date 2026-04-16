@@ -1,6 +1,6 @@
 # Rubydex
 
-This project is a high performance static analysis toolkit for the Ruby language. The goal is to be a solid
+This project is a high-performance static analysis toolkit for the Ruby language. The goal is to be a solid
 foundation to power a variety of tools, such as type checkers, linters, language servers and more.
 
 ## Usage

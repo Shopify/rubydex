@@ -9,8 +9,8 @@ Gem::Specification.new do |spec|
   spec.email = ["ruby@shopify.com"]
   spec.licenses = ["MIT"]
 
-  spec.summary = "A high performance static analysis suite for Ruby"
-  spec.description = "A high performance static analysis suite for Ruby, built in Rust with Ruby APIs"
+  spec.summary = "A high-performance static analysis suite for Ruby"
+  spec.description = "A high-performance static analysis suite for Ruby, built in Rust with Ruby APIs"
   spec.homepage = "https://github.com/Shopify/rubydex"
   spec.required_ruby_version = ">= 3.2.0"
   spec.required_rubygems_version = ">= 3.3.11"
