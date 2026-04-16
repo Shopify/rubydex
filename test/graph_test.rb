@@ -284,6 +284,56 @@ class GraphTest < Minitest::Test
     assert_nil(graph.resolve_constant("CONST", ["Foo", "Bar::Baz"]))
   end
 
+  def test_graph_resolve_constant_with_empty_name
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Bar; end
+
+        module Foo
+          CONST = 123
+
+          class Bar::Baz
+            CONST
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_nil(graph.resolve_constant("", []))
+      assert_nil(graph.resolve_constant("", ["Foo"]))
+      assert_nil(graph.resolve_constant("", ["Foo", "Bar::Baz"]))
+      assert_nil(graph.resolve_constant("::", []))
+      assert_nil(graph.resolve_constant("Foo::", []))
+      assert_nil(graph.resolve_constant("Foo::Bar::", ["Baz"]))
+    end
+  end
+
+  def test_graph_resolve_constant_with_empty_nesting
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Bar; end
+
+        module Foo
+          CONST = 123
+
+          class Bar::Baz
+            CONST
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal("Bar", graph.resolve_constant("Bar", []).name)
+      assert_equal("Foo", graph.resolve_constant("Foo", []).name)
+    end
+  end
+
   def test_graph_resolve_constant_alias
     with_context do |context|
       context.write!("foo.rb", <<~RUBY)

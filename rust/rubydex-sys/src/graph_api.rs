@@ -131,7 +131,10 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
     with_mut_graph(pointer, |graph| {
         let nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, count).unwrap() };
         let const_name: String = unsafe { utils::convert_char_ptr_to_string(const_name).unwrap() };
-        let (name_id, names_to_untrack) = name_api::nesting_stack_to_name_id(graph, &const_name, nesting);
+
+        let Some((name_id, names_to_untrack)) = name_api::nesting_stack_to_name_id(graph, &const_name, nesting) else {
+            return ptr::null();
+        };
 
         let mut resolver = Resolver::new(graph);
 
@@ -650,8 +653,8 @@ unsafe fn completion_nesting_name_id(
     graph: &mut Graph,
     nesting: *const *const c_char,
     nesting_count: usize,
-) -> Result<(NameId, Vec<NameId>), std::str::Utf8Error> {
-    let mut nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, nesting_count)? };
+) -> Option<(NameId, Vec<NameId>)> {
+    let mut nesting: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(nesting, nesting_count).ok()? };
 
     // When serving completion in a bare script, the self (top level) context is Object
     let self_name = if nesting.is_empty() {
@@ -660,7 +663,7 @@ unsafe fn completion_nesting_name_id(
         nesting.pop().unwrap()
     };
 
-    Ok(name_api::nesting_stack_to_name_id(graph, &self_name, nesting))
+    name_api::nesting_stack_to_name_id(graph, &self_name, nesting)
 }
 
 /// The result of a completion operation, carrying either a candidate array or an error message.
@@ -771,7 +774,7 @@ pub unsafe extern "C" fn rdx_graph_complete_expression(
     nesting_count: usize,
 ) -> CompletionResult {
     with_mut_graph(pointer, |graph| {
-        let Ok((name_id, names_to_untrack)) = (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
+        let Some((name_id, names_to_untrack)) = (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
         else {
             return CompletionResult::success(ptr::null_mut());
         };
@@ -853,7 +856,7 @@ pub unsafe extern "C" fn rdx_graph_complete_method_argument(
     };
 
     with_mut_graph(pointer, |graph| {
-        let Ok((self_name_id, names_to_untrack)) =
+        let Some((self_name_id, names_to_untrack)) =
             (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
         else {
             return CompletionResult::success(ptr::null_mut());
