@@ -683,9 +683,7 @@ impl CompletionResult {
     fn error(message: &str) -> Self {
         Self {
             candidates: ptr::null_mut(),
-            error: CString::new(message)
-                .map(|s| s.into_raw().cast_const())
-                .unwrap_or(ptr::null()),
+            error: CString::new(message).map_or(ptr::null(), |s| s.into_raw().cast_const()),
         }
     }
 }

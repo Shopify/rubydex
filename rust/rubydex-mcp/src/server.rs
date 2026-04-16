@@ -333,8 +333,8 @@ impl RubydexServer {
         let members: Vec<serde_json::Value> = namespace
             .map(|ns| {
                 ns.members()
-                    .iter()
-                    .filter_map(|(_, member_id)| {
+                    .values()
+                    .filter_map(|member_id| {
                         let member_decl = graph.declarations().get(member_id)?;
                         let member_def = member_decl
                             .definitions()
