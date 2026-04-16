@@ -30,7 +30,7 @@ pub enum MatchMode {
 ///
 /// Will panic if any of the threads panic
 pub fn declaration_search(graph: &Graph, query: &str, match_mode: &MatchMode) -> Vec<DeclarationId> {
-    let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
+    let num_threads = thread::available_parallelism().map_or(4, std::num::NonZero::get);
     let declarations = graph.declarations();
     let ids: Vec<DeclarationId> = declarations.keys().copied().collect();
     let chunk_size = ids.len().div_ceil(num_threads);
@@ -120,7 +120,7 @@ pub fn resolve_require_path(graph: &Graph, require_path: &str, load_path: &[Path
 /// Panics if one of the search threads panics
 #[must_use]
 pub fn require_paths(graph: &Graph, load_paths: &[PathBuf]) -> Vec<String> {
-    let num_threads = thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4);
+    let num_threads = thread::available_parallelism().map_or(4, std::num::NonZero::get);
     let documents = graph.documents().iter().collect::<Vec<_>>();
     let chunk_size = documents.len().div_ceil(num_threads);
 

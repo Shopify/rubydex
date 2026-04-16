@@ -46,10 +46,7 @@ impl JobQueue {
     pub fn run(queue: &Arc<JobQueue>) {
         // Determine the number of worker threads to launch.
         // Use the number of available logical CPUs, falling back to 4 if detection fails.
-        let worker_count = thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(4);
-
+        let worker_count = thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
         Self::run_with_workers(queue, worker_count);
     }
 
@@ -58,10 +55,7 @@ impl JobQueue {
     /// The caller is responsible for joining the returned handles. This allows
     /// overlapping other work (e.g. merging results) with job processing.
     pub fn run_without_waiting(queue: &Arc<JobQueue>) -> Vec<thread::JoinHandle<()>> {
-        let worker_count = thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(4);
-
+        let worker_count = thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
         Self::spawn_workers(queue, worker_count)
     }
 
