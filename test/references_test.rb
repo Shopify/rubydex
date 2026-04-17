@@ -267,4 +267,148 @@ class ReferencesTest < Minitest::Test
       assert_equal("#{context.absolute_path_to("file1.rb")}:4:5-4:9", ref1.location.to_display.to_s)
     end
   end
+
+  def test_method_reference_receiver_resolved
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo; end
+        Foo.bar
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      method_ref = graph.method_references.find { |r| r.name == "bar" }
+      refute_nil(method_ref)
+
+      receiver = method_ref.receiver
+      assert_kind_of(Rubydex::SingletonClass, receiver)
+      assert_equal("Foo::<Foo>", receiver.name)
+    end
+  end
+
+  def test_method_reference_receiver_is_nil_when_unresolved
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        Bar.baz
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      method_ref = graph.method_references.find { |r| r.name == "baz" }
+      refute_nil(method_ref)
+
+      assert_nil(method_ref.receiver)
+    end
+  end
+
+  def test_method_reference_receiver_implicit_self_in_instance_method
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bar
+            baz
+          end
+
+          def baz
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      method_ref = graph.method_references.find { |r| r.name == "baz" }
+      refute_nil(method_ref)
+
+      receiver = method_ref.receiver
+      assert_kind_of(Rubydex::Class, receiver)
+      assert_equal("Foo", receiver.name)
+    end
+  end
+
+  def test_method_reference_explicit_self_receiver_in_instance_method
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bar
+            self.baz
+          end
+
+          def baz
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      method_ref = graph.method_references.find { |r| r.name == "baz" }
+      refute_nil(method_ref)
+
+      receiver = method_ref.receiver
+      assert_kind_of(Rubydex::Class, receiver)
+      assert_equal("Foo", receiver.name)
+    end
+  end
+
+  def test_method_reference_explicit_self_receiver_in_self_method
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def self.bar
+            self.baz
+          end
+
+          def self.baz
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      method_ref = graph.method_references.find { |r| r.name == "baz" }
+      refute_nil(method_ref)
+
+      receiver = method_ref.receiver
+      assert_kind_of(Rubydex::SingletonClass, receiver)
+      assert_equal("<Foo>", receiver.unqualified_name)
+    end
+  end
+
+  def test_method_reference_explicit_self_receiver_in_constant_receiver_method
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Bar
+          def self.baz
+          end
+        end
+
+        class Foo
+        end
+
+        def Bar.bar
+          self.baz
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      method_ref = graph.method_references.find { |r| r.name == "baz" }
+      refute_nil(method_ref)
+
+      receiver = method_ref.receiver
+      assert_kind_of(Rubydex::SingletonClass, receiver)
+      assert_equal("Bar::<Bar>", receiver.name)
+    end
+  end
 end

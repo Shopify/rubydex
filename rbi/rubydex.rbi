@@ -412,6 +412,9 @@ class Rubydex::MethodReference < Rubydex::Reference
 
   sig { returns(String) }
   def name; end
+
+  sig { returns(T.nilable(Rubydex::Declaration)) }
+  def receiver; end
 end
 
 class Rubydex::Reference
