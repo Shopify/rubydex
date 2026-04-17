@@ -1141,6 +1141,7 @@ impl Graph {
                 let def_ids: Vec<DefinitionId> = decl.definitions().to_vec();
                 let unqualified_str_id = StringId::from(&decl.unqualified_name());
                 let owner_id = *decl.owner_id();
+                let is_singleton_class = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)));
 
                 for def_id in def_ids {
                     self.push_work(Unit::Definition(def_id));
@@ -1149,7 +1150,11 @@ impl Graph {
                 if let Some(owner) = self.declarations.get_mut(&owner_id)
                     && let Some(ns) = owner.as_namespace_mut()
                 {
-                    ns.remove_member(&unqualified_str_id);
+                    if is_singleton_class {
+                        ns.clear_singleton_class_id();
+                    } else {
+                        ns.remove_member(&unqualified_str_id);
+                    }
                 }
             }
 
@@ -3750,5 +3755,28 @@ mod incremental_resolution_tests {
         assert_declaration_exists!(context, "Foo");
         assert_declaration_exists!(context, "Foo::<Foo>#run()");
         assert_declaration_exists!(context, "Foo#run()");
+    }
+
+    #[test]
+    fn reindexing_namespace_panics_when_descendant_has_method_call_elsewhere() {
+        let foo_v1 = "class Foo; end";
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", foo_v1);
+        context.index_uri("file:///bar.rb", "class Bar < Foo; end");
+        context.index_uri("file:///baz.rb", "Bar.new");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Bar");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_exists!(context, "Bar::<Bar>");
+
+        context.index_uri("file:///foo.rb", &format!("{foo_v1}\n# trivial edit\n"));
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Bar");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_exists!(context, "Bar::<Bar>");
     }
 } // mod incremental_resolution_tests

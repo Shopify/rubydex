@@ -162,6 +162,10 @@ macro_rules! namespace_declaration {
                 self.singleton_class_id = Some(declaration_id);
             }
 
+            pub fn clear_singleton_class_id(&mut self) {
+                self.singleton_class_id = None;
+            }
+
             pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
                 self.singleton_class_id.as_ref()
             }
@@ -576,6 +580,10 @@ impl Namespace {
 
     pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
         all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
+    }
+
+    pub fn clear_singleton_class_id(&mut self) {
+        all_namespaces!(self, it => it.clear_singleton_class_id());
     }
 
     #[must_use]
