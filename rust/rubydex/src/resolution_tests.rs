@@ -971,6 +971,215 @@ mod constant_alias_tests {
     }
 }
 
+mod superclass_tests {
+    use super::*;
+
+    #[test]
+    fn linearizing_super_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar < Foo; end
+            class Baz < Bar; end
+            class Qux < Baz; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Qux",
+            ["Qux", "Baz", "Bar", "Foo", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn descendants_are_tracked_for_parent_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 123
+            end
+
+            class Bar < Foo; end
+
+            class Baz < Bar
+              CONST
+            end
+
+            class Qux < Bar
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_descendants!(context, "Foo", ["Bar"]);
+        assert_descendants!(context, "Bar", ["Baz", "Qux"]);
+    }
+
+    #[test]
+    fn linearizing_circular_super_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo < Bar; end
+            class Bar < Baz; end
+            class Baz < Foo; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
+    }
+
+    #[test]
+    fn resolving_a_constant_inherited_from_the_super_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 123
+            end
+
+            class Bar < Foo
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:3-6:8");
+    }
+
+    #[test]
+    fn does_not_loop_forever_on_non_existing_parents() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar < Foo
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        let declaration = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
+        assert!(matches!(
+            declaration.as_namespace().unwrap().clone_ancestors(),
+            Ancestors::Partial(_)
+        ));
+    }
+
+    #[test]
+    fn resolving_inherited_constant_dependent_on_complex_parent() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar
+                class Baz
+                  CONST = 123
+                end
+              end
+            end
+            class Qux < Foo::Bar::Baz
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_reference_to!(context, "Foo::Bar::Baz::CONST", "file:///foo.rb:9:3-9:8");
+    }
+
+    #[test]
+    fn linearizing_parent_classes_with_parent_scope() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar
+              end
+            end
+            class Baz < Foo::Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Baz", ["Baz", "Foo::Bar", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn references_with_parent_scope_search_inheritance() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+            end
+
+            class Baz
+              include Foo
+            end
+
+            Baz::Bar
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///foo.rb:9:6-9:9");
+    }
+
+    #[test]
+    fn ancestors_for_unresolved_parent_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo < Bar; end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(
+            context,
+            "Foo",
+            ["Foo", Partial("Bar"), "Object", "Kernel", "BasicObject"]
+        );
+        assert!(matches!(
+            context
+                .graph()
+                .declarations()
+                .get(&DeclarationId::from("Foo"))
+                .unwrap()
+                .as_namespace()
+                .unwrap()
+                .ancestors(),
+            Ancestors::Partial(_)
+        ));
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -1511,139 +1720,6 @@ fn resolution_for_self_method_alias_with_same_name_instance_method() {
 }
 
 #[test]
-fn linearizing_super_classes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo; end
-        class Bar < Foo; end
-        class Baz < Bar; end
-        class Qux < Baz; end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Qux",
-        ["Qux", "Baz", "Bar", "Foo", "Object", "Kernel", "BasicObject"]
-    );
-}
-
-#[test]
-fn descendants_are_tracked_for_parent_classes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          CONST = 123
-        end
-
-        class Bar < Foo; end
-
-        class Baz < Bar
-          CONST
-        end
-
-        class Qux < Bar
-          CONST
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_descendants!(context, "Foo", ["Bar"]);
-    assert_descendants!(context, "Bar", ["Baz", "Qux"]);
-}
-
-#[test]
-fn linearizing_circular_super_classes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo < Bar; end
-        class Bar < Baz; end
-        class Baz < Foo; end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Object"]);
-}
-
-#[test]
-fn resolving_a_constant_inherited_from_the_super_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          CONST = 123
-        end
-
-        class Bar < Foo
-          CONST
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:3-6:8");
-}
-
-#[test]
-fn does_not_loop_forever_on_non_existing_parents() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Bar < Foo
-          CONST
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    let declaration = context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap();
-    assert!(matches!(
-        declaration.as_namespace().unwrap().clone_ancestors(),
-        Ancestors::Partial(_)
-    ));
-}
-
-#[test]
-fn resolving_inherited_constant_dependent_on_complex_parent() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          module Bar
-            class Baz
-              CONST = 123
-            end
-          end
-        end
-        class Qux < Foo::Bar::Baz
-          CONST
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_constant_reference_to!(context, "Foo::Bar::Baz::CONST", "file:///foo.rb:9:3-9:8");
-}
-
-#[test]
 fn resolution_for_instance_and_class_instance_variables() {
     let mut context = GraphTest::new();
     context.index_uri("file:///foo.rb", {
@@ -1948,26 +2024,6 @@ fn resolving_global_variable_alias() {
         "Object",
         ["$bar", "$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
     );
-}
-
-#[test]
-fn linearizing_parent_classes_with_parent_scope() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          class Bar
-          end
-        end
-        class Baz < Foo::Bar
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Baz", ["Baz", "Foo::Bar", "Object", "Kernel", "BasicObject"]);
 }
 
 #[test]
@@ -2542,29 +2598,6 @@ fn included_modules_involved_in_definitions() {
 
     assert_no_members!(context, "Foo::Bar::Qux");
     assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
-}
-
-#[test]
-fn references_with_parent_scope_search_inheritance() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          module Bar; end
-        end
-
-        class Baz
-          include Foo
-        end
-
-        Baz::Bar
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_reference_to!(context, "Foo::Bar", "file:///foo.rb:9:6-9:9");
 }
 
 #[test]
@@ -4340,35 +4373,6 @@ fn extend_creates_singleton_class_on_module() {
         "Foo::<Foo>",
         ["Foo::<Foo>", "Bar", "Module", "Object", "Kernel", "BasicObject"]
     );
-}
-
-#[test]
-fn ancestors_for_unresolved_parent_class() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        "
-        class Foo < Bar; end
-        ",
-    );
-    context.resolve();
-
-    assert_ancestors_eq!(
-        context,
-        "Foo",
-        ["Foo", Partial("Bar"), "Object", "Kernel", "BasicObject"]
-    );
-    assert!(matches!(
-        context
-            .graph()
-            .declarations()
-            .get(&DeclarationId::from("Foo"))
-            .unwrap()
-            .as_namespace()
-            .unwrap()
-            .ancestors(),
-        Ancestors::Partial(_)
-    ));
 }
 
 #[test]
