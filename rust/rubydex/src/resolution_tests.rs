@@ -3143,247 +3143,396 @@ mod declaration_creation_tests {
     }
 }
 
-#[test]
-fn resolution_for_singleton_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          class << self
-            def bar; end
-            BAZ = 123
-          end
-        end
-        "
-    });
-    context.resolve();
+mod singleton_class_tests {
+    use super::*;
 
-    assert_no_diagnostics!(&context);
-
-    assert_no_members!(context, "Foo");
-    assert_owner_eq!(context, "Foo", "Object");
-    assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
-
-    assert_members_eq!(context, "Foo::<Foo>", ["BAZ", "bar()"]);
-    assert_owner_eq!(context, "Foo::<Foo>", "Foo");
-}
-
-#[test]
-fn resolution_for_nested_singleton_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          class << self
-            class << self
-              def baz; end
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_no_members!(context, "Foo");
-    assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
-
-    assert_no_members!(context, "Foo::<Foo>");
-    assert_singleton_class_eq!(context, "Foo::<Foo>", "Foo::<Foo>::<<Foo>>");
-
-    assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", ["baz()"]);
-    assert_owner_eq!(context, "Foo::<Foo>::<<Foo>>", "Foo::<Foo>");
-}
-
-#[test]
-fn resolution_for_singleton_class_of_external_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo; end
-        class Bar
-          class << Foo
-            def baz; end
-
-            class Baz; end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_no_members!(context, "Foo");
-    assert_owner_eq!(context, "Foo", "Object");
-    assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
-
-    assert_no_members!(context, "Bar");
-    assert_owner_eq!(context, "Bar", "Object");
-
-    assert_members_eq!(context, "Foo::<Foo>", ["Baz", "baz()"]);
-    assert_owner_eq!(context, "Foo::<Foo>", "Foo");
-}
-
-#[test]
-fn resolves_sibling_constant_inside_singleton_class_method_body() {
-    // Constant referenced from inside a method defined in `class << self` must resolve against
-    // the lexical scope that encloses the singleton class block, not stop at the singleton class.
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A
-          module B
-            class Sibling; end
-
-            class Main
+    #[test]
+    fn resolution_for_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
               class << self
-                def does_not_resolve_here
-                  Sibling
+                def bar; end
+                BAZ = 123
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
+
+        assert_members_eq!(context, "Foo::<Foo>", ["BAZ", "bar()"]);
+        assert_owner_eq!(context, "Foo::<Foo>", "Foo");
+    }
+
+    #[test]
+    fn resolution_for_nested_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+                class << self
+                  def baz; end
                 end
               end
             end
-          end
-        end
-        "
-    });
-    context.resolve();
+            "
+        });
+        context.resolve();
 
-    assert_no_diagnostics!(&context);
-    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:8:11-8:18");
-}
+        assert_no_diagnostics!(&context);
 
-#[test]
-fn resolves_sibling_constant_inside_nested_singleton_class() {
-    // Nested `class << self` inside a nested class: lookup must still walk outward through
-    // every enclosing lexical scope to find a sibling defined far above.
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A
-          module B
-            class Sibling; end
+        assert_no_members!(context, "Foo");
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
 
-            class Main
-              class Inner
-                class << self
-                  def m
+        assert_no_members!(context, "Foo::<Foo>");
+        assert_singleton_class_eq!(context, "Foo::<Foo>", "Foo::<Foo>::<<Foo>>");
+
+        assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", ["baz()"]);
+        assert_owner_eq!(context, "Foo::<Foo>::<<Foo>>", "Foo::<Foo>");
+    }
+
+    #[test]
+    fn resolution_for_singleton_class_of_external_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar
+              class << Foo
+                def baz; end
+
+                class Baz; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
+
+        assert_no_members!(context, "Bar");
+        assert_owner_eq!(context, "Bar", "Object");
+
+        assert_members_eq!(context, "Foo::<Foo>", ["Baz", "baz()"]);
+        assert_owner_eq!(context, "Foo::<Foo>", "Foo");
+    }
+
+    #[test]
+    fn singleton_class_is_set() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+              end
+            end
+            "
+        });
+
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
+    }
+
+    #[test]
+    fn incomplete_method_calls_automatically_trigger_singleton_creation() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+
+            Foo.
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseError]);
+
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_class_calls_create_nested_singletons() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+
+            Foo.singleton_class.singleton_class.to_s
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
+            [
+                "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
+                "Object::<Object>::<<Object>>::<<<Object>>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>::<<<BasicObject>>>",
+                "Class::<Class>::<<Class>>",
+                "Module::<Module>::<<Module>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_class_on_a_scoped_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar
+              end
+            end
+
+            Foo::Bar.singleton_class.to_s
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_references_count_eq!(context, "Foo::Bar::<Bar>::<<Bar>>", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::Bar::<Bar>::<<Bar>>",
+            [
+                "Foo::Bar::<Bar>::<<Bar>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_class_on_a_self_call() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+                def bar
+                  singleton_class.baz
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>::<<Foo>>", 1);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>::<<Foo>>",
+            [
+                "Foo::<Foo>::<<Foo>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn resolves_sibling_constant_inside_singleton_class_method_body() {
+        // Constant referenced from inside a method defined in `class << self` must resolve against
+        // the lexical scope that encloses the singleton class block, not stop at the singleton class.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              module B
+                class Sibling; end
+
+                class Main
+                  class << self
+                    def does_not_resolve_here
+                      Sibling
+                    end
+                  end
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:8:11-8:18");
+    }
+
+    #[test]
+    fn resolves_sibling_constant_inside_nested_singleton_class() {
+        // Nested `class << self` inside a nested class: lookup must still walk outward through
+        // every enclosing lexical scope to find a sibling defined far above.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              module B
+                class Sibling; end
+
+                class Main
+                  class Inner
+                    class << self
+                      def m
+                        Sibling
+                      end
+                    end
+                  end
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:9:13-9:20");
+    }
+
+    #[test]
+    fn resolves_sibling_constant_directly_in_singleton_class_body() {
+        // Constant referenced directly in the `class << self` body (not inside a method) — e.g.
+        // passed as an argument to a class-level DSL call — must also resolve lexically.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              module B
+                class Sibling; end
+
+                class Main
+                  class << self
                     Sibling
                   end
                 end
               end
             end
-          end
-        end
-        "
-    });
-    context.resolve();
+            "
+        });
+        context.resolve();
 
-    assert_no_diagnostics!(&context);
-    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:9:13-9:20");
-}
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:7:9-7:16");
+    }
 
-#[test]
-fn resolves_sibling_constant_directly_in_singleton_class_body() {
-    // Constant referenced directly in the `class << self` body (not inside a method) — e.g.
-    // passed as an argument to a class-level DSL call — must also resolve lexically.
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A
-          module B
-            class Sibling; end
+    #[test]
+    fn singleton_class_lexical_scope_still_resolves_sibling_from_other_scopes() {
+        // Sanity / non-regression: a sibling constant must continue to resolve from every other
+        // scope where it already worked (instance method body, class body, top level).
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              module B
+                class Sibling; end
 
-            class Main
-              class << self
+                class Main
+                  Sibling
+
+                  def instance_method
+                    Sibling
+                  end
+                end
+
                 Sibling
               end
             end
-          end
-        end
-        "
-    });
-    context.resolve();
+            "
+        });
+        context.resolve();
 
-    assert_no_diagnostics!(&context);
-    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:7:9-7:16");
-}
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:6:7-6:14");
+        assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:9:9-9:16");
+        assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:13:5-13:12");
+    }
 
-#[test]
-fn singleton_class_lexical_scope_still_resolves_sibling_from_other_scopes() {
-    // Sanity / non-regression: a sibling constant must continue to resolve from every other
-    // scope where it already worked (instance method body, class body, top level).
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A
-          module B
-            class Sibling; end
-
-            class Main
-              Sibling
-
-              def instance_method
-                Sibling
+    #[test]
+    fn singleton_class_scope_does_not_over_resolve_unknown_constant() {
+        // Sanity: a constant that genuinely does not exist must remain unresolved even with the
+        // fix in place — the fix must not invent resolutions by walking too far.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              class Main
+                class << self
+                  def m
+                    NotDefined
+                  end
+                end
               end
             end
+            "
+        });
+        context.resolve();
 
-            Sibling
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:6:7-6:14");
-    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:9:9-9:16");
-    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:13:5-13:12");
-}
-
-#[test]
-fn singleton_class_scope_does_not_over_resolve_unknown_constant() {
-    // Sanity: a constant that genuinely does not exist must remain unresolved even with the
-    // fix in place — the fix must not invent resolutions by walking too far.
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A
-          class Main
-            class << self
-              def m
-                NotDefined
-              end
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-    assert_constant_reference_unresolved!(context, "NotDefined", "file:///foo.rb:5:9-5:19");
-}
-
-#[test]
-fn singleton_class_is_set() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          class << self
-          end
-        end
-        "
-    });
-
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_declaration_exists!(context, "Foo::<Foo>");
-    assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_constant_reference_unresolved!(context, "NotDefined", "file:///foo.rb:5:9-5:19");
+    }
 }
 
 #[test]
@@ -3574,151 +3723,6 @@ fn resolves_constant_with_ancestor_partial() {
 
     assert_ancestors_eq!(context, "C", ["C", "O::A", "B", "Object", "Kernel", "BasicObject"]);
     assert_constant_reference_to!(context, "O::A::X", "file:///1.rb:7:3-7:4");
-}
-
-#[test]
-fn incomplete_method_calls_automatically_trigger_singleton_creation() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-        end
-
-        Foo.
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context, &[Rule::ParseError]);
-
-    assert_declaration_references_count_eq!(context, "Foo::<Foo>", 1);
-    assert_ancestors_eq!(
-        context,
-        "Foo::<Foo>",
-        [
-            "Foo::<Foo>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
-fn singleton_class_calls_create_nested_singletons() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-        end
-
-        Foo.singleton_class.singleton_class.to_s
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context);
-
-    assert_declaration_references_count_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", 1);
-    assert_ancestors_eq!(
-        context,
-        "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
-        [
-            "Foo::<Foo>::<<Foo>>::<<<Foo>>>",
-            "Object::<Object>::<<Object>>::<<<Object>>>",
-            "BasicObject::<BasicObject>::<<BasicObject>>::<<<BasicObject>>>",
-            "Class::<Class>::<<Class>>",
-            "Module::<Module>::<<Module>>",
-            "Object::<Object>::<<Object>>",
-            "BasicObject::<BasicObject>::<<BasicObject>>",
-            "Class::<Class>",
-            "Module::<Module>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
-fn singleton_class_on_a_scoped_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          class Bar
-          end
-        end
-
-        Foo::Bar.singleton_class.to_s
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context);
-
-    assert_declaration_references_count_eq!(context, "Foo::Bar::<Bar>::<<Bar>>", 1);
-    assert_ancestors_eq!(
-        context,
-        "Foo::Bar::<Bar>::<<Bar>>",
-        [
-            "Foo::Bar::<Bar>::<<Bar>>",
-            "Object::<Object>::<<Object>>",
-            "BasicObject::<BasicObject>::<<BasicObject>>",
-            "Class::<Class>",
-            "Module::<Module>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
-fn singleton_class_on_a_self_call() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          class << self
-            def bar
-              singleton_class.baz
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context);
-
-    assert_declaration_references_count_eq!(context, "Foo::<Foo>::<<Foo>>", 1);
-    assert_ancestors_eq!(
-        context,
-        "Foo::<Foo>::<<Foo>>",
-        [
-            "Foo::<Foo>::<<Foo>>",
-            "Object::<Object>::<<Object>>",
-            "BasicObject::<BasicObject>::<<BasicObject>>",
-            "Class::<Class>",
-            "Module::<Module>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
 }
 
 #[test]
