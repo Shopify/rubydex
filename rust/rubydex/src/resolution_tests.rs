@@ -143,6 +143,834 @@ mod constant_resolution_tests {
     }
 }
 
+mod constant_alias_tests {
+    use super::*;
+
+    #[test]
+    fn resolving_constant_alias_to_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              CONST = 123
+            end
+
+            ALIAS = Foo
+            ALIAS::CONST
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "ALIAS", "Foo");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:8-6:13");
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_nested_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar
+                CONST = 123
+              end
+            end
+
+            ALIAS = Foo::Bar
+            ALIAS::CONST
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "ALIAS", "Foo::Bar");
+        assert_constant_reference_to!(context, "Foo::Bar::CONST", "file:///foo.rb:8:8-8:13");
+    }
+
+    #[test]
+    fn resolving_constant_alias_inside_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              CONST = 123
+            end
+
+            module Bar
+              MyFoo = Foo
+              MyFoo::CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_alias_target_eq!(context, "Bar::MyFoo", "Foo");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:7:10-7:15");
+    }
+
+    #[test]
+    fn resolving_constant_alias_in_superclass() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 123
+            end
+
+            class Bar < Foo
+            end
+
+            ALIAS = Bar
+            ALIAS::CONST
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:9:8-9:13");
+    }
+
+    #[test]
+    fn resolving_chained_constant_aliases() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              CONST = 123
+            end
+
+            ALIAS1 = Foo
+            ALIAS2 = ALIAS1
+            ALIAS2::CONST
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "ALIAS1", "Foo");
+        assert_constant_alias_target_eq!(context, "ALIAS2", "ALIAS1");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:7:9-7:14");
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_non_existent_target() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            ALIAS_1 = NonExistent
+            ALIAS_2 = ALIAS_1
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_alias_target_eq!(context, "ALIAS_2", "ALIAS_1");
+        assert_no_constant_alias_target!(context, "ALIAS_1");
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_value_in_constant_path() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            VALUE = 1
+            ALIAS = VALUE
+            ALIAS::NOPE
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
+
+        // NOPE can't be created because ALIAS points to a value constant, not a namespace
+        assert_declaration_does_not_exist!(context, "VALUE::NOPE");
+    }
+
+    #[test]
+    fn resolving_constant_alias_defined_before_target() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            ALIAS = Foo
+            module Foo
+              CONST = 1
+            end
+            ALIAS::CONST
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "ALIAS", "Foo");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:5:8-5:13");
+    }
+
+    #[test]
+    fn resolving_constant_alias_to_value() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 1
+            end
+            class Bar
+              CONST = Foo::CONST
+            end
+            BAZ = Bar::CONST
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_alias_target_eq!(context, "BAZ", "Bar::CONST");
+        assert_constant_alias_target_eq!(context, "Bar::CONST", "Foo::CONST");
+    }
+
+    #[test]
+    fn resolving_circular_constant_aliases() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            A = B
+            B = C
+            C = A
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_constant_alias_target_eq!(context, "A", "B");
+        assert_constant_alias_target_eq!(context, "B", "C");
+        assert_constant_alias_target_eq!(context, "C", "A");
+    }
+
+    #[test]
+    fn resolving_circular_constant_aliases_cross_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              X = B::Y
+            end
+            module B
+              Y = A::X
+            end
+
+            A::X::SOMETHING = 1
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_exists!(context, "A::X");
+        assert_declaration_exists!(context, "B::Y");
+
+        // SOMETHING can't be created because the circular alias can't resolve to a namespace
+        assert_declaration_does_not_exist!(context, "A::X::SOMETHING");
+    }
+
+    #[test]
+    fn resolving_constant_alias_ping_pong() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Left
+              module Deep
+                VALUE = 'left'
+              end
+            end
+
+            module Right
+              module Deep
+                VALUE = 'right'
+              end
+            end
+
+            Left::RIGHT_REF = Right
+            Right::LEFT_REF = Left
+
+            Left::RIGHT_REF::Deep::VALUE
+            Left::RIGHT_REF::LEFT_REF::Deep::VALUE
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "Left::RIGHT_REF", "Right");
+        assert_constant_alias_target_eq!(context, "Right::LEFT_REF", "Left");
+
+        // Left::RIGHT_REF::Deep::VALUE
+        assert_constant_reference_to!(context, "Right::Deep", "file:///foo.rb:16:18-16:22");
+        assert_constant_reference_to!(context, "Right::Deep::VALUE", "file:///foo.rb:16:24-16:29");
+        // Left::RIGHT_REF::LEFT_REF::Deep::VALUE
+        assert_constant_reference_to!(context, "Left::Deep", "file:///foo.rb:17:28-17:32");
+        assert_constant_reference_to!(context, "Left::Deep::VALUE", "file:///foo.rb:17:34-17:39");
+    }
+
+    #[test]
+    fn resolving_constant_alias_self_referential() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M
+              SELF_REF = M
+
+              class Thing
+                CONST = 1
+              end
+            end
+
+            M::SELF_REF::Thing::CONST
+            M::SELF_REF::SELF_REF::Thing::CONST
+            M::SELF_REF::SELF_REF::SELF_REF::Thing::CONST
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "M::SELF_REF", "M");
+
+        // All 3 paths resolve to M::Thing::CONST
+        assert_declaration_references_count_eq!(context, "M::Thing::CONST", 3);
+        assert_declaration_references_count_eq!(context, "M::Thing", 3);
+
+        // M::SELF_REF::Thing::CONST
+        assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:9:14-9:19");
+        assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:9:21-9:26");
+        // M::SELF_REF::SELF_REF::Thing::CONST
+        assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:10:24-10:29");
+        assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:10:31-10:36");
+        // M::SELF_REF::SELF_REF::SELF_REF::Thing::CONST
+        assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:11:34-11:39");
+        assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:11:41-11:46");
+    }
+
+    #[test]
+    fn resolving_constant_alias_with_multiple_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module A; end
+            FOO = A
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            r"
+            module B; end
+            FOO = B
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // FOO should have 2 definitions pointing to different targets
+        assert_declaration_definitions_count_eq!(context, "FOO", 2);
+
+        assert_alias_targets_contain!(context, "FOO", "A", "B");
+    }
+
+    #[test]
+    fn resolving_constant_alias_with_multiple_targets() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module A
+              CONST_A = 1
+            end
+            FOO = A
+            "
+        });
+        context.index_uri("file:///b.rb", {
+            r"
+            module B
+              CONST_B = 2
+            end
+            FOO = B
+            "
+        });
+        context.index_uri("file:///usage.rb", {
+            r"
+            FOO::CONST_A
+            FOO::CONST_B
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "A::CONST_A", "file:///usage.rb:1:6-1:13");
+        assert_constant_reference_to!(context, "B::CONST_B", "file:///usage.rb:2:6-2:13");
+    }
+
+    #[test]
+    fn resolving_constant_alias_multi_target_with_circular() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module A
+              CONST = 1
+            end
+            ALIAS = A
+            "
+        });
+        context.index_uri("file:///b.rb", "ALIAS = ALIAS");
+        context.index_uri("file:///usage.rb", "ALIAS::CONST");
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        // ALIAS should have two targets: A and ALIAS (self-reference)
+        assert_alias_targets_contain!(context, "ALIAS", "A", "ALIAS");
+
+        // ALIAS::CONST should still resolve to A::CONST through the valid path
+        assert_constant_reference_to!(context, "A::CONST", "file:///usage.rb:1:8-1:13");
+    }
+
+    #[test]
+    fn multi_target_alias_constant_added_to_primary_owner() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///modules.rb", {
+            r"
+            module Foo; end
+            module Bar; end
+            "
+        });
+        context.index_uri("file:///alias1.rb", {
+            r"
+            ALIAS ||= Foo
+            "
+        });
+        context.index_uri("file:///alias2.rb", {
+            r"
+            ALIAS ||= Bar
+            "
+        });
+        context.index_uri("file:///const.rb", {
+            r"
+            ALIAS::CONST = 123
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["CONST"]);
+        assert_no_members!(context, "Bar");
+    }
+
+    #[test]
+    fn resolving_class_through_constant_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Outer
+              class Inner
+              end
+            end
+
+            ALIAS = Outer
+            Outer::NESTED = Outer::Inner
+
+            class ALIAS::NESTED
+              ADDED_CONST = 1
+            end
+
+            Outer::Inner::ADDED_CONST
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
+        assert_constant_alias_target_eq!(context, "Outer::NESTED", "Outer::Inner");
+
+        // ADDED_CONST should be in Outer::Inner (the resolved target)
+        assert_declaration_exists!(context, "Outer::Inner::ADDED_CONST");
+
+        assert_declaration_references_count_eq!(context, "Outer::Inner::ADDED_CONST", 1);
+    }
+
+    #[test]
+    fn resolving_class_definition_through_constant_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Outer
+              CONST = 1
+            end
+
+            ALIAS = Outer
+
+            class ALIAS::NewClass
+              CLASS_CONST = 2
+            end
+
+            Outer::NewClass::CLASS_CONST
+            ALIAS::NewClass::CLASS_CONST
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
+
+        // NewClass should be declared under Outer, not ALIAS
+        assert_declaration_exists!(context, "Outer::NewClass");
+        assert_declaration_exists!(context, "Outer::NewClass::CLASS_CONST");
+
+        // Outer::NewClass::CLASS_CONST
+        assert_constant_reference_to!(context, "Outer::NewClass", "file:///foo.rb:11:8-11:16");
+        assert_constant_reference_to!(context, "Outer::NewClass::CLASS_CONST", "file:///foo.rb:11:18-11:29");
+        // ALIAS::NewClass::CLASS_CONST
+        assert_constant_reference_to!(context, "Outer::NewClass", "file:///foo.rb:12:8-12:16");
+        assert_constant_reference_to!(context, "Outer::NewClass::CLASS_CONST", "file:///foo.rb:12:18-12:29");
+    }
+
+    #[test]
+    fn resolving_constant_reference_through_chained_aliases() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///defs.rb", {
+            r"
+            module Foo
+              CONST = 1
+            end
+            ALIAS1 = Foo
+            ALIAS2 = ALIAS1
+            "
+        });
+        context.index_uri("file:///usage.rb", "ALIAS2::CONST");
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_alias_target_eq!(context, "ALIAS1", "Foo");
+        assert_constant_alias_target_eq!(context, "ALIAS2", "ALIAS1");
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:1:9-1:14");
+    }
+
+    #[test]
+    fn resolving_constant_reference_through_top_level_alias_target() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///defs.rb", {
+            r"
+            module Foo
+              CONST = 1
+            end
+            ALIAS = ::Foo
+            "
+        });
+        context.index_uri("file:///usage.rb", "ALIAS::CONST");
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:1:8-1:13");
+    }
+
+    // Regression test: defining singleton method on alias triggers get_or_create_singleton_class
+    #[test]
+    fn resolving_singleton_method_on_alias_does_not_panic() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            ALIAS = Foo
+            def ALIAS.singleton_method; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+    }
+
+    #[test]
+    fn resolving_instance_variable_on_alias_does_not_panic() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            ALIAS = Foo
+            def ALIAS.singleton_method
+              @ivar = 123
+            end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+    }
+
+    #[test]
+    fn method_call_on_namespace_alias() {
+        // When a method call occurs in a constant alias to a namespace, the singleton class has to be created for the
+        // target namespace and not for the alias
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.bar; end
+            end
+
+            ALIAS = Foo
+            ALIAS.bar
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_does_not_exist!(context, "ALIAS::<ALIAS>");
+    }
+
+    #[test]
+    fn method_def_on_namespace_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+
+            ALIAS = Foo
+
+            def ALIAS.bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+        assert_declaration_does_not_exist!(context, "ALIAS::<ALIAS>");
+    }
+
+    #[test]
+    fn re_opening_constant_alias_as_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///alias.rb", {
+            r"
+            module Foo
+              class Bar; end
+            end
+
+            Baz = Foo::Bar
+            "
+        });
+        context.index_uri("file:///reopen.rb", {
+            r"
+            CONST = 1
+
+            class Baz
+              class Other
+                CONST
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Baz");
+        assert_constant_reference_to!(context, "CONST", "file:///reopen.rb:5:5-5:10");
+    }
+
+    #[test]
+    fn constant_alias_reopened_as_class_with_nested_inheritance() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo
+              Bar = ::Object
+            end
+
+            module Foo
+              class Bar
+                class Baz < Something
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::Bar");
+    }
+
+    #[test]
+    fn superclass_through_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            class Base; end
+            AliasedBase = Base
+            class Foo < AliasedBase; end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Base", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn mixin_through_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module M; end
+            AliasM = M
+            class Foo
+              include AliasM
+            end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn including_unresolved_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            Foo::Bar = Bar
+
+            module Baz
+              include Foo::Bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_ancestors_eq!(context, "Baz", ["Baz"]);
+    }
+
+    #[test]
+    fn prepending_unresolved_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            Foo::Bar = Bar
+
+            module Baz
+              prepend Foo::Bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_ancestors_eq!(context, "Baz", ["Baz"]);
+    }
+
+    #[test]
+    fn inheriting_unresolved_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            Foo::Bar = Bar
+
+            class Baz < Foo::Bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_ancestors_eq!(context, "Baz", ["Baz", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn re_opening_unresolved_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            Foo::Bar = Bar
+
+            module Foo::Bar
+              CONST = 123
+              @class_ivar = 123
+              @@class_var = 789
+
+              attr_reader :some_attr
+
+              def self.class_method; end
+
+              def initialize
+                @instance_ivar = 456
+              end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_declaration_does_not_exist!(context, "Foo::Bar::CONST");
+        assert_declaration_does_not_exist!(context, "Foo::Bar::<Bar>#@class_ivar");
+        assert_declaration_does_not_exist!(context, "Foo::Bar#@instance_ivar");
+        assert_declaration_does_not_exist!(context, "Foo::Bar#@@class_var");
+        assert_declaration_does_not_exist!(context, "Foo::Bar#some_attr()");
+        assert_declaration_does_not_exist!(context, "Foo::Bar::<Bar>#class_method()");
+        assert_declaration_does_not_exist!(context, "Foo::Bar#initialize()");
+    }
+
+    #[test]
+    fn re_opening_namespace_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            module Foo; end
+            ALIAS = Foo
+
+            module ALIAS
+              CONST = 123
+              @class_ivar = 123
+              @@class_var = 789
+
+              attr_reader :some_attr
+
+              def self.class_method; end
+
+              def initialize
+                @instance_ivar = 456
+              end
+
+              def bar; end
+              alias new_bar bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_declaration_exists!(context, "Foo::CONST");
+        assert_declaration_exists!(context, "Foo::<Foo>#@class_ivar");
+        assert_declaration_exists!(context, "Foo#@instance_ivar");
+        assert_declaration_exists!(context, "Foo#@@class_var");
+        assert_declaration_exists!(context, "Foo#some_attr()");
+        assert_declaration_exists!(context, "Foo::<Foo>#class_method()");
+        assert_declaration_exists!(context, "Foo#initialize()");
+        assert_declaration_exists!(context, "Foo#new_bar()");
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -2174,577 +3002,6 @@ fn resolving_attr_accessors_inside_method() {
 }
 
 #[test]
-fn resolving_constant_alias_to_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          CONST = 123
-        end
-
-        ALIAS = Foo
-        ALIAS::CONST
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "ALIAS", "Foo");
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:6:8-6:13");
-}
-
-#[test]
-fn resolving_constant_alias_to_nested_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          module Bar
-            CONST = 123
-          end
-        end
-
-        ALIAS = Foo::Bar
-        ALIAS::CONST
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "ALIAS", "Foo::Bar");
-    assert_constant_reference_to!(context, "Foo::Bar::CONST", "file:///foo.rb:8:8-8:13");
-}
-
-#[test]
-fn resolving_constant_alias_inside_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          CONST = 123
-        end
-
-        module Bar
-          MyFoo = Foo
-          MyFoo::CONST
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_constant_alias_target_eq!(context, "Bar::MyFoo", "Foo");
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:7:10-7:15");
-}
-
-#[test]
-fn resolving_constant_alias_in_superclass() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          CONST = 123
-        end
-
-        class Bar < Foo
-        end
-
-        ALIAS = Bar
-        ALIAS::CONST
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:9:8-9:13");
-}
-
-#[test]
-fn resolving_chained_constant_aliases() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          CONST = 123
-        end
-
-        ALIAS1 = Foo
-        ALIAS2 = ALIAS1
-        ALIAS2::CONST
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "ALIAS1", "Foo");
-    assert_constant_alias_target_eq!(context, "ALIAS2", "ALIAS1");
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:7:9-7:14");
-}
-
-#[test]
-fn resolving_constant_alias_to_non_existent_target() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        ALIAS_1 = NonExistent
-        ALIAS_2 = ALIAS_1
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_constant_alias_target_eq!(context, "ALIAS_2", "ALIAS_1");
-    assert_no_constant_alias_target!(context, "ALIAS_1");
-}
-
-#[test]
-fn resolving_constant_alias_to_value_in_constant_path() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        VALUE = 1
-        ALIAS = VALUE
-        ALIAS::NOPE
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "ALIAS", "VALUE");
-
-    // NOPE can't be created because ALIAS points to a value constant, not a namespace
-    assert_declaration_does_not_exist!(context, "VALUE::NOPE");
-}
-
-#[test]
-fn resolving_constant_alias_defined_before_target() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        ALIAS = Foo
-        module Foo
-          CONST = 1
-        end
-        ALIAS::CONST
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "ALIAS", "Foo");
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///foo.rb:5:8-5:13");
-}
-
-#[test]
-fn resolving_constant_alias_to_value() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          CONST = 1
-        end
-        class Bar
-          CONST = Foo::CONST
-        end
-        BAZ = Bar::CONST
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_constant_alias_target_eq!(context, "BAZ", "Bar::CONST");
-    assert_constant_alias_target_eq!(context, "Bar::CONST", "Foo::CONST");
-}
-
-#[test]
-fn resolving_circular_constant_aliases() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        A = B
-        B = C
-        C = A
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_constant_alias_target_eq!(context, "A", "B");
-    assert_constant_alias_target_eq!(context, "B", "C");
-    assert_constant_alias_target_eq!(context, "C", "A");
-}
-
-#[test]
-fn resolving_circular_constant_aliases_cross_namespace() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A
-          X = B::Y
-        end
-        module B
-          Y = A::X
-        end
-
-        A::X::SOMETHING = 1
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_declaration_exists!(context, "A::X");
-    assert_declaration_exists!(context, "B::Y");
-
-    // SOMETHING can't be created because the circular alias can't resolve to a namespace
-    assert_declaration_does_not_exist!(context, "A::X::SOMETHING");
-}
-
-#[test]
-fn resolving_constant_alias_ping_pong() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Left
-          module Deep
-            VALUE = 'left'
-          end
-        end
-
-        module Right
-          module Deep
-            VALUE = 'right'
-          end
-        end
-
-        Left::RIGHT_REF = Right
-        Right::LEFT_REF = Left
-
-        Left::RIGHT_REF::Deep::VALUE
-        Left::RIGHT_REF::LEFT_REF::Deep::VALUE
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "Left::RIGHT_REF", "Right");
-    assert_constant_alias_target_eq!(context, "Right::LEFT_REF", "Left");
-
-    // Left::RIGHT_REF::Deep::VALUE
-    assert_constant_reference_to!(context, "Right::Deep", "file:///foo.rb:16:18-16:22");
-    assert_constant_reference_to!(context, "Right::Deep::VALUE", "file:///foo.rb:16:24-16:29");
-    // Left::RIGHT_REF::LEFT_REF::Deep::VALUE
-    assert_constant_reference_to!(context, "Left::Deep", "file:///foo.rb:17:28-17:32");
-    assert_constant_reference_to!(context, "Left::Deep::VALUE", "file:///foo.rb:17:34-17:39");
-}
-
-#[test]
-fn resolving_constant_alias_self_referential() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module M
-          SELF_REF = M
-
-          class Thing
-            CONST = 1
-          end
-        end
-
-        M::SELF_REF::Thing::CONST
-        M::SELF_REF::SELF_REF::Thing::CONST
-        M::SELF_REF::SELF_REF::SELF_REF::Thing::CONST
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "M::SELF_REF", "M");
-
-    // All 3 paths resolve to M::Thing::CONST
-    assert_declaration_references_count_eq!(context, "M::Thing::CONST", 3);
-    assert_declaration_references_count_eq!(context, "M::Thing", 3);
-
-    // M::SELF_REF::Thing::CONST
-    assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:9:14-9:19");
-    assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:9:21-9:26");
-    // M::SELF_REF::SELF_REF::Thing::CONST
-    assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:10:24-10:29");
-    assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:10:31-10:36");
-    // M::SELF_REF::SELF_REF::SELF_REF::Thing::CONST
-    assert_constant_reference_to!(context, "M::Thing", "file:///foo.rb:11:34-11:39");
-    assert_constant_reference_to!(context, "M::Thing::CONST", "file:///foo.rb:11:41-11:46");
-}
-
-#[test]
-fn resolving_class_through_constant_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Outer
-          class Inner
-          end
-        end
-
-        ALIAS = Outer
-        Outer::NESTED = Outer::Inner
-
-        class ALIAS::NESTED
-          ADDED_CONST = 1
-        end
-
-        Outer::Inner::ADDED_CONST
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
-    assert_constant_alias_target_eq!(context, "Outer::NESTED", "Outer::Inner");
-
-    // ADDED_CONST should be in Outer::Inner (the resolved target)
-    assert_declaration_exists!(context, "Outer::Inner::ADDED_CONST");
-
-    assert_declaration_references_count_eq!(context, "Outer::Inner::ADDED_CONST", 1);
-}
-
-#[test]
-fn resolving_class_definition_through_constant_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Outer
-          CONST = 1
-        end
-
-        ALIAS = Outer
-
-        class ALIAS::NewClass
-          CLASS_CONST = 2
-        end
-
-        Outer::NewClass::CLASS_CONST
-        ALIAS::NewClass::CLASS_CONST
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "ALIAS", "Outer");
-
-    // NewClass should be declared under Outer, not ALIAS
-    assert_declaration_exists!(context, "Outer::NewClass");
-    assert_declaration_exists!(context, "Outer::NewClass::CLASS_CONST");
-
-    // Outer::NewClass::CLASS_CONST
-    assert_constant_reference_to!(context, "Outer::NewClass", "file:///foo.rb:11:8-11:16");
-    assert_constant_reference_to!(context, "Outer::NewClass::CLASS_CONST", "file:///foo.rb:11:18-11:29");
-    // ALIAS::NewClass::CLASS_CONST
-    assert_constant_reference_to!(context, "Outer::NewClass", "file:///foo.rb:12:8-12:16");
-    assert_constant_reference_to!(context, "Outer::NewClass::CLASS_CONST", "file:///foo.rb:12:18-12:29");
-}
-
-#[test]
-fn resolving_constant_alias_with_multiple_definitions() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module A; end
-        FOO = A
-        "
-    });
-    context.index_uri("file:///b.rb", {
-        r"
-        module B; end
-        FOO = B
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // FOO should have 2 definitions pointing to different targets
-    assert_declaration_definitions_count_eq!(context, "FOO", 2);
-
-    assert_alias_targets_contain!(context, "FOO", "A", "B");
-}
-
-#[test]
-fn resolving_constant_alias_with_multiple_targets() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module A
-          CONST_A = 1
-        end
-        FOO = A
-        "
-    });
-    context.index_uri("file:///b.rb", {
-        r"
-        module B
-          CONST_B = 2
-        end
-        FOO = B
-        "
-    });
-    context.index_uri("file:///usage.rb", {
-        r"
-        FOO::CONST_A
-        FOO::CONST_B
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_reference_to!(context, "A::CONST_A", "file:///usage.rb:1:6-1:13");
-    assert_constant_reference_to!(context, "B::CONST_B", "file:///usage.rb:2:6-2:13");
-}
-
-#[test]
-fn resolving_constant_alias_multi_target_with_circular() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module A
-          CONST = 1
-        end
-        ALIAS = A
-        "
-    });
-    context.index_uri("file:///b.rb", "ALIAS = ALIAS");
-    context.index_uri("file:///usage.rb", "ALIAS::CONST");
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    // ALIAS should have two targets: A and ALIAS (self-reference)
-    assert_alias_targets_contain!(context, "ALIAS", "A", "ALIAS");
-
-    // ALIAS::CONST should still resolve to A::CONST through the valid path
-    assert_constant_reference_to!(context, "A::CONST", "file:///usage.rb:1:8-1:13");
-}
-
-#[test]
-fn resolving_constant_reference_through_chained_aliases() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///defs.rb", {
-        r"
-        module Foo
-          CONST = 1
-        end
-        ALIAS1 = Foo
-        ALIAS2 = ALIAS1
-        "
-    });
-    context.index_uri("file:///usage.rb", "ALIAS2::CONST");
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_alias_target_eq!(context, "ALIAS1", "Foo");
-    assert_constant_alias_target_eq!(context, "ALIAS2", "ALIAS1");
-
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:1:9-1:14");
-}
-
-#[test]
-fn resolving_constant_reference_through_top_level_alias_target() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///defs.rb", {
-        r"
-        module Foo
-          CONST = 1
-        end
-        ALIAS = ::Foo
-        "
-    });
-    context.index_uri("file:///usage.rb", "ALIAS::CONST");
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///usage.rb:1:8-1:13");
-}
-
-// Regression test: defining singleton method on alias triggers get_or_create_singleton_class
-#[test]
-fn resolving_singleton_method_on_alias_does_not_panic() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo; end
-        ALIAS = Foo
-        def ALIAS.singleton_method; end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-}
-
-#[test]
-fn resolving_instance_variable_on_alias_does_not_panic() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo; end
-        ALIAS = Foo
-        def ALIAS.singleton_method
-          @ivar = 123
-        end
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context);
-}
-
-#[test]
-fn multi_target_alias_constant_added_to_primary_owner() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///modules.rb", {
-        r"
-        module Foo; end
-        module Bar; end
-        "
-    });
-    context.index_uri("file:///alias1.rb", {
-        r"
-        ALIAS ||= Foo
-        "
-    });
-    context.index_uri("file:///alias2.rb", {
-        r"
-        ALIAS ||= Bar
-        "
-    });
-    context.index_uri("file:///const.rb", {
-        r"
-        ALIAS::CONST = 123
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo", ["CONST"]);
-    assert_no_members!(context, "Bar");
-}
-
-#[test]
 fn distinct_declarations_with_conflicting_string_ids() {
     let mut context = GraphTest::new();
     context.index_uri("file:///foo.rb", {
@@ -3656,50 +3913,6 @@ fn promoted_constant_has_correct_ancestors() {
 }
 
 #[test]
-fn method_call_on_namespace_alias() {
-    // When a method call occurs in a constant alias to a namespace, the singleton class has to be created for the
-    // target namespace and not for the alias
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def self.bar; end
-        end
-
-        ALIAS = Foo
-        ALIAS.bar
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_exists!(context, "Foo::<Foo>");
-    assert_declaration_does_not_exist!(context, "ALIAS::<ALIAS>");
-}
-
-#[test]
-fn method_def_on_namespace_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-        end
-
-        ALIAS = Foo
-
-        def ALIAS.bar
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_exists!(context, "Foo::<Foo>");
-    assert_declaration_exists!(context, "Foo::<Foo>#bar()");
-    assert_declaration_does_not_exist!(context, "ALIAS::<ALIAS>");
-}
-
-#[test]
 fn meta_programming_class_with_members() {
     let mut context = GraphTest::new();
     context.index_uri("file:///foo.rb", {
@@ -3714,90 +3927,6 @@ fn meta_programming_class_with_members() {
     assert_no_diagnostics!(&context);
     assert_declaration_exists!(context, "Foo");
     assert_declaration_does_not_exist!(context, "Foo#bar()");
-}
-
-#[test]
-fn re_opening_constant_alias_as_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///alias.rb", {
-        r"
-        module Foo
-          class Bar; end
-        end
-
-        Baz = Foo::Bar
-        "
-    });
-    context.index_uri("file:///reopen.rb", {
-        r"
-        CONST = 1
-
-        class Baz
-          class Other
-            CONST
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-    assert_declaration_exists!(context, "Baz");
-    assert_constant_reference_to!(context, "CONST", "file:///reopen.rb:5:5-5:10");
-}
-
-#[test]
-fn constant_alias_reopened_as_class_with_nested_inheritance() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module Foo
-          Bar = ::Object
-        end
-
-        module Foo
-          class Bar
-            class Baz < Something
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_declaration_exists!(context, "Foo::Bar");
-}
-
-#[test]
-fn superclass_through_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        class Base; end
-        AliasedBase = Base
-        class Foo < AliasedBase; end
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Foo", ["Foo", "Base", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn mixin_through_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module M; end
-        AliasM = M
-        class Foo
-          include AliasM
-        end
-        "
-    });
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Foo", ["Foo", "M", "Object", "Kernel", "BasicObject"]);
 }
 
 #[test]
@@ -3816,131 +3945,6 @@ fn self_method_inside_non_promotable_constant() {
     // `CONST = 1` is non-promotable).
     context.resolve();
     assert_declaration_exists!(context, "CONST");
-}
-
-#[test]
-fn including_unresolved_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module Foo; end
-        Foo::Bar = Bar
-
-        module Baz
-          include Foo::Bar
-        end
-        "
-    });
-
-    context.resolve();
-    assert_ancestors_eq!(context, "Baz", ["Baz"]);
-}
-
-#[test]
-fn prepending_unresolved_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module Foo; end
-        Foo::Bar = Bar
-
-        module Baz
-          prepend Foo::Bar
-        end
-        "
-    });
-
-    context.resolve();
-    assert_ancestors_eq!(context, "Baz", ["Baz"]);
-}
-
-#[test]
-fn inheriting_unresolved_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module Foo; end
-        Foo::Bar = Bar
-
-        class Baz < Foo::Bar
-        end
-        "
-    });
-
-    context.resolve();
-    assert_ancestors_eq!(context, "Baz", ["Baz", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn re_opening_unresolved_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module Foo; end
-        Foo::Bar = Bar
-
-        module Foo::Bar
-          CONST = 123
-          @class_ivar = 123
-          @@class_var = 789
-
-          attr_reader :some_attr
-
-          def self.class_method; end
-
-          def initialize
-            @instance_ivar = 456
-          end
-        end
-        "
-    });
-
-    context.resolve();
-    assert_declaration_does_not_exist!(context, "Foo::Bar::CONST");
-    assert_declaration_does_not_exist!(context, "Foo::Bar::<Bar>#@class_ivar");
-    assert_declaration_does_not_exist!(context, "Foo::Bar#@instance_ivar");
-    assert_declaration_does_not_exist!(context, "Foo::Bar#@@class_var");
-    assert_declaration_does_not_exist!(context, "Foo::Bar#some_attr()");
-    assert_declaration_does_not_exist!(context, "Foo::Bar::<Bar>#class_method()");
-    assert_declaration_does_not_exist!(context, "Foo::Bar#initialize()");
-}
-
-#[test]
-fn re_opening_namespace_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        module Foo; end
-        ALIAS = Foo
-
-        module ALIAS
-          CONST = 123
-          @class_ivar = 123
-          @@class_var = 789
-
-          attr_reader :some_attr
-
-          def self.class_method; end
-
-          def initialize
-            @instance_ivar = 456
-          end
-
-          def bar; end
-          alias new_bar bar
-        end
-        "
-    });
-
-    context.resolve();
-    assert_declaration_exists!(context, "Foo::CONST");
-    assert_declaration_exists!(context, "Foo::<Foo>#@class_ivar");
-    assert_declaration_exists!(context, "Foo#@instance_ivar");
-    assert_declaration_exists!(context, "Foo#@@class_var");
-    assert_declaration_exists!(context, "Foo#some_attr()");
-    assert_declaration_exists!(context, "Foo::<Foo>#class_method()");
-    assert_declaration_exists!(context, "Foo#initialize()");
-    assert_declaration_exists!(context, "Foo#new_bar()");
 }
 
 #[test]
