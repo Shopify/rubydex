@@ -39,7 +39,7 @@ jobs:
     strategy:
       matrix:
         os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
-        rubies: ["3.3", "3.4", "4.0"]
+        rubies: ["3.2", "3.3", "3.4", "4.0"]
         type: ["cross", "native"]
     runs-on: "${{ matrix.os }}"
     steps:

@@ -122,12 +122,13 @@ MAKEFILE
 if release && system("cargo", "about", "--version", out: File::NULL, err: File::NULL)
   licenses_file = root_dir.join("THIRD_PARTY_LICENSES.html")
   about_config = root_dir.join("about.toml")
-  about_template = root_dir.join("about.hbs")
+  about_templates_dir = root_dir.join("about_templates")
+  template_deps = Dir.glob("#{about_templates_dir}/*.hbs").join(" ")
 
   new_makefile.gsub!(".rust_built: $(RUST_SRCS)", <<~MAKEFILE.chomp)
-    #{licenses_file}: #{about_config} #{about_template}
+    #{licenses_file}: #{about_config} #{template_deps}
     \t$(Q)$(RM) #{licenses_file}
-    \tcargo about generate #{about_template} --manifest-path #{root_dir.join("Cargo.toml")} --workspace > #{licenses_file}
+    \tcargo about generate #{about_templates_dir} --name about --manifest-path #{root_dir.join("Cargo.toml")} --workspace > #{licenses_file}
     \t$(COPY) #{licenses_file} #{gem_dir}
 
     .rust_built: $(RUST_SRCS) #{licenses_file}

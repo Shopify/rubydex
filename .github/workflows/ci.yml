@@ -28,7 +28,7 @@ jobs:
       - name: Check licenses
         run: |
           cargo install cargo-about
-          cargo about generate rust/about.hbs --manifest-path rust/Cargo.toml --workspace > THIRD_PARTY_LICENSES.html
+          cargo about generate rust/about_templates --name about --manifest-path rust/Cargo.toml --workspace > THIRD_PARTY_LICENSES.html
   build:
     strategy:
       fail-fast: false
