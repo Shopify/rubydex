@@ -2456,6 +2456,130 @@ mod singleton_ancestors_tests {
     }
 }
 
+mod method_tests {
+    use super::*;
+
+    #[test]
+    fn resolution_for_method_with_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.bar; end
+
+              class << self
+                def self.nested_bar; end
+              end
+            end
+
+            class Bar
+              def Foo.baz; end
+
+              def self.qux; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::<Foo>", ["bar()", "baz()"]);
+        assert_owner_eq!(context, "Foo::<Foo>", "Foo");
+
+        assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", ["nested_bar()"]);
+        assert_owner_eq!(context, "Foo::<Foo>::<<Foo>>", "Foo::<Foo>");
+
+        assert_members_eq!(context, "Bar::<Bar>", ["qux()"]);
+        assert_owner_eq!(context, "Bar::<Bar>", "Bar");
+    }
+
+    #[test]
+    fn resolution_for_self_method_with_same_name_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.run; end
+              def run; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["run()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["run()"]);
+    }
+
+    #[test]
+    fn resolution_for_self_method_alias_with_same_name_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri(
+            "file:///foo.rbs",
+            r"
+            class Foo
+              def self.run: () -> void
+              def run: () -> void
+              alias self.execute self.run
+              alias execute run
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::<Foo>", ["execute()", "run()"]);
+        assert_members_eq!(context, "Foo", ["execute()", "run()"]);
+    }
+
+    #[test]
+    fn resolving_method_defined_inside_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def setup
+                def inner_method; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // inner_method should be owned by Foo, not by setup
+        assert_members_eq!(context, "Foo", ["inner_method()", "setup()"]);
+    }
+
+    #[test]
+    fn resolving_attr_accessors_inside_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.setup
+                attr_reader :reader_attr
+                attr_writer :writer_attr
+                attr_accessor :accessor_attr
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::<Foo>", ["setup()"]);
+
+        // All attr_* should be owned by Foo, not by setup
+        assert_members_eq!(context, "Foo", ["accessor_attr()", "reader_attr()", "writer_attr()"]);
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -2920,82 +3044,6 @@ fn singleton_class_is_set() {
 }
 
 #[test]
-fn resolution_for_method_with_receiver() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def self.bar; end
-
-          class << self
-            def self.nested_bar; end
-          end
-        end
-
-        class Bar
-          def Foo.baz; end
-
-          def self.qux; end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo::<Foo>", ["bar()", "baz()"]);
-    assert_owner_eq!(context, "Foo::<Foo>", "Foo");
-
-    assert_members_eq!(context, "Foo::<Foo>::<<Foo>>", ["nested_bar()"]);
-    assert_owner_eq!(context, "Foo::<Foo>::<<Foo>>", "Foo::<Foo>");
-
-    assert_members_eq!(context, "Bar::<Bar>", ["qux()"]);
-    assert_owner_eq!(context, "Bar::<Bar>", "Bar");
-}
-
-#[test]
-fn resolution_for_self_method_with_same_name_instance_method() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        r"
-        class Foo
-          def self.run; end
-          def run; end
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo", ["run()"]);
-    assert_members_eq!(context, "Foo::<Foo>", ["run()"]);
-}
-
-#[test]
-fn resolution_for_self_method_alias_with_same_name_instance_method() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri(
-        "file:///foo.rbs",
-        r"
-        class Foo
-          def self.run: () -> void
-          def run: () -> void
-          alias self.execute self.run
-          alias execute run
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo::<Foo>", ["execute()", "run()"]);
-    assert_members_eq!(context, "Foo", ["execute()", "run()"]);
-}
-
-#[test]
 fn resolution_for_instance_and_class_instance_variables() {
     let mut context = GraphTest::new();
     context.index_uri("file:///foo.rb", {
@@ -3324,50 +3372,6 @@ fn resolving_global_variable_alias_inside_method() {
         "Object",
         ["$bar", "BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
     );
-}
-
-#[test]
-fn resolving_method_defined_inside_method() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def setup
-            def inner_method; end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // inner_method should be owned by Foo, not by setup
-    assert_members_eq!(context, "Foo", ["inner_method()", "setup()"]);
-}
-
-#[test]
-fn resolving_attr_accessors_inside_method() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def self.setup
-            attr_reader :reader_attr
-            attr_writer :writer_attr
-            attr_accessor :accessor_attr
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo::<Foo>", ["setup()"]);
-
-    // All attr_* should be owned by Foo, not by setup
-    assert_members_eq!(context, "Foo", ["accessor_attr()", "reader_attr()", "writer_attr()"]);
 }
 
 #[test]
