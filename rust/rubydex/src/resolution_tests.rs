@@ -3005,138 +3005,142 @@ mod variable_tests {
     }
 }
 
-#[test]
-fn resolution_creates_global_declaration() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          class Bar
-          end
-        end
+mod declaration_creation_tests {
+    use super::*;
 
-        class Foo::Baz
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo", ["Bar", "Baz"]);
-    assert_owner_eq!(context, "Foo", "Object");
-
-    assert_no_members!(context, "Foo::Bar");
-    assert_owner_eq!(context, "Foo::Bar", "Foo");
-
-    assert_no_members!(context, "Foo::Baz");
-    assert_owner_eq!(context, "Foo::Baz", "Foo");
-}
-
-#[test]
-fn resolution_for_non_constant_declarations() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def initialize
-            @name = 123
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo", ["@name", "initialize()"]);
-    assert_owner_eq!(context, "Foo", "Object");
-}
-
-#[test]
-fn resolution_for_ambiguous_namespace_definitions() {
-    // Like many examples of Ruby code that is ambiguous to static analysis, this example is ambiguous due to
-    // require order. If `foo.rb` is loaded first, then `Bar` doesn't exist, Ruby crashes and we should emit an
-    // error or warning for a non existing constant.
-    //
-    // If `bar.rb` is loaded first, then `Bar` resolves to top level `Bar` and `Bar::Baz` is defined, completely
-    // escaping the `Foo` nesting.
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          class Bar::Baz
-          end
-        end
-        "
-    });
-    context.index_uri("file:///bar.rb", {
-        r"
-        module Bar
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_no_members!(context, "Foo");
-    assert_owner_eq!(context, "Foo", "Object");
-
-    assert_members_eq!(context, "Bar", ["Baz"]);
-    assert_owner_eq!(context, "Bar", "Object");
-}
-
-#[test]
-fn expected_name_depth_order() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          module Bar
-            module Baz
-            end
-
-            module ::Top
-              class AfterTop
+    #[test]
+    fn resolution_creates_global_declaration() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar
               end
             end
-          end
 
-          module Qux::Zip
-            module Zap
-              class Zop::Boop
+            class Foo::Baz
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["Bar", "Baz"]);
+        assert_owner_eq!(context, "Foo", "Object");
+
+        assert_no_members!(context, "Foo::Bar");
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
+
+        assert_no_members!(context, "Foo::Baz");
+        assert_owner_eq!(context, "Foo::Baz", "Foo");
+    }
+
+    #[test]
+    fn resolution_for_non_constant_declarations() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def initialize
+                @name = 123
               end
             end
-          end
-        end
-        "
-    });
+            "
+        });
+        context.resolve();
 
-    let depths = Resolver::compute_name_depths(context.graph().names());
-    let mut names = context
-        .graph()
-        .names()
-        .iter()
-        .filter(|(_, n)| {
-            !["Kernel", "BasicObject", "Object", "Module", "Class"]
-                .contains(&context.graph().strings().get(n.str()).unwrap().as_str())
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(10, names.len());
+        assert_no_diagnostics!(&context);
 
-    names.sort_by_key(|(id, _)| depths.get(id).unwrap());
+        assert_members_eq!(context, "Foo", ["@name", "initialize()"]);
+        assert_owner_eq!(context, "Foo", "Object");
+    }
 
-    assert_eq!(
-        [
-            "Top", "Foo", "Bar", "Qux", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
-        ],
-        names
+    #[test]
+    fn resolution_for_ambiguous_namespace_definitions() {
+        // Like many examples of Ruby code that is ambiguous to static analysis, this example is ambiguous due to
+        // require order. If `foo.rb` is loaded first, then `Bar` doesn't exist, Ruby crashes and we should emit an
+        // error or warning for a non existing constant.
+        //
+        // If `bar.rb` is loaded first, then `Bar` resolves to top level `Bar` and `Bar::Baz` is defined, completely
+        // escaping the `Foo` nesting.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class Bar::Baz
+              end
+            end
+            "
+        });
+        context.index_uri("file:///bar.rb", {
+            r"
+            module Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
+
+        assert_members_eq!(context, "Bar", ["Baz"]);
+        assert_owner_eq!(context, "Bar", "Object");
+    }
+
+    #[test]
+    fn expected_name_depth_order() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar
+                module Baz
+                end
+
+                module ::Top
+                  class AfterTop
+                  end
+                end
+              end
+
+              module Qux::Zip
+                module Zap
+                  class Zop::Boop
+                  end
+                end
+              end
+            end
+            "
+        });
+
+        let depths = Resolver::compute_name_depths(context.graph().names());
+        let mut names = context
+            .graph()
+            .names()
             .iter()
-            .map(|(_, n)| context.graph().strings().get(n.str()).unwrap().as_str())
-            .collect::<Vec<_>>()
-            .as_slice()
-    );
+            .filter(|(_, n)| {
+                !["Kernel", "BasicObject", "Object", "Module", "Class"]
+                    .contains(&context.graph().strings().get(n.str()).unwrap().as_str())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(10, names.len());
+
+        names.sort_by_key(|(id, _)| depths.get(id).unwrap());
+
+        assert_eq!(
+            [
+                "Top", "Foo", "Bar", "Qux", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
+            ],
+            names
+                .iter()
+                .map(|(_, n)| context.graph().strings().get(n.str()).unwrap().as_str())
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+    }
 }
 
 #[test]
