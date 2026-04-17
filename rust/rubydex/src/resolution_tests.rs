@@ -2580,6 +2580,166 @@ mod method_tests {
     }
 }
 
+mod method_alias_tests {
+    use super::*;
+
+    #[test]
+    fn resolving_method_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def foo; end
+
+              alias bar foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["bar()", "foo()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_with_self_receiver() {
+        // SelfReceiver resolves to instance methods (the class directly), not the singleton
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def original; end
+              self.alias_method :aliased, :original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["aliased()", "original()"]);
+    }
+
+    #[test]
+    fn resolving_alias_method_in_singleton_class_lands_on_singleton() {
+        // `class << self; alias_method ...; end` — alias lands on singleton via lexical nesting
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.find; end
+
+              class << self
+                alias_method :find_old, :find
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::<Foo>", ["find()", "find_old()"]);
+    }
+
+    #[test]
+    fn resolving_self_alias_method_is_equivalent_to_bare_alias_method() {
+        // `self.alias_method` and bare `alias_method` resolve identically (instance methods)
+        let mut context = GraphTest::new();
+        context.index_uri("file:///with_self.rb", {
+            r"
+            class WithSelf
+              def original; end
+              self.alias_method :aliased, :original
+            end
+            "
+        });
+        context.index_uri("file:///without_self.rb", {
+            r"
+            class WithoutSelf
+              def original; end
+              alias_method :aliased, :original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Both resolve identically: alias lands on instance methods
+        assert_members_eq!(context, "WithSelf", ["aliased()", "original()"]);
+        assert_members_eq!(context, "WithoutSelf", ["aliased()", "original()"]);
+    }
+
+    #[test]
+    fn resolving_method_alias_with_constant_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar
+              def to_s; end
+            end
+
+            class Foo
+              Bar.alias_method(:new_to_s, :to_s)
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Bar.alias_method places the alias on Bar's instance methods
+        assert_no_members!(context, "Foo");
+        assert_members_eq!(context, "Bar", ["new_to_s()", "to_s()"]);
+    }
+
+    #[test]
+    fn resolving_global_variable_alias() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            $foo = 123
+            alias $bar $foo
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(
+            context,
+            "Object",
+            ["$bar", "$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
+        );
+    }
+
+    #[test]
+    fn resolving_global_variable_alias_inside_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def setup
+                alias $bar $baz
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Global variable aliases should still be owned by Object, regardless of where defined
+        assert_members_eq!(
+            context,
+            "Object",
+            ["$bar", "BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
+        );
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -3216,162 +3376,6 @@ fn resolution_for_instance_variable_with_unresolved_receiver() {
     // Instance variable in method with unresolved receiver should not create a declaration
     assert_declaration_does_not_exist!(context, "Object::@baz");
     assert_declaration_does_not_exist!(context, "Foo::@baz");
-}
-
-#[test]
-fn resolving_method_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def foo; end
-
-          alias bar foo
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo", ["bar()", "foo()"]);
-}
-
-#[test]
-fn resolving_method_alias_with_self_receiver() {
-    // SelfReceiver resolves to instance methods (the class directly), not the singleton
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def original; end
-          self.alias_method :aliased, :original
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo", ["aliased()", "original()"]);
-}
-
-#[test]
-fn resolving_alias_method_in_singleton_class_lands_on_singleton() {
-    // `class << self; alias_method ...; end` — alias lands on singleton via lexical nesting
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def self.find; end
-
-          class << self
-            alias_method :find_old, :find
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo::<Foo>", ["find()", "find_old()"]);
-}
-
-#[test]
-fn resolving_self_alias_method_is_equivalent_to_bare_alias_method() {
-    // `self.alias_method` and bare `alias_method` resolve identically (instance methods)
-    let mut context = GraphTest::new();
-    context.index_uri("file:///with_self.rb", {
-        r"
-        class WithSelf
-          def original; end
-          self.alias_method :aliased, :original
-        end
-        "
-    });
-    context.index_uri("file:///without_self.rb", {
-        r"
-        class WithoutSelf
-          def original; end
-          alias_method :aliased, :original
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // Both resolve identically: alias lands on instance methods
-    assert_members_eq!(context, "WithSelf", ["aliased()", "original()"]);
-    assert_members_eq!(context, "WithoutSelf", ["aliased()", "original()"]);
-}
-
-#[test]
-fn resolving_method_alias_with_constant_receiver() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Bar
-          def to_s; end
-        end
-
-        class Foo
-          Bar.alias_method(:new_to_s, :to_s)
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // Bar.alias_method places the alias on Bar's instance methods
-    assert_no_members!(context, "Foo");
-    assert_members_eq!(context, "Bar", ["new_to_s()", "to_s()"]);
-}
-
-#[test]
-fn resolving_global_variable_alias() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        $foo = 123
-        alias $bar $foo
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(
-        context,
-        "Object",
-        ["$bar", "$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
-    );
-}
-
-#[test]
-fn resolving_global_variable_alias_inside_method() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def setup
-            alias $bar $baz
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // Global variable aliases should still be owned by Object, regardless of where defined
-    assert_members_eq!(
-        context,
-        "Object",
-        ["$bar", "BasicObject", "Class", "Foo", "Kernel", "Module", "Object"]
-    );
 }
 
 #[test]
