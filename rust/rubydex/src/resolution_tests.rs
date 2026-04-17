@@ -4638,239 +4638,243 @@ mod promotability_tests {
     }
 }
 
-#[test]
-fn rbs_module_and_class_declarations() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri("file:///test.rbs", {
-        r"
-        module Foo
-        end
+mod rbs_tests {
+    use super::*;
 
-        class Bar
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_declaration_exists!(context, "Foo");
-    assert_declaration_exists!(context, "Bar");
-}
-
-#[test]
-fn rbs_nested_declarations() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri("file:///test.rbs", {
-        r"
-        module Foo
-          module Bar
-          end
-
-          class Baz
-            class Qux
+    #[test]
+    fn rbs_module_and_class_declarations() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Foo
             end
-          end
-        end
-        "
-    });
-    context.resolve();
 
-    assert_no_diagnostics!(&context);
+            class Bar
+            end
+            "
+        });
+        context.resolve();
 
-    assert_owner_eq!(context, "Foo::Bar", "Foo");
-    assert_owner_eq!(context, "Foo::Baz", "Foo");
-    assert_owner_eq!(context, "Foo::Baz::Qux", "Foo::Baz");
-    assert_members_eq!(context, "Foo", ["Bar", "Baz"]);
-    assert_members_eq!(context, "Foo::Baz", ["Qux"]);
-}
+        assert_no_diagnostics!(&context);
 
-#[test]
-fn rbs_qualified_module_name() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri("file:///parents.rbs", {
-        r"
-        module Foo
-          module Bar
-          end
-        end
-        "
-    });
-    context.index_rbs_uri("file:///test.rbs", {
-        r"
-        module Foo::Bar::Baz
-        end
-        "
-    });
-    context.resolve();
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Bar");
+    }
 
-    assert_no_diagnostics!(&context);
+    #[test]
+    fn rbs_nested_declarations() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Foo
+              module Bar
+              end
 
-    assert_declaration_exists!(context, "Foo::Bar::Baz");
-}
+              class Baz
+                class Qux
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
 
-#[test]
-fn rbs_qualified_name_inside_nested_module() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri("file:///foo.rbs", {
-        r"
-        module Outer
-          module Foo
-          end
-        end
-        "
-    });
-    context.index_rbs_uri("file:///test.rbs", {
-        r"
-        module Outer
-          module Foo::Bar
-          end
-        end
-        "
-    });
-    context.resolve();
+        assert_no_diagnostics!(&context);
 
-    assert_no_diagnostics!(&context);
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
+        assert_owner_eq!(context, "Foo::Baz", "Foo");
+        assert_owner_eq!(context, "Foo::Baz::Qux", "Foo::Baz");
+        assert_members_eq!(context, "Foo", ["Bar", "Baz"]);
+        assert_members_eq!(context, "Foo::Baz", ["Qux"]);
+    }
 
-    assert_owner_eq!(context, "Outer::Foo::Bar", "Outer::Foo");
-}
+    #[test]
+    fn rbs_qualified_module_name() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///parents.rbs", {
+            r"
+            module Foo
+              module Bar
+              end
+            end
+            "
+        });
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Foo::Bar::Baz
+            end
+            "
+        });
+        context.resolve();
 
-#[test]
-fn rbs_superclass_resolution() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri("file:///test.rbs", {
-        r"
-        class Foo
-        end
+        assert_no_diagnostics!(&context);
 
-        class Bar < Foo
-        end
+        assert_declaration_exists!(context, "Foo::Bar::Baz");
+    }
 
-        module Baz
-          class Base
-          end
+    #[test]
+    fn rbs_qualified_name_inside_nested_module() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///foo.rbs", {
+            r"
+            module Outer
+              module Foo
+              end
+            end
+            "
+        });
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Outer
+              module Foo::Bar
+              end
+            end
+            "
+        });
+        context.resolve();
 
-          class Child < Base
-          end
-        end
-        "
-    });
-    context.resolve();
+        assert_no_diagnostics!(&context);
 
-    assert_no_diagnostics!(&context);
+        assert_owner_eq!(context, "Outer::Foo::Bar", "Outer::Foo");
+    }
 
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object", "Kernel", "BasicObject"]);
-    assert_ancestors_eq!(
-        context,
-        "Baz::Child",
-        ["Baz::Child", "Baz::Base", "Object", "Kernel", "BasicObject"]
-    );
-}
+    #[test]
+    fn rbs_superclass_resolution() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            class Foo
+            end
 
-#[test]
-fn rbs_constant_declarations() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri("file:///test.rbs", {
-        r"
-        FOO: String
+            class Bar < Foo
+            end
 
-        class Bar
-          BAZ: Integer
-        end
+            module Baz
+              class Base
+              end
 
-        Bar::QUX: ::String
-        "
-    });
-    context.resolve();
+              class Child < Base
+              end
+            end
+            "
+        });
+        context.resolve();
 
-    assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context);
 
-    assert_declaration_exists!(context, "FOO");
-    assert_declaration_kind_eq!(context, "FOO", "Constant");
-    assert_owner_eq!(context, "FOO", "Object");
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(
+            context,
+            "Baz::Child",
+            ["Baz::Child", "Baz::Base", "Object", "Kernel", "BasicObject"]
+        );
+    }
 
-    assert_declaration_exists!(context, "Bar::BAZ");
-    assert_declaration_kind_eq!(context, "Bar::BAZ", "Constant");
-    assert_owner_eq!(context, "Bar::BAZ", "Bar");
+    #[test]
+    fn rbs_constant_declarations() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            FOO: String
 
-    assert_declaration_exists!(context, "Bar::QUX");
-    assert_declaration_kind_eq!(context, "Bar::QUX", "Constant");
-    assert_owner_eq!(context, "Bar::QUX", "Bar");
-}
+            class Bar
+              BAZ: Integer
+            end
 
-#[test]
-fn rbs_global_declaration() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri("file:///test.rbs", "$foo: String");
-    context.resolve();
+            Bar::QUX: ::String
+            "
+        });
+        context.resolve();
 
-    assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context);
 
-    assert_members_eq!(
-        context,
-        "Object",
-        ["$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
-    );
-}
+        assert_declaration_exists!(context, "FOO");
+        assert_declaration_kind_eq!(context, "FOO", "Constant");
+        assert_owner_eq!(context, "FOO", "Object");
 
-#[test]
-fn rbs_mixin_resolution() {
-    let mut context = GraphTest::new();
-    context.index_rbs_uri("file:///test.rbs", {
-        r"
-        module Bar
-        end
+        assert_declaration_exists!(context, "Bar::BAZ");
+        assert_declaration_kind_eq!(context, "Bar::BAZ", "Constant");
+        assert_owner_eq!(context, "Bar::BAZ", "Bar");
 
-        module Baz
-        end
+        assert_declaration_exists!(context, "Bar::QUX");
+        assert_declaration_kind_eq!(context, "Bar::QUX", "Constant");
+        assert_owner_eq!(context, "Bar::QUX", "Bar");
+    }
 
-        class Foo
-          include Bar
-          include Baz
-        end
-        "
-    });
-    context.resolve();
+    #[test]
+    fn rbs_global_declaration() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", "$foo: String");
+        context.resolve();
 
-    assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context);
 
-    assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object", "Kernel", "BasicObject"]);
-}
+        assert_members_eq!(
+            context,
+            "Object",
+            ["$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
+        );
+    }
 
-#[test]
-fn rbs_method_alias_resolution() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def bar; end
-          def self.class_method; end
-        end
+    #[test]
+    fn rbs_mixin_resolution() {
+        let mut context = GraphTest::new();
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            module Bar
+            end
 
-        module Baz
-          def original; end
-        end
-        "
-    });
-    context.index_rbs_uri("file:///test.rbs", {
-        r"
-        class Foo
-          alias qux bar
-          alias self.class_alias self.class_method
-        end
+            module Baz
+            end
 
-        module Baz
-          alias copy original
-        end
-        "
-    });
-    context.resolve();
+            class Foo
+              include Bar
+              include Baz
+            end
+            "
+        });
+        context.resolve();
 
-    assert_no_diagnostics!(&context);
+        assert_no_diagnostics!(&context);
 
-    assert_members_eq!(context, "Foo", ["bar()", "qux()"]);
-    assert_members_eq!(context, "Foo::<Foo>", ["class_alias()", "class_method()"]);
-    assert_members_eq!(context, "Baz", ["copy()", "original()"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Baz", "Bar", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn rbs_method_alias_resolution() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar; end
+              def self.class_method; end
+            end
+
+            module Baz
+              def original; end
+            end
+            "
+        });
+        context.index_rbs_uri("file:///test.rbs", {
+            r"
+            class Foo
+              alias qux bar
+              alias self.class_alias self.class_method
+            end
+
+            module Baz
+              alias copy original
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["bar()", "qux()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["class_alias()", "class_method()"]);
+        assert_members_eq!(context, "Baz", ["copy()", "original()"]);
+    }
 }
 
 #[test]
