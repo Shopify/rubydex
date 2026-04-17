@@ -4364,6 +4364,280 @@ mod dynamic_namespace_tests {
     }
 }
 
+mod promotability_tests {
+    use super::*;
+
+    #[test]
+    fn non_promotable_constant_not_promoted_to_class_with_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            FOO = 42
+            class FOO
+              def bar; end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "FOO");
+    }
+
+    #[test]
+    fn non_promotable_constant_not_promoted_to_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r#"
+                FOO = "hello"
+                module FOO
+                end
+                "#
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "FOO", "Constant");
+    }
+
+    #[test]
+    fn promotable_constant_is_promoted_to_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Baz; end
+
+            Bar = some_call
+
+            class Bar
+              include Baz
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn mixed_promotable_and_non_promotable_blocks_promotion() {
+        // If the same constant has both a promotable and non-promotable definition,
+        // promotion should be blocked
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "Foo = some_call");
+        context.index_uri("file:///b.rb", "Foo = 42");
+        context.index_uri("file:///c.rb", "class Foo; end");
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Foo", "Constant");
+    }
+
+    #[test]
+    fn promotable_constant_promoted_to_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Baz; end
+
+            Bar = some_call
+
+            module Bar
+              include Baz
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz"]);
+    }
+
+    #[test]
+    fn class_first_then_constant_stays_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            Foo = some_call
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Foo", "Class");
+    }
+
+    #[test]
+    fn promotable_constant_path_write() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+            A::B = some_factory_call
+            class A::B; end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "A::B");
+    }
+
+    #[test]
+    fn method_call_on_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Qux = some_factory_call
+            Qux.foo
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Qux::<Qux>");
+    }
+
+    #[test]
+    fn singleton_method_on_non_promotable_constant_does_not_crash() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            FOO = 42
+            FOO.bar
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "FOO::<FOO>");
+    }
+
+    #[test]
+    fn def_self_on_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Qux = some_factory_call
+            def Qux.foo; end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Qux::<Qux>");
+    }
+
+    #[test]
+    fn promoted_constant_has_correct_ancestors() {
+        // When a promotable constant is auto-promoted via singleton class access, we conservatively
+        // promote to a module (not a class) since we don't know what the call returns.
+        // Modules don't inherit from Object.
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_factory_call
+            Foo.bar
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Foo", ["Foo"]);
+    }
+
+    #[test]
+    fn meta_programming_class_with_members() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = dynamic_class do
+              def bar; end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo#bar()");
+    }
+
+    #[test]
+    fn self_method_inside_non_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            CONST = 1
+            module CONST
+              def self.bar
+              end
+            end
+            "
+        });
+        // Should not panic when a `def self.` method is inside a constant that can't be promoted to a namespace (e.g.,
+        // `CONST = 1` is non-promotable).
+        context.resolve();
+        assert_declaration_exists!(context, "CONST");
+    }
+
+    #[test]
+    fn defining_constant_in_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            Foo = dynamic
+            Foo::Bar = dynamic
+            Foo::Bar::Baz = 123
+            "
+        });
+
+        context.resolve();
+        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_kind_eq!(context, "Foo::Bar", "Module");
+        assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "Constant");
+    }
+
+    #[test]
+    fn singleton_class_block_for_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            Foo = dynamic
+
+            class << Foo
+              def bar; end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+    }
+
+    #[test]
+    fn singleton_class_block_for_non_promotable_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", {
+            r"
+            Foo = 1
+
+            class << Foo
+              def bar; end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_declaration_kind_eq!(context, "Foo", "Constant");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+    }
+}
+
 #[test]
 fn rbs_module_and_class_declarations() {
     let mut context = GraphTest::new();
@@ -4597,276 +4871,6 @@ fn rbs_method_alias_resolution() {
     assert_members_eq!(context, "Foo", ["bar()", "qux()"]);
     assert_members_eq!(context, "Foo::<Foo>", ["class_alias()", "class_method()"]);
     assert_members_eq!(context, "Baz", ["copy()", "original()"]);
-}
-
-#[test]
-fn non_promotable_constant_not_promoted_to_class_with_members() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        FOO = 42
-        class FOO
-          def bar; end
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_exists!(context, "FOO");
-}
-
-#[test]
-fn non_promotable_constant_not_promoted_to_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r#"
-            FOO = "hello"
-            module FOO
-            end
-            "#
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_kind_eq!(context, "FOO", "Constant");
-}
-
-#[test]
-fn promotable_constant_is_promoted_to_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Baz; end
-
-        Bar = some_call
-
-        class Bar
-          include Baz
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn mixed_promotable_and_non_promotable_blocks_promotion() {
-    // If the same constant has both a promotable and non-promotable definition,
-    // promotion should be blocked
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", "Foo = some_call");
-    context.index_uri("file:///b.rb", "Foo = 42");
-    context.index_uri("file:///c.rb", "class Foo; end");
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_kind_eq!(context, "Foo", "Constant");
-}
-
-#[test]
-fn promotable_constant_promoted_to_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Baz; end
-
-        Bar = some_call
-
-        module Bar
-          include Baz
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Baz"]);
-}
-
-#[test]
-fn class_first_then_constant_stays_namespace() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo; end
-        Foo = some_call
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_kind_eq!(context, "Foo", "Class");
-}
-
-#[test]
-fn promotable_constant_path_write() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-        A::B = some_factory_call
-        class A::B; end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_exists!(context, "A::B");
-}
-
-#[test]
-fn method_call_on_promotable_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Qux = some_factory_call
-        Qux.foo
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_exists!(context, "Qux::<Qux>");
-}
-
-#[test]
-fn singleton_method_on_non_promotable_constant_does_not_crash() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        FOO = 42
-        FOO.bar
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_does_not_exist!(context, "FOO::<FOO>");
-}
-
-#[test]
-fn def_self_on_promotable_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Qux = some_factory_call
-        def Qux.foo; end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_exists!(context, "Qux::<Qux>");
-}
-
-#[test]
-fn promoted_constant_has_correct_ancestors() {
-    // When a promotable constant is auto-promoted via singleton class access, we conservatively
-    // promote to a module (not a class) since we don't know what the call returns.
-    // Modules don't inherit from Object.
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Foo = some_factory_call
-        Foo.bar
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Foo", ["Foo"]);
-}
-
-#[test]
-fn meta_programming_class_with_members() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Foo = dynamic_class do
-          def bar; end
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_declaration_exists!(context, "Foo");
-    assert_declaration_does_not_exist!(context, "Foo#bar()");
-}
-
-#[test]
-fn self_method_inside_non_promotable_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        CONST = 1
-        module CONST
-          def self.bar
-          end
-        end
-        "
-    });
-    // Should not panic when a `def self.` method is inside a constant that can't be promoted to a namespace (e.g.,
-    // `CONST = 1` is non-promotable).
-    context.resolve();
-    assert_declaration_exists!(context, "CONST");
-}
-
-#[test]
-fn defining_constant_in_promotable_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        Foo = dynamic
-        Foo::Bar = dynamic
-        Foo::Bar::Baz = 123
-        "
-    });
-
-    context.resolve();
-    assert_declaration_kind_eq!(context, "Foo", "Module");
-    assert_declaration_kind_eq!(context, "Foo::Bar", "Module");
-    assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "Constant");
-}
-
-#[test]
-fn singleton_class_block_for_promotable_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        Foo = dynamic
-
-        class << Foo
-          def bar; end
-        end
-        "
-    });
-
-    context.resolve();
-    assert_declaration_kind_eq!(context, "Foo", "Module");
-    assert_declaration_exists!(context, "Foo::<Foo>#bar()");
-}
-
-#[test]
-fn singleton_class_block_for_non_promotable_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///a.rb", {
-        r"
-        Foo = 1
-
-        class << Foo
-          def bar; end
-        end
-        "
-    });
-
-    context.resolve();
-    assert_declaration_kind_eq!(context, "Foo", "Constant");
-    assert_declaration_does_not_exist!(context, "Foo::<Foo>");
-    assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
 }
 
 #[test]
