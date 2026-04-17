@@ -1804,6 +1804,136 @@ mod prepend_tests {
     }
 }
 
+mod mixin_dedup_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_includes_and_prepends() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+
+            class Foo
+              prepend A
+              include A
+            end
+
+            class Bar
+              include A
+              prepend A
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["A", "Foo", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(context, "Bar", ["A", "Bar", "A", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn duplicate_indirect_includes_and_prepends() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+            module B
+              include A
+            end
+            module C
+              prepend A
+            end
+
+            class Foo
+              include C
+              prepend B
+              include A
+            end
+
+            class Bar
+              include A
+              prepend B
+              include C
+            end
+
+            class Baz
+              prepend B
+              include C
+              prepend A
+            end
+
+            class Qux
+              prepend A
+              include C
+              prepend B
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Foo",
+            ["B", "A", "Foo", "A", "C", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Bar",
+            ["B", "A", "Bar", "C", "A", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Baz",
+            ["B", "A", "Baz", "C", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Qux",
+            ["B", "A", "Qux", "C", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn duplicate_includes_and_prepends_through_parents() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+
+            class Parent
+              include A
+            end
+
+            class Foo < Parent
+              prepend A
+            end
+
+            class Bar < Parent
+              include A
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Foo",
+            ["A", "Foo", "Parent", "A", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Bar",
+            ["Bar", "Parent", "A", "Object", "Kernel", "BasicObject"]
+        );
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -2647,132 +2777,6 @@ fn resolving_global_variable_alias() {
         context,
         "Object",
         ["$bar", "$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
-    );
-}
-
-#[test]
-fn duplicate_includes_and_prepends() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-
-        class Foo
-          prepend A
-          include A
-        end
-
-        class Bar
-          include A
-          prepend A
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["A", "Foo", "Object", "Kernel", "BasicObject"]);
-    assert_ancestors_eq!(context, "Bar", ["A", "Bar", "A", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn duplicate_indirect_includes_and_prepends() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-        module B
-          include A
-        end
-        module C
-          prepend A
-        end
-
-        class Foo
-          include C
-          prepend B
-          include A
-        end
-
-        class Bar
-          include A
-          prepend B
-          include C
-        end
-
-        class Baz
-          prepend B
-          include C
-          prepend A
-        end
-
-        class Qux
-          prepend A
-          include C
-          prepend B
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Foo",
-        ["B", "A", "Foo", "A", "C", "Object", "Kernel", "BasicObject"]
-    );
-    assert_ancestors_eq!(
-        context,
-        "Bar",
-        ["B", "A", "Bar", "C", "A", "Object", "Kernel", "BasicObject"]
-    );
-    assert_ancestors_eq!(
-        context,
-        "Baz",
-        ["B", "A", "Baz", "C", "Object", "Kernel", "BasicObject"]
-    );
-    assert_ancestors_eq!(
-        context,
-        "Qux",
-        ["B", "A", "Qux", "C", "Object", "Kernel", "BasicObject"]
-    );
-}
-
-#[test]
-fn duplicate_includes_and_prepends_through_parents() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-
-        class Parent
-          include A
-        end
-
-        class Foo < Parent
-          prepend A
-        end
-
-        class Bar < Parent
-          include A
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Foo",
-        ["A", "Foo", "Parent", "A", "Object", "Kernel", "BasicObject"]
-    );
-    assert_ancestors_eq!(
-        context,
-        "Bar",
-        ["Bar", "Parent", "A", "Object", "Kernel", "BasicObject"]
     );
 }
 
