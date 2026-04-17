@@ -4214,6 +4214,156 @@ mod todo_tests {
     }
 }
 
+mod dynamic_namespace_tests {
+    use super::*;
+
+    #[test]
+    fn resolving_meta_programming_class_reopened() {
+        // It's often not possible to provide first-class support to meta-programming constructs, but we have to prevent
+        // the implementation from crashing in cases like these.
+        //
+        // Here we use some meta-programming method call to define a class and then re-open it using the `class`
+        // keyword. The first definition of Bar is considered a constant because we don't know `dynamic_class` returns a
+        // new class. The second definition is a class.
+        //
+        // We need to ensure that the associated Declaration for Bar is transformed into a class if any of its
+        // definitions represent one, otherwise we have no place to store the includes and ancestors
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Baz; end
+
+            Bar = dynamic_class do
+            end
+
+            class Bar
+              include Baz
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn resolving_accessing_meta_programming_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = Protobuf.some_dynamic_class
+            Foo::Bar = Protobuf.some_other_dynamic_class
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+    }
+
+    #[test]
+    fn inheriting_from_dynamic_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_dynamic_class
+            class Bar < Foo
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn including_dynamic_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_dynamic_module
+            class Bar
+              include Foo
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn prepending_dynamic_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_dynamic_module
+            class Bar
+              prepend Foo
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn extending_dynamic_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Foo = some_dynamic_module
+            class Bar
+              extend Foo
+
+              class << self
+              end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>",
+            [
+                "Bar::<Bar>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn ancestor_operations_on_meta_programming_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar; end
+
+            Qux = dynamic_class do
+              include Foo
+              prepend Bar
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+    }
+}
+
 #[test]
 fn rbs_module_and_class_declarations() {
     let mut context = GraphTest::new();
@@ -4450,133 +4600,6 @@ fn rbs_method_alias_resolution() {
 }
 
 #[test]
-fn resolving_meta_programming_class_reopened() {
-    // It's often not possible to provide first-class support to meta-programming constructs, but we have to prevent
-    // the implementation from crashing in cases like these.
-    //
-    // Here we use some meta-programming method call to define a class and then re-open it using the `class`
-    // keyword. The first definition of Bar is considered a constant because we don't know `dynamic_class` returns a
-    // new class. The second definition is a class.
-    //
-    // We need to ensure that the associated Declaration for Bar is transformed into a class if any of its
-    // definitions represent one, otherwise we have no place to store the includes and ancestors
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Baz; end
-
-        Bar = dynamic_class do
-        end
-
-        class Bar
-          include Baz
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Baz", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn resolving_accessing_meta_programming_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Foo = Protobuf.some_dynamic_class
-        Foo::Bar = Protobuf.some_other_dynamic_class
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-}
-
-#[test]
-fn inheriting_from_dynamic_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Foo = some_dynamic_class
-        class Bar < Foo
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn including_dynamic_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Foo = some_dynamic_module
-        class Bar
-          include Foo
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn prepending_dynamic_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Foo = some_dynamic_module
-        class Bar
-          prepend Foo
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn extending_dynamic_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        Foo = some_dynamic_module
-        class Bar
-          extend Foo
-
-          class << self
-          end
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(
-        context,
-        "Bar::<Bar>",
-        [
-            "Bar::<Bar>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
 fn non_promotable_constant_not_promoted_to_class_with_members() {
     let mut context = GraphTest::new();
     context.index_uri("file:///foo.rb", {
@@ -4692,25 +4715,6 @@ fn promotable_constant_path_write() {
     context.resolve();
     assert_no_diagnostics!(&context);
     assert_declaration_exists!(context, "A::B");
-}
-
-#[test]
-fn ancestor_operations_on_meta_programming_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Bar; end
-
-        Qux = dynamic_class do
-          include Foo
-          prepend Bar
-        end
-        "
-    });
-
-    context.resolve();
-    assert_no_diagnostics!(&context);
 }
 
 #[test]
