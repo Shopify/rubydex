@@ -3535,127 +3535,131 @@ mod singleton_class_tests {
     }
 }
 
-#[test]
-fn distinct_declarations_with_conflicting_string_ids() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def Array(); end
-          class Array; end
-        end
-        "
-    });
-    context.resolve();
+mod fqn_and_naming_tests {
+    use super::*;
 
-    assert_no_diagnostics!(&context);
-
-    // Both entries exist as unique members
-    assert_members_eq!(context, "Foo", ["Array", "Array()"]);
-
-    // Both declarations exist with unique IDs
-    assert_declaration_exists!(context, "Foo::Array");
-    assert_declaration_exists!(context, "Foo#Array()");
-}
-
-#[test]
-fn fully_qualified_names_are_unique() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          class Bar
-            CONST = 1
-            @class_ivar = 2
-
-            attr_reader :baz
-            attr_writer :qux
-            attr_accessor :zip
-
-            def instance_m
-              @@class_var = 3
+    #[test]
+    fn distinct_declarations_with_conflicting_string_ids() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def Array(); end
+              class Array; end
             end
+            "
+        });
+        context.resolve();
 
-            def self.singleton_m
-              $global_var = 4
-            end
+        assert_no_diagnostics!(&context);
 
-            def Foo.another_singleton_m; end
+        // Both entries exist as unique members
+        assert_members_eq!(context, "Foo", ["Array", "Array()"]);
 
-            class << self
-              OTHER_CONST = 5
-              @other_class_ivar = 6
-              @@other_class_var = 7
+        // Both declarations exist with unique IDs
+        assert_declaration_exists!(context, "Foo::Array");
+        assert_declaration_exists!(context, "Foo#Array()");
+    }
 
-              def other_instance_m
-                @my_class_var = 8
-              end
-
-              def self.other_singleton_m
-                $other_global_var = 9
-              end
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // In the same order of appearence
-    assert_declaration_exists!(context, "Foo");
-    assert_declaration_exists!(context, "Foo::Bar");
-    assert_declaration_exists!(context, "Foo::Bar::CONST");
-    assert_declaration_exists!(context, "Foo::Bar::<Bar>#@class_ivar");
-    assert_declaration_exists!(context, "Foo::Bar#baz()");
-    // TODO: needs the fix for attributes
-    // assert_declaration_exists!(context, "Foo::Bar#qux=()");
-    assert_declaration_exists!(context, "Foo::Bar#zip()");
-    // TODO: needs the fix for attributes
-    // assert_declaration_exists!(context, "Foo::Bar#zip=()");
-    assert_declaration_exists!(context, "Foo::Bar#instance_m()");
-    assert_declaration_exists!(context, "Foo::Bar#@@class_var");
-    assert_declaration_exists!(context, "Foo::Bar::<Bar>#singleton_m()");
-    assert_declaration_exists!(context, "$global_var");
-    assert_declaration_exists!(context, "Foo::<Foo>#another_singleton_m()");
-    assert_declaration_exists!(context, "Foo::Bar::<Bar>::OTHER_CONST");
-    assert_declaration_exists!(context, "Foo::Bar::<Bar>::<<Bar>>#@other_class_ivar");
-    assert_declaration_exists!(context, "Foo::Bar#@@other_class_var");
-    assert_declaration_exists!(context, "Foo::Bar::<Bar>#other_instance_m()");
-    assert_declaration_exists!(context, "Foo::Bar::<Bar>#@my_class_var");
-    assert_declaration_exists!(context, "Foo::Bar::<Bar>::<<Bar>>#other_singleton_m()");
-    assert_declaration_exists!(context, "$other_global_var");
-}
-
-#[test]
-fn test_nested_same_names() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-          module Foo; end
-
-          module Bar
-            Foo
-
+    #[test]
+    fn fully_qualified_names_are_unique() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
             module Foo
-              FOO = 42
+              class Bar
+                CONST = 1
+                @class_ivar = 2
+
+                attr_reader :baz
+                attr_writer :qux
+                attr_accessor :zip
+
+                def instance_m
+                  @@class_var = 3
+                end
+
+                def self.singleton_m
+                  $global_var = 4
+                end
+
+                def Foo.another_singleton_m; end
+
+                class << self
+                  OTHER_CONST = 5
+                  @other_class_ivar = 6
+                  @@other_class_var = 7
+
+                  def other_instance_m
+                    @my_class_var = 8
+                  end
+
+                  def self.other_singleton_m
+                    $other_global_var = 9
+                  end
+                end
+              end
             end
-          end
-        "
-    });
-    context.resolve();
+            "
+        });
+        context.resolve();
 
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_no_diagnostics!(&context);
 
-    // FIXME: this is wrong, the reference is not to `Bar::Foo`, but to `Foo`
-    assert_constant_reference_to!(context, "Bar::Foo", "file:///foo.rb:4:3-4:6");
+        // In the same order of appearence
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::Bar");
+        assert_declaration_exists!(context, "Foo::Bar::CONST");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>#@class_ivar");
+        assert_declaration_exists!(context, "Foo::Bar#baz()");
+        // TODO: needs the fix for attributes
+        // assert_declaration_exists!(context, "Foo::Bar#qux=()");
+        assert_declaration_exists!(context, "Foo::Bar#zip()");
+        // TODO: needs the fix for attributes
+        // assert_declaration_exists!(context, "Foo::Bar#zip=()");
+        assert_declaration_exists!(context, "Foo::Bar#instance_m()");
+        assert_declaration_exists!(context, "Foo::Bar#@@class_var");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>#singleton_m()");
+        assert_declaration_exists!(context, "$global_var");
+        assert_declaration_exists!(context, "Foo::<Foo>#another_singleton_m()");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>::OTHER_CONST");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>::<<Bar>>#@other_class_ivar");
+        assert_declaration_exists!(context, "Foo::Bar#@@other_class_var");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>#other_instance_m()");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>#@my_class_var");
+        assert_declaration_exists!(context, "Foo::Bar::<Bar>::<<Bar>>#other_singleton_m()");
+        assert_declaration_exists!(context, "$other_global_var");
+    }
 
-    assert_ancestors_eq!(context, "Foo", &["Foo"]);
-    assert_ancestors_eq!(context, "Bar::Foo", &["Bar::Foo"]);
+    #[test]
+    fn test_nested_same_names() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+              module Foo; end
 
-    assert_no_members!(context, "Foo");
-    assert_members_eq!(context, "Bar::Foo", ["FOO"]);
+              module Bar
+                Foo
+
+                module Foo
+                  FOO = 42
+                end
+              end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+
+        // FIXME: this is wrong, the reference is not to `Bar::Foo`, but to `Foo`
+        assert_constant_reference_to!(context, "Bar::Foo", "file:///foo.rb:4:3-4:6");
+
+        assert_ancestors_eq!(context, "Foo", &["Foo"]);
+        assert_ancestors_eq!(context, "Bar::Foo", &["Bar::Foo"]);
+
+        assert_no_members!(context, "Foo");
+        assert_members_eq!(context, "Bar::Foo", ["FOO"]);
+    }
 }
 
 #[test]
