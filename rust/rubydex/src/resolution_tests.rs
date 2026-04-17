@@ -2127,6 +2127,335 @@ mod object_ancestors_tests {
     }
 }
 
+mod singleton_ancestors_tests {
+    use super::*;
+
+    #[test]
+    fn singleton_ancestors_for_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Qux; end
+            module Zip; end
+            class Bar; end
+
+            class Baz < Bar
+              extend Foo
+
+              class << self
+                include Qux
+
+                class << self
+                  include Zip
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>",
+            [
+                "Baz::<Baz>",
+                "Qux",
+                "Foo",
+                "Bar::<Bar>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>::<<Baz>>",
+            [
+                "Baz::<Baz>::<<Baz>>",
+                "Zip",
+                "Bar::<Bar>::<<Bar>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_ancestors_for_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Qux; end
+            module Zip; end
+            class Bar; end
+
+            module Baz
+              extend Foo
+
+              class << self
+                include Qux
+
+                class << self
+                  include Zip
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>",
+            ["Baz::<Baz>", "Qux", "Foo", "Module", "Object", "Kernel", "BasicObject"]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>::<<Baz>>",
+            [
+                "Baz::<Baz>::<<Baz>>",
+                "Zip",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_ancestors_with_inherited_parent_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Qux; end
+            class Bar
+              class << self
+                include Foo
+                prepend Qux
+              end
+            end
+
+            class Baz < Bar
+              class << self
+                class << self
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>",
+            [
+                "Qux",
+                "Bar::<Bar>",
+                "Foo",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>",
+            [
+                "Baz::<Baz>",
+                "Qux",
+                "Bar::<Bar>",
+                "Foo",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>::<<Baz>>",
+            [
+                "Baz::<Baz>::<<Baz>>",
+                "Bar::<Bar>::<<Bar>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_ancestor_chain_cascades_through_intermediate_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.foo; end
+            end
+            class Bar < Foo
+            end
+            class Baz < Bar
+              def self.baz; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(
+            context,
+            "Baz::<Baz>",
+            [
+                "Baz::<Baz>",
+                "Bar::<Bar>",
+                "Foo::<Foo>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn extend_creates_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar; end
+
+            class Foo
+              extend Bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Bar",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn extend_creates_singleton_class_with_existing_singleton_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar; end
+
+            class Foo
+              extend Bar
+
+              def self.baz; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Bar",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn extend_creates_singleton_class_on_module() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar; end
+
+            module Foo
+              extend Bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            ["Foo::<Foo>", "Bar", "Module", "Object", "Kernel", "BasicObject"]
+        );
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -2970,204 +3299,6 @@ fn resolving_global_variable_alias() {
         context,
         "Object",
         ["$bar", "$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
-    );
-}
-
-#[test]
-fn singleton_ancestors_for_classes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Qux; end
-        module Zip; end
-        class Bar; end
-
-        class Baz < Bar
-          extend Foo
-
-          class << self
-            include Qux
-
-            class << self
-              include Zip
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Baz::<Baz>",
-        [
-            "Baz::<Baz>",
-            "Qux",
-            "Foo",
-            "Bar::<Bar>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-
-    assert_ancestors_eq!(
-        context,
-        "Baz::<Baz>::<<Baz>>",
-        [
-            "Baz::<Baz>::<<Baz>>",
-            "Zip",
-            "Bar::<Bar>::<<Bar>>",
-            "Object::<Object>::<<Object>>",
-            "BasicObject::<BasicObject>::<<BasicObject>>",
-            "Class::<Class>",
-            "Module::<Module>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
-fn singleton_ancestors_for_modules() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Qux; end
-        module Zip; end
-        class Bar; end
-
-        module Baz
-          extend Foo
-
-          class << self
-            include Qux
-
-            class << self
-              include Zip
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Baz::<Baz>",
-        ["Baz::<Baz>", "Qux", "Foo", "Module", "Object", "Kernel", "BasicObject"]
-    );
-    assert_ancestors_eq!(
-        context,
-        "Baz::<Baz>::<<Baz>>",
-        [
-            "Baz::<Baz>::<<Baz>>",
-            "Zip",
-            "Module::<Module>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
-fn singleton_ancestors_with_inherited_parent_modules() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Qux; end
-        class Bar
-          class << self
-            include Foo
-            prepend Qux
-          end
-        end
-
-        class Baz < Bar
-          class << self
-            class << self
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Bar::<Bar>",
-        [
-            "Qux",
-            "Bar::<Bar>",
-            "Foo",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-
-    assert_ancestors_eq!(
-        context,
-        "Baz::<Baz>",
-        [
-            "Baz::<Baz>",
-            "Qux",
-            "Bar::<Bar>",
-            "Foo",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-    assert_ancestors_eq!(
-        context,
-        "Baz::<Baz>::<<Baz>>",
-        [
-            "Baz::<Baz>::<<Baz>>",
-            "Bar::<Bar>::<<Bar>>",
-            "Object::<Object>::<<Object>>",
-            "BasicObject::<BasicObject>::<<BasicObject>>",
-            "Class::<Class>",
-            "Module::<Module>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
     );
 }
 
@@ -4262,133 +4393,6 @@ fn qualified_name_inside_nesting_resolves_to_top_level() {
     assert_declaration_exists!(context, "Bar::Baz");
     assert_members_eq!(context, "Bar::Baz", vec!["qux()"]);
     assert_declaration_does_not_exist!(context, "Foo::Bar");
-}
-
-#[test]
-fn singleton_ancestor_chain_cascades_through_intermediate_class() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        r"
-        class Foo
-          def self.foo; end
-        end
-        class Bar < Foo
-        end
-        class Baz < Bar
-          def self.baz; end
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_ancestors_eq!(
-        context,
-        "Baz::<Baz>",
-        [
-            "Baz::<Baz>",
-            "Bar::<Bar>",
-            "Foo::<Foo>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
-fn extend_creates_singleton_class() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        "
-        module Bar; end
-
-        class Foo
-          extend Bar
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_declaration_exists!(context, "Foo::<Foo>");
-    assert_ancestors_eq!(
-        context,
-        "Foo::<Foo>",
-        [
-            "Foo::<Foo>",
-            "Bar",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
-fn extend_creates_singleton_class_with_existing_singleton_method() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        "
-        module Bar; end
-
-        class Foo
-          extend Bar
-
-          def self.baz; end
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_declaration_exists!(context, "Foo::<Foo>");
-    assert_ancestors_eq!(
-        context,
-        "Foo::<Foo>",
-        [
-            "Foo::<Foo>",
-            "Bar",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
-}
-
-#[test]
-fn extend_creates_singleton_class_on_module() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        "
-        module Bar; end
-
-        module Foo
-          extend Bar
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_declaration_exists!(context, "Foo::<Foo>");
-    assert_ancestors_eq!(
-        context,
-        "Foo::<Foo>",
-        ["Foo::<Foo>", "Bar", "Module", "Object", "Kernel", "BasicObject"]
-    );
 }
 
 #[test]
