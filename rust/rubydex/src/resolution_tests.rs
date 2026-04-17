@@ -1489,6 +1489,321 @@ mod include_tests {
     }
 }
 
+mod prepend_tests {
+    use super::*;
+
+    #[test]
+    fn resolving_constant_references_involved_in_prepends() {
+        let mut context = GraphTest::new();
+
+        // To linearize the ancestors of `Bar`, we need to resolve `Foo` first. However, during that resolution, we need
+        // to check `Bar`'s ancestor chain before checking the top level (which is where we'll find `Foo`). In these
+        // scenarios, we need to realize the dependency and skip ancestors
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              prepend Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
+    }
+
+    #[test]
+    fn resolving_prepend_using_inherited_constant() {
+        let mut context = GraphTest::new();
+        // Prepending `Foo` makes `Bar` available, which we can then prepend as well. This requires resolving constants
+        // with partially linearized ancestors
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+            end
+            class Baz
+              prepend Foo
+              prepend Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Baz",
+            ["Foo::Bar", "Foo", "Baz", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn linearizing_prepended_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              prepend Foo
+            end
+            class Baz
+              prepend Bar
+            end
+            class Qux < Baz; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo"]);
+        assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
+        assert_ancestors_eq!(
+            context,
+            "Qux",
+            ["Qux", "Foo", "Bar", "Baz", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn prepend_on_dynamic_namespace_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module B; end
+            A = Struct.new do
+              prepend B
+            end
+
+            C = Class.new do
+              prepend B
+            end
+
+            D = Module.new do
+              prepend B
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "B", ["B"]);
+        // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
+        //assert_ancestors_eq!(context, "A", Vec::<&str>::new());
+        assert_ancestors_eq!(context, "C", ["B", "C", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(context, "D", ["B", "D"]);
+    }
+
+    #[test]
+    fn prepends_track_descendants() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              prepend Foo
+            end
+            class Baz
+              prepend Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_descendants!(context, "Foo", ["Bar", "Baz"]);
+        assert_descendants!(context, "Bar", ["Baz"]);
+    }
+
+    #[test]
+    fn cyclic_prepend() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              prepend Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo"]);
+    }
+
+    #[test]
+    fn duplicate_prepends() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+            end
+
+            module Bar
+              prepend Foo
+              prepend Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
+    }
+
+    #[test]
+    fn indirect_duplicate_prepends() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+
+            module B
+              prepend A
+            end
+
+            module C
+              prepend A
+            end
+
+            module Foo
+              prepend B
+              prepend C
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "A", ["A"]);
+        assert_ancestors_eq!(context, "B", ["A", "B"]);
+        assert_ancestors_eq!(context, "C", ["A", "C"]);
+        assert_ancestors_eq!(context, "Foo", ["A", "C", "B", "Foo"]);
+    }
+
+    #[test]
+    fn multiple_mixins_in_same_prepend() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+            module B; end
+
+            class Foo
+              prepend A, B
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["A", "B", "Foo", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn prepends_involving_parent_scopes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              module B
+                module C; end
+              end
+            end
+
+            module D
+              prepend A::B::C
+            end
+
+            module Foo
+              prepend D
+              prepend A::B::C
+            end
+
+            module Bar
+              prepend A::B::C
+              prepend D
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["A::B::C", "D", "Foo"]);
+        assert_ancestors_eq!(context, "Bar", ["A::B::C", "D", "Bar"]);
+    }
+
+    #[test]
+    fn duplicate_prepends_in_parents() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+
+            module B
+              prepend A
+            end
+
+            class Parent
+              prepend B
+            end
+
+            class Child < Parent
+              prepend B
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Child",
+            ["A", "B", "Child", "A", "B", "Parent", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn prepended_modules_involved_in_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+            end
+
+            module Baz
+              prepend Foo
+
+              class Bar::Qux
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::Bar", ["Qux"]);
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
+
+        assert_no_members!(context, "Foo::Bar::Qux");
+        assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -2333,317 +2648,6 @@ fn resolving_global_variable_alias() {
         "Object",
         ["$bar", "$foo", "BasicObject", "Class", "Kernel", "Module", "Object"]
     );
-}
-
-#[test]
-fn resolving_constant_references_involved_in_prepends() {
-    let mut context = GraphTest::new();
-
-    // To linearize the ancestors of `Bar`, we need to resolve `Foo` first. However, during that resolution, we need
-    // to check `Bar`'s ancestor chain before checking the top level (which is where we'll find `Foo`). In these
-    // scenarios, we need to realize the dependency and skip ancestors
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Bar
-          prepend Foo
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
-}
-
-#[test]
-fn resolving_prepend_using_inherited_constant() {
-    let mut context = GraphTest::new();
-    // Prepending `Foo` makes `Bar` available, which we can then prepend as well. This requires resolving constants
-    // with partially linearized ancestors
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          module Bar; end
-        end
-        class Baz
-          prepend Foo
-          prepend Bar
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Baz",
-        ["Foo::Bar", "Foo", "Baz", "Object", "Kernel", "BasicObject"]
-    );
-}
-
-#[test]
-fn linearizing_prepended_modules() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Bar
-          prepend Foo
-        end
-        class Baz
-          prepend Bar
-        end
-        class Qux < Baz; end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["Foo"]);
-    assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
-    assert_ancestors_eq!(
-        context,
-        "Qux",
-        ["Qux", "Foo", "Bar", "Baz", "Object", "Kernel", "BasicObject"]
-    );
-}
-
-#[test]
-fn prepend_on_dynamic_namespace_definitions() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module B; end
-        A = Struct.new do
-          prepend B
-        end
-
-        C = Class.new do
-          prepend B
-        end
-
-        D = Module.new do
-          prepend B
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "B", ["B"]);
-    // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
-    //assert_ancestors_eq!(context, "A", Vec::<&str>::new());
-    assert_ancestors_eq!(context, "C", ["B", "C", "Object", "Kernel", "BasicObject"]);
-    assert_ancestors_eq!(context, "D", ["B", "D"]);
-}
-
-#[test]
-fn prepends_track_descendants() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Bar
-          prepend Foo
-        end
-        class Baz
-          prepend Bar
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_descendants!(context, "Foo", ["Bar", "Baz"]);
-    assert_descendants!(context, "Bar", ["Baz"]);
-}
-
-#[test]
-fn cyclic_prepend() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          prepend Foo
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["Foo"]);
-}
-
-#[test]
-fn duplicate_prepends() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-        end
-
-        module Bar
-          prepend Foo
-          prepend Foo
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
-}
-
-#[test]
-fn indirect_duplicate_prepends() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-
-        module B
-          prepend A
-        end
-
-        module C
-          prepend A
-        end
-
-        module Foo
-          prepend B
-          prepend C
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "A", ["A"]);
-    assert_ancestors_eq!(context, "B", ["A", "B"]);
-    assert_ancestors_eq!(context, "C", ["A", "C"]);
-    assert_ancestors_eq!(context, "Foo", ["A", "C", "B", "Foo"]);
-}
-
-#[test]
-fn multiple_mixins_in_same_prepend() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-        module B; end
-
-        class Foo
-          prepend A, B
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["A", "B", "Foo", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn prepends_involving_parent_scopes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A
-          module B
-            module C; end
-          end
-        end
-
-        module D
-          prepend A::B::C
-        end
-
-        module Foo
-          prepend D
-          prepend A::B::C
-        end
-
-        module Bar
-          prepend A::B::C
-          prepend D
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["A::B::C", "D", "Foo"]);
-    assert_ancestors_eq!(context, "Bar", ["A::B::C", "D", "Bar"]);
-}
-
-#[test]
-fn duplicate_prepends_in_parents() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-
-        module B
-          prepend A
-        end
-
-        class Parent
-          prepend B
-        end
-
-        class Child < Parent
-          prepend B
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Child",
-        ["A", "B", "Child", "A", "B", "Parent", "Object", "Kernel", "BasicObject"]
-    );
-}
-
-#[test]
-fn prepended_modules_involved_in_definitions() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          module Bar; end
-        end
-
-        module Baz
-          prepend Foo
-
-          class Bar::Qux
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo::Bar", ["Qux"]);
-    assert_owner_eq!(context, "Foo::Bar", "Foo");
-
-    assert_no_members!(context, "Foo::Bar::Qux");
-    assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
 }
 
 #[test]
