@@ -14,7 +14,7 @@ jobs:
     name: "Cross compile the gem on different ruby versions"
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm"]
+        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
     runs-on: "${{ matrix.os }}"
     env:
       RELEASE: "true"
@@ -38,7 +38,7 @@ jobs:
     needs: compile
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm"]
+        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
         rubies: ["3.2", "3.3", "3.4", "4.0"]
         type: ["cross", "native"]
     runs-on: "${{ matrix.os }}"
@@ -55,12 +55,12 @@ jobs:
         with:
           step: "test_${{ matrix.type }}"
   install:
-    timeout-minutes: 5
+    timeout-minutes: 10
     name: "Verify the gem can be installed"
     needs: test
     strategy:
       matrix:
-        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm"]
+        os: ["macos-latest", "ubuntu-22.04", "ubuntu-22.04-arm", "windows-latest"]
     runs-on: "${{ matrix.os }}"
     steps:
       - name: "Setup Ruby"

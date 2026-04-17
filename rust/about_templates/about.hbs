@@ -53,6 +53,8 @@
             {{#each overview}}
             <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
             {{/each}}
+            <li><a href="#mingw-w64-toolchain">MinGW-w64 toolchain and related libraries for Windows precompiled
+                    builds</a></li>
         </ul>
 
         <h2>All license text:</h2>
@@ -71,6 +73,7 @@
                 <pre class="license-text">{{text}}</pre>
             </li>
             {{/each}}
+            {{> mingw_licenses}}
         </ul>
     </main>
 </body>

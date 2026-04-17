@@ -38,6 +38,13 @@ end
 append_cflags("-Werror=unused-but-set-variable")
 append_cflags("-Werror=implicit-function-declaration")
 
+# There's an error on Windows with function pointer types not matching. This has been fixed and backported in Ruby, but
+# it seems that RubyInstaller sometimes picks an older patch version on CI and it breaks compilation. This isn't
+# actually a problem, so we're ignoring it temporarily only on Windows
+if Gem.win_platform? && RUBY_VERSION < "4.0"
+  append_cflags("-Wno-incompatible-pointer-types")
+end
+
 if Gem.win_platform?
   $LDFLAGS << " #{target_dir.join("librubydex_sys.a")}"
 
@@ -115,12 +122,13 @@ MAKEFILE
 if release && system("cargo", "about", "--version", out: File::NULL, err: File::NULL)
   licenses_file = root_dir.join("THIRD_PARTY_LICENSES.html")
   about_config = root_dir.join("about.toml")
-  about_template = root_dir.join("about.hbs")
+  about_templates_dir = root_dir.join("about_templates")
+  template_deps = Dir.glob("#{about_templates_dir}/*.hbs").join(" ")
 
   new_makefile.gsub!(".rust_built: $(RUST_SRCS)", <<~MAKEFILE.chomp)
-    #{licenses_file}: #{about_config} #{about_template}
+    #{licenses_file}: #{about_config} #{template_deps}
     \t$(Q)$(RM) #{licenses_file}
-    \tcargo about generate #{about_template} --manifest-path #{root_dir.join("Cargo.toml")} --workspace > #{licenses_file}
+    \tcargo about generate #{about_templates_dir} --name about --manifest-path #{root_dir.join("Cargo.toml")} --workspace > #{licenses_file}
     \t$(COPY) #{licenses_file} #{gem_dir}
 
     .rust_built: $(RUST_SRCS) #{licenses_file}
