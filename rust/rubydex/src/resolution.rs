@@ -6515,3 +6515,386 @@ mod todo_tests {
         assert_members_eq!(context, "Foo::<Foo>", ["bar()", "baz()"]);
     }
 }
+
+#[cfg(test)]
+mod visibility {
+    use crate::test_utils::GraphTest;
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_method_private() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar
+              end
+
+              private :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing method modifies the visibility of the method
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_method_public() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              private def bar
+              end
+
+              public :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing method modifies the visibility of the method
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_method_protected() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar
+              end
+
+              protected :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing method modifies the visibility of the method
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_inherited_method_protected() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent
+              def bar
+              end
+            end
+
+            class Child < Parent
+              protected :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an inherited method creates a new method entry on the child
+        // with the modified visibility, but does not change the original one
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_inherited_method_private() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent
+              def bar
+              end
+            end
+
+            class Child < Parent
+              private :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an inherited method creates a new method entry on the child
+        // with the modified visibility, but does not change the original one
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_class_method_private() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def self.bar
+              end
+
+              private_class_method :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing class method modifies the visibility of the method
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_class_method_public() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              private_class_method def self.bar; end
+
+              public_class_method :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing class method modifies the visibility of the method
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_inherited_class_method_private() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent
+              def self.bar
+              end
+            end
+
+            class Child < Parent
+              private_class_method :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an inherited class method creates a new method entry on the
+        // child's singleton class with the modified visibility, but does not change the original one
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_inherited_class_method_public() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Parent
+              class << self
+                private def bar
+                end
+              end
+            end
+
+            class Child < Parent
+              public_class_method :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an inherited class method creates a new method entry on the
+        // child's singleton class with the modified visibility, but does not change the original one
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_constant_private() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 1
+
+              private_constant :CONST
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing constant modifies the visibility of the constant
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_constant_public() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              CONST = 1
+
+              public_constant :CONST
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing constant modifies the visibility of the constant
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_constant_private_with_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              FOO = 2
+            end
+
+            class Bar
+              Foo.private_constant :FOO
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing constant modifies the visibility of the constant.
+        // if there is a receiver, it is resolved and applied to the proper target
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn making_constant_public_with_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              FOO = 2
+            end
+
+            class Bar
+              Foo.public_constant :FOO
+            end
+            "
+        });
+        context.resolve();
+
+        // changing the visibility of an existing constant modifies the visibility of the constant.
+        // if there is a receiver, it is resolved and applied to the proper target
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn cannot_make_private_through_lexical_scope() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              FOO = 2
+
+              class Bar
+                private_constant :FOO
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // the target of private_constant is scoped only to self.
+        // This results in a diagnostic saying FOO does not exist
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn cannot_make_public_through_lexical_scope() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              FOO = 2
+
+              private_constant :FOO
+
+              class Bar
+                public_constant :FOO
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // the target of public_constant is scoped only to self.
+        // This results in a diagnostic saying FOO does not exist
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn cannot_make_private_through_inheritance() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              FOO = 2
+            end
+
+            class Bar
+              include Foo
+
+              private_constant :FOO
+            end
+            "
+        });
+        context.resolve();
+
+        // the target of private_constant is scoped only to self.
+        // This results in a diagnostic saying FOO does not exist
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn cannot_make_public_through_inheritance() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              FOO = 2
+
+              private_constant :FOO
+            end
+
+            class Bar
+              include Foo
+
+              public_constant :FOO
+            end
+            "
+        });
+        context.resolve();
+
+        // the target of public_constant is scoped only to self.
+        // This results in a diagnostic saying FOO does not exist
+    }
+
+    #[test]
+    #[ignore = "not yet implemented"]
+    fn make_module_function_through_inheritance() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              def bar
+              end
+            end
+
+            module Baz
+              include Foo
+
+              module_function :bar
+            end
+            "
+        });
+        context.resolve();
+
+        // module_function :bar makes the instance method private and creates a public singleton
+        // method on Baz. The original Foo#bar is unchanged.
+    }
+}
