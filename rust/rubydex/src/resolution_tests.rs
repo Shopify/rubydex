@@ -1934,6 +1934,199 @@ mod mixin_dedup_tests {
     }
 }
 
+mod object_ancestors_tests {
+    use super::*;
+
+    #[test]
+    fn ancestors_with_missing_core() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Bar; end
+
+            class Foo
+              include Bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
+        assert_descendants!(context, "Bar", ["Foo"]);
+    }
+
+    #[test]
+    fn ancestor_patches_to_object_are_correctly_processed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Foo; end
+
+            module Kernel
+              include Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Object", ["Object", "Kernel", "Foo", "BasicObject"]);
+    }
+
+    #[test]
+    fn basic_object_ancestors() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo < BasicObject
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "BasicObject"]);
+    }
+
+    #[test]
+    fn basic_object_ancestors_including_kernel() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo < BasicObject
+              include Kernel
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn constant_resolution_inside_basic_object() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class String; end
+
+            class Foo < BasicObject
+              String
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_unresolved!(context, "String");
+    }
+
+    #[test]
+    fn top_level_scope_searches_object_ancestors() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Kernel
+              FOUND_ME = true
+            end
+
+            class Object
+              include Kernel
+            end
+
+            class Foo
+              ::FOUND_ME
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:10:5-10:13");
+    }
+
+    #[test]
+    fn top_level_script_constant_resolution_searches_object_ancestors() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Kernel
+              FOUND_ME = true
+            end
+
+            class Object
+              include Kernel
+            end
+
+            FOUND_ME
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:9:1-9:9");
+    }
+
+    #[test]
+    fn module_own_ancestors_take_priority_over_object_fallback() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module MyConstants
+              CONST = 'mine'
+            end
+
+            module Kernel
+              CONST = 'kernel'
+            end
+
+            class Object
+              include Kernel
+            end
+
+            module Foo
+              include MyConstants
+              CONST
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_constant_reference_to!(context, "MyConstants::CONST", "file:///foo.rb:15:3-15:8");
+    }
+
+    #[test]
+    fn object_inherited_constant_inside_module() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Kernel
+              FOUND_ME = true
+            end
+
+            class Object
+              include Kernel
+            end
+
+            module Foo
+              # This is valid because of Object inheritance
+              FOUND_ME
+            end
+
+            Foo::FOUND_ME # this is not
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:11:3-11:11");
+        assert_constant_reference_unresolved!(context, "FOUND_ME", "file:///foo.rb:14:6-14:14");
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -4105,195 +4298,6 @@ fn singleton_ancestor_chain_cascades_through_intermediate_class() {
             "BasicObject"
         ]
     );
-}
-
-#[test]
-fn ancestors_with_missing_core() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        "
-        module Bar; end
-
-        class Foo
-          include Bar
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
-    assert_descendants!(context, "Bar", ["Foo"]);
-}
-
-#[test]
-fn ancestor_patches_to_object_are_correctly_processed() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        "
-        module Foo; end
-
-        module Kernel
-          include Foo
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_ancestors_eq!(context, "Object", ["Object", "Kernel", "Foo", "BasicObject"]);
-}
-
-#[test]
-fn basic_object_ancestors() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        "
-        class Foo < BasicObject
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_ancestors_eq!(context, "Foo", ["Foo", "BasicObject"]);
-}
-
-#[test]
-fn basic_object_ancestors_including_kernel() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        "
-        class Foo < BasicObject
-          include Kernel
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_ancestors_eq!(context, "Foo", ["Foo", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn constant_resolution_inside_basic_object() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class String; end
-
-        class Foo < BasicObject
-          String
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-    assert_constant_reference_unresolved!(context, "String");
-}
-
-#[test]
-fn top_level_scope_searches_object_ancestors() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Kernel
-          FOUND_ME = true
-        end
-
-        class Object
-          include Kernel
-        end
-
-        class Foo
-          ::FOUND_ME
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-    assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:10:5-10:13");
-}
-
-#[test]
-fn top_level_script_constant_resolution_searches_object_ancestors() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Kernel
-          FOUND_ME = true
-        end
-
-        class Object
-          include Kernel
-        end
-
-        FOUND_ME
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-    assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:9:1-9:9");
-}
-
-#[test]
-fn module_own_ancestors_take_priority_over_object_fallback() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module MyConstants
-          CONST = 'mine'
-        end
-
-        module Kernel
-          CONST = 'kernel'
-        end
-
-        class Object
-          include Kernel
-        end
-
-        module Foo
-          include MyConstants
-          CONST
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-    assert_constant_reference_to!(context, "MyConstants::CONST", "file:///foo.rb:15:3-15:8");
-}
-
-#[test]
-fn object_inherited_constant_inside_module() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Kernel
-          FOUND_ME = true
-        end
-
-        class Object
-          include Kernel
-        end
-
-        module Foo
-          # This is valid because of Object inheritance
-          FOUND_ME
-        end
-
-        Foo::FOUND_ME # this is not
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-    assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:11:3-11:11");
-    assert_constant_reference_unresolved!(context, "FOUND_ME", "file:///foo.rb:14:6-14:14");
 }
 
 #[test]
