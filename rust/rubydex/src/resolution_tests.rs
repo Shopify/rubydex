@@ -2740,6 +2740,271 @@ mod method_alias_tests {
     }
 }
 
+mod variable_tests {
+    use super::*;
+
+    #[test]
+    fn resolution_for_class_variable_in_nested_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+                @@bar = 123
+
+                class << self
+                  @@baz = 456
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["@@bar", "@@baz"]);
+        assert_owner_eq!(context, "Foo", "Object");
+    }
+
+    #[test]
+    fn resolution_for_class_variable_in_method() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def bar
+                @@baz = 456
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo", ["@@baz", "bar()"]);
+    }
+
+    #[test]
+    fn resolution_for_class_variable_only_follows_lexical_nesting() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar
+              def Foo.demo
+                @@cvar1 = 1
+              end
+
+              class << Foo
+                def demo2
+                  @@cvar2 = 1
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_no_members!(context, "Foo");
+        assert_members_eq!(context, "Bar", ["@@cvar1", "@@cvar2"]);
+    }
+
+    #[test]
+    fn resolution_for_class_variable_at_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            @@var = 123
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // TODO: this should push an error diagnostic
+        assert_declaration_does_not_exist!(context, "Object::@@var");
+    }
+
+    #[test]
+    fn resolution_for_instance_and_class_instance_variables() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              @foo = 0
+
+              def initialize
+                @bar = 1
+              end
+
+              def self.baz
+                @baz = 2
+              end
+
+              class << self
+                def qux
+                  @qux = 3
+                end
+
+                def self.nested
+                  @nested = 4
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_instance_variables_eq!(context, "Foo", ["@bar"]);
+        // @qux in `class << self; def qux` - self is Foo when called, so @qux belongs to Foo's singleton class
+        assert_instance_variables_eq!(context, "Foo::<Foo>", ["@baz", "@foo", "@qux"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", ["@nested"]);
+    }
+
+    #[test]
+    fn resolution_for_instance_variables_with_dynamic_method_owner() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+
+            class Bar
+              def Foo.bar
+                @foo = 0
+              end
+
+              class << Foo
+                def Bar.baz
+                  @baz = 1
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_instance_variables_eq!(context, "Foo::<Foo>", ["@foo"]);
+        assert_instance_variables_eq!(context, "Bar::<Bar>", ["@baz"]);
+    }
+
+    #[test]
+    fn resolution_for_class_instance_variable_in_compact_namespace() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Bar; end
+
+            class Foo
+              class Bar::Baz
+                @baz = 1
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
+        assert_instance_variables_eq!(context, "Bar::Baz::<Baz>", ["@baz"]);
+    }
+
+    #[test]
+    fn resolution_for_instance_variable_in_singleton_class_body() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              class << self
+                @bar = 1
+
+                class << self
+                  @baz = 2
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", ["@bar"]);
+        assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", ["@baz"]);
+    }
+
+    #[test]
+    fn resolution_for_instance_variable_in_constant_receiver_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo; end
+
+            def Foo.bar
+              @bar = 1
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+        assert_instance_variables_eq!(context, "Foo::<Foo>", ["@bar"]);
+    }
+
+    #[test]
+    fn resolution_for_top_level_instance_variable() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            @foo = 0
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Top-level instance variables belong to `<main>`, not `Object`.
+        // We can't represent `<main>` yet, so no declaration is created.
+        assert_declaration_does_not_exist!(context, "Object::@foo");
+    }
+
+    #[test]
+    fn resolution_for_instance_variable_with_unresolved_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def foo.bar
+                @baz = 0
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (2:3-4:6)",]
+        );
+
+        // Instance variable in method with unresolved receiver should not create a declaration
+        assert_declaration_does_not_exist!(context, "Object::@baz");
+        assert_declaration_does_not_exist!(context, "Foo::@baz");
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -3098,92 +3363,6 @@ fn singleton_class_scope_does_not_over_resolve_unknown_constant() {
 }
 
 #[test]
-fn resolution_for_class_variable_in_nested_singleton_class() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          class << self
-            @@bar = 123
-
-            class << self
-              @@baz = 456
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo", ["@@bar", "@@baz"]);
-    assert_owner_eq!(context, "Foo", "Object");
-}
-
-#[test]
-fn resolution_for_class_variable_in_method() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def bar
-            @@baz = 456
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo", ["@@baz", "bar()"]);
-}
-
-#[test]
-fn resolution_for_class_variable_only_follows_lexical_nesting() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo; end
-        class Bar
-          def Foo.demo
-            @@cvar1 = 1
-          end
-
-          class << Foo
-            def demo2
-              @@cvar2 = 1
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_no_members!(context, "Foo");
-    assert_members_eq!(context, "Bar", ["@@cvar1", "@@cvar2"]);
-}
-
-#[test]
-fn resolution_for_class_variable_at_top_level() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        @@var = 123
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // TODO: this should push an error diagnostic
-    assert_declaration_does_not_exist!(context, "Object::@@var");
-}
-
-#[test]
 fn singleton_class_is_set() {
     let mut context = GraphTest::new();
     context.index_uri("file:///foo.rb", {
@@ -3201,181 +3380,6 @@ fn singleton_class_is_set() {
 
     assert_declaration_exists!(context, "Foo::<Foo>");
     assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
-}
-
-#[test]
-fn resolution_for_instance_and_class_instance_variables() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          @foo = 0
-
-          def initialize
-            @bar = 1
-          end
-
-          def self.baz
-            @baz = 2
-          end
-
-          class << self
-            def qux
-              @qux = 3
-            end
-
-            def self.nested
-              @nested = 4
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_instance_variables_eq!(context, "Foo", ["@bar"]);
-    // @qux in `class << self; def qux` - self is Foo when called, so @qux belongs to Foo's singleton class
-    assert_instance_variables_eq!(context, "Foo::<Foo>", ["@baz", "@foo", "@qux"]);
-    assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", ["@nested"]);
-}
-
-#[test]
-fn resolution_for_instance_variables_with_dynamic_method_owner() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-        end
-
-        class Bar
-          def Foo.bar
-            @foo = 0
-          end
-
-          class << Foo
-            def Bar.baz
-              @baz = 1
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_instance_variables_eq!(context, "Foo::<Foo>", ["@foo"]);
-    assert_instance_variables_eq!(context, "Bar::<Bar>", ["@baz"]);
-}
-
-#[test]
-fn resolution_for_class_instance_variable_in_compact_namespace() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Bar; end
-
-        class Foo
-          class Bar::Baz
-            @baz = 1
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // The class is `Bar::Baz`, so its singleton class is `Bar::Baz::<Baz>`
-    assert_instance_variables_eq!(context, "Bar::Baz::<Baz>", ["@baz"]);
-}
-
-#[test]
-fn resolution_for_instance_variable_in_singleton_class_body() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          class << self
-            @bar = 1
-
-            class << self
-              @baz = 2
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>", ["@bar"]);
-    assert_instance_variables_eq!(context, "Foo::<Foo>::<<Foo>>::<<<Foo>>>", ["@baz"]);
-}
-
-#[test]
-fn resolution_for_instance_variable_in_constant_receiver_method() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        r"
-        class Foo; end
-
-        def Foo.bar
-          @bar = 1
-        end
-        ",
-    );
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_declaration_exists!(context, "Foo::<Foo>#bar()");
-    assert_instance_variables_eq!(context, "Foo::<Foo>", ["@bar"]);
-}
-
-#[test]
-fn resolution_for_top_level_instance_variable() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        @foo = 0
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    // Top-level instance variables belong to `<main>`, not `Object`.
-    // We can't represent `<main>` yet, so no declaration is created.
-    assert_declaration_does_not_exist!(context, "Object::@foo");
-}
-
-#[test]
-fn resolution_for_instance_variable_with_unresolved_receiver() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        class Foo
-          def foo.bar
-            @baz = 0
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_diagnostics_eq!(
-        &context,
-        ["dynamic-singleton-definition: Dynamic receiver for singleton method definition (2:3-4:6)",]
-    );
-
-    // Instance variable in method with unresolved receiver should not create a declaration
-    assert_declaration_does_not_exist!(context, "Object::@baz");
-    assert_declaration_does_not_exist!(context, "Foo::@baz");
 }
 
 #[test]
