@@ -10,106 +10,137 @@ use crate::{
     test_utils::GraphTest,
 };
 
-#[test]
-fn resolving_top_level_references() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///bar.rb", {
-        r"
-        class Bar; end
+mod constant_resolution_tests {
+    use super::*;
 
-        ::Bar
-        Bar
-        "
-    });
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          ::Bar
-        end
-        "
-    });
-    context.resolve();
+    #[test]
+    fn resolving_top_level_references() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Bar; end
 
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+            ::Bar
+            Bar
+            "
+        });
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              ::Bar
+            end
+            "
+        });
+        context.resolve();
 
-    assert_constant_reference_to!(context, "Bar", "file:///bar.rb:3:3-3:6");
-    assert_constant_reference_to!(context, "Bar", "file:///bar.rb:4:1-4:4");
-    assert_constant_reference_to!(context, "Bar", "file:///foo.rb:2:5-2:8");
-}
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-#[test]
-fn resolving_nested_reference() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///bar.rb", {
-        r"
-        module Foo
-          CONST = 123
+        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:3:3-3:6");
+        assert_constant_reference_to!(context, "Bar", "file:///bar.rb:4:1-4:4");
+        assert_constant_reference_to!(context, "Bar", "file:///foo.rb:2:5-2:8");
+    }
 
-          class Bar
-            CONST
-            Foo::CONST
-          end
-        end
-        "
-    });
-    context.resolve();
+    #[test]
+    fn resolving_nested_reference() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            module Foo
+              CONST = 123
 
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:5:5-5:10");
-    assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:6:10-6:15");
-}
+              class Bar
+                CONST
+                Foo::CONST
+              end
+            end
+            "
+        });
+        context.resolve();
 
-#[test]
-fn resolving_nested_reference_that_refer_to_top_level_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///bar.rb", {
-        r"
-        class Baz; end
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:5:5-5:10");
+        assert_constant_reference_to!(context, "Foo::CONST", "file:///bar.rb:6:10-6:15");
+    }
 
-        module Foo
-          class Bar
-            Baz
-          end
-        end
-        "
-    });
-    context.resolve();
+    #[test]
+    fn resolving_nested_reference_that_refer_to_top_level_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            class Baz; end
 
-    assert_no_diagnostics!(&context);
+            module Foo
+              class Bar
+                Baz
+              end
+            end
+            "
+        });
+        context.resolve();
 
-    assert_constant_reference_to!(context, "Baz", "file:///bar.rb:5:5-5:8");
-}
+        assert_no_diagnostics!(&context);
 
-#[test]
-fn resolving_constant_path_references_at_top_level() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///bar.rb", {
-        r"
-        module Foo
-          class Bar; end
-        end
+        assert_constant_reference_to!(context, "Baz", "file:///bar.rb:5:5-5:8");
+    }
 
-        Foo::Bar
-        "
-    });
-    context.resolve();
+    #[test]
+    fn resolving_constant_path_references_at_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", {
+            r"
+            module Foo
+              class Bar; end
+            end
 
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+            Foo::Bar
+            "
+        });
+        context.resolve();
 
-    assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:5:6-5:9");
-}
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
 
-#[test]
-fn resolving_reference_for_non_existing_declaration() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-          Foo
-        "
-    });
-    context.resolve();
+        assert_constant_reference_to!(context, "Foo::Bar", "file:///bar.rb:5:6-5:9");
+    }
 
-    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
-    assert_constant_reference_unresolved!(context, "Foo");
+    #[test]
+    fn resolving_reference_for_non_existing_declaration() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+              Foo
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+        assert_constant_reference_unresolved!(context, "Foo");
+    }
+
+    #[test]
+    fn resolution_for_top_level_references() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              class ::Bar
+                class Baz
+                end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_no_members!(context, "Foo");
+        assert_owner_eq!(context, "Foo", "Object");
+
+        assert_members_eq!(context, "Bar", ["Baz"]);
+        assert_owner_eq!(context, "Bar", "Object");
+
+        assert_no_members!(context, "Bar::Baz");
+        assert_owner_eq!(context, "Bar::Baz", "Bar");
+    }
 }
 
 #[test]
@@ -192,33 +223,6 @@ fn resolution_for_ambiguous_namespace_definitions() {
 
     assert_members_eq!(context, "Bar", ["Baz"]);
     assert_owner_eq!(context, "Bar", "Object");
-}
-
-#[test]
-fn resolution_for_top_level_references() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          class ::Bar
-            class Baz
-            end
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_no_members!(context, "Foo");
-    assert_owner_eq!(context, "Foo", "Object");
-
-    assert_members_eq!(context, "Bar", ["Baz"]);
-    assert_owner_eq!(context, "Bar", "Object");
-
-    assert_no_members!(context, "Bar::Baz");
-    assert_owner_eq!(context, "Bar::Baz", "Bar");
 }
 
 #[test]
