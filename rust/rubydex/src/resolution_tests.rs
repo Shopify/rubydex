@@ -1180,6 +1180,315 @@ mod superclass_tests {
     }
 }
 
+mod include_tests {
+    use super::*;
+
+    #[test]
+    fn resolving_constant_references_involved_in_includes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              include Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo"]);
+    }
+
+    #[test]
+    fn resolving_include_using_inherited_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+            end
+            class Baz
+              include Foo
+              include Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Baz",
+            ["Baz", "Foo::Bar", "Foo", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn linearizing_included_modules() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              prepend Foo
+            end
+            class Baz
+              prepend Bar
+            end
+            class Qux < Baz; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo"]);
+        assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
+        assert_ancestors_eq!(
+            context,
+            "Qux",
+            ["Qux", "Foo", "Bar", "Baz", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn include_on_dynamic_namespace_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module B; end
+            A = Struct.new do
+              include B
+            end
+
+            C = Class.new do
+              include B
+            end
+
+            D = Module.new do
+              include B
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "B", ["B"]);
+        // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
+        //assert_ancestors_eq!(context, "A", Vec::<&str>::new());
+        assert_ancestors_eq!(context, "C", ["C", "B", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(context, "D", ["D", "B"]);
+    }
+
+    #[test]
+    fn cyclic_include() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              include Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo"]);
+    }
+
+    #[test]
+    fn duplicate_includes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+            end
+
+            module Bar
+              include Foo
+              include Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Bar", ["Bar", "Foo"]);
+    }
+
+    #[test]
+    fn indirect_duplicate_includes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+
+            module B
+              include A
+            end
+
+            module C
+              include A
+            end
+
+            module Foo
+              include B
+              include C
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "A", ["A"]);
+        assert_ancestors_eq!(context, "B", ["B", "A"]);
+        assert_ancestors_eq!(context, "C", ["C", "A"]);
+        assert_ancestors_eq!(context, "Foo", ["Foo", "C", "B", "A"]);
+    }
+
+    #[test]
+    fn includes_involving_parent_scopes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A
+              module B
+                module C; end
+              end
+            end
+
+            module D
+              include A::B::C
+            end
+
+            module Foo
+              include D
+              include A::B::C
+            end
+
+            module Bar
+              include A::B::C
+              include D
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "D", "A::B::C"]);
+        assert_ancestors_eq!(context, "Bar", ["Bar", "D", "A::B::C"]);
+    }
+
+    #[test]
+    fn duplicate_includes_in_parents() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+
+            module B
+              include A
+            end
+
+            class Parent
+              include B
+            end
+
+            class Child < Parent
+              include B
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Child",
+            ["Child", "Parent", "B", "A", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn included_modules_involved_in_definitions() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar; end
+            end
+
+            module Baz
+              include Foo
+
+              class Bar::Qux
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_members_eq!(context, "Foo::Bar", ["Qux"]);
+        assert_owner_eq!(context, "Foo::Bar", "Foo");
+
+        assert_no_members!(context, "Foo::Bar::Qux");
+        assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
+    }
+
+    #[test]
+    fn multiple_mixins_in_same_include() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module A; end
+            module B; end
+
+            class Foo
+              include A, B
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "A", "B", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    fn descendants_are_tracked_for_includes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo; end
+            module Bar
+              include Foo
+            end
+            module Baz
+              include Bar
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_descendants!(context, "Bar", ["Baz"]);
+        assert_descendants!(context, "Foo", ["Bar", "Baz"]);
+    }
+}
+
 #[test]
 fn resolution_creates_global_declaration() {
     let mut context = GraphTest::new();
@@ -2338,269 +2647,6 @@ fn prepended_modules_involved_in_definitions() {
 }
 
 #[test]
-fn resolving_constant_references_involved_in_includes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Bar
-          include Foo
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Foo"]);
-}
-
-#[test]
-fn resolving_include_using_inherited_constant() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          module Bar; end
-        end
-        class Baz
-          include Foo
-          include Bar
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Baz",
-        ["Baz", "Foo::Bar", "Foo", "Object", "Kernel", "BasicObject"]
-    );
-}
-
-#[test]
-fn linearizing_included_modules() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Bar
-          prepend Foo
-        end
-        class Baz
-          prepend Bar
-        end
-        class Qux < Baz; end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["Foo"]);
-    assert_ancestors_eq!(context, "Bar", ["Foo", "Bar"]);
-    assert_ancestors_eq!(
-        context,
-        "Qux",
-        ["Qux", "Foo", "Bar", "Baz", "Object", "Kernel", "BasicObject"]
-    );
-}
-
-#[test]
-fn include_on_dynamic_namespace_definitions() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module B; end
-        A = Struct.new do
-          include B
-        end
-
-        C = Class.new do
-          include B
-        end
-
-        D = Module.new do
-          include B
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "B", ["B"]);
-    // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
-    //assert_ancestors_eq!(context, "A", Vec::<&str>::new());
-    assert_ancestors_eq!(context, "C", ["C", "B", "Object", "Kernel", "BasicObject"]);
-    assert_ancestors_eq!(context, "D", ["D", "B"]);
-}
-
-#[test]
-fn cyclic_include() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          include Foo
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["Foo"]);
-}
-
-#[test]
-fn duplicate_includes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-        end
-
-        module Bar
-          include Foo
-          include Foo
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Bar", ["Bar", "Foo"]);
-}
-
-#[test]
-fn indirect_duplicate_includes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-
-        module B
-          include A
-        end
-
-        module C
-          include A
-        end
-
-        module Foo
-          include B
-          include C
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "A", ["A"]);
-    assert_ancestors_eq!(context, "B", ["B", "A"]);
-    assert_ancestors_eq!(context, "C", ["C", "A"]);
-    assert_ancestors_eq!(context, "Foo", ["Foo", "C", "B", "A"]);
-}
-
-#[test]
-fn includes_involving_parent_scopes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A
-          module B
-            module C; end
-          end
-        end
-
-        module D
-          include A::B::C
-        end
-
-        module Foo
-          include D
-          include A::B::C
-        end
-
-        module Bar
-          include A::B::C
-          include D
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["Foo", "D", "A::B::C"]);
-    assert_ancestors_eq!(context, "Bar", ["Bar", "D", "A::B::C"]);
-}
-
-#[test]
-fn duplicate_includes_in_parents() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-
-        module B
-          include A
-        end
-
-        class Parent
-          include B
-        end
-
-        class Child < Parent
-          include B
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(
-        context,
-        "Child",
-        ["Child", "Parent", "B", "A", "Object", "Kernel", "BasicObject"]
-    );
-}
-
-#[test]
-fn included_modules_involved_in_definitions() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo
-          module Bar; end
-        end
-
-        module Baz
-          include Foo
-
-          class Bar::Qux
-          end
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_members_eq!(context, "Foo::Bar", ["Qux"]);
-    assert_owner_eq!(context, "Foo::Bar", "Foo");
-
-    assert_no_members!(context, "Foo::Bar::Qux");
-    assert_owner_eq!(context, "Foo::Bar::Qux", "Foo::Bar");
-}
-
-#[test]
 fn duplicate_includes_and_prepends() {
     let mut context = GraphTest::new();
     context.index_uri("file:///foo.rb", {
@@ -2724,48 +2770,6 @@ fn duplicate_includes_and_prepends_through_parents() {
         "Bar",
         ["Bar", "Parent", "A", "Object", "Kernel", "BasicObject"]
     );
-}
-
-#[test]
-fn multiple_mixins_in_same_include() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module A; end
-        module B; end
-
-        class Foo
-          include A, B
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_ancestors_eq!(context, "Foo", ["Foo", "A", "B", "Object", "Kernel", "BasicObject"]);
-}
-
-#[test]
-fn descendants_are_tracked_for_includes() {
-    let mut context = GraphTest::new();
-    context.index_uri("file:///foo.rb", {
-        r"
-        module Foo; end
-        module Bar
-          include Foo
-        end
-        module Baz
-          include Bar
-        end
-        "
-    });
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-
-    assert_descendants!(context, "Bar", ["Baz"]);
-    assert_descendants!(context, "Foo", ["Bar", "Baz"]);
 }
 
 #[test]
