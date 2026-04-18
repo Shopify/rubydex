@@ -78,6 +78,10 @@ AST to save in the graph
 - `rust/rubydex/src/resolution.rs`: the Resolution stage that computes fully qualified names, creates declarations,
 resolves constant references, and linearizes ancestor chains
 
+Inheritance edges: namespaces store only *immediate* descendants (direct superclass/include/prepend children, plus
+`extend`-via-singleton). For transitive descendants, call `Graph::transitive_descendants(root)` — a BFS iterator over
+the direct-child DAG with dedup. Never add a stored transitive set; it would defeat the memory-bounded invariant.
+
 ### Commands
 
 When necessary, commands can be executed for the Rust code.

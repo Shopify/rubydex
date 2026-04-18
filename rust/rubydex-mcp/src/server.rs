@@ -379,19 +379,19 @@ impl RubydexServer {
     fn get_descendants(&self, Parameters(params): Parameters<GetDescendantsParams>) -> String {
         let state = ensure_graph_ready!(self);
         let graph = state.graph.as_ref().unwrap();
-        let (_, decl) = lookup_declaration!(graph, &params.name);
-        let namespace = require_namespace!(decl, &params.name, "get_descendants");
+        let (decl_id, decl) = lookup_declaration!(graph, &params.name);
+        require_namespace!(decl, &params.name, "get_descendants");
 
         let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(500); // default 50, max 500
         let offset = params.offset.unwrap_or(0);
 
         let (descendants, total) = paginate!(
-            namespace.descendants().iter(),
+            graph.transitive_descendants(decl_id),
             offset,
             limit,
-            |id| graph.declarations().get(id).is_some(),
-            |id| {
-                let desc_decl = graph.declarations().get(id)?;
+            |id: &DeclarationId| graph.declarations().get(id).is_some(),
+            |id: DeclarationId| {
+                let desc_decl = graph.declarations().get(&id)?;
                 Some(serde_json::json!({
                     "name": desc_decl.name(),
                     "kind": desc_decl.kind(),

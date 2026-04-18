@@ -245,9 +245,9 @@ class DeclarationTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal(["Child", "Parent"], graph["Parent"].descendants.map(&:name))
-      assert_equal(["Child", "Foo"], graph["Foo"].descendants.map(&:name))
-      assert_equal(["Child", "Bar"], graph["Bar"].descendants.map(&:name))
+      assert_equal(["Child", "Parent"].sort, graph["Parent"].descendants.map(&:name).sort)
+      assert_equal(["Child", "Foo"].sort, graph["Foo"].descendants.map(&:name).sort)
+      assert_equal(["Child", "Bar"].sort, graph["Bar"].descendants.map(&:name).sort)
     end
   end
 

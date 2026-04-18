@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashSet, VecDeque, hash_map::Entry},
-    hash::BuildHasher,
-};
+use std::collections::{HashSet, VecDeque, hash_map::Entry};
 
 use crate::model::{
     built_in::{BASIC_OBJECT_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
@@ -39,7 +36,6 @@ impl Outcome {
 }
 
 struct LinearizationContext {
-    descendants: IdentityHashSet<DeclarationId>,
     seen_ids: IdentityHashSet<DeclarationId>,
     cyclic: bool,
     partial: bool,
@@ -48,7 +44,6 @@ struct LinearizationContext {
 impl LinearizationContext {
     fn new() -> Self {
         Self {
-            descendants: IdentityHashSet::default(),
             seen_ids: IdentityHashSet::default(),
             cyclic: false,
             partial: false,
@@ -59,7 +54,6 @@ impl LinearizationContext {
     /// the linearization algorithm, regardless of whether we are returning a cached result or a freshly built ancestor
     /// chain
     fn finalize(&mut self, declaration_id: DeclarationId) {
-        self.descendants.remove(&declaration_id);
         self.seen_ids.remove(&declaration_id);
     }
 }
@@ -704,6 +698,18 @@ impl<'a> Resolver<'a> {
         self.linearize_ancestors(declaration_id, &mut context)
     }
 
+    /// Record `child_id` as an immediate descendant of `parent_id`, unless they are
+    /// the same declaration — a namespace is never its own immediate descendant, even
+    /// under cyclic self-inclusion like `module A; include A; end`.
+    fn record_immediate_descendant(&mut self, parent_id: DeclarationId, child_id: DeclarationId) {
+        if parent_id != child_id
+            && let Some(decl) = self.graph.declarations_mut().get_mut(&parent_id)
+            && let Some(ns) = decl.as_namespace_mut()
+        {
+            ns.add_immediate_descendant(child_id);
+        }
+    }
+
     /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
     ///
     /// # Panics
@@ -714,14 +720,10 @@ impl<'a> Resolver<'a> {
         {
             let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
 
-            // Add this declaration to the descendants so that we capture transitive descendant relationships
-            context.descendants.insert(declaration_id);
-
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
             // again
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().clone_ancestors();
-                self.propagate_descendants(&mut context.descendants, &cached);
 
                 context.finalize(declaration_id);
                 return cached;
@@ -744,18 +746,6 @@ impl<'a> Resolver<'a> {
 
                 context.finalize(declaration_id);
                 return estimated_ancestors;
-            }
-
-            // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
-            // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
-            for descendant in &context.descendants {
-                self.graph
-                    .declarations_mut()
-                    .get_mut(&declaration_id)
-                    .unwrap()
-                    .as_namespace_mut()
-                    .unwrap()
-                    .add_descendant(*descendant);
             }
         }
 
@@ -799,7 +789,7 @@ impl<'a> Resolver<'a> {
         }
 
         let (linearized_prepends, linearized_includes) =
-            self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
+            self.linearize_mixins(declaration_id, context, mixins, parent_ancestors.as_ref());
 
         // Build the final list
         let mut ancestors = Vec::new();
@@ -845,17 +835,19 @@ impl<'a> Resolver<'a> {
             Declaration::Namespace(Namespace::Class(_)) => {
                 let definition_ids = declaration.definitions().to_vec();
 
-                Some(match self.linearize_parent_class(&definition_ids, context) {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        context.partial = true;
-                        ids
-                    }
-                })
+                Some(
+                    match self.linearize_parent_class(declaration_id, &definition_ids, context) {
+                        Ancestors::Complete(ids) => ids,
+                        Ancestors::Cyclic(ids) => {
+                            context.cyclic = true;
+                            ids
+                        }
+                        Ancestors::Partial(ids) => {
+                            context.partial = true;
+                            ids
+                        }
+                    },
+                )
             }
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
@@ -864,6 +856,8 @@ impl<'a> Resolver<'a> {
                 if partial_singleton {
                     context.partial = true;
                 }
+
+                self.record_immediate_descendant(singleton_parent_id, declaration_id);
 
                 Some(match self.linearize_ancestors(singleton_parent_id, context) {
                     Ancestors::Complete(ids) => ids,
@@ -885,6 +879,7 @@ impl<'a> Resolver<'a> {
     /// modules are deduplicated against them
     fn linearize_mixins(
         &mut self,
+        child_id: DeclarationId,
         context: &mut LinearizationContext,
         mixins: Vec<Mixin>,
         parent_ancestors: Option<&Vec<Ancestor>>,
@@ -909,6 +904,8 @@ impl<'a> Resolver<'a> {
                             let Some(module_id) = self.resolve_to_namespace(*resolved.declaration_id()) else {
                                 continue;
                             };
+
+                            self.record_immediate_descendant(module_id, child_id);
 
                             let ids = match self.linearize_ancestors(module_id, context) {
                                 Ancestors::Complete(ids) => ids,
@@ -949,6 +946,8 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
+                            self.record_immediate_descendant(module_id, child_id);
+
                             let mut ids = match self.linearize_ancestors(module_id, context) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
@@ -986,29 +985,6 @@ impl<'a> Resolver<'a> {
         }
 
         (linearized_prepends, linearized_includes)
-    }
-
-    /// Propagate descendants to all cached ancestors
-    fn propagate_descendants<S: BuildHasher>(
-        &mut self,
-        descendants: &mut HashSet<DeclarationId, S>,
-        cached: &Ancestors,
-    ) {
-        if !descendants.is_empty() {
-            for ancestor in cached {
-                if let Ancestor::Complete(ancestor_id) = ancestor {
-                    for descendant in descendants.iter() {
-                        self.graph
-                            .declarations_mut()
-                            .get_mut(ancestor_id)
-                            .unwrap()
-                            .as_namespace_mut()
-                            .unwrap()
-                            .add_descendant(*descendant);
-                    }
-                }
-            }
-        }
     }
 
     // Handles the resolution of the namespace name, the creation of the declaration and membership
@@ -1802,10 +1778,12 @@ impl<'a> Resolver<'a> {
 
     fn linearize_parent_class(
         &mut self,
+        child_id: DeclarationId,
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Ancestors {
         let (picked_parent, unresolved_parent) = self.get_parent_class(definition_ids);
+        self.record_immediate_descendant(picked_parent, child_id);
         let mut result = self.linearize_ancestors(picked_parent, context);
 
         if let Some(name_id) = unresolved_parent {
