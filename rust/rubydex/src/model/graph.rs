@@ -1249,6 +1249,10 @@ impl Graph {
                 let unqualified_str_id = StringId::from(&decl.unqualified_name());
                 let owner_id = *decl.owner_id();
                 let is_singleton_class = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)));
+                let ancestors_to_detach: Vec<Ancestor> = decl
+                    .as_namespace()
+                    .map(|ns| ns.ancestors().iter().copied().collect())
+                    .unwrap_or_default();
 
                 for def_id in def_ids {
                     self.push_work(Unit::Definition(def_id));
@@ -1261,6 +1265,16 @@ impl Graph {
                         ns.clear_singleton_class_id();
                     } else {
                         ns.remove_member(&unqualified_str_id);
+                    }
+                }
+
+                // Detach from each complete ancestor's descendant set so we don't leave a stale id in descendants
+                for ancestor in ancestors_to_detach {
+                    if let Ancestor::Complete(ancestor_id) = ancestor
+                        && let Some(anc_decl) = self.declarations.get_mut(&ancestor_id)
+                        && let Some(ns) = anc_decl.as_namespace_mut()
+                    {
+                        ns.remove_descendant(&decl_id);
                     }
                 }
             }
@@ -2443,6 +2457,7 @@ mod tests {
 
 #[cfg(test)]
 mod incremental_resolution_tests {
+    use crate::model::ids::DeclarationId;
     use crate::model::name::NameRef;
     use crate::test_utils::GraphTest;
     use crate::{
@@ -4069,5 +4084,38 @@ mod incremental_resolution_tests {
         assert_declaration_exists!(context, "Bar");
         assert_declaration_exists!(context, "Foo::<Foo>");
         assert_declaration_exists!(context, "Bar::<Bar>");
+    }
+
+    #[test]
+    fn constant_references_through_object_inheritance_are_invalidated() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo; end");
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module Wrap
+              class Foo; end
+              ::Foo
+              Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        let kernel = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Kernel"))
+            .unwrap();
+
+        for id in kernel.as_namespace().unwrap().descendants() {
+            assert!(
+                context.graph().declarations().contains_key(id),
+                "Kernel has stale descendant id {id:?} with no backing declaration"
+            );
+        }
     }
 } // mod incremental_resolution_tests
