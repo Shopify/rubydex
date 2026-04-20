@@ -4223,6 +4223,36 @@ fn ancestors_for_unresolved_parent_class() {
     ));
 }
 
+#[test]
+fn singleton_class_created_in_remaining_definitions_has_linearized_ancestors() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+            class Foo
+              @var = 1
+            end
+            ",
+    );
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_ancestors_eq!(
+        context,
+        "Foo::<Foo>",
+        [
+            "Foo::<Foo>",
+            "Object::<Object>",
+            "BasicObject::<BasicObject>",
+            "Class",
+            "Module",
+            "Object",
+            "Kernel",
+            "BasicObject"
+        ]
+    );
+}
+
 mod todo_tests {
     use super::*;
 
