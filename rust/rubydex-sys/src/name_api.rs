@@ -17,67 +17,65 @@ pub fn nesting_stack_to_name_id(
     let mut names_to_untrack = Vec::new();
 
     for entry in nesting {
-        for part in entry.split("::").map(String::from) {
-            if part.is_empty() {
-                current_name = ParentScope::TopLevel;
-                continue;
-            }
-
-            // Singleton class names (e.g., `<Foo>`) use Attached parent scope and are always created with nesting=None
-            // by the indexer. When the singleton is a standalone nesting entry, current_name is None (reset between
-            // entries), so fall back to current_nesting for the attachment point.
-            let (parent_scope, nesting_for_part) = if part.starts_with('<') {
-                let attached = match current_name {
-                    ParentScope::Some(id) | ParentScope::Attached(id) => ParentScope::Attached(id),
-                    _ => current_nesting.map_or(ParentScope::None, ParentScope::Attached),
-                };
-
-                (attached, None)
-            } else {
-                (current_name, current_nesting)
-            };
-
-            let str_id = graph.intern_string(part);
-            let name_id = graph.add_name(Name::new(str_id, parent_scope, nesting_for_part));
-            names_to_untrack.push(name_id);
-            current_name = ParentScope::Some(name_id);
-        }
-
-        current_nesting = current_name.map_or(None, |id| Some(*id));
+        process_qualified_name(
+            graph,
+            &entry,
+            &mut current_name,
+            &mut current_nesting,
+            &mut names_to_untrack,
+        );
+        current_nesting = current_name.as_ref().copied();
         current_name = ParentScope::None;
     }
 
-    for part in const_name.split("::").map(String::from) {
-        if part.is_empty() {
-            current_name = ParentScope::TopLevel;
-            continue;
-        }
-
-        // Singleton class names use Attached parent scope and nesting=None.
-        // When the singleton name is the first (or only) part of const_name, current_name is None
-        // (reset after the nesting loop), so we fall back to current_nesting for the attachment point.
-        let (parent_scope, nesting_for_part) = if part.starts_with('<') {
-            let attached = match current_name {
-                ParentScope::Some(id) | ParentScope::Attached(id) => ParentScope::Attached(id),
-                _ => current_nesting.map_or(ParentScope::None, ParentScope::Attached),
-            };
-
-            (attached, None)
-        } else {
-            (current_name, current_nesting)
-        };
-
-        let str_id = graph.intern_string(part);
-        let name_id = graph.add_name(Name::new(str_id, parent_scope, nesting_for_part));
-        names_to_untrack.push(name_id);
-        current_name = ParentScope::Some(name_id);
-    }
+    process_qualified_name(
+        graph,
+        const_name,
+        &mut current_name,
+        &mut current_nesting,
+        &mut names_to_untrack,
+    );
 
     let (ParentScope::Some(name_id) | ParentScope::Attached(name_id)) = current_name else {
         return None;
     };
 
     Some((name_id, names_to_untrack))
+}
+
+/// Processes a qualified name (e.g., `"Foo::Bar"` or `"<Foo>"`) by splitting on `"::"` and registering each part in the
+/// graph. Singleton class names (starting with `<`) use `ParentScope::Attached` and `nesting=None`, matching how the
+/// indexer creates them. When a singleton is the first part (i.e., `current_name` has no parent), `current_nesting` is
+/// used as the attachment point.
+fn process_qualified_name(
+    graph: &mut Graph,
+    qualified_name: &str,
+    current_name: &mut ParentScope,
+    current_nesting: &mut Option<NameId>,
+    names_to_untrack: &mut Vec<NameId>,
+) {
+    for part in qualified_name.split("::") {
+        if part.is_empty() {
+            *current_name = ParentScope::TopLevel;
+            continue;
+        }
+
+        let (parent_scope, nesting_for_part) = if part.starts_with('<') {
+            let attached = match *current_name {
+                ParentScope::Some(id) | ParentScope::Attached(id) => ParentScope::Attached(id),
+                _ => current_nesting.map_or(ParentScope::None, ParentScope::Attached),
+            };
+
+            (attached, None)
+        } else {
+            (*current_name, *current_nesting)
+        };
+
+        let str_id = graph.intern_string(part.to_owned());
+        let name_id = graph.add_name(Name::new(str_id, parent_scope, nesting_for_part));
+        names_to_untrack.push(name_id);
+        *current_name = ParentScope::Some(name_id);
+    }
 }
 
 #[cfg(test)]
