@@ -6,12 +6,12 @@ use rubydex::model::{
 
 /// Takes a constant name and a nesting stack (e.g.: `["Foo", "Bar::Baz", "Qux"]`) and transforms it into a `NameId`,
 /// registering each required part in the graph. Returns the `NameId` and a list of name ids that need to be untracked
-/// afterwards
-///
-/// # Panics
-///
-/// Should not panic because `const_name` will always be turned into a name
-pub fn nesting_stack_to_name_id(graph: &mut Graph, const_name: &str, nesting: Vec<String>) -> (NameId, Vec<NameId>) {
+/// afterwards. Returns `None` if the constant name contains no valid identifier parts (e.g.: `""`, `"::"`, `"Foo::"`).
+pub fn nesting_stack_to_name_id(
+    graph: &mut Graph,
+    const_name: &str,
+    nesting: Vec<String>,
+) -> Option<(NameId, Vec<NameId>)> {
     let mut current_nesting = None;
     let mut current_name = ParentScope::None;
     let mut names_to_untrack = Vec::new();
@@ -45,10 +45,11 @@ pub fn nesting_stack_to_name_id(graph: &mut Graph, const_name: &str, nesting: Ve
         current_name = ParentScope::Some(name_id);
     }
 
-    (
-        current_name.expect("The NameId cannot be None since it contains at least `const_name`"),
-        names_to_untrack,
-    )
+    let (ParentScope::Some(name_id) | ParentScope::Attached(name_id)) = current_name else {
+        return None;
+    };
+
+    Some((name_id, names_to_untrack))
 }
 
 #[cfg(test)]
@@ -65,7 +66,8 @@ mod tests {
             &mut graph,
             "Some::CONST",
             vec!["Foo".into(), "Bar::Zip".into(), "Qux".into()],
-        );
+        )
+        .unwrap();
 
         let const_name = graph.names().get(&name_id).unwrap();
         assert_eq!(StringId::from("CONST"), *const_name.str());
@@ -101,7 +103,7 @@ mod tests {
     fn top_level_reference_is_converted_to_name_id() {
         let mut graph = Graph::new();
 
-        let (name_id, _) = nesting_stack_to_name_id(&mut graph, "::CONST", vec!["Foo".into()]);
+        let (name_id, _) = nesting_stack_to_name_id(&mut graph, "::CONST", vec!["Foo".into()]).unwrap();
 
         let const_name = graph.names().get(&name_id).unwrap();
         assert_eq!(StringId::from("CONST"), *const_name.str());
@@ -117,7 +119,7 @@ mod tests {
     fn top_level_nesting_is_converted_to_name_id() {
         let mut graph = Graph::new();
 
-        let (name_id, _) = nesting_stack_to_name_id(&mut graph, "CONST", vec!["Foo".into(), "::Bar".into()]);
+        let (name_id, _) = nesting_stack_to_name_id(&mut graph, "CONST", vec!["Foo".into(), "::Bar".into()]).unwrap();
 
         let const_name = graph.names().get(&name_id).unwrap();
         assert_eq!(StringId::from("CONST"), *const_name.str());
