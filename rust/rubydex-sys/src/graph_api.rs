@@ -10,6 +10,7 @@ use rubydex::indexing::LanguageId;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::{DeclarationId, NameId};
+use rubydex::model::keywords;
 use rubydex::model::name::NameRef;
 use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
 use rubydex::resolution::Resolver;
@@ -871,6 +872,73 @@ pub unsafe extern "C" fn rdx_graph_complete_method_argument(
             names_to_untrack,
         )
     })
+}
+
+#[repr(C)]
+pub struct CKeyword {
+    name: *const c_char,
+    documentation: *const c_char,
+}
+
+/// Looks up a Ruby keyword by its exact name.
+/// Returns a heap-allocated `CKeyword` if found, or NULL if the name is not a keyword.
+/// Caller must free with `rdx_keyword_free`.
+///
+/// # Safety
+///
+/// - `name` must be a valid, null-terminated UTF-8 string.
+///
+/// # Panics
+///
+/// Will panic if the keyword's name or documentation contains an internal NUL byte
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_keyword_get(name: *const c_char) -> *const CKeyword {
+    let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
+        return ptr::null();
+    };
+
+    match keywords::get(&name_str) {
+        Some(kw) => {
+            let c_name = CString::new(kw.name())
+                .expect("keyword name must not contain NUL")
+                .into_raw()
+                .cast_const();
+
+            let c_doc = CString::new(kw.documentation())
+                .expect("keyword documentation must not contain NUL")
+                .into_raw()
+                .cast_const();
+
+            Box::into_raw(Box::new(CKeyword {
+                name: c_name,
+                documentation: c_doc,
+            }))
+            .cast_const()
+        }
+        None => ptr::null(),
+    }
+}
+
+/// Frees a `CKeyword` previously returned by `rdx_keyword_get`.
+///
+/// # Safety
+///
+/// - `ptr` must be a valid pointer previously returned by `rdx_keyword_get`, or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_keyword_free(ptr: *const CKeyword) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let kw = unsafe { Box::from_raw(ptr.cast_mut()) };
+
+    if !kw.name.is_null() {
+        let _ = unsafe { CString::from_raw(kw.name.cast_mut()) };
+    }
+
+    if !kw.documentation.is_null() {
+        let _ = unsafe { CString::from_raw(kw.documentation.cast_mut()) };
+    }
 }
 
 #[cfg(test)]
