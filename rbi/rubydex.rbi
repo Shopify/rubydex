@@ -76,6 +76,9 @@ end
 class Rubydex::ConstantAlias < Rubydex::Declaration
   sig { returns(T::Enumerable[Rubydex::ConstantReference]) }
   def references; end
+
+  sig { returns(T.nilable(Rubydex::Declaration)) }
+  def target; end
 end
 
 class Rubydex::ClassVariable < Rubydex::Declaration

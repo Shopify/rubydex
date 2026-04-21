@@ -424,6 +424,34 @@ pub unsafe extern "C" fn rdx_declaration_members(pointer: GraphPointer, decl_id:
     DeclarationsIter::new(declarations.into_boxed_slice())
 }
 
+/// Returns the first resolved target declaration for a constant alias declaration, or NULL if the declaration is not
+/// a constant alias or none of its definitions have a resolved target.
+///
+/// # Safety
+///
+/// Assumes that the graph pointer is valid.
+///
+/// # Panics
+///
+/// Will panic if there's inconsistent graph data
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_constant_alias_target(pointer: GraphPointer, decl_id: u64) -> *const CDeclaration {
+    with_graph(pointer, |graph| {
+        let declaration_id = DeclarationId::new(decl_id);
+
+        let Some(targets) = graph.alias_targets(&declaration_id) else {
+            return ptr::null();
+        };
+
+        let Some(&target_id) = targets.first() else {
+            return ptr::null();
+        };
+
+        let target_decl = graph.declarations().get(&target_id).unwrap();
+        Box::into_raw(Box::new(CDeclaration::from_declaration(target_id, target_decl))).cast_const()
+    })
+}
+
 /// Creates a new iterator over constant references for a given declaration.
 ///
 /// # Safety
