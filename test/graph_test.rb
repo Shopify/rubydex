@@ -731,6 +731,225 @@ class GraphTest < Minitest::Test
     assert(keywords.any? { |c| c.name == "if" })
   end
 
+  def test_complete_expression_with_singleton_method_receiver
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      module Outer
+        OUTER_CONST = 1
+        @@outer_cvar = 0
+
+        class Foo
+          FOO_CONST = 2
+          @@foo_cvar = 3
+          @ivar = 4
+
+          def instance_m; end
+          def self.singleton_m; end
+        end
+
+        def Foo.bar
+          # Completion inside here:
+          # - self is Foo (the class), so methods/ivars come from Foo::<Foo>
+          # - class variables follow LEXICAL scope [Outer], NOT self
+          # - constants come from the lexical scope [Outer], NOT from Foo
+        end
+      end
+    RUBY
+    graph.resolve
+
+    # Lexical nesting at `def Foo.bar` is [Outer]; self receiver is Foo::<Foo>
+    candidates = graph.complete_expression(["Outer"], self_receiver: "Outer::Foo::<Foo>")
+
+    # Methods: singleton methods defined on Foo (live on Foo::<Foo>)
+    methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
+    method_names = methods.map(&:name)
+    assert_includes(method_names, "Outer::Foo::<Foo>#singleton_m()")
+    assert_includes(method_names, "Outer::Foo::<Foo>#bar()")
+    # Instance methods of Foo should NOT be callable on the class itself
+    refute_includes(method_names, "Outer::Foo#instance_m()")
+
+    # Instance variables: class instance variables of Foo (stored on Foo::<Foo>)
+    ivars = candidates.select { |c| c.is_a?(Rubydex::InstanceVariable) }
+    assert(ivars.any? { |c| c.name == "Outer::Foo::<Foo>\#@ivar" })
+
+    # Class variables follow lexical scope: Outer's cvars are visible, Foo's must NOT leak
+    cvars = candidates.select { |c| c.is_a?(Rubydex::ClassVariable) }
+    cvar_names = cvars.map(&:name)
+    assert_includes(cvar_names, "Outer\#@@outer_cvar")
+    refute_includes(cvar_names, "Outer::Foo\#@@foo_cvar")
+
+    # Constants: from lexical scope [Outer], plus top-level. Foo::FOO_CONST must NOT leak.
+    declarations = candidates.select { |c| c.is_a?(Rubydex::Declaration) }
+    decl_names = declarations.map(&:name)
+    assert_includes(decl_names, "Outer::OUTER_CONST")
+    assert_includes(decl_names, "Outer::Foo")
+    refute_includes(decl_names, "Outer::Foo::FOO_CONST")
+  end
+
+  def test_complete_expression_with_def_self_method
+    # `def self.bar` inside a class: lexical nesting is [Foo] (NOT [Foo, <Foo>]),
+    # but self is Foo::<Foo>.
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        FOO_CONST = 1
+        @@class_var = 2
+        @ivar = 3
+
+        def instance_m; end
+
+        def self.bar
+          # completion point
+        end
+      end
+    RUBY
+    graph.resolve
+
+    candidates = graph.complete_expression(["Foo"], self_receiver: "Foo::<Foo>")
+
+    # Methods: singleton methods only
+    methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
+    method_names = methods.map(&:name)
+    assert_includes(method_names, "Foo::<Foo>#bar()")
+    refute_includes(method_names, "Foo#instance_m()")
+
+    # Instance variables: from Foo::<Foo>
+    ivars = candidates.select { |c| c.is_a?(Rubydex::InstanceVariable) }
+    assert(ivars.any? { |c| c.name == "Foo::<Foo>\#@ivar" })
+
+    # Class variables: from attached object Foo
+    cvars = candidates.select { |c| c.is_a?(Rubydex::ClassVariable) }
+    assert(cvars.any? { |c| c.name == "Foo\#@@class_var" })
+
+    # Constants: FOO_CONST is visible because Foo IS in the lexical nesting
+    declarations = candidates.select { |c| c.is_a?(Rubydex::Declaration) }
+    decl_names = declarations.map(&:name)
+    assert_includes(decl_names, "Foo::FOO_CONST")
+    assert_includes(decl_names, "Foo")
+  end
+
+  def test_complete_method_argument_with_singleton_method_receiver
+    # `def Foo.bar(x:)` — inside the argument list of a call from within this method.
+    # self-type / nesting split must propagate through method_argument_completion too.
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      module Outer
+        OUTER_CONST = 1
+        @@outer_cvar = 0
+
+        class Foo
+          FOO_CONST = 2
+          @ivar = 3
+          @@foo_cvar = 4
+
+          def self.helper(name:); end
+        end
+
+        def Foo.bar
+          # completion inside `Foo.helper(|)` here
+        end
+      end
+    RUBY
+    graph.resolve
+
+    candidates = graph.complete_method_argument(
+      "Outer::Foo::<Foo>#helper()",
+      ["Outer"],
+      self_receiver: "Outer::Foo::<Foo>",
+    )
+
+    # Keyword argument from the method being called
+    keyword_params = candidates.select { |c| c.is_a?(Rubydex::KeywordParameter) }
+    assert(keyword_params.any? { |c| c.name == "name" })
+
+    # Everything expression_completion provides, with the correct self/nesting split:
+    methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
+    method_names = methods.map(&:name)
+    assert_includes(method_names, "Outer::Foo::<Foo>#helper()")
+    assert_includes(method_names, "Outer::Foo::<Foo>#bar()")
+
+    ivars = candidates.select { |c| c.is_a?(Rubydex::InstanceVariable) }
+    assert(ivars.any? { |c| c.name == "Outer::Foo::<Foo>\#@ivar" })
+
+    # Class variables follow lexical scope [Outer], not self (Foo::<Foo>)
+    cvars = candidates.select { |c| c.is_a?(Rubydex::ClassVariable) }
+    cvar_names = cvars.map(&:name)
+    assert_includes(cvar_names, "Outer\#@@outer_cvar")
+    refute_includes(cvar_names, "Outer::Foo\#@@foo_cvar")
+
+    declarations = candidates.select { |c| c.is_a?(Rubydex::Declaration) }
+    decl_names = declarations.map(&:name)
+    assert_includes(decl_names, "Outer::OUTER_CONST")
+    refute_includes(decl_names, "Outer::Foo::FOO_CONST")
+  end
+
+  def test_complete_expression_raises_on_empty_self_receiver
+    graph = Rubydex::Graph.new
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["Foo"], self_receiver: "")
+    end
+  end
+
+  def test_complete_method_argument_raises_on_empty_self_receiver
+    graph = Rubydex::Graph.new
+    assert_raises(ArgumentError) do
+      graph.complete_method_argument("Foo#bar()", ["Foo"], self_receiver: "")
+    end
+  end
+
+  def test_complete_expression_with_nil_self_receiver_matches_no_kwarg
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def instance_m; end
+      end
+    RUBY
+    graph.resolve
+
+    without_kwarg = graph.complete_expression(["Foo"]).map(&:name)
+    with_nil = graph.complete_expression(["Foo"], self_receiver: nil).map(&:name)
+    assert_equal(without_kwarg.sort, with_nil.sort)
+  end
+
+  def test_complete_expression_raises_on_nonexistent_self_receiver
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.resolve
+
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["Foo"], self_receiver: "Nonexistent")
+    end
+  end
+
+  def test_complete_expression_raises_on_non_namespace_self_receiver
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar; end
+      end
+    RUBY
+    graph.resolve
+
+    # `Foo#bar()` is a Method declaration, not a Namespace and not a ConstantAlias.
+    assert_raises(ArgumentError) do
+      graph.complete_expression(["Foo"], self_receiver: "Foo#bar()")
+    end
+  end
+
+  def test_complete_expression_raises_on_wrong_type_self_receiver
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) do
+      graph.complete_expression(["Foo"], self_receiver: 42)
+    end
+  end
+
+  def test_complete_method_argument_raises_on_wrong_type_self_receiver
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) do
+      graph.complete_method_argument("Foo#bar()", ["Foo"], self_receiver: 42)
+    end
+  end
+
   def test_complete_expression_with_empty_nesting
     graph = Rubydex::Graph.new
     graph.index_source("file:///foo.rb", "class Object; end\nclass Foo; end", "ruby")

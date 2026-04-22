@@ -13,6 +13,9 @@ static VALUE mRubydex;
 static VALUE cKeyword;
 static VALUE cKeywordParameter;
 
+// Interned once in `rdxi_initialize_graph` to avoid repeated symbol-table lookups on hot completion paths.
+static ID id_self_receiver;
+
 // Free function for the custom Graph allocator. We always have to call into Rust to free data allocated by it
 static void graph_free(void *ptr) {
     if (ptr) {
@@ -546,11 +549,29 @@ static VALUE completion_result_to_ruby_array(struct CompletionResult result, VAL
     return ruby_array;
 }
 
-// Graph#complete_expression: (Array[String] nesting) -> Array[Declaration | Keyword]
+// Graph#complete_expression: (Array[String] nesting, self_receiver: nil) -> Array[Declaration | Keyword]
 // Returns completion candidates for an expression context.
-// The nesting array represents the lexical scope stack
-static VALUE rdxr_graph_complete_expression(VALUE self, VALUE nesting) {
+// The nesting array represents the lexical scope stack. The optional self_receiver keyword argument
+// overrides the self-type (e.g., "Foo::<Foo>" for `def Foo.bar`); when nil, self is derived from
+// the innermost nesting element.
+static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
+    VALUE nesting, opts;
+    rb_scan_args(argc, argv, "1:", &nesting, &opts);
     rdxi_check_array_of_strings(nesting);
+
+    const char *self_receiver = NULL;
+    if (!NIL_P(opts)) {
+        VALUE kwarg_val;
+        rb_get_kwargs(opts, &id_self_receiver, 0, 1, &kwarg_val);
+
+        if (kwarg_val != Qundef && !NIL_P(kwarg_val)) {
+            Check_Type(kwarg_val, T_STRING);
+            if (RSTRING_LEN(kwarg_val) == 0) {
+                rb_raise(rb_eArgError, "self_receiver cannot be empty");
+            }
+            self_receiver = StringValueCStr(kwarg_val);
+        }
+    }
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -559,7 +580,7 @@ static VALUE rdxr_graph_complete_expression(VALUE self, VALUE nesting) {
     char **converted_nesting = rdxi_str_array_to_char(nesting, nesting_count);
 
     struct CompletionResult result =
-        rdx_graph_complete_expression(graph, (const char *const *)converted_nesting, nesting_count);
+        rdx_graph_complete_expression(graph, (const char *const *)converted_nesting, nesting_count, self_receiver);
 
     rdxi_free_str_array(converted_nesting, nesting_count);
     return completion_result_to_ruby_array(result, self);
@@ -589,11 +610,29 @@ static VALUE rdxr_graph_complete_method_call(VALUE self, VALUE name) {
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_method_argument: (String name, Array[String] nesting) -> Array[Declaration | Keyword | KeywordParameter]
+// Graph#complete_method_argument: (String name, Array[String] nesting, self_receiver: nil) -> Array[Declaration | Keyword | KeywordParameter]
 // Returns completion candidates inside a method call's argument list (e.g., `foo.bar(|)`).
-static VALUE rdxr_graph_complete_method_argument(VALUE self, VALUE name, VALUE nesting) {
+// See complete_expression for semantics of self_receiver.
+static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE self) {
+    VALUE name, nesting, opts;
+    rb_scan_args(argc, argv, "2:", &name, &nesting, &opts);
+
     Check_Type(name, T_STRING);
     rdxi_check_array_of_strings(nesting);
+
+    const char *self_receiver = NULL;
+    if (!NIL_P(opts)) {
+        VALUE kwarg_val;
+        rb_get_kwargs(opts, &id_self_receiver, 0, 1, &kwarg_val);
+
+        if (kwarg_val != Qundef && !NIL_P(kwarg_val)) {
+            Check_Type(kwarg_val, T_STRING);
+            if (RSTRING_LEN(kwarg_val) == 0) {
+                rb_raise(rb_eArgError, "self_receiver cannot be empty");
+            }
+            self_receiver = StringValueCStr(kwarg_val);
+        }
+    }
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -602,7 +641,7 @@ static VALUE rdxr_graph_complete_method_argument(VALUE self, VALUE name, VALUE n
     char **converted_nesting = rdxi_str_array_to_char(nesting, nesting_count);
 
     struct CompletionResult result = rdx_graph_complete_method_argument(
-        graph, StringValueCStr(name), (const char *const *)converted_nesting, nesting_count);
+        graph, StringValueCStr(name), (const char *const *)converted_nesting, nesting_count, self_receiver);
 
     rdxi_free_str_array(converted_nesting, nesting_count);
     return completion_result_to_ruby_array(result, self);
@@ -673,6 +712,8 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     cKeyword = rb_define_class_under(mRubydex, "Keyword", rb_cObject);
     cKeywordParameter = rb_define_class_under(mRubydex, "KeywordParameter", rb_cObject);
 
+    id_self_receiver = rb_intern("self_receiver");
+
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
     rb_define_method(cGraph, "index_source", rdxr_graph_index_source, 3);
@@ -691,10 +732,10 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);
     rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
     rb_define_method(cGraph, "require_paths", rdxr_graph_require_paths, 1);
-    rb_define_method(cGraph, "complete_expression", rdxr_graph_complete_expression, 1);
+    rb_define_method(cGraph, "complete_expression", rdxr_graph_complete_expression, -1);
     rb_define_method(cGraph, "complete_namespace_access", rdxr_graph_complete_namespace_access, 1);
     rb_define_method(cGraph, "complete_method_call", rdxr_graph_complete_method_call, 1);
-    rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, 2);
+    rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, -1);
     rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
     rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);
     rb_define_method(cGraph, "keyword", rdxr_graph_keyword, 1);

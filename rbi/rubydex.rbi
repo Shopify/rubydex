@@ -152,6 +152,7 @@ class Rubydex::GlobalVariableDefinition < Rubydex::Definition; end
 class Rubydex::InstanceVariableDefinition < Rubydex::Definition; end
 class Rubydex::MethodAliasDefinition < Rubydex::Definition; end
 class Rubydex::MethodDefinition < Rubydex::Definition; end
+
 class Rubydex::ModuleDefinition < Rubydex::Definition
   sig { returns(T::Array[Rubydex::Mixin]) }
   def mixins; end
@@ -314,10 +315,17 @@ class Rubydex::Graph
   # Returns completion candidates for an expression context. This includes all keywords, constants, methods, instance
   # variables, class variables and global variables reachable from the current lexical scope and self type.
   #
-  # The nesting array represents the lexical scope stack, where the last element is the self type. An empty array
-  # defaults to `Object` as the self type (top-level context).
-  sig { params(nesting: T::Array[String]).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword)]) }
-  def complete_expression(nesting); end
+  # The nesting array represents the lexical scope stack. The optional `self_receiver` keyword argument overrides the
+  # self type independently of the lexical scope (e.g., `"Foo::<Foo>"` for `def Foo.bar`). This distinction is important
+  # because constants and class variables are always attached to the lexical scope. Meanwhile, methods and instance
+  # variables are attached to the type of `self` and those don't always match.
+  sig do
+    params(
+      nesting: T::Array[String],
+      self_receiver: T.nilable(String),
+    ).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword)])
+  end
+  def complete_expression(nesting, self_receiver: nil); end
 
   # Returns completion candidates after a namespace access operator (e.g., `Foo::`). This includes all constants and
   # singleton methods for the namespace and its ancestors.
@@ -332,9 +340,15 @@ class Rubydex::Graph
   # Returns completion candidates inside a method call's argument list (e.g., `foo.bar(|)`). This includes everything
   # that expression completion provides plus keyword argument names of the method being called.
   #
-  # The nesting array represents the lexical scope stack, where the last element is the self type.
-  sig { params(name: String, nesting: T::Array[String]).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword, Rubydex::KeywordParameter)]) }
-  def complete_method_argument(name, nesting); end
+  # See `complete_expression` for the semantics of `nesting` and `self_receiver`.
+  sig do
+    params(
+      name: String,
+      nesting: T::Array[String],
+      self_receiver: T.nilable(String),
+    ).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword, Rubydex::KeywordParameter)])
+  end
+  def complete_method_argument(name, nesting, self_receiver: nil); end
 
   private
 

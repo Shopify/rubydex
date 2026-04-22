@@ -2,6 +2,7 @@
 
 use crate::declaration_api::CDeclaration;
 use crate::declaration_api::DeclarationsIter;
+use crate::declaration_api::decl_id_from_char_ptr;
 use crate::document_api::DocumentsIter;
 use crate::reference_api::{CConstantReference, CMethodReference, ConstantReferencesIter, MethodReferencesIter};
 use crate::{name_api, utils};
@@ -768,11 +769,15 @@ fn run_and_finalize_completion(
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
+/// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. When non-null, it
+///   overrides the self-type (e.g., `"Foo::<Foo>"` for completion inside `def Foo.bar`), while
+///   the lexical nesting still comes from `nesting`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_complete_expression(
     pointer: GraphPointer,
     nesting: *const *const c_char,
     nesting_count: usize,
+    self_receiver: *const c_char,
 ) -> CompletionResult {
     with_mut_graph(pointer, |graph| {
         let Some((name_id, names_to_untrack)) = (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
@@ -780,7 +785,16 @@ pub unsafe extern "C" fn rdx_graph_complete_expression(
             return CompletionResult::success(ptr::null_mut());
         };
 
-        run_and_finalize_completion(graph, CompletionReceiver::Expression(name_id), names_to_untrack)
+        let self_decl_id = unsafe { decl_id_from_char_ptr(self_receiver) };
+
+        run_and_finalize_completion(
+            graph,
+            CompletionReceiver::Expression {
+                self_decl_id,
+                nesting_name_id: name_id,
+            },
+            names_to_untrack,
+        )
     })
 }
 
@@ -845,28 +859,34 @@ pub unsafe extern "C" fn rdx_graph_complete_method_call(
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - `name` must be a valid, null-terminated UTF-8 string (FQN of the method).
 /// - `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
+/// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. See
+///   `rdx_graph_complete_expression` for semantics.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_complete_method_argument(
     pointer: GraphPointer,
     name: *const c_char,
     nesting: *const *const c_char,
     nesting_count: usize,
+    self_receiver: *const c_char,
 ) -> CompletionResult {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
         return CompletionResult::success(ptr::null_mut());
     };
 
     with_mut_graph(pointer, |graph| {
-        let Some((self_name_id, names_to_untrack)) =
+        let Some((nesting_name_id, names_to_untrack)) =
             (unsafe { completion_nesting_name_id(graph, nesting, nesting_count) })
         else {
             return CompletionResult::success(ptr::null_mut());
         };
 
+        let self_decl_id = unsafe { decl_id_from_char_ptr(self_receiver) };
+
         run_and_finalize_completion(
             graph,
             CompletionReceiver::MethodArgument {
-                self_name_id,
+                self_decl_id,
+                nesting_name_id,
                 method_decl_id: DeclarationId::from(name_str.as_str()),
             },
             names_to_untrack,
