@@ -407,6 +407,28 @@ static VALUE rdxr_variable_declaration_references(VALUE self) {
     return rb_ary_new();
 }
 
+// ConstantAlias#target -> Declaration?
+// Returns the first resolved target declaration for this constant alias, or nil if none of its definitions resolved to
+// a target
+static VALUE rdxr_constant_alias_target(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const CDeclaration *decl = rdx_constant_alias_target(graph, data->id);
+    if (decl == NULL) {
+        return Qnil;
+    }
+
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {data->graph_obj, ULL2NUM(decl->id)};
+    free_c_declaration(decl);
+
+    return rb_class_new_instance(2, argv, decl_class);
+}
+
 void rdxi_initialize_declaration(VALUE mRubydex) {
     cDeclaration = rb_define_class_under(mRubydex, "Declaration", rb_cObject);
     cNamespace = rb_define_class_under(mRubydex, "Namespace", cDeclaration);
@@ -440,6 +462,7 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     // Constant and ConstantAlias have constant references
     rb_define_method(cConstant, "references", rdxr_constant_declaration_references, 0);
     rb_define_method(cConstantAlias, "references", rdxr_constant_declaration_references, 0);
+    rb_define_method(cConstantAlias, "target", rdxr_constant_alias_target, 0);
 
     // Method has method references
     rb_define_method(cMethod, "references", rdxr_method_declaration_references, 0);

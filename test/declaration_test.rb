@@ -608,4 +608,114 @@ class DeclarationTest < Minitest::Test
       assert_equal("Foo#initialize()", decl.name)
     end
   end
+
+  def test_following_constant_alias_targets
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          class Bar
+          end
+        end
+
+        module Baz
+          Qux = Foo
+        end
+
+        ALIAS = Baz
+        # This is the same as Foo::Bar. We need to be able to follow the alias step by step
+        ALIAS::Qux::Bar
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      alias_decl = graph["ALIAS"]
+      assert_instance_of(Rubydex::ConstantAlias, alias_decl)
+
+      baz = alias_decl.target
+      assert_instance_of(Rubydex::Module, baz)
+      assert_equal("Baz", baz.name)
+
+      qux = baz.member("Qux")
+      assert_instance_of(Rubydex::ConstantAlias, qux)
+      assert_equal("Baz::Qux", qux.name)
+
+      foo = qux.target
+      assert_instance_of(Rubydex::Module, foo)
+      assert_equal("Foo", foo.name)
+
+      bar = foo.member("Bar")
+      assert_instance_of(Rubydex::Class, bar)
+      assert_equal("Foo::Bar", bar.name)
+    end
+  end
+
+  def test_unresolved_constant_alias_target_returns_nil
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        ALIAS = NonexistentConstant
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      alias_decl = graph["ALIAS"]
+      assert_instance_of(Rubydex::ConstantAlias, alias_decl)
+      assert_nil(alias_decl.target)
+    end
+  end
+
+  def test_circular_constant_alias_target
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        A = B
+        B = A
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      a = graph["A"]
+      assert_instance_of(Rubydex::ConstantAlias, a)
+
+      b = a.target
+      assert_instance_of(Rubydex::ConstantAlias, b)
+      assert_equal("B", b.name)
+
+      a_again = b.target
+      assert_instance_of(Rubydex::ConstantAlias, a_again)
+      assert_equal("A", a_again.name)
+    end
+  end
+
+  def test_constant_alias_with_multiple_definitions_returns_one_resolved_target
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo; end
+        ALIAS = Foo
+      RUBY
+
+      context.write!("file2.rb", <<~RUBY)
+        module Bar; end
+        ALIAS = Bar
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      alias_decl = graph["ALIAS"]
+      assert_instance_of(Rubydex::ConstantAlias, alias_decl)
+
+      target = alias_decl.target
+      assert_instance_of(Rubydex::Module, target)
+
+      # Since ALIAS has two definitions pointing to different targets and we just pick the first one, it could be either
+      # `Foo` or `Bar`. We check for any of them here to avoid having a flaky test
+      assert_includes(["Foo", "Bar"], target.name)
+    end
+  end
 end
