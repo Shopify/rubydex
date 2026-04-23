@@ -22,7 +22,7 @@ jobs:
       - name: "Checkout code"
         uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@7372622e62b60b3cb750dcd2b9e32c247ffec26a # v1.302.0
+        uses: ruby/setup-ruby@0cb964fd540e0a24c900370abf38a33466142735 # v1.305.0
         with:
           ruby-version: "3.2.9"
           bundler-cache: true
@@ -46,7 +46,7 @@ jobs:
       - name: "Checkout code"
         uses: "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@7372622e62b60b3cb750dcd2b9e32c247ffec26a # v1.302.0
+        uses: ruby/setup-ruby@0cb964fd540e0a24c900370abf38a33466142735 # v1.305.0
         with:
           ruby-version: "${{ matrix.rubies }}"
           bundler-cache: true
@@ -64,7 +64,7 @@ jobs:
     runs-on: "${{ matrix.os }}"
     steps:
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@7372622e62b60b3cb750dcd2b9e32c247ffec26a # v1.302.0
+        uses: ruby/setup-ruby@0cb964fd540e0a24c900370abf38a33466142735 # v1.305.0
         with:
           ruby-version: "4.0.0"
       - name: "Run cibuildgem"
@@ -83,7 +83,7 @@ jobs:
     runs-on: "ubuntu-latest"
     steps:
       - name: "Setup Ruby"
-        uses: ruby/setup-ruby@7372622e62b60b3cb750dcd2b9e32c247ffec26a # v1.302.0
+        uses: ruby/setup-ruby@0cb964fd540e0a24c900370abf38a33466142735 # v1.305.0
         with:
           ruby-version: "4.0.0"
       - name: "Run cibuildgem"
