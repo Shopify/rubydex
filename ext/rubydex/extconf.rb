@@ -86,11 +86,15 @@ copy_dylib_commands = if Gem.win_platform?
   ""
 elsif RUBY_PLATFORM.include?("darwin")
   src_dylib = target_dir.join("librubydex_sys.dylib")
-  "\t$(COPY) #{src_dylib} #{lib_dir}"
+  dst_dylib = lib_dir.join("librubydex_sys.dylib")
+  # Unlink before copy so the new dylib gets a fresh inode. Overwriting in place while another process
+  # (e.g. the Ruby LSP) has the old dylib mmap'd triggers a macOS code-signing SIGKILL on its next page fault.
+  "\t$(Q)$(RM) #{dst_dylib}\n\t$(COPY) #{src_dylib} #{lib_dir}"
 else
   # Linux
   src_dylib = target_dir.join("librubydex_sys.so")
-  "\t$(COPY) #{src_dylib} #{lib_dir}"
+  dst_dylib = lib_dir.join("librubydex_sys.so")
+  "\t$(Q)$(RM) #{dst_dylib}\n\t$(COPY) #{src_dylib} #{lib_dir}"
 end
 
 rust_srcs = Dir.glob("#{root_dir}/**/*.rs").reject { |path| path.include?("rust/target") }
