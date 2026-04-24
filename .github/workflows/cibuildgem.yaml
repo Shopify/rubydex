@@ -27,7 +27,7 @@ jobs:
           ruby-version: "3.2.9"
           bundler-cache: true
       - name: "Install cargo-about"
-        run: cargo install cargo-about
+        run: cargo install cargo-about --features cli
       - name: "Run cibuildgem"
         uses: "shopify/cibuildgem/.github/actions/cibuildgem@main"
         with:
