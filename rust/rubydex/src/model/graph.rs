@@ -14,6 +14,7 @@ use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, Method
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
+use crate::model::visibility::Visibility;
 use crate::stats;
 
 /// An entity whose validity depends on a particular `NameId`.
@@ -599,6 +600,44 @@ impl Graph {
     #[must_use]
     pub fn name_dependents(&self) -> &IdentityHashMap<NameId, Vec<NameDependent>> {
         &self.name_dependents
+    }
+
+    /// Returns the visibility for a method declaration.
+    ///
+    /// Scans the declaration's backing definitions from the end:
+    /// - First `MethodVisibilityDefinition` wins
+    /// - Otherwise, falls back to the latest method-like definition's indexed visibility
+    /// - Returns `None` if the declaration has no definitions with visibility
+    #[must_use]
+    pub fn visibility(&self, declaration_id: &DeclarationId) -> Option<Visibility> {
+        let declaration = self.declarations.get(declaration_id)?;
+        let definitions = declaration.definitions();
+
+        // Scan from the end: last visibility directive wins
+        for def_id in definitions.iter().rev() {
+            if let Some(definition) = self.definitions.get(def_id) {
+                match definition {
+                    Definition::MethodVisibility(vis) => return Some(*vis.visibility()),
+                    Definition::Method(method) => return Some(*method.visibility()),
+                    Definition::AttrAccessor(attr) => return Some(*attr.visibility()),
+                    Definition::AttrReader(attr) => return Some(*attr.visibility()),
+                    Definition::AttrWriter(attr) => return Some(*attr.visibility()),
+                    Definition::Class(_)
+                    | Definition::SingletonClass(_)
+                    | Definition::Module(_)
+                    | Definition::Constant(_)
+                    | Definition::ConstantAlias(_)
+                    | Definition::ConstantVisibility(_)
+                    | Definition::GlobalVariable(_)
+                    | Definition::InstanceVariable(_)
+                    | Definition::ClassVariable(_)
+                    | Definition::MethodAlias(_)
+                    | Definition::GlobalVariableAlias(_) => {}
+                }
+            }
+        }
+
+        None
     }
 
     /// Drains the accumulated work items, returning them for use by the resolver.

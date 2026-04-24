@@ -3,6 +3,7 @@ use std::{
     hash::BuildHasher,
 };
 
+use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::{
     built_in::{BASIC_OBJECT_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
     declaration::{
@@ -272,6 +273,8 @@ impl<'a> Resolver<'a> {
     /// Handle other definitions that don't require resolution, but need to have their declarations and membership created
     #[allow(clippy::too_many_lines)]
     fn handle_remaining_definitions(&mut self, other_ids: Vec<DefinitionId>) {
+        let mut method_visibility_ids = Vec::new();
+
         for id in other_ids {
             match self.graph.definitions().get(&id).unwrap() {
                 Definition::Method(method_definition) => {
@@ -538,8 +541,8 @@ impl<'a> Resolver<'a> {
                 Definition::ConstantVisibility(_constant_visibility) => {
                     // TODO
                 }
-                Definition::MethodVisibility(_method_visibility) => {
-                    // TODO
+                Definition::MethodVisibility(_) => {
+                    method_visibility_ids.push(id);
                 }
                 Definition::Class(_)
                 | Definition::SingletonClass(_)
@@ -550,6 +553,91 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+
+        self.resolve_method_visibilities(method_visibility_ids);
+    }
+
+    /// Resolves retroactive method visibility changes (`private :foo`, `protected :foo`, `public :foo`).
+    ///
+    /// Runs as a second pass after all methods/attrs are declared, so `private :bar` works
+    /// regardless of whether `def bar` appeared before or after it in source.
+    fn resolve_method_visibilities(&mut self, visibility_ids: Vec<DefinitionId>) {
+        let mut pending_work = Vec::new();
+
+        for id in visibility_ids {
+            let Definition::MethodVisibility(method_visibility) = self.graph.definitions().get(&id).unwrap() else {
+                unreachable!()
+            };
+
+            let str_id = *method_visibility.str_id();
+            let uri_id = *method_visibility.uri_id();
+            let offset = method_visibility.offset().clone();
+            let lexical_nesting_id = *method_visibility.lexical_nesting_id();
+
+            let Some(owner_id) = self.resolve_lexical_owner(lexical_nesting_id) else {
+                continue;
+            };
+
+            let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&owner_id) else {
+                continue;
+            };
+
+            let mut visibility_applied = false;
+            let mut has_partial = false;
+
+            for ancestor in namespace.ancestors() {
+                match ancestor {
+                    Ancestor::Complete(ancestor_id) => {
+                        let has_member = self
+                            .graph
+                            .declarations()
+                            .get(ancestor_id)
+                            .and_then(|decl| decl.as_namespace())
+                            .and_then(|ns| ns.member(&str_id))
+                            .is_some();
+
+                        if has_member {
+                            // Direct member: `create_declaration`'s fully qualified name dedup attaches
+                            // this visibility definition to the existing method declaration.
+                            // Inherited: a new child-owned declaration is created.
+                            self.create_declaration(str_id, id, owner_id, |name| {
+                                Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                            });
+                            visibility_applied = true;
+                            break;
+                        }
+                    }
+                    Ancestor::Partial(_) => has_partial = true,
+                }
+            }
+
+            if visibility_applied {
+                continue;
+            }
+
+            if has_partial {
+                // Method might exist on an unresolved ancestor — requeue for retry.
+                pending_work.push(Unit::Definition(id));
+            } else {
+                // Ancestors are fully resolved — method definitively doesn't exist.
+                let method_name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
+                let owner_name = self.graph.declarations().get(&owner_id).unwrap().name().to_string();
+                let diagnostic = Diagnostic::new(
+                    Rule::UndefinedMethodVisibilityTarget,
+                    uri_id,
+                    offset,
+                    format!("undefined method `{method_name}` for visibility change in `{owner_name}`"),
+                );
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&owner_id)
+                    .unwrap()
+                    .add_diagnostic(diagnostic);
+            }
+        }
+
+        // Must extend work here so incremental resolution can resolve previously unresolved visibility operations
+        self.graph.extend_work(pending_work);
     }
 
     fn create_declaration<F>(
