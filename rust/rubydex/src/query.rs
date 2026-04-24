@@ -897,7 +897,7 @@ mod tests {
         context.resolve();
 
         let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
-        let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), None).id();
+        let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), Some(foo_id)).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression(name_id),
