@@ -13,7 +13,6 @@ jobs:
           rustup update --no-self-update stable
           rustup default stable
           rustup component add --toolchain stable clippy rustfmt
-          cargo install cargo-about
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@0cb964fd540e0a24c900370abf38a33466142735 # v1.305.0

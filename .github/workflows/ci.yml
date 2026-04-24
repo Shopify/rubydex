@@ -27,7 +27,7 @@ jobs:
       # Verify that licenses conform to the policy in rust/about.toml
       - name: Check licenses
         run: |
-          cargo install cargo-about
+          cargo install cargo-about --features cli
           cargo about generate rust/about_templates --name about --manifest-path rust/Cargo.toml --workspace > THIRD_PARTY_LICENSES.html
   build:
     strategy:
