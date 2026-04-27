@@ -357,6 +357,146 @@ fn resolution_for_singleton_class_of_external_constant() {
 }
 
 #[test]
+fn resolves_sibling_constant_inside_singleton_class_method_body() {
+    // Constant referenced from inside a method defined in `class << self` must resolve against
+    // the lexical scope that encloses the singleton class block, not stop at the singleton class.
+    let mut context = GraphTest::new();
+    context.index_uri("file:///foo.rb", {
+        r"
+        module A
+          module B
+            class Sibling; end
+
+            class Main
+              class << self
+                def does_not_resolve_here
+                  Sibling
+                end
+              end
+            end
+          end
+        end
+        "
+    });
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:8:11-8:18");
+}
+
+#[test]
+fn resolves_sibling_constant_inside_nested_singleton_class() {
+    // Nested `class << self` inside a nested class: lookup must still walk outward through
+    // every enclosing lexical scope to find a sibling defined far above.
+    let mut context = GraphTest::new();
+    context.index_uri("file:///foo.rb", {
+        r"
+        module A
+          module B
+            class Sibling; end
+
+            class Main
+              class Inner
+                class << self
+                  def m
+                    Sibling
+                  end
+                end
+              end
+            end
+          end
+        end
+        "
+    });
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:9:13-9:20");
+}
+
+#[test]
+fn resolves_sibling_constant_directly_in_singleton_class_body() {
+    // Constant referenced directly in the `class << self` body (not inside a method) — e.g.
+    // passed as an argument to a class-level DSL call — must also resolve lexically.
+    let mut context = GraphTest::new();
+    context.index_uri("file:///foo.rb", {
+        r"
+        module A
+          module B
+            class Sibling; end
+
+            class Main
+              class << self
+                Sibling
+              end
+            end
+          end
+        end
+        "
+    });
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:7:9-7:16");
+}
+
+#[test]
+fn singleton_class_lexical_scope_still_resolves_sibling_from_other_scopes() {
+    // Sanity / non-regression: a sibling constant must continue to resolve from every other
+    // scope where it already worked (instance method body, class body, top level).
+    let mut context = GraphTest::new();
+    context.index_uri("file:///foo.rb", {
+        r"
+        module A
+          module B
+            class Sibling; end
+
+            class Main
+              Sibling
+
+              def instance_method
+                Sibling
+              end
+            end
+
+            Sibling
+          end
+        end
+        "
+    });
+    context.resolve();
+
+    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:6:7-6:14");
+    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:9:9-9:16");
+    assert_constant_reference_to!(context, "A::B::Sibling", "file:///foo.rb:13:5-13:12");
+}
+
+#[test]
+fn singleton_class_scope_does_not_over_resolve_unknown_constant() {
+    // Sanity: a constant that genuinely does not exist must remain unresolved even with the
+    // fix in place — the fix must not invent resolutions by walking too far.
+    let mut context = GraphTest::new();
+    context.index_uri("file:///foo.rb", {
+        r"
+        module A
+          class Main
+            class << self
+              def m
+                NotDefined
+              end
+            end
+          end
+        end
+        "
+    });
+    context.resolve();
+
+    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+    assert_constant_reference_unresolved!(context, "NotDefined", "file:///foo.rb:5:9-5:19");
+}
+
+#[test]
 fn resolution_for_class_variable_in_nested_singleton_class() {
     let mut context = GraphTest::new();
     context.index_uri("file:///foo.rb", {

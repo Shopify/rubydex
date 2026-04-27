@@ -2273,14 +2273,14 @@ mod tests {
         assert_eq!(13, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
         assert_eq!(2, context.graph().documents.len());
-        assert_eq!(19, context.graph().names.len());
+        assert_eq!(20, context.graph().names.len());
         assert_eq!(47, context.graph().strings.len());
         context.index_uri("file:///foo.rb", source);
         assert_eq!(49, context.graph().definitions.len());
         assert_eq!(13, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
         assert_eq!(2, context.graph().documents.len());
-        assert_eq!(19, context.graph().names.len());
+        assert_eq!(20, context.graph().names.len());
         assert_eq!(47, context.graph().strings.len());
     }
 

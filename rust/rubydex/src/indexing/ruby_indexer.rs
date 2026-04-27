@@ -1507,9 +1507,10 @@ impl Visit<'_> for RubyIndexer<'_> {
         };
 
         let string_id = self.local_graph.intern_string(singleton_class_name);
+        let nesting = self.current_lexical_scope_name_id();
         let name_id = self
             .local_graph
-            .add_name(Name::new(string_id, ParentScope::Attached(attached_target), None));
+            .add_name(Name::new(string_id, ParentScope::Attached(attached_target), nesting));
 
         let definition = Definition::SingletonClass(Box::new(SingletonClassDefinition::new(
             name_id,

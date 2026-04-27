@@ -44,9 +44,10 @@ pub fn nesting_stack_to_name_id(
 }
 
 /// Processes a qualified name (e.g., `"Foo::Bar"` or `"<Foo>"`) by splitting on `"::"` and registering each part in the
-/// graph. Singleton class names (starting with `<`) use `ParentScope::Attached` and `nesting=None`, matching how the
-/// indexer creates them. When a singleton is the first part (i.e., `current_name` has no parent), `current_nesting` is
-/// used as the attachment point.
+/// graph. Singleton class names (starting with `<`) use `ParentScope::Attached` and a `nesting` equal to the attached
+/// target, matching how the indexer creates them (`class << self` always sits lexically inside its attached class).
+/// When a singleton is the first part (i.e., `current_name` has no parent), `current_nesting` is used as the attachment
+/// point.
 fn process_qualified_name(
     graph: &mut Graph,
     qualified_name: &str,
@@ -61,12 +62,13 @@ fn process_qualified_name(
         }
 
         let (parent_scope, nesting_for_part) = if part.starts_with('<') {
-            let attached = match *current_name {
-                ParentScope::Some(id) | ParentScope::Attached(id) => ParentScope::Attached(id),
-                _ => current_nesting.map_or(ParentScope::None, ParentScope::Attached),
+            let attached_id = match *current_name {
+                ParentScope::Some(id) | ParentScope::Attached(id) => Some(id),
+                _ => *current_nesting,
             };
 
-            (attached, None)
+            let attached = attached_id.map_or(ParentScope::None, ParentScope::Attached);
+            (attached, attached_id)
         } else {
             (*current_name, *current_nesting)
         };
