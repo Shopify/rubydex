@@ -2454,6 +2454,36 @@ mod singleton_ancestors_tests {
             ["Foo::<Foo>", "Bar", "Module", "Object", "Kernel", "BasicObject"]
         );
     }
+
+    #[test]
+    fn singleton_class_created_in_remaining_definitions_has_linearized_ancestors() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+                class Foo
+                  @var = 1
+                end
+                ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
 }
 
 mod method_tests {
@@ -4875,36 +4905,6 @@ mod rbs_tests {
         assert_members_eq!(context, "Foo::<Foo>", ["class_alias()", "class_method()"]);
         assert_members_eq!(context, "Baz", ["copy()", "original()"]);
     }
-}
-
-#[test]
-fn singleton_class_created_in_remaining_definitions_has_linearized_ancestors() {
-    let mut context = GraphTest::new();
-    context.index_uri(
-        "file:///foo.rb",
-        r"
-            class Foo
-              @var = 1
-            end
-            ",
-    );
-    context.resolve();
-
-    assert_no_diagnostics!(&context);
-    assert_ancestors_eq!(
-        context,
-        "Foo::<Foo>",
-        [
-            "Foo::<Foo>",
-            "Object::<Object>",
-            "BasicObject::<BasicObject>",
-            "Class",
-            "Module",
-            "Object",
-            "Kernel",
-            "BasicObject"
-        ]
-    );
 }
 
 mod visibility_resolution_tests {
