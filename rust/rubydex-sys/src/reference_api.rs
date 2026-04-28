@@ -226,6 +226,43 @@ pub unsafe extern "C" fn rdx_resolved_constant_reference_declaration(
     })
 }
 
+/// Returns the declaration of the resolved receiver for the given method reference. Returns NULL when the method
+/// reference has no tracked receiver or when the receiver could not be resolved. Caller must free with
+/// `free_c_declaration`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the reference cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_method_reference_receiver_declaration(
+    pointer: GraphPointer,
+    reference_id: u64,
+) -> *const CDeclaration {
+    with_graph(pointer, |graph| {
+        let ref_id = MethodReferenceId::new(reference_id);
+        let reference = graph.method_references().get(&ref_id).expect("Reference not found");
+
+        let Some(name_id) = reference.receiver() else {
+            return ptr::null();
+        };
+
+        let name_ref = graph.names().get(&name_id).expect("Name ID should exist");
+
+        match name_ref {
+            NameRef::Resolved(resolved) => {
+                let decl_id = *resolved.declaration_id();
+                let decl = graph.declarations().get(&decl_id).expect("Declaration not found");
+                Box::into_raw(Box::new(CDeclaration::from_declaration(decl_id, decl))).cast_const()
+            }
+            NameRef::Unresolved(_) => ptr::null(),
+        }
+    })
+}
+
 /// Returns a newly allocated `Location` for the given method reference id.
 /// Caller must free the returned pointer with `rdx_location_free`.
 ///

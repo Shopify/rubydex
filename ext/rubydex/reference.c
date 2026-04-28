@@ -75,6 +75,28 @@ static VALUE rdxr_method_reference_location(VALUE self) {
     return location;
 }
 
+// MethodReference#receiver -> Rubydex::Declaration?
+// Returns the resolved declaration for the receiver of the method call. Returns nil when the receiver is not a
+// tracked constant or cannot be resolved.
+static VALUE rdxr_method_reference_receiver(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const struct CDeclaration *decl = rdx_method_reference_receiver_declaration(graph, data->id);
+    if (decl == NULL) {
+        return Qnil;
+    }
+
+    VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);
+    VALUE argv[] = {data->graph_obj, ULL2NUM(decl->id)};
+    free_c_declaration(decl);
+
+    return rb_class_new_instance(2, argv, decl_class);
+}
+
 // ResolvedConstantReference#declaration -> Declaration
 static VALUE rdxr_resolved_constant_reference_declaration(VALUE self) {
     HandleData *data;
@@ -120,4 +142,5 @@ void rdxi_initialize_reference(VALUE mRubydex) {
     rb_define_method(cMethodReference, "initialize", rdxr_handle_initialize, 2);
     rb_define_method(cMethodReference, "name", rdxr_method_reference_name, 0);
     rb_define_method(cMethodReference, "location", rdxr_method_reference_location, 0);
+    rb_define_method(cMethodReference, "receiver", rdxr_method_reference_receiver, 0);
 }
