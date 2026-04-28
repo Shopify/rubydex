@@ -1,5 +1,5 @@
 # frozen_string_literal: true
 
 module Rubydex
-  VERSION = "0.1.0.beta13"
+  VERSION = "0.1.0.beta14"
 end
