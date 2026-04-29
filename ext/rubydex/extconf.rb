@@ -141,10 +141,12 @@ end
 
 File.write("Makefile", new_makefile)
 
-begin
-  require "extconf_compile_commands_json"
+if developing_rubydex
+  begin
+    require "extconf_compile_commands_json"
 
-  ExtconfCompileCommandsJson.generate!
-  ExtconfCompileCommandsJson.symlink!
-rescue LoadError # rubocop:disable Lint/SuppressedException
+    ExtconfCompileCommandsJson.generate!
+    ExtconfCompileCommandsJson.symlink!
+  rescue LoadError # rubocop:disable Lint/SuppressedException
+  end
 end
