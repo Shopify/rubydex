@@ -9,7 +9,7 @@ use libc::{c_char, c_void};
 use rubydex::indexing::LanguageId;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
-use rubydex::model::ids::{DeclarationId, NameId};
+use rubydex::model::ids::{DeclarationId, NameId, UriId};
 use rubydex::model::keywords;
 use rubydex::model::name::NameRef;
 use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
@@ -257,6 +257,29 @@ pub unsafe extern "C" fn rdx_index_all(
 
         let boxed = c_strings.into_boxed_slice();
         Box::into_raw(boxed).cast::<*const c_char>()
+    })
+}
+
+/// Returns a pointer to the URI ID of the document identified by `uri`, or NULL if it doesn't exist.
+/// Caller must free the returned pointer with `free_u64`.
+///
+/// # Safety
+///
+/// Expects both the graph pointer and uri string pointer to be valid
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_get_document(pointer: GraphPointer, uri: *const c_char) -> *const u64 {
+    let Ok(uri_str) = (unsafe { utils::convert_char_ptr_to_string(uri) }) else {
+        return ptr::null();
+    };
+
+    with_graph(pointer, |graph| {
+        let uri_id = UriId::from(uri_str.as_str());
+
+        if graph.documents().contains_key(&uri_id) {
+            Box::into_raw(Box::new(*uri_id)).cast_const()
+        } else {
+            ptr::null()
+        }
     })
 }
 
