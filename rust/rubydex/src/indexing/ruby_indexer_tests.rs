@@ -3271,31 +3271,38 @@ mod visibility_tests {
         assert_no_local_diagnostics!(&context);
 
         assert_definition_at!(&context, "6:21-6:24", ConstantVisibility, |def| {
-            assert_def_name_eq!(&context, def, "BAR");
+            assert_string_eq!(&context, def.target(), "BAR");
+            assert!(def.receiver().is_none());
             assert_eq!(def.visibility(), &Visibility::Private);
         });
         assert_definition_at!(&context, "6:27-6:30", ConstantVisibility, |def| {
-            assert_def_name_eq!(&context, def, "BAZ");
+            assert_string_eq!(&context, def.target(), "BAZ");
+            assert!(def.receiver().is_none());
             assert_eq!(def.visibility(), &Visibility::Private);
         });
         assert_definition_at!(&context, "7:20-7:25", ConstantVisibility, |def| {
-            assert_def_name_eq!(&context, def, "FOO");
+            assert_string_eq!(&context, def.target(), "FOO");
+            assert!(def.receiver().is_none());
             assert_eq!(def.visibility(), &Visibility::Private);
         });
         assert_definition_at!(&context, "13:26-13:29", ConstantVisibility, |def| {
-            assert_def_name_eq!(&context, def, "Foo::BAR");
+            assert_string_eq!(&context, def.target(), "BAR");
+            assert_name_path_eq!(&context, "Foo", def.receiver().unwrap());
             assert_eq!(def.visibility(), &Visibility::Public);
         });
         assert_definition_at!(&context, "14:25-14:30", ConstantVisibility, |def| {
-            assert_def_name_eq!(&context, def, "Foo::BAZ");
+            assert_string_eq!(&context, def.target(), "BAZ");
+            assert_name_path_eq!(&context, "Foo", def.receiver().unwrap());
             assert_eq!(def.visibility(), &Visibility::Public);
         });
         assert_definition_at!(&context, "17:26-17:29", ConstantVisibility, |def| {
-            assert_def_name_eq!(&context, def, "Qux");
+            assert_string_eq!(&context, def.target(), "Qux");
+            assert!(def.receiver().is_none());
             assert_eq!(def.visibility(), &Visibility::Private);
         });
         assert_definition_at!(&context, "20:22-20:25", ConstantVisibility, |def| {
-            assert_def_name_eq!(&context, def, "Foo::BAR");
+            assert_string_eq!(&context, def.target(), "BAR");
+            assert_name_path_eq!(&context, "Foo", def.receiver().unwrap());
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
