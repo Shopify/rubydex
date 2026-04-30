@@ -2,11 +2,12 @@
 # frozen_string_literal: true
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
 require "optparse"
 
-OptionParser.new do |parser|
-  parser.banner = "Usage: [path1, path2]"
+options = {}
 
+OptionParser.new do |parser|
   parser.on("--version", "Print the gem's version") do
     require "rubydex/version"
     puts "v#{Rubydex::VERSION}"
@@ -17,31 +18,34 @@ OptionParser.new do |parser|
     puts parser
     exit
   end
+
+  parser.on("-i", "--interactive", "Open an interactive session with a populated graph for the current workspace") do
+    options[:interactive] = true
+  end
 end.parse!
 
 require "rubydex"
 
-workspace_path = ARGV.first
-
-# If a workspace path is passed, we need to ensure that Bundler is setup in that context so that we find the
-# dependencies for that project
-if workspace_path
-  gemfile_path = File.join(workspace_path, "Gemfile")
-
-  if File.exist?(gemfile_path)
-    ENV["BUNDLE_GEMFILE"] = gemfile_path
-
-    begin
-      Bundler.setup
-    rescue Bundler::BundlerError => e
-      $stderr.puts(<<~MESSAGE)
-        Bundle setup failed for #{gemfile_path}. Indexing of dependencies may be partial
-        Error:
-          #{e.message}
-      MESSAGE
-    end
-  end
+def __with_timer(message, &block)
+  print(message)
+  start = Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond)
+  block.call
+  duration = Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond) - start
+  puts " finished in #{duration.round(2)}ms"
 end
 
-graph = Rubydex::Graph.new(workspace_path: workspace_path)
-graph.index_workspace
+graph = Rubydex::Graph.new
+__with_timer("Indexing workspace...") { graph.index_workspace }
+__with_timer("Resolving graph...") { graph.resolve }
+
+if options[:interactive]
+  begin
+    require "irb"
+    IRB.setup(nil)
+    IRB.conf[:IRB_NAME] = "rubydex"
+    workspace = IRB::WorkSpace.new(binding)
+    IRB::Irb.new(workspace).run(IRB.conf)
+  rescue LoadError
+    abort("Interactive mode requires `irb` to be in the bundle")
+  end
+end

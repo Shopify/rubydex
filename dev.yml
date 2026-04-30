@@ -4,6 +4,8 @@ up:
   - ruby
   - bundler
   - rust
+  - packages:
+    - libyaml
   # met? checks: 1) binary exists, 2) no file under rust/ (excluding rust/target/) is newer than the binary
   - custom:
       name: Install rubydex MCP server

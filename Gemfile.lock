@@ -7,7 +7,15 @@ GEM
   remote: https://rubygems.org/
   specs:
     ast (2.4.3)
+    date (3.5.1)
+    erb (6.0.2)
     extconf_compile_commands_json (0.0.7)
+    io-console (0.8.2)
+    irb (1.17.0)
+      pp (>= 0.6.0)
+      prism (>= 1.3.0)
+      rdoc (>= 4.0.0)
+      reline (>= 0.4.2)
     json (2.19.4)
     language_server-protocol (3.17.0.5)
     lint_roller (1.1.0)
@@ -24,7 +32,13 @@ GEM
     parser (3.3.11.1)
       ast (~> 2.4.1)
       racc
+    pp (0.6.3)
+      prettyprint
+    prettyprint (0.2.0)
     prism (1.9.0)
+    psych (5.3.1)
+      date
+      stringio
     racc (1.8.1)
     rainbow (3.1.1)
     rake (13.3.1)
@@ -33,7 +47,13 @@ GEM
     rbs (3.10.3)
       logger
       tsort
+    rdoc (7.2.0)
+      erb
+      psych (>= 4.0.0)
+      tsort
     regexp_parser (2.12.0)
+    reline (0.6.3)
+      io-console (~> 0.5)
     rubocop (1.84.0)
       json (~> 2.3)
       language_server-protocol (~> 3.17.0.2)
@@ -53,6 +73,7 @@ GEM
     ruby-progressbar (1.13.0)
     ruby_memcheck (3.0.1)
       nokogiri
+    stringio (3.2.0)
     tsort (0.2.0)
     unicode-display_width (3.2.0)
       unicode-emoji (~> 4.1)
@@ -64,6 +85,7 @@ PLATFORMS
 
 DEPENDENCIES
   extconf_compile_commands_json
+  irb
   minitest
   rake (~> 13.3)
   rake-compiler
