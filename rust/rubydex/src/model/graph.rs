@@ -10,9 +10,12 @@ use crate::model::definitions::{Definition, Receiver};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
-use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
+use crate::model::ids::{
+    ConstantReferenceId, DeclarationId, DefinitionId, InstanceVariableReferenceId, MethodReferenceId, NameId, StringId,
+    UriId,
+};
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
-use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::references::{ConstantReference, InstanceVariableReference, MethodRef, ResolvedInstanceVariableRef};
 use crate::model::string_ref::StringRef;
 use crate::model::visibility::Visibility;
 use crate::stats;
@@ -69,6 +72,8 @@ pub struct Graph {
     constant_references: IdentityHashMap<ConstantReferenceId, ConstantReference>,
     // Map of method references that still need to be resolved
     method_references: IdentityHashMap<MethodReferenceId, MethodRef>,
+    // Map of instance variable references
+    instance_variable_references: IdentityHashMap<InstanceVariableReferenceId, InstanceVariableReference>,
 
     /// The position encoding used for LSP line/column locations. Not related to the actual encoding of the file
     position_encoding: Encoding,
@@ -96,6 +101,7 @@ impl Graph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
+            instance_variable_references: IdentityHashMap::default(),
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
@@ -441,6 +447,14 @@ impl Graph {
     #[must_use]
     pub fn method_references(&self) -> &IdentityHashMap<MethodReferenceId, MethodRef> {
         &self.method_references
+    }
+
+    // Returns an immutable reference to the instance variable references map
+    #[must_use]
+    pub fn instance_variable_references(
+        &self,
+    ) -> &IdentityHashMap<InstanceVariableReferenceId, InstanceVariableReference> {
+        &self.instance_variable_references
     }
 
     #[must_use]
@@ -858,6 +872,44 @@ impl Graph {
             .add_constant_reference(reference_id);
     }
 
+    /// Records a resolved instance variable reference by linking it to its target declaration.
+    ///
+    /// # Panics
+    ///
+    /// Will panic if invoked for a non existing reference id, or for a non existing declaration.
+    pub fn record_resolved_ivar_reference(
+        &mut self,
+        reference_id: InstanceVariableReferenceId,
+        declaration_id: DeclarationId,
+    ) {
+        match self.instance_variable_references.entry(reference_id) {
+            Entry::Occupied(entry) => match entry.remove() {
+                InstanceVariableReference::Unresolved(unresolved) => {
+                    let resolved = InstanceVariableReference::Resolved(Box::new(ResolvedInstanceVariableRef::new(
+                        *unresolved,
+                        declaration_id,
+                    )));
+
+                    self.instance_variable_references.insert(reference_id, resolved);
+                }
+                already_resolved @ InstanceVariableReference::Resolved(_) => {
+                    debug_assert!(
+                        false,
+                        "Tried to resolve an instance variable reference that was already resolved"
+                    );
+                    self.instance_variable_references.insert(reference_id, already_resolved);
+                    return;
+                }
+            },
+            Entry::Vacant(_) => panic!("Tried to record an ivar reference for an id that doesn't exist"),
+        }
+
+        self.declarations
+            .get_mut(&declaration_id)
+            .expect("Tried to record an ivar reference for a declaration that doesn't exist")
+            .add_instance_variable_reference(reference_id);
+    }
+
     /// Handles the deletion of a document identified by `uri`.
     /// Returns the `UriId` of the removed document, or `None` if it didn't exist.
     ///
@@ -874,8 +926,17 @@ impl Graph {
     /// Merges everything in `other` into this Graph. This method is meant to merge all graph representations from
     /// different threads, but not meant to handle updates to the existing global representation
     pub fn extend(&mut self, local_graph: LocalGraph) {
-        let (uri_id, document, definitions, strings, names, constant_references, method_references, name_dependents) =
-            local_graph.into_parts();
+        let (
+            uri_id,
+            document,
+            definitions,
+            strings,
+            names,
+            constant_references,
+            method_references,
+            instance_variable_references,
+            name_dependents,
+        ) = local_graph.into_parts();
 
         if self.documents.insert(uri_id, document).is_some() {
             debug_assert!(false, "UriId collision in global graph");
@@ -924,6 +985,16 @@ impl Graph {
         for (method_ref_id, method_ref) in method_references {
             if self.method_references.insert(method_ref_id, method_ref).is_some() {
                 debug_assert!(false, "Method ReferenceId collision in global graph");
+            }
+        }
+
+        for (ivar_ref_id, ivar_ref) in instance_variable_references {
+            if self
+                .instance_variable_references
+                .insert(ivar_ref_id, ivar_ref)
+                .is_some()
+            {
+                debug_assert!(false, "InstanceVariable ReferenceId collision in global graph");
             }
         }
 
@@ -1022,6 +1093,18 @@ impl Graph {
         for ref_id in document.method_references() {
             if let Some(method_ref) = self.method_references.remove(ref_id) {
                 self.untrack_string(*method_ref.str());
+            }
+        }
+
+        for ref_id in document.instance_variable_references() {
+            if let Some(ivar_ref) = self.instance_variable_references.remove(ref_id) {
+                if let InstanceVariableReference::Resolved(resolved) = &ivar_ref
+                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
+                {
+                    declaration.remove_instance_variable_reference(ref_id);
+                }
+
+                self.untrack_string(*ivar_ref.str_id());
             }
         }
 
@@ -1477,8 +1560,8 @@ mod tests {
     use crate::model::declaration::Ancestors;
     use crate::test_utils::GraphTest;
     use crate::{
-        assert_declaration_does_not_exist, assert_dependents, assert_descendants, assert_members_eq,
-        assert_no_diagnostics, assert_no_members,
+        assert_declaration_does_not_exist, assert_declaration_references_count_eq, assert_dependents,
+        assert_descendants, assert_members_eq, assert_no_diagnostics, assert_no_members,
     };
 
     #[test]
@@ -1634,6 +1717,49 @@ mod tests {
             let declaration = context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap();
             assert!(declaration.as_namespace().unwrap().references().is_empty());
         }
+    }
+
+    #[test]
+    fn ivar_reference_resolves_across_incremental_updates() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///decl.rb",
+            r"
+            class Foo
+              @var = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///read.rb",
+            r"
+            class Bar
+              def Foo.baz
+                @var
+              end
+            end
+            ",
+        );
+
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+
+        context.delete_uri("file:///read.rb");
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 0);
+
+        context.index_uri(
+            "file:///read.rb",
+            r"
+            class Bar
+              def Foo.baz
+                @var
+              end
+            end
+            ",
+        );
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
     }
 
     #[test]

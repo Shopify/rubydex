@@ -4,7 +4,7 @@ use line_index::LineIndex;
 use url::Url;
 
 use crate::diagnostic::Diagnostic;
-use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId};
+use crate::model::ids::{ConstantReferenceId, DefinitionId, InstanceVariableReferenceId, MethodReferenceId};
 
 // Represents a document currently loaded into memory. Identified by its unique URI, it holds the edges to all
 // definitions and references discovered in it
@@ -15,6 +15,7 @@ pub struct Document {
     definition_ids: Vec<DefinitionId>,
     method_reference_ids: Vec<MethodReferenceId>,
     constant_reference_ids: Vec<ConstantReferenceId>,
+    instance_variable_reference_ids: Vec<InstanceVariableReferenceId>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -27,6 +28,7 @@ impl Document {
             definition_ids: Vec::new(),
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
+            instance_variable_reference_ids: Vec::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -71,6 +73,15 @@ impl Document {
 
     pub fn add_constant_reference(&mut self, reference_id: ConstantReferenceId) {
         self.constant_reference_ids.push(reference_id);
+    }
+
+    #[must_use]
+    pub fn instance_variable_references(&self) -> &[InstanceVariableReferenceId] {
+        &self.instance_variable_reference_ids
+    }
+
+    pub fn add_instance_variable_reference(&mut self, reference_id: InstanceVariableReferenceId) {
+        self.instance_variable_reference_ids.push(reference_id);
     }
 
     #[must_use]

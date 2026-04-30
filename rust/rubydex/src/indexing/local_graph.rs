@@ -5,9 +5,11 @@ use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::graph::NameDependent;
 use crate::model::identity_maps::IdentityHashMap;
-use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
+use crate::model::ids::{
+    ConstantReferenceId, DefinitionId, InstanceVariableReferenceId, MethodReferenceId, NameId, StringId, UriId,
+};
 use crate::model::name::{Name, NameRef};
-use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::references::{ConstantReference, InstanceVariableRef, InstanceVariableReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::offset::Offset;
 
@@ -19,6 +21,7 @@ type LocalGraphParts = (
     IdentityHashMap<NameId, NameRef>,
     IdentityHashMap<ConstantReferenceId, ConstantReference>,
     IdentityHashMap<MethodReferenceId, MethodRef>,
+    IdentityHashMap<InstanceVariableReferenceId, InstanceVariableReference>,
     IdentityHashMap<NameId, Vec<NameDependent>>,
 );
 
@@ -31,6 +34,7 @@ pub struct LocalGraph {
     names: IdentityHashMap<NameId, NameRef>,
     constant_references: IdentityHashMap<ConstantReferenceId, ConstantReference>,
     method_references: IdentityHashMap<MethodReferenceId, MethodRef>,
+    instance_variable_references: IdentityHashMap<InstanceVariableReferenceId, InstanceVariableReference>,
     name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
 }
 
@@ -45,6 +49,7 @@ impl LocalGraph {
             names: IdentityHashMap::default(),
             constant_references: IdentityHashMap::default(),
             method_references: IdentityHashMap::default(),
+            instance_variable_references: IdentityHashMap::default(),
             name_dependents: IdentityHashMap::default(),
         }
     }
@@ -187,6 +192,27 @@ impl LocalGraph {
         reference_id
     }
 
+    // Instance variable references
+
+    #[must_use]
+    pub fn instance_variable_references(
+        &self,
+    ) -> &IdentityHashMap<InstanceVariableReferenceId, InstanceVariableReference> {
+        &self.instance_variable_references
+    }
+
+    pub fn add_instance_variable_reference(&mut self, reference: InstanceVariableRef) -> InstanceVariableReferenceId {
+        let reference_id = reference.id();
+        let entry = InstanceVariableReference::Unresolved(Box::new(reference));
+
+        if self.instance_variable_references.insert(reference_id, entry).is_some() {
+            debug_assert!(false, "InstanceVariableReferenceId collision in local graph");
+        }
+
+        self.document.add_instance_variable_reference(reference_id);
+        reference_id
+    }
+
     // Diagnostics
 
     #[must_use]
@@ -218,6 +244,7 @@ impl LocalGraph {
             self.names,
             self.constant_references,
             self.method_references,
+            self.instance_variable_references,
             self.name_dependents,
         )
     }

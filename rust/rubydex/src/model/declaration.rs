@@ -448,6 +448,43 @@ impl Declaration {
             _ => unreachable!("Cannot remove constant reference from {} declaration", self.kind()),
         }
     }
+
+    /// Returns the instance variable reference IDs for `InstanceVariable` declarations.
+    /// Returns `None` for other declaration types.
+    #[must_use]
+    pub fn instance_variable_references(&self) -> Option<&IdentityHashSet<InstanceVariableReferenceId>> {
+        match self {
+            Declaration::InstanceVariable(it) => Some(it.references()),
+            _ => None,
+        }
+    }
+
+    /// Adds an instance variable reference to this declaration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a declaration that doesn't track instance variable references.
+    pub fn add_instance_variable_reference(&mut self, reference_id: InstanceVariableReferenceId) {
+        match self {
+            Declaration::InstanceVariable(it) => it.add_reference(reference_id),
+            _ => unreachable!("Cannot add instance variable reference to {} declaration", self.kind()),
+        }
+    }
+
+    /// Removes an instance variable reference from this declaration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a declaration that doesn't track instance variable references.
+    pub fn remove_instance_variable_reference(&mut self, reference_id: &InstanceVariableReferenceId) {
+        match self {
+            Declaration::InstanceVariable(it) => it.remove_reference(reference_id),
+            _ => unreachable!(
+                "Cannot remove instance variable reference from {} declaration",
+                self.kind()
+            ),
+        }
+    }
 }
 
 #[derive(Debug)]
