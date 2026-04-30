@@ -4061,6 +4061,19 @@ mod constant_reference_tests {
     }
 
     #[test]
+    fn index_unresolved_constant_references_in_default_values() {
+        let context = index_source({
+            "
+            def foo(a = C1, b = C2::C3); end
+            def bar(a: C4, b: C5::C6); end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_constant_references_eq!(&context, ["C1", "C2", "C3", "C4", "C5", "C6"]);
+    }
+
+    #[test]
     fn index_constant_path_and_write_visits_value() {
         let context = index_source({
             "

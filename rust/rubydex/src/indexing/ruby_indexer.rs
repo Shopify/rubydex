@@ -234,6 +234,7 @@ impl<'a> RubyIndexer<'a> {
                     Offset::from_prism_location(&name_loc),
                     str_id,
                 )));
+                self.visit(&opt_param.value());
             }
 
             if let Some(rest) = parameters_list.rest() {
@@ -276,6 +277,7 @@ impl<'a> RubyIndexer<'a> {
                         let str_id = self.local_graph.intern_string(self.offset_to_string(&offset));
 
                         parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(offset, str_id)));
+                        self.visit(&optional.value());
                     }
                     _ => {}
                 }
