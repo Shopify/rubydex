@@ -259,6 +259,9 @@ class Rubydex::Graph
   sig { params(uri: String).returns(T.nilable(Rubydex::Document)) }
   def delete_document(uri); end
 
+  sig { params(uri: String).returns(T.nilable(Rubydex::Document)) }
+  def document(uri); end
+
   sig { returns(T::Array[Rubydex::Diagnostic]) }
   def diagnostics; end
 

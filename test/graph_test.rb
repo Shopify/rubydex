@@ -987,6 +987,49 @@ class GraphTest < Minitest::Test
     assert_raises(TypeError) { graph.keyword(nil) }
   end
 
+  def test_document_returns_specific_document
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+      end
+    RUBY
+
+    document = graph.document("file:///foo.rb")
+    assert_instance_of(Rubydex::Document, document)
+    assert_equal(1, document.definitions.count)
+  end
+
+  def test_document_returns_nil_for_non_existing_uri
+    graph = Rubydex::Graph.new
+    assert_nil(graph.document("file:///non_existing.rb"))
+  end
+
+  def test_document_with_invalid_argument
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) { graph.document(123) }
+  end
+
+  def test_document_returns_nil_after_delete_document
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+
+    refute_nil(graph.document("file:///foo.rb"))
+
+    graph.delete_document("file:///foo.rb")
+    assert_nil(graph.document("file:///foo.rb"))
+  end
+
+  def test_document_returns_correct_document_with_multiple_documents
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.index_source("file:///bar.rb", "class Bar; end", "ruby")
+    graph.index_source("file:///baz.rb", "class Baz; end", "ruby")
+
+    document = graph.document("file:///bar.rb")
+    assert_instance_of(Rubydex::Document, document)
+    assert_equal("file:///bar.rb", document.uri)
+  end
+
   private
 
   def assert_diagnostics(expected, actual)
