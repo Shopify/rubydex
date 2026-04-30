@@ -8,7 +8,7 @@ GEM
   specs:
     ast (2.4.3)
     date (3.5.1)
-    erb (6.0.2)
+    erb (6.0.4)
     extconf_compile_commands_json (0.0.7)
     io-console (0.8.2)
     irb (1.17.0)
