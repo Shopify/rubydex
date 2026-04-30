@@ -12,6 +12,7 @@ gem "rubocop"
 gem "rubocop-shopify"
 gem "extconf_compile_commands_json"
 gem "rbs"
+gem "irb"
 
 # Gems that aren't supported on Windows
 platforms :ruby do
