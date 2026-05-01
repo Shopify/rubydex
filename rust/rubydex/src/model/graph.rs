@@ -645,7 +645,7 @@ impl Graph {
         std::mem::take(&mut self.pending_work)
     }
 
-    fn push_work(&mut self, unit: Unit) {
+    pub(crate) fn push_work(&mut self, unit: Unit) {
         self.pending_work.push(unit);
     }
 
@@ -2398,6 +2398,34 @@ mod incremental_resolution_tests {
         }
     }
 
+    /// Compares incremental resolution against a fresh index at the declaration-ID level.
+    ///
+    /// This is a broad consistency check: it catches both stale declarations left
+    /// behind by incremental invalidation and declarations that incremental
+    /// resolution failed to recreate.
+    fn assert_declaration_ids_match(incremental: &GraphTest, fresh: &GraphTest) {
+        let extras: Vec<_> = incremental
+            .graph()
+            .declarations()
+            .iter()
+            .filter(|(id, _)| !fresh.graph().declarations().contains_key(id))
+            .map(|(_, d)| format!("{} ({})", d.name(), d.kind()))
+            .collect();
+
+        let missing: Vec<_> = fresh
+            .graph()
+            .declarations()
+            .iter()
+            .filter(|(id, _)| !incremental.graph().declarations().contains_key(id))
+            .map(|(_, d)| format!("{} ({})", d.name(), d.kind()))
+            .collect();
+
+        assert!(
+            extras.is_empty() && missing.is_empty(),
+            "Declaration mismatch:\n  Extra: {extras:?}\n  Missing: {missing:?}"
+        );
+    }
+
     #[test]
     fn new_namespace_shadowing_include_target_invalidates_references() {
         let mut context = GraphTest::new();
@@ -3770,6 +3798,162 @@ mod incremental_resolution_tests {
 
         assert_declaration_exists!(context, "Parent::Target");
         assert_declaration_exists!(context, "Parent::Target::<Target>");
+    }
+
+    #[test]
+    fn singleton_definition_survives_receiver_delete_readd() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.index_uri("file:///singleton.rb", "class << Foo; def bar; end; end");
+        incremental.resolve();
+        assert_declaration_exists!(incremental, "Foo::<Foo>");
+        assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
+
+        incremental.delete_uri("file:///foo.rb");
+        incremental.resolve();
+        assert_declaration_does_not_exist!(incremental, "Foo");
+        assert_declaration_does_not_exist!(incremental, "Foo::<Foo>");
+        assert_declaration_does_not_exist!(incremental, "Foo::<Foo>#bar()");
+        assert_declaration_does_not_exist!(incremental, "Object#bar()");
+
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///foo.rb", "class Foo; end");
+        fresh.index_uri("file:///singleton.rb", "class << Foo; def bar; end; end");
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+        assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
+    }
+
+    #[test]
+    fn explicit_singleton_method_survives_receiver_delete_readd() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.index_uri("file:///singleton.rb", "def Foo.bar; end");
+        incremental.resolve();
+        assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
+
+        incremental.delete_uri("file:///foo.rb");
+        incremental.resolve();
+        assert_declaration_does_not_exist!(incremental, "Foo::<Foo>#bar()");
+
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///foo.rb", "class Foo; end");
+        fresh.index_uri("file:///singleton.rb", "def Foo.bar; end");
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+        assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
+    }
+
+    #[test]
+    fn explicit_singleton_method_ivar_survives_receiver_delete_readd() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.index_uri("file:///singleton.rb", "def Foo.bar; @x = 1; end");
+        incremental.resolve();
+        assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
+        assert_declaration_exists!(incremental, "Foo::<Foo>#@x");
+
+        incremental.delete_uri("file:///foo.rb");
+        incremental.resolve();
+        assert_declaration_does_not_exist!(incremental, "Foo::<Foo>#bar()");
+        assert_declaration_does_not_exist!(incremental, "Foo::<Foo>#@x");
+
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///foo.rb", "class Foo; end");
+        fresh.index_uri("file:///singleton.rb", "def Foo.bar; @x = 1; end");
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+        assert_declaration_exists!(incremental, "Foo::<Foo>#bar()");
+        assert_declaration_exists!(incremental, "Foo::<Foo>#@x");
+    }
+
+    #[test]
+    fn constant_receiver_method_alias_survives_receiver_delete_readd() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.index_uri("file:///alias.rb", "Foo.alias_method :new_name, :old_name");
+        incremental.resolve();
+        assert_declaration_exists!(incremental, "Foo#new_name()");
+
+        incremental.delete_uri("file:///foo.rb");
+        incremental.resolve();
+        assert_declaration_does_not_exist!(incremental, "Foo#new_name()");
+
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///foo.rb", "class Foo; end");
+        fresh.index_uri("file:///alias.rb", "Foo.alias_method :new_name, :old_name");
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+        assert_declaration_exists!(incremental, "Foo#new_name()");
+    }
+
+    #[test]
+    fn singleton_body_method_alias_survives_receiver_delete_readd() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.index_uri("file:///singleton.rb", "class << Foo; def old; end; alias new old; end");
+        incremental.resolve();
+        assert_declaration_exists!(incremental, "Foo::<Foo>#old()");
+        assert_declaration_exists!(incremental, "Foo::<Foo>#new()");
+
+        incremental.delete_uri("file:///foo.rb");
+        incremental.resolve();
+        assert_declaration_does_not_exist!(incremental, "Foo::<Foo>#old()");
+        assert_declaration_does_not_exist!(incremental, "Foo::<Foo>#new()");
+        assert_declaration_does_not_exist!(incremental, "Object#old()");
+        assert_declaration_does_not_exist!(incremental, "Object#new()");
+
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///foo.rb", "class Foo; end");
+        fresh.index_uri("file:///singleton.rb", "class << Foo; def old; end; alias new old; end");
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+        assert_declaration_exists!(incremental, "Foo::<Foo>#new()");
+    }
+
+    #[test]
+    fn singleton_body_ivar_survives_receiver_delete_readd() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.index_uri("file:///singleton.rb", "class << Foo; @bar = 1; end");
+        incremental.resolve();
+        assert_declaration_exists!(incremental, "Foo::<Foo>::<<Foo>>#@bar");
+
+        incremental.delete_uri("file:///foo.rb");
+        incremental.resolve();
+        assert_declaration_does_not_exist!(incremental, "Foo::<Foo>::<<Foo>>#@bar");
+        assert_declaration_does_not_exist!(incremental, "Object::<Object>#@bar");
+
+        incremental.index_uri("file:///foo.rb", "class Foo; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///foo.rb", "class Foo; end");
+        fresh.index_uri("file:///singleton.rb", "class << Foo; @bar = 1; end");
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+        assert_declaration_exists!(incremental, "Foo::<Foo>::<<Foo>>#@bar");
     }
 
     #[test]
