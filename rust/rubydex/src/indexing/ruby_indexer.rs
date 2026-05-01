@@ -1260,11 +1260,8 @@ impl<'a> RubyIndexer<'a> {
             let str_id = self.local_graph.intern_string(name);
             let offset = Offset::from_prism_location(&location);
             let definition = Definition::ConstantVisibility(Box::new(ConstantVisibilityDefinition::new(
-                self.local_graph.add_name(Name::new(
-                    str_id,
-                    receiver_name_id.map_or(ParentScope::None, ParentScope::Some),
-                    self.current_lexical_scope_name_id(),
-                )),
+                receiver_name_id,
+                str_id,
                 visibility,
                 self.uri_id,
                 offset,

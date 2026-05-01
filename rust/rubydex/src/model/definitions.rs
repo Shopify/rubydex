@@ -155,8 +155,8 @@ impl Definition {
             Definition::Module(d) => Some(d.name_id()),
             Definition::Constant(d) => Some(d.name_id()),
             Definition::ConstantAlias(d) => Some(d.name_id()),
-            Definition::ConstantVisibility(d) => Some(d.name_id()),
-            Definition::MethodVisibility(_)
+            Definition::ConstantVisibility(_)
+            | Definition::MethodVisibility(_)
             | Definition::GlobalVariable(_)
             | Definition::InstanceVariable(_)
             | Definition::ClassVariable(_)
@@ -711,7 +711,8 @@ impl ConstantAliasDefinition {
 
 #[derive(Debug)]
 pub struct ConstantVisibilityDefinition {
-    name_id: NameId,
+    receiver: Option<NameId>,
+    target: StringId,
     visibility: Visibility,
     uri_id: UriId,
     offset: Offset,
@@ -722,8 +723,10 @@ pub struct ConstantVisibilityDefinition {
 
 impl ConstantVisibilityDefinition {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
-        name_id: NameId,
+        receiver: Option<NameId>,
+        target: StringId,
         visibility: Visibility,
         uri_id: UriId,
         offset: Offset,
@@ -732,7 +735,8 @@ impl ConstantVisibilityDefinition {
         lexical_nesting_id: Option<DefinitionId>,
     ) -> Self {
         Self {
-            name_id,
+            receiver,
+            target,
             visibility,
             uri_id,
             offset,
@@ -744,12 +748,17 @@ impl ConstantVisibilityDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.name_id))
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.target))
     }
 
     #[must_use]
-    pub fn name_id(&self) -> &NameId {
-        &self.name_id
+    pub fn receiver(&self) -> &Option<NameId> {
+        &self.receiver
+    }
+
+    #[must_use]
+    pub fn target(&self) -> &StringId {
+        &self.target
     }
 
     #[must_use]
@@ -782,7 +791,7 @@ impl ConstantVisibilityDefinition {
         &self.flags
     }
 }
-assert_mem_size!(ConstantVisibilityDefinition, 56);
+assert_mem_size!(ConstantVisibilityDefinition, 64);
 
 #[derive(Debug)]
 pub struct MethodVisibilityDefinition {

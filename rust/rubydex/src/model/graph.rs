@@ -260,10 +260,7 @@ impl Graph {
                 let name = self.names.get(it.name_id()).unwrap();
                 name.str()
             }
-            Definition::ConstantVisibility(it) => {
-                let name = self.names.get(it.name_id()).unwrap();
-                name.str()
-            }
+            Definition::ConstantVisibility(it) => it.target(),
             Definition::MethodVisibility(it) => it.str_id(),
             Definition::GlobalVariable(it) => it.str_id(),
             Definition::InstanceVariable(it) => it.str_id(),
@@ -320,9 +317,12 @@ impl Graph {
             Definition::ConstantAlias(it) => {
                 return self.name_id_to_declaration_id(*it.name_id());
             }
-            Definition::ConstantVisibility(it) => {
-                return self.name_id_to_declaration_id(*it.name_id());
-            }
+            Definition::ConstantVisibility(it) => (
+                it.receiver()
+                    .as_ref()
+                    .or_else(|| self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref())),
+                it.target(),
+            ),
             Definition::MethodVisibility(it) => (
                 self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
                 it.str_id(),
