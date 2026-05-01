@@ -13,6 +13,7 @@ use rubydex::model::graph::Graph;
 use rubydex::model::ids::{DeclarationId, NameId, UriId};
 use rubydex::model::keywords;
 use rubydex::model::name::NameRef;
+use rubydex::model::visibility::Visibility;
 use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
 use rubydex::resolution::Resolver;
 use rubydex::{indexing, integrity, listing, query};
@@ -959,6 +960,53 @@ pub unsafe extern "C" fn rdx_keyword_get(name: *const c_char) -> *const CKeyword
             .cast_const()
         }
         None => ptr::null(),
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy)]
+pub enum CVisibility {
+    Public = 0,
+    Protected = 1,
+    Private = 2,
+}
+
+/// Returns the visibility of a declaration (method, constant, class, or module) as a heap-allocated
+/// `CVisibility`, or NULL when the declaration carries no visibility (e.g. variables, singleton
+/// classes, todos). Caller must free the returned pointer with `free_c_visibility`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_visibility(pointer: GraphPointer, declaration_id: u64) -> *const CVisibility {
+    with_graph(pointer, |graph| {
+        let Some(visibility) = graph.visibility(&DeclarationId::new(declaration_id)) else {
+            return ptr::null();
+        };
+
+        let c_visibility = match visibility {
+            Visibility::Public => CVisibility::Public,
+            Visibility::Protected => CVisibility::Protected,
+            Visibility::Private => CVisibility::Private,
+            Visibility::ModuleFunction => {
+                unimplemented!("module_function visibility translation is not implemented yet")
+            }
+        };
+
+        Box::into_raw(Box::new(c_visibility)).cast_const()
+    })
+}
+
+/// Frees a `CVisibility` previously returned by `rdx_graph_visibility`.
+///
+/// # Safety
+///
+/// - `ptr` must be a valid pointer previously returned by `rdx_graph_visibility`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_c_visibility(ptr: *const CVisibility) {
+    unsafe {
+        let _ = Box::from_raw(ptr.cast_mut());
     }
 }
 

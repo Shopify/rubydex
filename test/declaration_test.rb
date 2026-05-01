@@ -691,6 +691,234 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_method_visibility_defaults_to_public
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bare; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:public, graph["Foo#bare()"].visibility)
+    end
+  end
+
+  def test_method_visibility_via_scope_flag
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          private
+
+          def hidden; end
+
+          protected
+
+          def guarded; end
+
+          public
+
+          def visible; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo#hidden()"].visibility)
+      assert_equal(:protected, graph["Foo#guarded()"].visibility)
+      assert_equal(:public, graph["Foo#visible()"].visibility)
+    end
+  end
+
+  def test_method_visibility_via_retroactive_call
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def hidden; end
+          private :hidden
+
+          def guarded; end
+          protected :guarded
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo#hidden()"].visibility)
+      assert_equal(:protected, graph["Foo#guarded()"].visibility)
+    end
+  end
+
+  def test_constant_visibility_defaults_to_public
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          BAR = 1
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:public, graph["Foo::BAR"].visibility)
+    end
+  end
+
+  def test_constant_visibility_via_private_constant
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          BAR = 1
+          private_constant :BAR
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo::BAR"].visibility)
+    end
+  end
+
+  def test_constant_alias_visibility
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          BAR = 1
+          ALIAS = BAR
+          private_constant :ALIAS
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo::ALIAS"].visibility)
+    end
+  end
+
+  def test_class_and_module_visibility_via_private_constant
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Outer
+          class Inner; end
+          module Helpers; end
+          private_constant :Inner, :Helpers
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Outer::Inner"].visibility)
+      assert_equal(:private, graph["Outer::Helpers"].visibility)
+    end
+  end
+
+  def test_visibility_is_undefined_for_declarations_without_visibility
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          @@class_var = 1
+
+          def initialize
+            @ivar = 1
+          end
+
+          class << self; end
+        end
+
+        $global = 1
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      refute_respond_to(graph["Foo::<Foo>"], :visibility)
+      refute_respond_to(graph["Foo\#@ivar"], :visibility)
+      refute_respond_to(graph["Foo\#@@class_var"], :visibility)
+      refute_respond_to(graph["$global"], :visibility)
+    end
+  end
+
+  def test_inline_module_function_visibility
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          module_function
+
+          def bar; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo#bar()"].visibility)
+      assert_equal(:public, graph["Foo::<Foo>#bar()"].visibility)
+    end
+  end
+
+  def test_visibility_predicates
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def visible; end
+
+          def hidden; end
+          private :hidden
+
+          def guarded; end
+          protected :guarded
+
+          BAR = 1
+          PRIVATE_BAR = 2
+          private_constant :PRIVATE_BAR
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      visible = graph["Foo#visible()"]
+      assert_predicate(visible, :public?)
+      refute_predicate(visible, :private?)
+      refute_predicate(visible, :protected?)
+
+      hidden = graph["Foo#hidden()"]
+      assert_predicate(hidden, :private?)
+      refute_predicate(hidden, :public?)
+      refute_predicate(hidden, :protected?)
+
+      guarded = graph["Foo#guarded()"]
+      assert_predicate(guarded, :protected?)
+      refute_predicate(guarded, :public?)
+      refute_predicate(guarded, :private?)
+
+      bar = graph["Foo::BAR"]
+      assert_predicate(bar, :public?)
+      refute_predicate(bar, :private?)
+
+      private_bar = graph["Foo::PRIVATE_BAR"]
+      assert_predicate(private_bar, :private?)
+      refute_predicate(private_bar, :public?)
+    end
+  end
+
   def test_constant_alias_with_multiple_definitions_returns_one_resolved_target
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

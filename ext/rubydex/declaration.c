@@ -407,6 +407,38 @@ static VALUE rdxr_variable_declaration_references(VALUE self) {
     return rb_ary_new();
 }
 
+static VALUE rdxi_visibility_to_symbol(CVisibility visibility) {
+    switch (visibility) {
+    case CVisibility_Public:
+        return ID2SYM(rb_intern("public"));
+    case CVisibility_Protected:
+        return ID2SYM(rb_intern("protected"));
+    case CVisibility_Private:
+        return ID2SYM(rb_intern("private"));
+    default:
+        rb_raise(rb_eRuntimeError, "Unknown CVisibility: %d", visibility);
+    }
+}
+
+// Declaration#visibility -> Symbol
+static VALUE rdxr_declaration_visibility(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const CVisibility *visibility = rdx_graph_visibility(graph, data->id);
+    if (visibility == NULL) {
+        rb_raise(rb_eRuntimeError, "declaration has no visibility");
+    }
+
+    VALUE symbol = rdxi_visibility_to_symbol(*visibility);
+    free_c_visibility(visibility);
+
+    return symbol;
+}
+
 // ConstantAlias#target -> Declaration?
 // Returns the first resolved target declaration for this constant alias, or nil if none of its definitions resolved to
 // a target
@@ -459,13 +491,19 @@ void rdxi_initialize_declaration(VALUE mRubydex) {
     rb_define_method(cNamespace, "descendants", rdxr_declaration_descendants, 0);
     rb_define_method(cNamespace, "members", rdxr_declaration_members, 0);
 
+    rb_define_method(cClass, "visibility", rdxr_declaration_visibility, 0);
+    rb_define_method(cModule, "visibility", rdxr_declaration_visibility, 0);
+
     // Constant and ConstantAlias have constant references
     rb_define_method(cConstant, "references", rdxr_constant_declaration_references, 0);
+    rb_define_method(cConstant, "visibility", rdxr_declaration_visibility, 0);
     rb_define_method(cConstantAlias, "references", rdxr_constant_declaration_references, 0);
     rb_define_method(cConstantAlias, "target", rdxr_constant_alias_target, 0);
+    rb_define_method(cConstantAlias, "visibility", rdxr_declaration_visibility, 0);
 
     // Method has method references
     rb_define_method(cMethod, "references", rdxr_method_declaration_references, 0);
+    rb_define_method(cMethod, "visibility", rdxr_declaration_visibility, 0);
 
     // Variable declarations don't yet support references
     rb_define_method(cGlobalVariable, "references", rdxr_variable_declaration_references, 0);
