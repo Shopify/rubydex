@@ -287,11 +287,8 @@ impl<'a> Resolver<'a> {
                             unreachable!("SelfReceiver methods should be routed to handle_definition_unit");
                         }
                         Some(Receiver::ConstantReceiver(name_id)) => {
-                            let receiver_decl_id = match self.graph.names().get(name_id).unwrap() {
-                                NameRef::Resolved(resolved) => *resolved.declaration_id(),
-                                NameRef::Unresolved(_) => {
-                                    continue;
-                                }
+                            let Some(receiver_decl_id) = self.resolve_constant_receiver(*name_id, id) else {
+                                continue;
                             };
 
                             let Some(singleton_id) = self.get_or_create_singleton_class(receiver_decl_id, true) else {
@@ -301,8 +298,8 @@ impl<'a> Resolver<'a> {
                             singleton_id
                         }
                         None => {
-                            let Some(resolved) = self.resolve_lexical_owner(*method_definition.lexical_nesting_id())
-                            else {
+                            let lexical = *method_definition.lexical_nesting_id();
+                            let Some(resolved) = self.resolve_lexical_owner(lexical, id) else {
                                 continue;
                             };
                             resolved
@@ -314,29 +311,35 @@ impl<'a> Resolver<'a> {
                     });
                 }
                 Definition::AttrAccessor(attr) => {
-                    let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
+                    let lexical = *attr.lexical_nesting_id();
+                    let str_id = *attr.str_id();
+                    let Some(owner_id) = self.resolve_lexical_owner(lexical, id) else {
                         continue;
                     };
 
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
+                    self.create_declaration(str_id, id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
                 Definition::AttrReader(attr) => {
-                    let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
+                    let lexical = *attr.lexical_nesting_id();
+                    let str_id = *attr.str_id();
+                    let Some(owner_id) = self.resolve_lexical_owner(lexical, id) else {
                         continue;
                     };
 
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
+                    self.create_declaration(str_id, id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
                 Definition::AttrWriter(attr) => {
-                    let Some(owner_id) = self.resolve_lexical_owner(*attr.lexical_nesting_id()) else {
+                    let lexical = *attr.lexical_nesting_id();
+                    let str_id = *attr.str_id();
+                    let Some(owner_id) = self.resolve_lexical_owner(lexical, id) else {
                         continue;
                     };
 
-                    self.create_declaration(*attr.str_id(), id, owner_id, |name| {
+                    self.create_declaration(str_id, id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
@@ -377,11 +380,11 @@ impl<'a> Resolver<'a> {
                                         .definition_id_to_declaration_id(*def_id)
                                         .expect("SelfReceiver definition should have a declaration"),
                                     Receiver::ConstantReceiver(name_id) => {
-                                        let Some(NameRef::Resolved(resolved)) = self.graph.names().get(name_id) else {
+                                        let Some(receiver_decl_id) = self.resolve_constant_receiver(*name_id, id)
+                                        else {
                                             continue;
                                         };
-
-                                        *resolved.declaration_id()
+                                        receiver_decl_id
                                     }
                                 };
 
@@ -407,7 +410,8 @@ impl<'a> Resolver<'a> {
                             }
 
                             // If the method has no explicit receiver, we resolve the owner based on the lexical nesting
-                            let Some(method_owner_id) = self.resolve_lexical_owner(*method.lexical_nesting_id()) else {
+                            let Some(method_owner_id) = self.resolve_lexical_owner(*method.lexical_nesting_id(), id)
+                            else {
                                 continue;
                             };
 
@@ -464,11 +468,14 @@ impl<'a> Resolver<'a> {
                         // If in a singleton class body directly, the owner is the singleton class's singleton class
                         // Like `class << Foo; @bar = 1; end`, where `@bar` is owned by `Foo::<Foo>::<<Foo>>`
                         Definition::SingletonClass(_) => {
-                            let singleton_class_decl_id = self
-                                .graph
-                                .definition_id_to_declaration_id(nesting_id)
-                                .copied()
-                                .unwrap_or(*OBJECT_ID);
+                            // The singleton's declaration may be missing (e.g. its receiver was
+                            // just deleted). Re-queue and let the next resolve place `@bar` on
+                            // the right owner instead of falling back to Object.
+                            let Some(&singleton_class_decl_id) = self.graph.definition_id_to_declaration_id(nesting_id)
+                            else {
+                                self.graph.push_work(Unit::Definition(id));
+                                continue;
+                            };
                             let owner_id = self
                                 .get_or_create_singleton_class(singleton_class_decl_id, true)
                                 .expect("singleton class nesting should always be a namespace");
@@ -515,14 +522,15 @@ impl<'a> Resolver<'a> {
                             };
                             owner_id
                         }
-                        Some(Receiver::ConstantReceiver(name_id)) => match self.graph.names().get(name_id).unwrap() {
-                            NameRef::Resolved(resolved) => *resolved.declaration_id(),
-                            NameRef::Unresolved(_) => {
+                        Some(Receiver::ConstantReceiver(name_id)) => {
+                            let Some(resolved) = self.resolve_constant_receiver(*name_id, id) else {
                                 continue;
-                            }
-                        },
+                            };
+                            resolved
+                        }
                         None => {
-                            let Some(resolved) = self.resolve_lexical_owner(*alias.lexical_nesting_id()) else {
+                            let lexical = *alias.lexical_nesting_id();
+                            let Some(resolved) = self.resolve_lexical_owner(lexical, id) else {
                                 continue;
                             };
                             resolved
@@ -574,7 +582,7 @@ impl<'a> Resolver<'a> {
             let offset = method_visibility.offset().clone();
             let lexical_nesting_id = *method_visibility.lexical_nesting_id();
 
-            let Some(owner_id) = self.resolve_lexical_owner(lexical_nesting_id) else {
+            let Some(owner_id) = self.resolve_lexical_owner(lexical_nesting_id, id) else {
                 continue;
             };
 
@@ -640,6 +648,19 @@ impl<'a> Resolver<'a> {
         self.graph.extend_work(pending_work);
     }
 
+    /// Resolves a constant receiver for `handle_remaining_definitions`.
+    /// If the receiver name is unresolved, preserve the definition for a later
+    /// resolve cycle instead of dropping work during an incremental delete/re-add gap.
+    fn resolve_constant_receiver(&mut self, name_id: NameId, id: DefinitionId) -> Option<DeclarationId> {
+        match self.graph.names().get(&name_id).unwrap() {
+            NameRef::Resolved(resolved) => Some(*resolved.declaration_id()),
+            NameRef::Unresolved(_) => {
+                self.graph.push_work(Unit::Definition(id));
+                None
+            }
+        }
+    }
+
     fn create_declaration<F>(
         &mut self,
         str_id: StringId,
@@ -689,37 +710,62 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolves owner from lexical nesting.
-    fn resolve_lexical_owner(&self, lexical_nesting_id: Option<DefinitionId>) -> Option<DeclarationId> {
-        let Some(id) = lexical_nesting_id else {
-            return Some(*OBJECT_ID);
+    ///
+    /// If the owner cannot be resolved yet, re-queues the current definition so
+    /// a later resolve cycle can retry instead of permanently dropping it.
+    fn resolve_lexical_owner(
+        &mut self,
+        lexical_nesting_id: Option<DefinitionId>,
+        definition_id: DefinitionId,
+    ) -> Option<DeclarationId> {
+        let mut current_nesting = lexical_nesting_id;
+
+        let resolved = loop {
+            let Some(id) = current_nesting else {
+                break Some(*OBJECT_ID);
+            };
+
+            // If no declaration exists yet for this definition, walk up the lexical chain.
+            // This handles the case where attr_* definitions inside methods are processed
+            // before the method definition itself. A SingletonClass with no declaration
+            // is an exception: returning the surrounding scope would attach its members to
+            // the wrong owner (e.g. `Object`) and never recover, so retry later instead.
+            let Some(declaration_id) = self.graph.definition_id_to_declaration_id(id) else {
+                let definition = self.graph.definitions().get(&id).unwrap();
+                if matches!(definition, Definition::SingletonClass(_)) {
+                    break None;
+                }
+                current_nesting = *definition.lexical_nesting_id();
+                continue;
+            };
+
+            let decl = self.graph.declarations().get(declaration_id).unwrap();
+
+            // If the associated declaration is a namespace that can own things, we found the right owner. Otherwise, we might
+            // have found something nested inside something else (like a method), in which case we have to walk up until we find
+            // the appropriate owner.
+            if matches!(
+                decl,
+                Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_) | Namespace::SingletonClass(_))
+            ) {
+                break Some(*declaration_id);
+            }
+
+            if matches!(decl, Declaration::ConstantAlias(_)) {
+                // Follow the alias chain to find the target namespace. If the alias is unresolved,
+                // the definition cannot be properly owned yet and should be retried later.
+                break self.resolve_to_namespace(*declaration_id);
+            }
+
+            let definition = self.graph.definitions().get(&id).unwrap();
+            current_nesting = *definition.lexical_nesting_id();
         };
 
-        // If no declaration exists yet for this definition, walk up the lexical chain.
-        // This handles the case where attr_* definitions inside methods are processed
-        // before the method definition itself.
-        let Some(declaration_id) = self.graph.definition_id_to_declaration_id(id) else {
-            let definition = self.graph.definitions().get(&id).unwrap();
-            return self.resolve_lexical_owner(*definition.lexical_nesting_id());
-        };
-
-        let decl = self.graph.declarations().get(declaration_id).unwrap();
-
-        // If the associated declaration is a namespace that can own things, we found the right owner. Otherwise, we might
-        // have found something nested inside something else (like a method), in which case we have to recurse until we find
-        // the appropriate owner
-        if matches!(
-            decl,
-            Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_) | Namespace::SingletonClass(_))
-        ) {
-            Some(*declaration_id)
-        } else if matches!(decl, Declaration::ConstantAlias(_)) {
-            // Follow the alias chain to find the target namespace. If the alias is unresolved,
-            // the definition cannot be properly owned and should be skipped by the caller.
-            self.resolve_to_namespace(*declaration_id)
-        } else {
-            let definition = self.graph.definitions().get(&id).unwrap();
-            self.resolve_lexical_owner(*definition.lexical_nesting_id())
+        if resolved.is_none() {
+            self.graph.push_work(Unit::Definition(definition_id));
         }
+
+        resolved
     }
 
     /// Gets or creates a singleton class declaration for a given class/module declaration.  For class `Foo`, this
@@ -1124,11 +1170,17 @@ impl<'a> Resolver<'a> {
         let name_ref = self.graph.names().get(&name_id).unwrap();
         let str_id = *name_ref.str();
 
-        let outcome = match self.name_owner_id(name_id) {
+        let outcome = match self.name_owner_id(name_id, singleton) {
             // name_owner_id returns Unresolved(None) only when the parent scope is genuinely unknown
             // (e.g., `class A::B::C` where `A` doesn't exist). This definition needs an owner, so
             // create Todo placeholders for the missing parent chain. Todos get promoted when real
             // definitions appear later.
+            //
+            // Singleton classes are the exception: `class << UndefinedReceiver` attaches via
+            // `set_singleton_class_id`, not `add_member`, so a TODO receiver would never gain a
+            // member. Emit Retry so the unit is preserved for a later resolve where the receiver
+            // may exist.
+            Outcome::Unresolved(None) if singleton => Outcome::Retry(None),
             Outcome::Unresolved(None) => Outcome::Resolved(self.create_todo_for_parent(name_id), None),
             other => other,
         };
@@ -1200,7 +1252,11 @@ impl<'a> Resolver<'a> {
     // Returns the owner declaration ID for a given name. If the name is simple and has no parent scope, then the owner is
     // either the nesting or Object. If the name has a parent scope, we attempt to resolve the reference and that should be
     // the name's owner. For aliases, resolves through to get the actual namespace.
-    fn name_owner_id(&mut self, name_id: NameId) -> Outcome {
+    //
+    // When `preserve_retry` is true, Retry from resolve_constant_internal is NOT folded into
+    // Unresolved(None). This is used by the singleton path so the unit can retry when the
+    // receiver might resolve later rather than being dropped.
+    fn name_owner_id(&mut self, name_id: NameId, preserve_retry: bool) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap();
 
         if let Some(&parent_scope) = name_ref.parent_scope().as_ref() {
@@ -1210,7 +1266,8 @@ impl<'a> Resolver<'a> {
                 Outcome::Resolved(id, linearization) => self.resolve_to_primary_namespace(id, linearization),
                 // The parent scope is genuinely unknown — not a circular alias or pending
                 // linearization, but a name that doesn't exist anywhere in the graph.
-                Outcome::Retry(None) | Outcome::Unresolved(None) => Outcome::Unresolved(None),
+                Outcome::Unresolved(None) => Outcome::Unresolved(None),
+                Outcome::Retry(None) if !preserve_retry => Outcome::Unresolved(None),
                 other => other,
             }
         } else if let Some(nesting_id) = name_ref.nesting()
@@ -1251,7 +1308,7 @@ impl<'a> Resolver<'a> {
         // Object so it becomes top-level `A`. This way `module A; end` appearing later
         // promotes it correctly. Using nesting would incorrectly create `SomeModule::A`.
         let parent_owner_id = if parent_has_parent_scope {
-            match self.name_owner_id(parent_scope) {
+            match self.name_owner_id(parent_scope, false) {
                 Outcome::Resolved(id, _) => id,
                 _ => self.create_todo_for_parent(parent_scope),
             }
