@@ -1099,19 +1099,32 @@ impl Graph {
             }
         }
 
+        // Detach references and queue any declaration that becomes removable as a
+        // result. `invalidate()` only seeds from removed definitions, so a singleton
+        // kept alive purely by a reference (e.g. `Foo::<Foo>` materialized by
+        // `Foo.new`) would otherwise linger after the reference's file is deleted.
+        let mut emptied_by_ref_removal: Vec<InvalidationItem> = Vec::new();
         for ref_id in document.constant_references() {
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
                 // Detach from target declaration. References unresolved during invalidation
                 // were already detached; this catches the rest.
-                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id())
-                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
-                {
-                    declaration.remove_constant_reference(ref_id);
+                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id()) {
+                    let target_id = *resolved.declaration_id();
+                    if let Some(declaration) = self.declarations.get_mut(&target_id) {
+                        declaration.remove_constant_reference(ref_id);
+                        if declaration.is_removable() {
+                            emptied_by_ref_removal.push(InvalidationItem::Declaration(target_id));
+                        }
+                    }
                 }
 
                 self.remove_name_dependent(*constant_ref.name_id(), NameDependent::Reference(*ref_id));
                 self.untrack_name(*constant_ref.name_id());
             }
+        }
+
+        if !emptied_by_ref_removal.is_empty() {
+            self.invalidate_graph(emptied_by_ref_removal, IdentityHashMap::default());
         }
 
         // Detach removed definitions from their declarations.
@@ -4519,5 +4532,38 @@ mod incremental_resolution_tests {
         fresh.resolve();
 
         assert_declaration_ids_match(&incremental, &fresh);
+    }
+
+    /// A singleton class materialized solely by a constant reference (e.g.
+    /// `Foo.new` creating `Foo::<Foo>` even though no `class << Foo` block
+    /// exists) must be collected when its sole supporting reference is
+    /// removed. `invalidate()` only seeds from removed definitions, so the
+    /// reference detachment in `remove_document_data` queues now-removable
+    /// declarations for cleanup.
+    #[test]
+    fn singleton_kept_only_by_reference_collected_on_ref_delete() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.index_uri("file:///user.rb", "Foo.new");
+        context.resolve();
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///user.rb");
+        context.resolve();
+
+        // The reference that materialized the singleton is gone, so the
+        // singleton itself must not linger and `Foo.singleton_class_id` must
+        // be cleared.
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        let foo = context
+            .graph()
+            .declarations()
+            .get(&crate::model::ids::DeclarationId::from("Foo"))
+            .expect("Foo should still exist");
+        let foo_ns = foo.as_namespace().expect("Foo is a namespace");
+        assert!(
+            foo_ns.singleton_class().is_none(),
+            "Foo.singleton_class_id should be cleared after the singleton is removed"
+        );
     }
 } // mod incremental_resolution_tests
