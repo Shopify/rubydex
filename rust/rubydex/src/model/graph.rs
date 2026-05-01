@@ -288,6 +288,16 @@ impl Graph {
         &self.documents
     }
 
+    /// Attaches a diagnostic to the document with the given `uri_id`. The diagnostic clears
+    /// automatically when the document is deleted or re-indexed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no document is registered for `uri_id`.
+    pub fn add_document_diagnostic(&mut self, uri_id: UriId, diagnostic: Diagnostic) {
+        self.documents.get_mut(&uri_id).unwrap().add_diagnostic(diagnostic);
+    }
+
     /// # Panics
     ///
     /// Panics if the definition is not found
@@ -602,42 +612,50 @@ impl Graph {
         &self.name_dependents
     }
 
-    /// Returns the visibility for a method declaration.
+    /// Returns the visibility for a declaration.
     ///
-    /// Scans the declaration's backing definitions from the end:
-    /// - First `MethodVisibilityDefinition` wins
-    /// - Otherwise, falls back to the latest method-like definition's indexed visibility
-    /// - Returns `None` if the declaration has no definitions with visibility
+    /// For methods, the latest definition wins. For constants, the latest
+    /// `private_constant`/`public_constant` wins, otherwise `Public`.
     #[must_use]
     pub fn visibility(&self, declaration_id: &DeclarationId) -> Option<Visibility> {
         let declaration = self.declarations.get(declaration_id)?;
         let definitions = declaration.definitions();
 
-        // Scan from the end: last visibility directive wins
-        for def_id in definitions.iter().rev() {
-            if let Some(definition) = self.definitions.get(def_id) {
-                match definition {
-                    Definition::MethodVisibility(vis) => return Some(*vis.visibility()),
-                    Definition::Method(method) => return Some(*method.visibility()),
-                    Definition::AttrAccessor(attr) => return Some(*attr.visibility()),
-                    Definition::AttrReader(attr) => return Some(*attr.visibility()),
-                    Definition::AttrWriter(attr) => return Some(*attr.visibility()),
-                    Definition::Class(_)
-                    | Definition::SingletonClass(_)
-                    | Definition::Module(_)
-                    | Definition::Constant(_)
-                    | Definition::ConstantAlias(_)
-                    | Definition::ConstantVisibility(_)
-                    | Definition::GlobalVariable(_)
-                    | Definition::InstanceVariable(_)
-                    | Definition::ClassVariable(_)
-                    | Definition::MethodAlias(_)
-                    | Definition::GlobalVariableAlias(_) => {}
+        match declaration {
+            Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_))
+            | Declaration::Constant(_)
+            | Declaration::ConstantAlias(_) => {
+                for def_id in definitions.iter().rev() {
+                    if let Some(Definition::ConstantVisibility(vis)) = self.definitions.get(def_id) {
+                        return Some(*vis.visibility());
+                    }
                 }
+                Some(Visibility::Public)
             }
+            Declaration::Method(_) => {
+                for def_id in definitions.iter().rev() {
+                    let Some(definition) = self.definitions.get(def_id) else {
+                        continue;
+                    };
+                    let visibility = match definition {
+                        Definition::MethodVisibility(vis) => Some(*vis.visibility()),
+                        Definition::Method(method) => Some(*method.visibility()),
+                        Definition::AttrAccessor(attr) => Some(*attr.visibility()),
+                        Definition::AttrReader(attr) => Some(*attr.visibility()),
+                        Definition::AttrWriter(attr) => Some(*attr.visibility()),
+                        _ => None,
+                    };
+                    if visibility.is_some() {
+                        return visibility;
+                    }
+                }
+                None
+            }
+            Declaration::Namespace(Namespace::SingletonClass(_) | Namespace::Todo(_))
+            | Declaration::GlobalVariable(_)
+            | Declaration::InstanceVariable(_)
+            | Declaration::ClassVariable(_) => None,
         }
-
-        None
     }
 
     /// Drains the accumulated work items, returning them for use by the resolver.

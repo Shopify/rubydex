@@ -5128,4 +5128,182 @@ mod visibility_resolution_tests {
         assert_owner_eq!(context, "Child#foo()", "Child");
         assert_visibility_eq!(context, "Child#foo()", Visibility::Private);
     }
+
+    #[test]
+    fn retroactive_constant_visibility_on_direct_member() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              BAR = 1
+              private_constant :BAR
+
+              BAZ = 2
+              public_constant :BAZ
+
+              QUX = 3
+
+              class Inner; end
+              private_constant :Inner
+
+              module InnerMod; end
+              private_constant :InnerMod
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::BAR", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::BAZ", Visibility::Public);
+        assert_visibility_eq!(context, "Foo::QUX", Visibility::Public);
+        assert_visibility_eq!(context, "Foo::Inner", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::InnerMod", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_constant_visibility_via_qualified_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              BAR = 1
+              BAZ = 2
+            end
+
+            ALIAS = Foo
+            Foo.private_constant :BAR
+            ALIAS.private_constant :BAZ
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::BAR", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::BAZ", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_constant_visibility_multi_arg_undefined_emits_per_name_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              private_constant :NOPE_ONE, :NOPE_TWO
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &[
+                "undefined-constant-visibility-target: undefined constant `NOPE_ONE` for visibility change in `Foo` (2:21-2:29)",
+                "undefined-constant-visibility-target: undefined constant `NOPE_TWO` for visibility change in `Foo` (2:32-2:40)",
+            ]
+        );
+    }
+
+    #[test]
+    fn retroactive_constant_visibility_inherited_constant_emits_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Parent
+              CONST = 1
+            end
+
+            class Child < Parent
+              private_constant :CONST
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &[
+                "undefined-constant-visibility-target: undefined constant `CONST` for visibility change in `Child` (6:21-6:26)"
+            ]
+        );
+        assert_visibility_eq!(context, "Parent::CONST", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_constant_visibility_clears_when_call_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              BAR = 1
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///vis.rb",
+            r"
+            Foo.private_constant :BAR
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::BAR", Visibility::Private);
+
+        context.delete_uri("file:///vis.rb");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::BAR", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_constant_visibility_inside_singleton_class_body() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              class << self
+                BAR = 1
+                private_constant :BAR
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::<Foo>::BAR", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_constant_visibility_persists_across_reopened_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            class Foo
+              BAR = 1
+              private_constant :BAR
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            class Foo
+              BAR = 2
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo::BAR", Visibility::Private);
+    }
 }

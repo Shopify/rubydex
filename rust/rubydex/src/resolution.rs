@@ -546,8 +546,63 @@ impl<'a> Resolver<'a> {
                         Declaration::GlobalVariable(Box::new(GlobalVariableDeclaration::new(name, *OBJECT_ID)))
                     });
                 }
-                Definition::ConstantVisibility(_constant_visibility) => {
-                    // TODO
+                Definition::ConstantVisibility(constant_visibility) => {
+                    // Both `private_constant` and `public_constant` can only target direct members.
+                    // Inheritance or surrounding lexical scopes are not taken into account.
+                    let receiver = *constant_visibility.receiver();
+                    let target = *constant_visibility.target();
+                    let uri_id = *constant_visibility.uri_id();
+                    let offset = constant_visibility.offset().clone();
+                    let lexical_nesting_id = *constant_visibility.lexical_nesting_id();
+                    let constant_name = self.graph.strings().get(&target).unwrap().as_str().to_string();
+
+                    let owner_id = if let Some(receiver_name_id) = receiver {
+                        let NameRef::Resolved(resolved_receiver) = self.graph.names().get(&receiver_name_id).unwrap()
+                        else {
+                            continue;
+                        };
+                        let Some(namespace_id) = self.resolve_to_namespace(*resolved_receiver.declaration_id()) else {
+                            continue;
+                        };
+                        namespace_id
+                    } else {
+                        let Some(decl_id) = self.resolve_lexical_owner(lexical_nesting_id, id) else {
+                            continue;
+                        };
+                        decl_id
+                    };
+
+                    let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&owner_id) else {
+                        continue;
+                    };
+
+                    if let Some(member) = namespace
+                        .member(&target)
+                        .and_then(|member_id| self.graph.declarations().get(member_id))
+                        && matches!(
+                            member,
+                            Declaration::Constant(_)
+                                | Declaration::ConstantAlias(_)
+                                | Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_))
+                        )
+                    {
+                        // `add_declaration` deduplicates by fully qualified name, so this appends
+                        // the visibility definition to the existing constant declaration.
+                        self.graph.add_declaration(id, member.name().to_string(), |name| {
+                            Declaration::Constant(Box::new(ConstantDeclaration::new(name, owner_id)))
+                        });
+                    } else {
+                        let diagnostic = Diagnostic::new(
+                            Rule::UndefinedConstantVisibilityTarget,
+                            uri_id,
+                            offset,
+                            format!(
+                                "undefined constant `{constant_name}` for visibility change in `{}`",
+                                namespace.name()
+                            ),
+                        );
+                        self.graph.add_document_diagnostic(uri_id, diagnostic);
+                    }
                 }
                 Definition::MethodVisibility(_) => {
                     method_visibility_ids.push(id);
