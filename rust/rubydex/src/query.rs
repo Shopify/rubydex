@@ -6,7 +6,7 @@ use std::thread;
 use url::Url;
 
 use crate::model::built_in::OBJECT_ID;
-use crate::model::declaration::{Ancestor, Declaration};
+use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, Parameter};
 use crate::model::graph::Graph;
 use crate::model::identity_maps::IdentityHashSet;
@@ -169,7 +169,17 @@ pub enum CompletionCandidate {
 pub enum CompletionReceiver {
     /// Completion requested for an expression with no previous token (e.g.: at the start of a line with nothing before)
     /// Includes: all keywords, all global variables and reacheable instance variables, class variables, constants and methods
-    Expression(NameId),
+    ///
+    /// `nesting_name_id` represents the lexical scope. It is walked for constants and drives class-variable
+    /// lookup (cvars follow lexical scope in Ruby, not self).
+    /// `self_decl_id` overrides the self-type used for methods and instance variables when the runtime `self`
+    /// diverges from the innermost lexical scope — for example `def Foo.bar` (where self is `Foo` but the
+    /// lexical scope is the outer namespace) or `def self.bar`. Callers may pass a `ConstantAlias` id; it is
+    /// unwrapped to the target namespace. When `None`, self is derived from the innermost lexical scope.
+    Expression {
+        self_decl_id: Option<DeclarationId>,
+        nesting_name_id: NameId,
+    },
     /// Completion requested after a namespace access operator (e.g.: `Foo::`)
     /// Includes: all constants and singleton methods for the namespace and its ancestors
     NamespaceAccess(DeclarationId),
@@ -179,8 +189,11 @@ pub enum CompletionReceiver {
     MethodCall(DeclarationId),
     /// Completion requested inside a method call's argument list (e.g.: `foo.bar(|)`)
     /// Includes: everything expressions do plus keyword parameter names of the method being called
+    ///
+    /// Same `self_decl_id` / `nesting_name_id` split as `Expression`.
     MethodArgument {
-        self_name_id: NameId,
+        self_decl_id: Option<DeclarationId>,
+        nesting_name_id: NameId,
         method_decl_id: DeclarationId,
     },
 }
@@ -245,19 +258,24 @@ macro_rules! collect_candidates {
 ///
 /// # Errors
 ///
-/// Will error if the given `self_name_id` does not point to a namespace declaration
+/// Will error if the given `self_decl_id` does not resolve to a namespace declaration (directly or via
+/// a constant alias).
 pub fn completion_candidates<'a>(
     graph: &'a Graph,
     context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
     match context.completion_receiver {
-        CompletionReceiver::Expression(self_name_id) => expression_completion(graph, self_name_id, context),
+        CompletionReceiver::Expression {
+            self_decl_id,
+            nesting_name_id,
+        } => expression_completion(graph, self_decl_id, nesting_name_id, context),
         CompletionReceiver::NamespaceAccess(decl_id) => namespace_access_completion(graph, decl_id, context),
         CompletionReceiver::MethodCall(decl_id) => method_call_completion(graph, decl_id, context),
         CompletionReceiver::MethodArgument {
-            self_name_id,
+            self_decl_id,
+            nesting_name_id,
             method_decl_id,
-        } => method_argument_completion(graph, self_name_id, method_decl_id, context),
+        } => method_argument_completion(graph, self_decl_id, nesting_name_id, method_decl_id, context),
     }
 }
 
@@ -357,35 +375,169 @@ fn method_call_completion<'a>(
 /// Collect completion for an expression
 fn expression_completion<'a>(
     graph: &'a Graph,
-    self_name_id: NameId,
+    self_decl_id: Option<DeclarationId>,
+    nesting_name_id: NameId,
     mut context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
-    let Some(name_ref) = graph.names().get(&self_name_id) else {
-        return Err(format!("Name {self_name_id} not found in graph").into());
+    let Some(name_ref) = graph.names().get(&nesting_name_id) else {
+        return Err(format!("Name {nesting_name_id} not found in graph").into());
     };
     let NameRef::Resolved(name_ref) = name_ref else {
-        return Err(format!("Expected name {self_name_id} to be resolved").into());
+        return Err(format!("Expected name {nesting_name_id} to be resolved").into());
     };
-    let Some(self_decl) = graph
+    // When no explicit self is given, self is the innermost lexical scope (the nesting's own declaration).
+    // When explicit, follow constant aliases so callers can pass whatever the expression that set self
+    // resolves to without having to unwrap aliases themselves. Missing or non-namespace decls are graph
+    // inconsistencies and surfaced as errors.
+    let resolved_self_decl_id = match self_decl_id {
+        Some(id) => {
+            resolve_to_namespace(graph, id)?.ok_or_else(|| format!("self declaration {id:?} not found in graph"))?
+        }
+        None => *name_ref.declaration_id(),
+    };
+    let self_decl = graph
+        .declarations()
+        .get(&resolved_self_decl_id)
+        .unwrap()
+        .as_namespace()
+        .ok_or("Expected associated declaration to be a namespace")?;
+    let innermost_lexical_decl = graph
         .declarations()
         .get(name_ref.declaration_id())
-        .and_then(|d| d.as_namespace())
-    else {
-        return Err("Expected associated declaration to be a namespace".into());
-    };
+        .unwrap()
+        .as_namespace()
+        .unwrap();
+
     let mut candidates = Vec::new();
 
-    // Walk the name's lexical scopes, collecting all constant completion members
-    let mut current_name_id = Some(self_name_id);
+    // Collect constants. Immediate scope includes inheritance. Outer scopes only include `Object` inheritance when it's a module
+    collect_constants_from_lexical_scope(graph, innermost_lexical_decl, &mut context, &mut candidates);
+    collect_constants_from_outer_nesting(graph, name_ref, &mut context, &mut candidates);
+
+    // Collect class variables, which are based on the inheritance chain of the attached object of the immediate lexical scope
+    collect_class_variables_from_lexical_scope(graph, name_ref, &mut context, &mut candidates);
+
+    // Globals are accessible from anywhere, regardless of lexical scope or `self` type.
+    let object = graph.declarations().get(&OBJECT_ID).unwrap().as_namespace().unwrap();
+    collect_candidates!(graph, &object, context, candidates, Declaration::GlobalVariable(_));
+
+    // Collect methods and instance variables, which are based on the inheritance chain of the `self` type (which may
+    // not match the immediate lexical scope)
+    collect_methods_and_ivars_from_self(graph, self_decl, &mut context, &mut candidates);
+
+    // Keywords are always available in expression contexts
+    candidates.extend(keywords::KEYWORDS.iter().map(CompletionCandidate::Keyword));
+    Ok(candidates)
+}
+
+/// Collects constants reachable from the innermost lexical scope's ancestor chain. Module bodies also fall back to
+/// `Object`'s ancestor chain to mirror Ruby's resolution rules.
+fn collect_constants_from_lexical_scope<'a>(
+    graph: &'a Graph,
+    innermost_lexical_decl: &'a Namespace,
+    context: &mut CompletionContext<'a>,
+    candidates: &mut Vec<CompletionCandidate>,
+) {
+    for ancestor in innermost_lexical_decl.ancestors() {
+        if let Ancestor::Complete(ancestor_id) = ancestor {
+            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
+
+            collect_candidates!(
+                graph,
+                &ancestor_decl,
+                context,
+                candidates,
+                Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
+            );
+        }
+    }
+
+    if matches!(innermost_lexical_decl, Namespace::Module(_)) {
+        let object = graph.declarations().get(&OBJECT_ID).unwrap().as_namespace().unwrap();
+
+        for ancestor in object.ancestors() {
+            if let Ancestor::Complete(ancestor_id) = ancestor {
+                let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
+
+                collect_candidates!(
+                    graph,
+                    &ancestor_decl,
+                    context,
+                    candidates,
+                    Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
+                );
+            }
+        }
+    }
+}
+
+/// Collects class variables visible from the current lexical scope. Class variables are resolved
+/// lexically and singleton classes are skipped: inside `class Bar; class << Foo; @@cvar` the
+/// cvar belongs to `Bar`, not `Foo`. We walk the lexical chain (innermost outward) until we find
+/// a non-singleton namespace, then walk that namespace's ancestors.
+fn collect_class_variables_from_lexical_scope<'a>(
+    graph: &'a Graph,
+    name_ref: &crate::model::name::ResolvedName,
+    context: &mut CompletionContext<'a>,
+    candidates: &mut Vec<CompletionCandidate>,
+) {
+    let mut decl = graph
+        .declarations()
+        .get(name_ref.declaration_id())
+        .unwrap()
+        .as_namespace()
+        .unwrap();
+    let mut current_name_id = *name_ref.nesting();
+
+    while matches!(decl, Namespace::SingletonClass(_)) {
+        let Some(parent_name_id) = current_name_id else {
+            // No non-singleton lexical scope (invalid Ruby). Skip cvar collection.
+            return;
+        };
+        let NameRef::Resolved(parent_ref) = graph.names().get(&parent_name_id).unwrap() else {
+            return;
+        };
+        decl = graph
+            .declarations()
+            .get(parent_ref.declaration_id())
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+        current_name_id = *parent_ref.nesting();
+    }
+
+    for ancestor in decl.ancestors() {
+        if let Ancestor::Complete(ancestor_id) = ancestor {
+            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
+            collect_candidates!(
+                graph,
+                &ancestor_decl,
+                context,
+                candidates,
+                Declaration::ClassVariable(_)
+            );
+        }
+    }
+}
+
+/// Walks the outer lexical nesting chain (excluding the innermost scope) to collect constants reachable through
+/// enclosing classes/modules.
+fn collect_constants_from_outer_nesting<'a>(
+    graph: &'a Graph,
+    name_ref: &crate::model::name::ResolvedName,
+    context: &mut CompletionContext<'a>,
+    candidates: &mut Vec<CompletionCandidate>,
+) {
+    let mut current_name_id = *name_ref.nesting();
 
     while let Some(id) = current_name_id {
-        let NameRef::Resolved(name_ref) = graph.names().get(&id).unwrap() else {
+        let NameRef::Resolved(parent_ref) = graph.names().get(&id).unwrap() else {
             break;
         };
 
         let nesting_decl = graph
             .declarations()
-            .get(name_ref.declaration_id())
+            .get(parent_ref.declaration_id())
             .unwrap()
             .as_namespace()
             .unwrap();
@@ -398,54 +550,42 @@ fn expression_completion<'a>(
             Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
         );
 
-        current_name_id = *name_ref.nesting();
+        current_name_id = *parent_ref.nesting();
     }
+}
 
-    // Include all top level constants and globals, which are accessible everywhere
-    let object = graph.declarations().get(&OBJECT_ID).unwrap().as_namespace().unwrap();
-    collect_candidates!(
-        graph,
-        &object,
-        context,
-        candidates,
-        Declaration::Namespace(_)
-            | Declaration::Constant(_)
-            | Declaration::ConstantAlias(_)
-            | Declaration::GlobalVariable(_)
-    );
-
-    // Walk ancestors collecting all applicable completion members
+/// Collects methods and instance variables along `self`'s ancestor chain. The chain may differ
+/// from the lexical chain when `self` was rebound (e.g., `def Foo.baz` written inside `class Bar`).
+fn collect_methods_and_ivars_from_self<'a>(
+    graph: &'a Graph,
+    self_decl: &'a Namespace,
+    context: &mut CompletionContext<'a>,
+    candidates: &mut Vec<CompletionCandidate>,
+) {
     for ancestor in self_decl.ancestors() {
         if let Ancestor::Complete(ancestor_id) = ancestor {
             let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-            collect_candidates!(&ancestor_decl, context, candidates);
 
-            // Collect class variables from the attached object, which are available at any singleton class level
-            // within self
-            let attached_object = graph.attached_object(ancestor_decl);
             collect_candidates!(
                 graph,
-                &attached_object,
+                &ancestor_decl,
                 context,
                 candidates,
-                Declaration::ClassVariable(_)
+                Declaration::Method(_) | Declaration::InstanceVariable(_)
             );
         }
     }
-
-    // Keywords are always available in expression contexts
-    candidates.extend(keywords::KEYWORDS.iter().map(CompletionCandidate::Keyword));
-    Ok(candidates)
 }
 
 /// Collect completion for a method argument (e.g.: `foo.bar(|)`)
 fn method_argument_completion<'a>(
     graph: &'a Graph,
-    self_name_id: NameId,
+    self_decl_id: Option<DeclarationId>,
+    nesting_name_id: NameId,
     method_decl_id: DeclarationId,
     context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
-    let mut candidates = expression_completion(graph, self_name_id, context)?;
+    let mut candidates = expression_completion(graph, self_decl_id, nesting_name_id, context)?;
     let Some(method_decl) = graph.declarations().get(&method_decl_id) else {
         return Ok(candidates);
     };
@@ -523,30 +663,37 @@ mod tests {
 
     macro_rules! assert_completion_eq {
         ($context:expr, $receiver:expr, $expected:expr) => {
-            assert_eq!(
-                $expected,
-                *completion_candidates($context.graph(), CompletionContext::new($receiver))
-                    .unwrap()
-                    .iter()
-                    .map(|candidate| candidate_label(&$context, candidate))
-                    .collect::<Vec<_>>()
-            );
+            let mut actual: Vec<String> = completion_candidates($context.graph(), CompletionContext::new($receiver))
+                .unwrap()
+                .iter()
+                .map(|candidate| candidate_label(&$context, candidate))
+                .collect();
+            actual.sort();
+
+            let mut expected: Vec<String> = $expected.into_iter().map(String::from).collect();
+            expected.sort();
+
+            assert_eq!(expected, actual);
         };
     }
 
     /// Asserts declaration and keyword argument completion candidates, excluding language keywords.
     /// Language keywords are always present in expression contexts and tested separately.
+    /// Both sides are sorted before comparison so tests are not coupled to candidate emission order.
     macro_rules! assert_declaration_completion_eq {
         ($context:expr, $receiver:expr, $expected:expr) => {
-            assert_eq!(
-                $expected,
-                *completion_candidates($context.graph(), CompletionContext::new($receiver))
-                    .unwrap()
-                    .iter()
-                    .filter(|c| !matches!(c, CompletionCandidate::Keyword(_)))
-                    .map(|candidate| candidate_label(&$context, candidate))
-                    .collect::<Vec<_>>()
-            );
+            let mut actual: Vec<String> = completion_candidates($context.graph(), CompletionContext::new($receiver))
+                .unwrap()
+                .iter()
+                .filter(|c| !matches!(c, CompletionCandidate::Keyword(_)))
+                .map(|candidate| candidate_label(&$context, candidate))
+                .collect();
+            actual.sort();
+
+            let mut expected: Vec<String> = $expected.into_iter().map(String::from).collect();
+            expected.sort();
+
+            assert_eq!(expected, actual);
         };
     }
 
@@ -761,8 +908,12 @@ mod tests {
         let name_id = Name::new(StringId::from("Child"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
+                "Foo::CONST",
                 "Class",
                 "BasicObject",
                 "Child",
@@ -772,7 +923,6 @@ mod tests {
                 "Foo",
                 "Object",
                 "Child#baz()",
-                "Foo::CONST",
                 "Foo#bar()",
                 "Parent#initialize()",
                 "Parent#@var"
@@ -807,7 +957,10 @@ mod tests {
         let name_id = Name::new(StringId::from("Child"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
                 "Class",
                 "BasicObject",
@@ -853,7 +1006,10 @@ mod tests {
         let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
                 "Foo",
                 "Class",
@@ -900,7 +1056,10 @@ mod tests {
         let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), Some(foo_id)).id();
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
                 "Module",
                 "Class",
@@ -917,7 +1076,10 @@ mod tests {
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
                 "Module",
                 "Class",
@@ -966,9 +1128,11 @@ mod tests {
         .id();
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
-                "Foo::CONST_A",
                 "Module",
                 "Class",
                 "Object",
@@ -976,6 +1140,7 @@ mod tests {
                 "Kernel",
                 "Foo",
                 "Bar",
+                "Foo::CONST_A",
                 "Bar#bar_m()",
                 "Bar#bar_m2()"
             ]
@@ -984,7 +1149,10 @@ mod tests {
         let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
                 "Module",
                 "Class",
@@ -1025,16 +1193,19 @@ mod tests {
         // when the user types the unqualified name CONST
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
-                "Foo::CONST",
-                "Foo::Bar",
                 "Class",
                 "Object",
                 "BasicObject",
                 "Kernel",
                 "Foo",
                 "Module",
+                "Foo::CONST",
+                "Foo::Bar",
                 "Foo::Bar#baz()"
             ]
         );
@@ -1069,19 +1240,11 @@ mod tests {
         .id();
         assert_declaration_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
-            [
-                "Foo::Bar",
-                "$var2",
-                "$var",
-                "BasicObject",
-                "Object",
-                "Kernel",
-                "Module",
-                "Foo",
-                "Class",
-                "Foo::Bar#bar_m()"
-            ]
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
+            ["Foo::Bar", "$var2", "$var", "Foo::Bar#bar_m()"]
         );
     }
 
@@ -1560,7 +1723,8 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_name_id: name_id,
+                self_decl_id: None,
+                nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#greet()"),
             },
             [
@@ -1595,7 +1759,8 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_name_id: name_id,
+                self_decl_id: None,
+                nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
             ["Class", "Object", "BasicObject", "Kernel", "Foo", "Module", "Foo#bar()"]
@@ -1620,7 +1785,8 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_name_id: name_id,
+                self_decl_id: None,
+                nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#search()"),
             },
             // Only RequiredKeyword and OptionalKeyword, not RestKeyword (**opts)
@@ -1663,7 +1829,8 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_name_id: name_id,
+                self_decl_id: None,
+                nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
             [
@@ -1689,7 +1856,10 @@ mod tests {
         let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
         assert_completion_eq!(
             context,
-            CompletionReceiver::Expression(name_id),
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
             [
                 "Class",
                 "Object",
@@ -1752,7 +1922,8 @@ mod tests {
         assert_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_name_id: name_id,
+                self_decl_id: None,
+                nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
             [
@@ -1837,5 +2008,582 @@ mod tests {
         .unwrap();
 
         assert!(!candidates.iter().any(|c| matches!(c, CompletionCandidate::Keyword(_))));
+    }
+
+    #[test]
+    fn expression_completion_class_variables_follow_lexical_scope() {
+        // `@@cvar` in Ruby is resolved via the innermost lexical class/module's ancestor chain,
+        // NOT `self`'s ancestor chain. Inside `def Foo.bar` written inside `Outer`, the lexical
+        // scope is `[Outer]`, so `@@outer_cvar` is reachable and `@@foo_cvar` (which lives on
+        // `Foo`, not on any lexical ancestor) must not be offered.
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Outer
+              @@outer_cvar = 1
+
+              class Foo
+                @@foo_cvar = 2
+                def self.singleton_m; end
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let outer_name_id = Name::new(StringId::from("Outer"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Outer::Foo::<Foo>")),
+                nesting_name_id: outer_name_id,
+            },
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Outer",
+                "Outer::Foo",
+                "Outer#@@outer_cvar",
+                "Outer::Foo::<Foo>#singleton_m()"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_follows_self_decl_alias() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Outer
+              class Original
+                def original_m; end
+              end
+
+              MyAlias = Original
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Outer"), ParentScope::None, None).id();
+        // `self_decl_id` points to the alias `Outer::MyAlias`, which is a `ConstantAlias` rather than a `Namespace`.
+        // The completion should still collect members from the aliased namespace (`Outer::Original`) instead of
+        // returning an error, so callers do not have to unwrap aliases themselves.
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Outer::MyAlias")),
+                nesting_name_id: name_id,
+            },
+            [
+                "Outer::MyAlias",
+                "Outer::Original",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Outer",
+                "Kernel",
+                "Module",
+                "Outer::Original#original_m()"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_in_method_definition_with_receiver_uses_lexical_scope_for_class_variables() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              @@class_var = 1
+            end
+
+            class Bar
+              @@other_class_var = 2
+
+              def Foo.baz
+                # completion here
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Foo::<Foo>")),
+                nesting_name_id: name_id,
+            },
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Foo::<Foo>#baz()",
+                "Bar#@@other_class_var"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_in_method_definition_with_receiver_uses_lexical_scope_for_constants() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              CONST = 1
+            end
+
+            class Bar
+              OTHER_CONST = 2
+
+              def Foo.baz
+                # completion here
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Foo::<Foo>")),
+                nesting_name_id: name_id,
+            },
+            [
+                "Bar::OTHER_CONST",
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Foo::<Foo>#baz()"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_does_not_leak_constants_reachable_only_through_self_ancestors() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Mixin
+              MIXIN_CONST = 1
+            end
+
+            class Foo
+              extend Mixin
+            end
+
+            class Bar
+              def Foo.baz
+                # completion here
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Foo::<Foo>")),
+                nesting_name_id: name_id,
+            },
+            [
+                "Class",
+                "BasicObject",
+                "Mixin",
+                "Object",
+                "Kernel",
+                "Module",
+                "Foo",
+                "Bar",
+                "Foo::<Foo>#baz()"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_at_top_level_includes_object_constants() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              CONST = 1
+            end
+
+            TOP_CONST = 2
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Object"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
+            ["Module", "Class", "Object", "BasicObject", "Kernel", "Foo", "TOP_CONST"]
+        );
+    }
+
+    #[test]
+    fn expression_completion_in_module_body_falls_back_to_object_constants() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            TOP_CONST = 1
+
+            module Mod
+              MOD_CONST = 2
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Mod"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
+            [
+                "Mod::MOD_CONST",
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "TOP_CONST",
+                "Mod"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_in_module_body_falls_back_to_object_ancestors() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Kernel
+              CONST = 1
+            end
+
+            module Mod
+              # completion here
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Mod"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
+            [
+                "Class",
+                "Object",
+                "Kernel",
+                "BasicObject",
+                "Mod",
+                "Module",
+                "Kernel::CONST",
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_at_top_level_offers_methods_from_object_chain() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            def my_top_method; end
+
+            module Kernel
+              def kernel_helper; end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Object"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
+            [
+                "Object",
+                "Kernel",
+                "BasicObject",
+                "Module",
+                "Class",
+                "Object#my_top_method()",
+                "Kernel#kernel_helper()"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_in_basic_object_subclass_excludes_object_constants() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            TOP_CONST = 1
+
+            class Bar < BasicObject
+              BAR_CONST = 2
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: name_id,
+            },
+            ["Bar::BAR_CONST"]
+        );
+    }
+
+    #[test]
+    fn expression_completion_class_variables_in_singleton_class_block_use_outer_lexical_scope() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              @@foo_cvar = 1
+            end
+
+            class Bar
+              @@bar_cvar = 2
+
+              class << Foo
+                # completion here
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let bar_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        let foo_ref_id = Name::new(StringId::from("Foo"), ParentScope::None, Some(bar_id)).id();
+        let nesting_name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_ref_id), Some(bar_id)).id();
+
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id,
+            },
+            ["Bar#@@bar_cvar"]
+        );
+    }
+
+    #[test]
+    fn expression_completion_in_def_self_method_inside_module_body() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Mod
+              MOD_CONST = 1
+
+              def self.helper
+                # completion here
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Mod"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Mod::<Mod>")),
+                nesting_name_id: name_id,
+            },
+            [
+                "Mod::MOD_CONST",
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Mod",
+                "Mod::<Mod>#helper()"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_in_singleton_class_block_at_top_level() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              @@foo_cvar = 1
+            end
+
+            class << Foo
+              # completion here
+            end
+            ",
+        );
+        context.resolve();
+
+        let foo_ref_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        let nesting_name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_ref_id), None).id();
+
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id,
+            },
+            ["Module", "Class", "Object", "BasicObject", "Kernel", "Foo"]
+        );
+    }
+
+    #[test]
+    fn expression_completion_errors_when_self_decl_id_does_not_exist() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        let result = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Nonexistent")),
+                nesting_name_id: name_id,
+            }),
+        );
+
+        assert!(result.is_err(), "missing self_decl_id should surface as an error");
+    }
+
+    #[test]
+    fn expression_completion_errors_when_self_decl_id_is_not_a_namespace() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              CONST = 1
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        let result = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression {
+                // CONST resolves to a `Constant`, not a `Namespace` and not an alias.
+                self_decl_id: Some(DeclarationId::from("Foo::CONST")),
+                nesting_name_id: name_id,
+            }),
+        );
+
+        assert!(result.is_err(), "non-namespace self_decl_id should surface as an error");
+    }
+
+    #[test]
+    fn expression_completion_follows_chained_self_decl_alias() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Outer
+              class Original
+                def original_m; end
+              end
+
+              FirstAlias = Original
+              SecondAlias = FirstAlias
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Outer"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Outer::SecondAlias")),
+                nesting_name_id: name_id,
+            },
+            [
+                "Outer::FirstAlias",
+                "Outer::SecondAlias",
+                "Outer::Original",
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Outer",
+                "Kernel",
+                "Outer::Original#original_m()"
+            ]
+        );
     }
 }

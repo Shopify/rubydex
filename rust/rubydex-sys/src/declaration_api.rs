@@ -64,6 +64,25 @@ impl CDeclaration {
     }
 }
 
+/// Convert a nullable C string to `Option<DeclarationId>`.
+/// Null, empty, or non-UTF-8 input yields `None`.
+///
+/// # Safety
+///
+/// If non-null, `ptr` must point to a valid, NUL-terminated C string that remains valid for the
+/// duration of the call. The contents do not need to be UTF-8 — non-UTF-8 input is handled by returning
+/// `None`.
+pub(crate) unsafe fn decl_id_from_char_ptr(ptr: *const c_char) -> Option<DeclarationId> {
+    if ptr.is_null() {
+        return None;
+    }
+    let s = unsafe { utils::convert_char_ptr_to_string(ptr) }.ok()?;
+    if s.is_empty() {
+        return None;
+    }
+    Some(DeclarationId::from(s.as_str()))
+}
+
 /// An iterator over declaration IDs
 ///
 /// We snapshot the IDs at iterator creation so if the graph is modified, the iterator will not see the changes
