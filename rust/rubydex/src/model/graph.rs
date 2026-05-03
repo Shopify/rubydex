@@ -83,6 +83,29 @@ pub struct Graph {
 
     /// Paths to exclude from file discovery during indexing.
     excluded_paths: HashSet<PathBuf>,
+
+    /// Watch list of TODOs created by `create_todo_for_parent` during
+    /// resolution. Every new TODO is recorded here via `track_todo`.
+    ///
+    /// Whether a tracked TODO actually gets removed is decided later, in
+    /// one of two ways:
+    ///
+    /// 1. Cascaded removal — invalidation removes the TODO's last child.
+    ///    Example: with just `class A::B; end` in the codebase, deleting
+    ///    the file removes `A::B` and cascades to the TODO `A`.
+    ///    Handled inline in `invalidate_declaration`.
+    ///
+    /// 2. Post-resolution cleanup — some TODOs stay empty forever.
+    ///    Example: `class << Math; def log2(x); x; end; end` with no
+    ///    `module Math` anywhere. The resolver creates a TODO `Math` as
+    ///    the singleton's parent, but the singleton attaches via
+    ///    `set_singleton_class_id`, not `add_member`. So TODO `Math`
+    ///    never gains a member; nothing is ever removed, so (1) never
+    ///    fires. We can't decide this at creation time — a later file
+    ///    could still add `module Math` and promote it. `cleanup_stale_todos`
+    ///    sweeps this list after resolution and removes entries that are
+    ///    still empty.
+    tracked_todos: IdentityHashSet<DeclarationId>,
 }
 
 impl Graph {
@@ -100,6 +123,7 @@ impl Graph {
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
             excluded_paths: HashSet::new(),
+            tracked_todos: IdentityHashSet::default(),
         };
 
         add_built_in_data(&mut graph);
@@ -663,12 +687,44 @@ impl Graph {
         std::mem::take(&mut self.pending_work)
     }
 
+    pub(crate) fn track_todo(&mut self, decl_id: DeclarationId) {
+        self.tracked_todos.insert(decl_id);
+    }
+
     pub(crate) fn push_work(&mut self, unit: Unit) {
         self.pending_work.push(unit);
     }
 
     pub(crate) fn extend_work(&mut self, units: impl IntoIterator<Item = Unit>) {
         self.pending_work.extend(units);
+    }
+
+    /// Drains `tracked_todos` and removes orphan TODOs via
+    /// `invalidate_graph`. See `tracked_todos` for the full rationale.
+    pub(crate) fn cleanup_stale_todos(&mut self) {
+        let candidates = std::mem::take(&mut self.tracked_todos);
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        let items: Vec<InvalidationItem> = candidates
+            .into_iter()
+            .filter(|decl_id| match self.declarations.get(decl_id) {
+                // TODOs that acquired members are actively serving as namespace
+                // parents (e.g. compact notation `class A::B::C`). Keep them.
+                Some(Declaration::Namespace(ns @ Namespace::Todo(_))) => {
+                    ns.definitions().is_empty() && ns.members().is_empty()
+                }
+                Some(decl) => decl.has_no_definitions(),
+                None => false,
+            })
+            .map(InvalidationItem::Declaration)
+            .collect();
+
+        if !items.is_empty() {
+            self.invalidate_graph(items, IdentityHashMap::default());
+        }
     }
 
     /// Converts a `Resolved` `NameRef` back to `Unresolved`, preserving the original `Name` data.
@@ -1043,19 +1099,32 @@ impl Graph {
             }
         }
 
+        // Detach references and queue any declaration that becomes removable as a
+        // result. `invalidate()` only seeds from removed definitions, so a singleton
+        // kept alive purely by a reference (e.g. `Foo::<Foo>` materialized by
+        // `Foo.new`) would otherwise linger after the reference's file is deleted.
+        let mut emptied_by_ref_removal: Vec<InvalidationItem> = Vec::new();
         for ref_id in document.constant_references() {
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
                 // Detach from target declaration. References unresolved during invalidation
                 // were already detached; this catches the rest.
-                if let NameRef::Resolved(resolved) = self.names.get(constant_ref.name_id()).unwrap()
-                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
-                {
-                    declaration.remove_constant_reference(ref_id);
+                if let Some(NameRef::Resolved(resolved)) = self.names.get(constant_ref.name_id()) {
+                    let target_id = *resolved.declaration_id();
+                    if let Some(declaration) = self.declarations.get_mut(&target_id) {
+                        declaration.remove_constant_reference(ref_id);
+                        if declaration.is_removable() {
+                            emptied_by_ref_removal.push(InvalidationItem::Declaration(target_id));
+                        }
+                    }
                 }
 
                 self.remove_name_dependent(*constant_ref.name_id(), NameDependent::Reference(*ref_id));
                 self.untrack_name(*constant_ref.name_id());
             }
+        }
+
+        if !emptied_by_ref_removal.is_empty() {
+            self.invalidate_graph(emptied_by_ref_removal, IdentityHashMap::default());
         }
 
         // Detach removed definitions from their declarations.
@@ -1074,10 +1143,18 @@ impl Graph {
             .collect();
 
         if !missed_def_ids.is_empty() {
-            for declaration in self.declarations.values_mut() {
+            let mut emptied: Vec<InvalidationItem> = Vec::new();
+            for (decl_id, declaration) in &mut self.declarations {
+                let had_definitions = !declaration.definitions().is_empty();
                 for def_id in &missed_def_ids {
                     declaration.remove_definition(def_id);
                 }
+                if had_definitions && declaration.is_removable() {
+                    emptied.push(InvalidationItem::Declaration(*decl_id));
+                }
+            }
+            if !emptied.is_empty() {
+                self.invalidate_graph(emptied, IdentityHashMap::default());
             }
         }
 
@@ -1092,8 +1169,11 @@ impl Graph {
         }
     }
 
-    /// Unified invalidation worklist. Processes declaration and name items in a single loop,
+    /// Invalidation worklist. Processes declaration, name, and reference items in a loop,
     /// where processing one item can push new items back onto the queue.
+    ///
+    /// `pending_detachments` maps declarations to definitions that need to be detached
+    /// before deciding whether to remove or update each declaration.
     fn invalidate_graph(
         &mut self,
         items: Vec<InvalidationItem>,
@@ -1158,13 +1238,18 @@ impl Graph {
             }
         }
 
+        // The same declaration can be queued twice (e.g. from `tracked_todos`
+        // plus a cascade from an owner). Re-visits are idempotent: once removed, the
+        // lookup below returns None and we short-circuit.
         let Some(decl) = self.declarations.get(&decl_id) else {
             return;
         };
-        let should_remove = decl.has_no_definitions() || !self.declarations.contains_key(decl.owner_id());
+        let should_remove = decl.is_removable() || !self.declarations.contains_key(decl.owner_id());
 
         if should_remove {
-            // Queue members + singleton for removal
+            // Remove path: definitions came from a deleted/changed file and won't
+            // re-resolve to this declaration. Removal must be immediate so child
+            // declarations see a missing owner and cascade correctly.
             if let Some(ns) = decl.as_namespace() {
                 if let Some(singleton_id) = ns.singleton_class() {
                     queue.push(InvalidationItem::Declaration(*singleton_id));
@@ -1193,7 +1278,11 @@ impl Graph {
                 }
             }
 
-            // Clean up owner membership and queue remaining definitions for re-resolution
+            // Detach from the owner and re-queue any surviving definitions.
+            // The def_ids loop only does work when we're here because the owner
+            // was deleted (orphan path) — definitions still exist and need to
+            // be re-resolved against a new owner. On the is_removable
+            // path, `decl.definitions()` is already empty.
             if let Some(decl) = self.declarations.get(&decl_id) {
                 let def_ids: Vec<DefinitionId> = decl.definitions().to_vec();
                 let unqualified_str_id = StringId::from(&decl.unqualified_name());
@@ -1212,6 +1301,12 @@ impl Graph {
                     } else {
                         ns.remove_member(&unqualified_str_id);
                     }
+                }
+
+                // The owner may now be eligible for removal (e.g. a TODO parent
+                // that lost its last child). Cascade inline via the worklist.
+                if self.declarations.get(&owner_id).is_some_and(Declaration::is_removable) {
+                    queue.push(InvalidationItem::Declaration(owner_id));
                 }
             }
 
@@ -1277,10 +1372,14 @@ impl Graph {
                             decl.remove_definition(def_id);
                         }
 
+                        // This definition is from a surviving file — it was re-queued
+                        // and will likely re-resolve to the same declaration. If it
+                        // resolves elsewhere, the old declaration is left empty. Queue
+                        // it for removal so it doesn't linger.
                         if self
                             .declarations
                             .get(&old_decl_id)
-                            .is_some_and(Declaration::has_no_definitions)
+                            .is_some_and(Declaration::is_removable)
                         {
                             queue.push(InvalidationItem::Declaration(old_decl_id));
                         }
@@ -2219,6 +2318,36 @@ mod tests {
         assert!(context.graph().get("Foo").is_none());
         assert!(context.graph().get("Foo::<Foo>").is_none());
         assert!(context.graph().get("Foo::<Foo>::<<Foo>>").is_none());
+    }
+
+    /// Regression test: `class << Math` with no `module Math` in the codebase
+    /// used to send `resolve()` into an infinite loop. A singleton attaches via
+    /// `set_singleton_class_id`, not `add_member`, so a TODO receiver would never
+    /// gain a member and would be removed on the next cleanup round — which
+    /// unresolved the singleton's name and re-ran resolution, re-creating the
+    /// TODO forever. The resolver now skips TODO creation when the owner being
+    /// placed is a singleton, so the receiver is never materialized and neither
+    /// is the singleton.
+    #[test]
+    fn resolve_terminates_with_singleton_class_on_undefined_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            "
+            class << Math
+              def log2(x)
+                x
+              end
+            end
+            ",
+        );
+        // If the bug returns, this call hangs.
+        context.resolve();
+
+        // No `Math` TODO is synthesized and no singleton is attached — the
+        // receiver is genuinely missing and the singleton can't be placed.
+        assert_declaration_does_not_exist!(context, "Math");
+        assert_declaration_does_not_exist!(context, "Math::<Math>");
     }
 
     #[test]
@@ -3773,6 +3902,85 @@ mod incremental_resolution_tests {
         assert_no_dangling_definitions(context.graph());
     }
 
+    /// Deleting a bare reopener (`class Foo; end`) must not cascade-remove
+    /// `Foo::<Foo>` when another file still backs it with singleton members.
+    #[test]
+    fn singleton_class_survives_when_reopener_is_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.index_uri("file:///reopener.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///reopener.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn singleton_survives_when_singleton_definition_deleted_but_caller_remains() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.index_uri("file:///foo_singleton.rb", "class Foo; class << self; end; end");
+        context.index_uri("file:///whatever.rb", "Foo.new");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        // Remove the file with the explicit `class << self`. Foo::<Foo> should
+        // survive because Foo.new in whatever.rb created an Attached reference
+        // that also triggers singleton creation.
+        context.delete_uri("file:///foo_singleton.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    /// A class nested inside a `class << self` scope (`Outer::<Outer>::Inner`)
+    /// has a singleton-class ancestor in its qualified name. Deleting an
+    /// unrelated reopener of the outer module must not cascade through the
+    /// singleton path and remove the nested class.
+    #[test]
+    fn nested_class_inside_singleton_scope_survives_reopener_deletion() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///main.rb",
+            r"
+            module Outer
+              class << self
+                class Inner
+                  def initialize; end
+                end
+
+                def run
+                  Inner.new
+                end
+              end
+            end
+            ",
+        );
+        context.index_uri("file:///reopener.rb", "module Outer; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner::<Inner>");
+
+        context.delete_uri("file:///reopener.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Outer");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner");
+        assert_declaration_exists!(context, "Outer::<Outer>::Inner::<Inner>");
+    }
+
     #[test]
     fn singleton_class_preserved_after_delete_and_reindex() {
         let mut context = GraphTest::new();
@@ -3794,28 +4002,62 @@ mod incremental_resolution_tests {
         assert_declaration_exists!(context, "Foo::<Foo>");
     }
 
+    /// Deleting the file that defines singleton-class members (`@x`,
+    /// `self.bar`) must remove those member declarations, not just the
+    /// singleton itself. `Foo` survives because a bare reopener in another
+    /// file still defines it.
     #[test]
-    fn singleton_recreated_when_reference_nested_in_compact_class() {
+    fn singleton_members_cleaned_up_after_file_deletion() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            "
+            class Foo
+              @x = 1
+              def self.bar; end
+            end
+            ",
+        );
+        context.index_uri("file:///b.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>#@x");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#@x");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+    }
+
+    /// Mirror of `singleton_class_survives_when_reopener_is_deleted`: once
+    /// the file defining the singleton members is gone, the singleton must
+    /// be collected (it is no longer backed by anything). Also verifies the
+    /// singleton is recreated if the file comes back.
+    #[test]
+    fn empty_singleton_removed_after_its_members_are_deleted() {
         let mut context = GraphTest::new();
 
-        context.index_uri("file:///parent.rb", "module Parent; end");
-        context.index_uri("file:///target.rb", "class Parent::Target; end");
-        context.index_uri("file:///caller.rb", "class Parent::Caller; Parent::Target.new; end");
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.index_uri("file:///reopener.rb", "class Foo; end");
         context.resolve();
 
-        assert_declaration_exists!(context, "Parent::Target");
-        assert_declaration_exists!(context, "Parent::Target::<Target>");
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
 
-        context.delete_uri("file:///parent.rb");
-        context.delete_uri("file:///target.rb");
+        context.delete_uri("file:///foo.rb");
         context.resolve();
 
-        context.index_uri("file:///parent.rb", "module Parent; end");
-        context.index_uri("file:///target.rb", "class Parent::Target; end");
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
         context.resolve();
 
-        assert_declaration_exists!(context, "Parent::Target");
-        assert_declaration_exists!(context, "Parent::Target::<Target>");
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
     }
 
     #[test]
@@ -4019,5 +4261,309 @@ mod incremental_resolution_tests {
         assert_declaration_exists!(context, "Bar");
         assert_declaration_exists!(context, "Foo::<Foo>");
         assert_declaration_exists!(context, "Bar::<Bar>");
+    }
+
+    /// Deleting the file that defines an ancestor module (`A`) makes
+    /// compact nested classes (`class A::B::C`) briefly unresolvable, so
+    /// `create_todo_for_parent` synthesizes a TODO for `A`. Re-adding the
+    /// ancestor file must not leave that orphan TODO behind — the final
+    /// state must match a fresh index.
+    #[test]
+    fn no_orphan_todo_after_ancestor_definer_readded() {
+        let index_all = |g: &mut GraphTest| {
+            g.index_uri("file:///a.rb", "module A; end");
+            g.index_uri("file:///b.rb", "class A::B::C; end");
+        };
+
+        let mut incremental = GraphTest::new();
+        index_all(&mut incremental);
+        incremental.resolve();
+
+        incremental.delete_uri("file:///a.rb");
+        incremental.resolve();
+
+        incremental.index_uri("file:///a.rb", "module A; end");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        index_all(&mut fresh);
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+    }
+
+    /// After deleting and re-adding the ancestor module, the `A::C::D` TODO
+    /// chain must be restored so `class A::C::D::E` still resolves. Checks
+    /// the restoration side of the delete+readd cycle (complements
+    /// `no_orphan_todo_after_ancestor_definer_readded` which checks
+    /// non-leakage).
+    #[test]
+    fn compact_class_todo_chain_restored_after_ancestor_delete_readd() {
+        let a = "module A; end; class A::B; end";
+        let b = "class A::C::D::E < A::B; end";
+
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", a);
+        context.index_uri("file:///b.rb", b);
+        context.resolve();
+
+        assert_declaration_exists!(context, "A::C::D::E");
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        context.index_uri("file:///a.rb", a);
+        context.resolve();
+
+        assert_declaration_exists!(context, "A");
+        assert_declaration_exists!(context, "A::B");
+        assert_declaration_exists!(context, "A::C::D::E");
+    }
+
+    /// `class A::B::C` with `class << self` creates a singleton on a TODO
+    /// declaration. The `include D::E` in `module A` changes resolution
+    /// ordering so the singleton is attached before the TODO is promoted.
+    /// Calling `resolve()` twice must produce the same state as once — no
+    /// leaked singletons from the promotion, no lost declarations from
+    /// over-eager cleanup.
+    #[test]
+    fn no_leaked_singleton_on_todo_after_double_resolve() {
+        let index_all = |g: &mut GraphTest| {
+            g.index_uri("file:///a.rb", "class A::B::C; class << self; def run; end; end; end");
+            g.index_uri(
+                "file:///b.rb",
+                "module A; include D::E; class F < StandardError; end; end",
+            );
+            g.index_uri("file:///c.rb", "module D; module E; end; end");
+        };
+
+        let mut incremental = GraphTest::new();
+        index_all(&mut incremental);
+        incremental.resolve();
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        index_all(&mut fresh);
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+    }
+
+    /// Minimal cascade: deleting the only file that defines `A::B`
+    /// (compact form) must remove both `A::B` and the synthesized TODO
+    /// parent `A`.
+    #[test]
+    fn todo_parent_removed_after_compact_child_deleted() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///a.rb", "class A::B; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "A");
+        assert_declaration_exists!(context, "A::B");
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "A");
+        assert_declaration_does_not_exist!(context, "A::B");
+    }
+
+    /// Extends `todo_parent_removed_after_compact_child_deleted` with a
+    /// singleton on the compact child. Verifies the cascade reaches the
+    /// singleton through the owner-deleted path.
+    #[test]
+    fn orphan_singleton_cleaned_up_when_owner_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class A::B; class << self; end; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "A");
+        assert_declaration_exists!(context, "A::B");
+        assert_declaration_exists!(context, "A::B::<B>");
+
+        // Deleting the only file removes B (and its singleton) AND the TODO
+        // parent A.
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "A::B");
+        assert_declaration_does_not_exist!(context, "A::B::<B>");
+        assert_declaration_does_not_exist!(context, "A");
+        assert_no_dangling_definitions(context.graph());
+    }
+
+    /// Cross-file superclass singleton cascade: deleting both a base class
+    /// and its subclass (where each has its own singleton) must remove
+    /// every declaration in the chain.
+    #[test]
+    fn ancestor_singletons_cleaned_up_after_class_chain_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class A; end");
+        context.index_uri("file:///b.rb", "class B < A; class << self; end; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "A::<A>");
+        assert_declaration_exists!(context, "B::<B>");
+
+        // Delete both files — A::<A> should cascade-clean because A is gone.
+        context.delete_uri("file:///a.rb");
+        context.delete_uri("file:///b.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "A");
+        assert_declaration_does_not_exist!(context, "B");
+        assert_declaration_does_not_exist!(context, "A::<A>");
+        assert_declaration_does_not_exist!(context, "B::<B>");
+        assert_no_dangling_definitions(context.graph());
+    }
+
+    /// A singleton materialized via a `.new` reference inside a compact-class
+    /// body (`class Parent::Caller; Parent::Target.new; end`) must be restored
+    /// after the parent TODO is deleted and re-indexed. Protects the
+    /// reference-keeps-singleton-alive path for compact nesting.
+    #[test]
+    fn singleton_recreated_when_reference_nested_in_compact_class() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///parent.rb", "module Parent; end");
+        context.index_uri("file:///target.rb", "class Parent::Target; end");
+        context.index_uri("file:///caller.rb", "class Parent::Caller; Parent::Target.new; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Parent::Target");
+        assert_declaration_exists!(context, "Parent::Target::<Target>");
+
+        context.delete_uri("file:///parent.rb");
+        context.delete_uri("file:///target.rb");
+        context.resolve();
+
+        context.index_uri("file:///parent.rb", "module Parent; end");
+        context.index_uri("file:///target.rb", "class Parent::Target; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Parent::Target");
+        assert_declaration_exists!(context, "Parent::Target::<Target>");
+    }
+
+    /// A TODO left with only an external reference (no members, no
+    /// definitions) is still removed. `class Baz < Foo` registers a
+    /// reference against the TODO `Foo` while `class Foo::Bar` holds `Foo`
+    /// alive via the `Bar` member. Deleting `Foo::Bar` leaves `Foo` with
+    /// just the inbound reference — which must not keep it alive.
+    #[test]
+    fn todo_with_only_references_is_removed_after_member_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo::Bar; end");
+        context.index_uri("file:///b.rb", "class Baz < Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::Bar");
+        assert_declaration_exists!(context, "Baz");
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+        assert_declaration_does_not_exist!(context, "Foo");
+        assert_declaration_exists!(context, "Baz");
+    }
+
+    /// `class << Foo::Bar::Baz` on a compact chain where no ancestor is defined.
+    /// A sibling nested class keeps the chain alive after the initial resolve
+    /// so we can observe the TODOs, then deletion cascades the whole chain
+    /// plus the singleton.
+    #[test]
+    fn compact_chain_singleton_on_undefined_parents_cleaned_up_after_delete() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            "
+            class << Foo::Bar::Baz
+              def qux; end
+            end
+            class Foo::Bar::Baz::Keep; end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::Bar");
+        assert_declaration_exists!(context, "Foo::Bar::Baz");
+        assert_declaration_exists!(context, "Foo::Bar::Baz::<Baz>");
+        assert_declaration_exists!(context, "Foo::Bar::Baz::Keep");
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
+        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz");
+        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz::<Baz>");
+        assert_declaration_does_not_exist!(context, "Foo::Bar::Baz::Keep");
+        assert_no_dangling_definitions(context.graph());
+    }
+
+    /// Churn across multiple `resolve()` calls: delete one file, resolve, delete
+    /// another, resolve. End state must equal a fresh index of the final
+    /// sources. Catches bugs where `tracked_todos` leaks across resolves
+    /// or cascaded cleanup misses cross-resolve-round dependencies.
+    #[test]
+    fn multi_round_deletion_matches_fresh_index() {
+        let index_initial = |g: &mut GraphTest| {
+            g.index_uri("file:///a.rb", "class A; def self.x; end; end");
+            g.index_uri("file:///b.rb", "class B < A; class << self; end; end");
+            g.index_uri("file:///c.rb", "class A::C; end");
+        };
+
+        let mut incremental = GraphTest::new();
+        index_initial(&mut incremental);
+        incremental.resolve();
+
+        incremental.delete_uri("file:///b.rb");
+        incremental.resolve();
+
+        incremental.delete_uri("file:///c.rb");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///a.rb", "class A; def self.x; end; end");
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+    }
+
+    /// A singleton class materialized solely by a constant reference (e.g.
+    /// `Foo.new` creating `Foo::<Foo>` even though no `class << Foo` block
+    /// exists) must be collected when its sole supporting reference is
+    /// removed. `invalidate()` only seeds from removed definitions, so the
+    /// reference detachment in `remove_document_data` queues now-removable
+    /// declarations for cleanup.
+    #[test]
+    fn singleton_kept_only_by_reference_collected_on_ref_delete() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.index_uri("file:///user.rb", "Foo.new");
+        context.resolve();
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///user.rb");
+        context.resolve();
+
+        // The reference that materialized the singleton is gone, so the
+        // singleton itself must not linger and `Foo.singleton_class_id` must
+        // be cleared.
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        let foo = context
+            .graph()
+            .declarations()
+            .get(&crate::model::ids::DeclarationId::from("Foo"))
+            .expect("Foo should still exist");
+        let foo_ns = foo.as_namespace().expect("Foo is a namespace");
+        assert!(
+            foo_ns.singleton_class().is_none(),
+            "Foo.singleton_class_id should be cleared after the singleton is removed"
+        );
     }
 } // mod incremental_resolution_tests

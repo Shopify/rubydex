@@ -332,6 +332,14 @@ impl Declaration {
     }
 
     #[must_use]
+    pub fn as_singleton_class(&self) -> Option<&Namespace> {
+        match self {
+            Declaration::Namespace(ns @ Namespace::SingletonClass(_)) => Some(ns),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn as_namespace_mut(&mut self) -> Option<&mut Namespace> {
         match self {
             Declaration::Namespace(namespace) => Some(namespace),
@@ -347,6 +355,20 @@ impl Declaration {
     #[must_use]
     pub fn has_no_definitions(&self) -> bool {
         all_declarations!(self, it => it.definition_ids.is_empty())
+    }
+
+    /// Returns true if this declaration is no longer anchored to anything
+    /// and can be removed. For most declarations, that means having no
+    /// definitions. Singleton classes are an exception: they're also kept
+    /// alive by their members (e.g. `@x`, `def self.bar`) and by inbound
+    /// constant references (e.g. `Foo.new`).
+    #[must_use]
+    pub fn is_removable(&self) -> bool {
+        if let Some(ns) = self.as_singleton_class() {
+            return ns.definitions().is_empty() && ns.members().is_empty() && ns.references().is_empty();
+        }
+
+        self.has_no_definitions()
     }
 
     pub fn add_definition(&mut self, definition_id: DefinitionId) {
