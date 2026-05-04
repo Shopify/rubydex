@@ -180,6 +180,18 @@ impl Definition {
     }
 
     #[must_use]
+    pub fn has_extend_mixin(&self) -> bool {
+        let mixins = match self {
+            Definition::Class(definition) => definition.mixins(),
+            Definition::SingletonClass(definition) => definition.mixins(),
+            Definition::Module(definition) => definition.mixins(),
+            _ => return false,
+        };
+
+        mixins.iter().any(|mixin| matches!(mixin, Mixin::Extend(_)))
+    }
+
+    #[must_use]
     pub fn is_deprecated(&self) -> bool {
         all_definitions!(self, it => it.flags().is_deprecated())
     }
