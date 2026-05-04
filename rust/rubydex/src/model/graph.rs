@@ -1258,12 +1258,24 @@ impl Graph {
                 }
             }
 
-            // Clean up owner membership and queue remaining definitions for re-resolution
+            // Clean up owner membership and queue remaining definitions for re-resolution.
             if let Some(decl) = self.declarations.get(&decl_id) {
                 let def_ids: Vec<DefinitionId> = decl.definitions().to_vec();
                 let unqualified_str_id = StringId::from(&decl.unqualified_name());
                 let owner_id = *decl.owner_id();
                 let is_singleton_class = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)));
+
+                for ref_id in decl.instance_variable_references().into_iter().flatten().copied() {
+                    if let Entry::Occupied(entry) = self.instance_variable_references.entry(ref_id)
+                        && matches!(entry.get(), InstanceVariableReference::Resolved(_))
+                        && let InstanceVariableReference::Resolved(resolved) = entry.remove()
+                    {
+                        self.instance_variable_references.insert(
+                            ref_id,
+                            InstanceVariableReference::Unresolved(Box::new(resolved.into_inner())),
+                        );
+                    }
+                }
 
                 for def_id in def_ids {
                     self.push_work(Unit::Definition(def_id));
@@ -2506,7 +2518,8 @@ mod incremental_resolution_tests {
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
         assert_constant_reference_unresolved, assert_declaration_does_not_exist, assert_declaration_exists,
-        assert_declaration_references_count_eq, assert_members_eq, assert_no_constant_alias_target,
+        assert_declaration_references_count_eq, assert_ivar_reference_unresolved, assert_members_eq,
+        assert_no_constant_alias_target,
     };
 
     const NO_ANCESTORS: [&str; 0] = [];
@@ -4080,6 +4093,160 @@ mod incremental_resolution_tests {
 
         assert_declaration_ids_match(&incremental, &fresh);
         assert_declaration_exists!(incremental, "Foo::<Foo>::<<Foo>>#@bar");
+    }
+
+    #[test]
+    fn ivar_resolution_idempotent_under_repeated_resolves() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///decl.rb", "class Foo; @var = 1; end");
+        context.index_uri(
+            "file:///read.rb",
+            r"
+            class Bar
+              def Foo.baz
+                @var
+              end
+            end
+            ",
+        );
+
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+
+        context.resolve();
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+    }
+
+    #[test]
+    fn ivar_back_ref_preserved_when_decl_file_is_reindexed() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///decl.rb", "class Foo; @var = 1; end");
+        context.index_uri(
+            "file:///read.rb",
+            r"
+            class Bar
+              def Foo.baz
+                @var
+              end
+            end
+            ",
+        );
+
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+
+        context.index_uri("file:///decl.rb", "class Foo; @var = 1; end");
+        assert_ivar_reference_unresolved!(context, "@var");
+
+        context.resolve();
+        assert_declaration_exists!(context, "Foo::<Foo>#@var");
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+    }
+
+    #[test]
+    fn ivar_reference_re_resolves_when_decl_file_deleted_and_re_added() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///decl.rb", "class Foo; @var = 1; end");
+        context.index_uri(
+            "file:///read.rb",
+            r"
+            class Bar
+              def Foo.baz
+                @var
+              end
+            end
+            ",
+        );
+
+        context.resolve();
+        assert_declaration_exists!(context, "Foo::<Foo>#@var");
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+
+        context.delete_uri("file:///decl.rb");
+        context.resolve();
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#@var");
+        assert_ivar_reference_unresolved!(context, "@var");
+
+        context.index_uri("file:///decl.rb", "class Foo; @var = 1; end");
+        context.resolve();
+        assert_declaration_exists!(context, "Foo::<Foo>#@var");
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+    }
+
+    #[test]
+    fn ivar_reference_re_resolves_type_of_self_changes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; @var = 1; end");
+        context.index_uri("file:///bar.rb", "class Bar; @var = 1; end");
+        context.index_uri(
+            "file:///read.rb",
+            r"
+            class Qux
+              def Foo.baz
+                @var
+              end
+            end
+            ",
+        );
+
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+
+        context.index_uri(
+            "file:///read.rb",
+            r"
+            class Qux
+              def Bar.baz
+                @var
+              end
+            end
+            ",
+        );
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 0);
+        assert_declaration_references_count_eq!(context, "Bar::<Bar>#@var", 1);
+    }
+
+    #[test]
+    fn ivar_reference_re_resolves_if_self_ancestors_change() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def initialize
+                @var = 1
+              end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar
+              def read
+                @var
+              end
+            end
+            ",
+        );
+
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo#@var", 0);
+
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            class Bar < Foo
+              def read
+                @var
+              end
+            end
+            ",
+        );
+        context.resolve();
+        assert_declaration_references_count_eq!(context, "Foo#@var", 1);
     }
 
     #[test]

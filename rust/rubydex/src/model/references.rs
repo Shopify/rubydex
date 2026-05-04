@@ -193,6 +193,13 @@ impl ResolvedInstanceVariableRef {
     pub fn declaration_id(&self) -> &DeclarationId {
         &self.declaration_id
     }
+
+    /// Consumes the resolved reference and returns the underlying unresolved data.
+    /// Used when invalidation needs to flip a `Resolved` back to `Unresolved`.
+    #[must_use]
+    pub fn into_inner(self) -> InstanceVariableRef {
+        self.inner
+    }
 }
 
 /// A usage of an instance variable. Mirrors `NameRef`: the resolved variant carries the

@@ -16,6 +16,7 @@ use crate::model::{
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
     ids::{ConstantReferenceId, DeclarationId, DefinitionId, InstanceVariableReferenceId, NameId, StringId},
     name::{Name, NameRef, ParentScope},
+    references::InstanceVariableReference,
 };
 
 enum Outcome {
@@ -647,8 +648,12 @@ impl<'a> Resolver<'a> {
     /// Resolves all instance variable references by linking them to their target declarations.
     /// Runs as a post-pass after `handle_remaining_definitions` since ivar declarations must exist first.
     fn resolve_instance_variable_references(&mut self) {
-        let ivar_ref_ids: Vec<InstanceVariableReferenceId> =
-            self.graph.instance_variable_references().keys().copied().collect();
+        let ivar_ref_ids: Vec<InstanceVariableReferenceId> = self
+            .graph
+            .instance_variable_references()
+            .iter()
+            .filter_map(|(id, ivar_ref)| matches!(ivar_ref, InstanceVariableReference::Unresolved(_)).then_some(*id))
+            .collect();
 
         for ref_id in ivar_ref_ids {
             let ivar_ref = self.graph.instance_variable_references().get(&ref_id).unwrap();
