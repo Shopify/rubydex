@@ -29,14 +29,51 @@ pub enum NameDependent {
     NestedName(NameId),
 }
 
+/// Declaration-specific modes processed by the unified invalidation worklist.
+enum DeclarationInvalidationReason {
+    /// Definitions or structural ownership changed. The declaration may be
+    /// removed, or it may survive and need ancestor relinearization.
+    Changed,
+    /// Ancestor chain is stale, but the declaration should not be pruned just
+    /// because it is currently waiting for new document data to be merged.
+    RecomputeAncestors,
+    /// A local anchor was detached. Remove only if no graph-level anchors remain.
+    PruneIfUnanchored,
+}
+
 /// Items processed by the unified invalidation worklist.
 enum InvalidationItem {
-    /// Ancestor chain is stale, or declaration has become empty and needs removal.
-    Declaration(DeclarationId),
+    Declaration {
+        id: DeclarationId,
+        reason: DeclarationInvalidationReason,
+    },
     /// Structural dependency broken — unresolve the name and cascade to all dependents.
     Name(NameId),
     /// Ancestor context changed — unresolve references under this name but keep the name resolved.
     References(NameId),
+}
+
+impl InvalidationItem {
+    fn declaration_changed(id: DeclarationId) -> Self {
+        Self::Declaration {
+            id,
+            reason: DeclarationInvalidationReason::Changed,
+        }
+    }
+
+    fn declaration_recompute_ancestors(id: DeclarationId) -> Self {
+        Self::Declaration {
+            id,
+            reason: DeclarationInvalidationReason::RecomputeAncestors,
+        }
+    }
+
+    fn declaration_prune_if_unanchored(id: DeclarationId) -> Self {
+        Self::Declaration {
+            id,
+            reason: DeclarationInvalidationReason::PruneIfUnanchored,
+        }
+    }
 }
 
 /// A work item produced by graph mutations (update/delete) that needs resolution.
@@ -984,7 +1021,7 @@ impl Graph {
     /// Identifies declarations affected by old/new documents and feeds them into `invalidate_graph`.
     ///
     /// Does NOT mutate declarations or remove raw data — definition detachment is deferred to
-    /// `invalidate_declaration`, and raw data cleanup to `remove_document_data`.
+    /// `handle_declaration_change`, and raw data cleanup to `remove_document_data`.
     fn invalidate(&mut self, old_document: Option<&Document>, new_local_graph: Option<&LocalGraph>) {
         let capacity = old_document.map_or(0, |d| d.definitions().len())
             + new_local_graph.map_or(0, |lg| lg.definitions().len() + lg.constant_references().len());
@@ -993,13 +1030,29 @@ impl Graph {
 
         // Identify declarations affected by removed definitions
         if let Some(document) = old_document {
+            let mut attached_singletons = Vec::new();
+
             for def_id in document.definitions() {
                 if let Some(declaration_id) = self.definition_id_to_declaration_id(*def_id).copied() {
                     pending_detachments.entry(declaration_id).or_default().push(*def_id);
+
+                    if let Some(singleton_id) = self
+                        .declarations
+                        .get(&declaration_id)
+                        .and_then(Declaration::as_namespace)
+                        .and_then(Namespace::singleton_class)
+                    {
+                        attached_singletons.push(*singleton_id);
+                    }
                 }
             }
+
+            for singleton_id in attached_singletons {
+                items.push(InvalidationItem::declaration_changed(singleton_id));
+            }
+
             for decl_id in pending_detachments.keys() {
-                items.push(InvalidationItem::Declaration(*decl_id));
+                items.push(InvalidationItem::declaration_changed(*decl_id));
             }
         }
 
@@ -1009,7 +1062,9 @@ impl Graph {
                 if let Some(name_id) = def.name_id()
                     && let Some(NameRef::Resolved(resolved)) = self.names.get(name_id)
                 {
-                    items.push(InvalidationItem::Declaration(*resolved.declaration_id()));
+                    items.push(InvalidationItem::declaration_recompute_ancestors(
+                        *resolved.declaration_id(),
+                    ));
                 }
             }
 
@@ -1024,7 +1079,9 @@ impl Graph {
                     && let Some(nesting_id) = name_ref.nesting()
                     && let Some(NameRef::Resolved(resolved)) = self.names.get(nesting_id)
                 {
-                    items.push(InvalidationItem::Declaration(*resolved.declaration_id()));
+                    items.push(InvalidationItem::declaration_recompute_ancestors(
+                        *resolved.declaration_id(),
+                    ));
                 }
             }
         }
@@ -1035,22 +1092,40 @@ impl Graph {
     }
 
     /// Removes raw document data (refs, defs, names, strings) from maps.
-    /// Does not touch declarations or perform invalidation -- that is handled by `invalidate`.
+    ///
+    /// `invalidate` has already handled dependency invalidation and the normal
+    /// definition detachment path. This cleanup removes the raw map entries and
+    /// prunes declarations that become removable only after those entries are detached.
     fn remove_document_data(&mut self, document: &Document) {
+        self.remove_document_method_references(document);
+
+        let mut declarations_to_prune = self.remove_document_constant_references(document);
+        declarations_to_prune.extend(self.detach_unmapped_document_definitions(document));
+        self.prune_declarations_if_unanchored(declarations_to_prune);
+
+        self.remove_document_definitions(document);
+    }
+
+    fn remove_document_method_references(&mut self, document: &Document) {
         for ref_id in document.method_references() {
             if let Some(method_ref) = self.method_references.remove(ref_id) {
                 self.untrack_string(*method_ref.str());
             }
         }
+    }
 
+    fn remove_document_constant_references(&mut self, document: &Document) -> Vec<DeclarationId> {
+        let mut declarations_to_prune = Vec::new();
         for ref_id in document.constant_references() {
             if let Some(constant_ref) = self.constant_references.remove(ref_id) {
                 // Detach from target declaration. References unresolved during invalidation
                 // were already detached; this catches the rest.
-                if let NameRef::Resolved(resolved) = self.names.get(constant_ref.name_id()).unwrap()
-                    && let Some(declaration) = self.declarations.get_mut(resolved.declaration_id())
+                let target_id = self.name_id_to_declaration_id(*constant_ref.name_id()).copied();
+                if let Some(target_id) = target_id
+                    && let Some(declaration) = self.declarations.get_mut(&target_id)
                 {
                     declaration.remove_constant_reference(ref_id);
+                    declarations_to_prune.push(target_id);
                 }
 
                 self.remove_name_dependent(*constant_ref.name_id(), NameDependent::Reference(*ref_id));
@@ -1058,29 +1133,57 @@ impl Graph {
             }
         }
 
-        // Detach removed definitions from their declarations.
-        // Most definitions were already detached by invalidate_declaration via
-        // pending_detachments. Definitions not handled by pending_detachments are
-        // those where definition_to_declaration_id returns None, for example:
-        //   - methods inside `class << self` when <Foo> was unresolved by a prior deletion
-        //   - instance variables in class body (owned by singleton, but lookup resolves to class)
-        //   - definitions whose enclosing namespace name chain is broken
-        // Detach those by scanning declarations for the remainder.
-        let missed_def_ids: Vec<DefinitionId> = document
+        declarations_to_prune
+    }
+
+    fn detach_unmapped_document_definitions(&mut self, document: &Document) -> Vec<DeclarationId> {
+        let unmapped_definition_ids = self.unmapped_document_definition_ids(document);
+
+        if unmapped_definition_ids.is_empty() {
+            return Vec::new();
+        }
+
+        self.detach_definitions_from_any_declaration(&unmapped_definition_ids)
+    }
+
+    /// Definitions that cannot be mapped through `definition_id_to_declaration_id`
+    /// are skipped by the normal invalidation detachment path. That happens when
+    /// the definition's name chain is already broken, or when the resolved owner
+    /// differs from the lexical owner used by lookup, such as singleton-owned
+    /// methods and instance variables.
+    fn unmapped_document_definition_ids(&self, document: &Document) -> Vec<DefinitionId> {
+        document
             .definitions()
             .iter()
             .copied()
             .filter(|def_id| self.definition_id_to_declaration_id(*def_id).is_none())
-            .collect();
+            .collect()
+    }
 
-        if !missed_def_ids.is_empty() {
-            for declaration in self.declarations.values_mut() {
-                for def_id in &missed_def_ids {
-                    declaration.remove_definition(def_id);
-                }
+    fn detach_definitions_from_any_declaration(
+        &mut self,
+        document_definition_ids: &[DefinitionId],
+    ) -> Vec<DeclarationId> {
+        let mut touched_declarations = Vec::new();
+
+        for (decl_id, declaration) in &mut self.declarations {
+            let mut removed_document_definition = false;
+            for def_id in document_definition_ids {
+                removed_document_definition |= declaration.remove_definition(def_id);
+            }
+
+            // This is a fallback scan across every declaration. Only declarations
+            // that actually contained one of this document's definitions should
+            // be considered for pruning.
+            if removed_document_definition {
+                touched_declarations.push(*decl_id);
             }
         }
 
+        touched_declarations
+    }
+
+    fn remove_document_definitions(&mut self, document: &Document) {
         for def_id in document.definitions() {
             let definition = self.definitions.remove(def_id).unwrap();
 
@@ -1090,6 +1193,67 @@ impl Graph {
             }
             self.untrack_definition_strings(&definition);
         }
+    }
+
+    fn prune_declarations_if_unanchored(&mut self, candidate_declaration_ids: Vec<DeclarationId>) {
+        if candidate_declaration_ids.is_empty() {
+            return;
+        }
+
+        let prune_items = candidate_declaration_ids
+            .into_iter()
+            .map(InvalidationItem::declaration_prune_if_unanchored)
+            .collect();
+
+        self.invalidate_graph(prune_items, IdentityHashMap::default());
+    }
+
+    fn declaration_is_unanchored(&self, declaration_id: DeclarationId) -> bool {
+        let Some(declaration) = self.declarations.get(&declaration_id) else {
+            return false;
+        };
+
+        if let Some(namespace) = declaration.as_namespace() {
+            let has_reference_anchor = match namespace {
+                Namespace::SingletonClass(_) => {
+                    if self.singleton_class_needed_for_extend(namespace) {
+                        return false;
+                    }
+
+                    !namespace.references().is_empty()
+                }
+                Namespace::Todo(_) => false,
+                Namespace::Class(_) | Namespace::Module(_) => !namespace.references().is_empty(),
+            };
+
+            // Synthetic namespaces such as TODO parents and singleton classes can
+            // have no definitions while still owning surviving members or being
+            // referenced. Pruning is allowed only after every graph-level anchor
+            // is gone: definitions, members, references (Class/Module/Singleton),
+            // an attached singleton class, and — for singleton classes — an
+            // `extend` on the attached object (handled by the early return above).
+            // TODO parents are not kept alive by references alone.
+            return namespace.definitions().is_empty()
+                && namespace.members().is_empty()
+                && !has_reference_anchor
+                && namespace.singleton_class().is_none();
+        }
+
+        declaration.has_no_definitions()
+    }
+
+    fn singleton_class_needed_for_extend(&self, singleton: &Namespace) -> bool {
+        // `class Foo; extend Bar; end` records the extend on Foo's definition,
+        // but resolution installs Bar in Foo::<Foo>'s ancestor chain.
+        let Some(attached_object) = self.declarations.get(singleton.owner_id()) else {
+            return false;
+        };
+
+        attached_object
+            .definitions()
+            .iter()
+            .filter_map(|definition_id| self.definitions.get(definition_id))
+            .any(Definition::has_extend_mixin)
     }
 
     /// Unified invalidation worklist. Processes declaration and name items in a single loop,
@@ -1104,10 +1268,19 @@ impl Graph {
 
         while let Some(item) = queue.pop() {
             match item {
-                InvalidationItem::Declaration(decl_id) => {
-                    let detach = pending_detachments.remove(&decl_id).unwrap_or_default();
-                    self.invalidate_declaration(decl_id, &detach, &mut queue, &mut visited_declarations);
-                }
+                InvalidationItem::Declaration { id, reason } => match reason {
+                    DeclarationInvalidationReason::Changed => {
+                        let detach = pending_detachments.remove(&id).unwrap_or_default();
+                        self.handle_declaration_change(id, &detach, &mut queue, &mut visited_declarations);
+                    }
+                    DeclarationInvalidationReason::RecomputeAncestors => {
+                        let seed_names = self.names_for_declaration(id);
+                        self.recompute_declaration_ancestors(id, seed_names, &mut queue, &mut visited_declarations);
+                    }
+                    DeclarationInvalidationReason::PruneIfUnanchored => {
+                        self.prune_declaration_if_unanchored(id, &mut queue);
+                    }
+                },
                 InvalidationItem::Name(name_id) => {
                     self.unresolve_dependent_name(name_id, &mut queue);
                 }
@@ -1138,7 +1311,7 @@ impl Graph {
     ///   without changing ancestors (e.g. adding a method in a new file). In that case
     ///   the ancestor re-resolution is redundant — a future optimization could skip it
     ///   by tracking why the declaration was seeded.
-    fn invalidate_declaration(
+    fn handle_declaration_change(
         &mut self,
         decl_id: DeclarationId,
         detach_def_ids: &[DefinitionId],
@@ -1161,98 +1334,194 @@ impl Graph {
         let Some(decl) = self.declarations.get(&decl_id) else {
             return;
         };
-        let should_remove = decl.has_no_definitions() || !self.declarations.contains_key(decl.owner_id());
+        let is_synthetic_namespace = matches!(
+            decl,
+            Declaration::Namespace(Namespace::SingletonClass(_) | Namespace::Todo(_))
+        );
+        let owner_id = *decl.owner_id();
+        let has_no_definitions = decl.has_no_definitions();
 
-        if should_remove {
-            // Queue members + singleton for removal
-            if let Some(ns) = decl.as_namespace() {
-                if let Some(singleton_id) = ns.singleton_class() {
-                    queue.push(InvalidationItem::Declaration(*singleton_id));
-                }
-                for member_decl_id in ns.members().values() {
-                    queue.push(InvalidationItem::Declaration(*member_decl_id));
-                }
-                for descendant_id in ns.descendants() {
-                    queue.push(InvalidationItem::Declaration(*descendant_id));
-                }
-            }
-
-            // Unresolve names and cascade. Reference dependents from surviving
-            // files must be re-queued — their resolution path through this
-            // declaration is broken and needs to be retried after re-add.
-            for name_id in seed_names {
-                self.unresolve_name(name_id);
-                self.queue_structural_cascade(name_id, queue);
-
-                if let Some(deps) = self.name_dependents.get(&name_id) {
-                    for dep in deps {
-                        if let NameDependent::Reference(ref_id) = dep {
-                            self.pending_work.push(Unit::ConstantRef(*ref_id));
-                        }
-                    }
-                }
-            }
-
-            // Clean up owner membership and queue remaining definitions for re-resolution
-            if let Some(decl) = self.declarations.get(&decl_id) {
-                let def_ids: Vec<DefinitionId> = decl.definitions().to_vec();
-                let unqualified_str_id = StringId::from(&decl.unqualified_name());
-                let owner_id = *decl.owner_id();
-                let is_singleton_class = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)));
-
-                for def_id in def_ids {
-                    self.push_work(Unit::Definition(def_id));
-                }
-
-                if let Some(owner) = self.declarations.get_mut(&owner_id)
-                    && let Some(ns) = owner.as_namespace_mut()
-                {
-                    if is_singleton_class {
-                        ns.clear_singleton_class_id();
-                    } else {
-                        ns.remove_member(&unqualified_str_id);
-                    }
-                }
-            }
-
-            self.declarations.remove(&decl_id);
-        } else {
-            // Update: the declaration still has definitions so it stays in the graph,
-            // but its ancestor chain may have changed (e.g. a mixin was added/removed).
-            // Clear ancestors and descendants, then re-queue ancestor resolution.
-            if !visited_declarations.insert(decl_id) {
-                return;
-            }
-
-            let Some(namespace) = self.declarations.get_mut(&decl_id).and_then(|d| d.as_namespace_mut()) else {
-                return;
+        let should_remove = !self.declarations.contains_key(&owner_id)
+            || if is_synthetic_namespace {
+                self.declaration_is_unanchored(decl_id)
+            } else {
+                has_no_definitions
             };
 
-            // Remove self from each ancestor's descendant set
-            for ancestor in &namespace.clone_ancestors() {
-                if let Ancestor::Complete(ancestor_id) = ancestor
-                    && let Some(anc_decl) = self.declarations.get_mut(ancestor_id)
-                    && let Some(ns) = anc_decl.as_namespace_mut()
-                {
-                    ns.remove_descendant(&decl_id);
+        if should_remove {
+            self.remove_declaration(decl_id, seed_names, queue);
+        } else {
+            self.recompute_declaration_ancestors(decl_id, seed_names, queue, visited_declarations);
+        }
+    }
+
+    fn prune_declaration_if_unanchored(&mut self, decl_id: DeclarationId, queue: &mut Vec<InvalidationItem>) {
+        if !self.declaration_is_unanchored(decl_id) {
+            return;
+        }
+
+        let seed_names = self.names_for_declaration(decl_id);
+        self.remove_declaration(decl_id, seed_names, queue);
+    }
+
+    fn remove_declaration(
+        &mut self,
+        decl_id: DeclarationId,
+        seed_names: IdentityHashSet<NameId>,
+        queue: &mut Vec<InvalidationItem>,
+    ) {
+        if !self.declarations.contains_key(&decl_id) {
+            return;
+        }
+
+        self.queue_relatives_for_change(decl_id, queue);
+        self.unresolve_seed_names_and_queue_dependents(seed_names, queue);
+        self.requeue_attached_definitions(decl_id);
+        self.detach_edges_and_queue_prune(decl_id, queue);
+        self.declarations.remove(&decl_id);
+    }
+
+    fn queue_relatives_for_change(&mut self, decl_id: DeclarationId, queue: &mut Vec<InvalidationItem>) {
+        let Some(decl) = self.declarations.get(&decl_id) else {
+            return;
+        };
+        if let Some(ns) = decl.as_namespace() {
+            if let Some(singleton_id) = ns.singleton_class() {
+                queue.push(InvalidationItem::declaration_changed(*singleton_id));
+            }
+            for member_decl_id in ns.members().values() {
+                queue.push(InvalidationItem::declaration_changed(*member_decl_id));
+            }
+            ns.for_each_descendant(|descendant_id| {
+                queue.push(InvalidationItem::declaration_changed(*descendant_id));
+            });
+        }
+    }
+
+    fn unresolve_seed_names_and_queue_dependents(
+        &mut self,
+        seed_names: IdentityHashSet<NameId>,
+        queue: &mut Vec<InvalidationItem>,
+    ) {
+        // Unresolve names and cascade. Reference dependents from surviving
+        // files must be re-queued — their resolution path through this
+        // declaration is broken and needs to be retried after re-add.
+        for name_id in seed_names {
+            self.unresolve_name(name_id);
+            self.queue_structural_cascade(name_id, queue);
+
+            if let Some(deps) = self.name_dependents.get(&name_id) {
+                for dep in deps {
+                    if let NameDependent::Reference(ref_id) = dep {
+                        self.pending_work.push(Unit::ConstantRef(*ref_id));
+                    }
+                }
+            }
+        }
+    }
+
+    fn requeue_attached_definitions(&mut self, decl_id: DeclarationId) {
+        if let Some(decl) = self.declarations.get(&decl_id) {
+            let def_ids: Vec<DefinitionId> = decl.definitions().to_vec();
+
+            for def_id in def_ids {
+                self.push_work(Unit::Definition(def_id));
+            }
+        }
+    }
+
+    fn detach_edges_and_queue_prune(&mut self, decl_id: DeclarationId, queue: &mut Vec<InvalidationItem>) {
+        if let Some(decl) = self.declarations.get(&decl_id) {
+            let unqualified_str_id = StringId::from(&decl.unqualified_name());
+            let owner_id = *decl.owner_id();
+            let is_singleton_class = matches!(decl, Declaration::Namespace(Namespace::SingletonClass(_)));
+
+            if let Some(owner) = self.declarations.get_mut(&owner_id)
+                && let Some(ns) = owner.as_namespace_mut()
+            {
+                if is_singleton_class {
+                    ns.clear_singleton_class_id();
+                } else {
+                    ns.remove_member(&unqualified_str_id);
                 }
             }
 
-            let namespace = self.declarations.get_mut(&decl_id).unwrap().as_namespace_mut().unwrap();
+            queue.push(InvalidationItem::declaration_prune_if_unanchored(owner_id));
+        }
 
-            namespace.for_each_descendant(|descendant_id| {
-                queue.push(InvalidationItem::Declaration(*descendant_id));
-            });
+        for ancestor_id in self.detach_declaration_from_ancestors(decl_id) {
+            queue.push(InvalidationItem::declaration_prune_if_unanchored(ancestor_id));
+        }
+    }
 
-            namespace.clear_ancestors();
-            namespace.clear_descendants();
+    fn recompute_declaration_ancestors(
+        &mut self,
+        decl_id: DeclarationId,
+        seed_names: IdentityHashSet<NameId>,
+        queue: &mut Vec<InvalidationItem>,
+        visited_declarations: &mut IdentityHashSet<DeclarationId>,
+    ) {
+        if !visited_declarations.insert(decl_id) {
+            return;
+        }
 
-            self.push_work(Unit::Ancestors(decl_id));
+        if self
+            .declarations
+            .get(&decl_id)
+            .and_then(Declaration::as_namespace)
+            .is_none()
+        {
+            return;
+        }
 
-            for seed_name_id in seed_names {
-                self.queue_ancestor_triggered_invalidation(seed_name_id, queue);
+        for ancestor_id in self.detach_declaration_from_ancestors(decl_id) {
+            queue.push(InvalidationItem::declaration_prune_if_unanchored(ancestor_id));
+        }
+
+        let namespace = self.declarations.get_mut(&decl_id).unwrap().as_namespace_mut().unwrap();
+
+        namespace.for_each_descendant(|descendant_id| {
+            queue.push(InvalidationItem::declaration_recompute_ancestors(*descendant_id));
+        });
+
+        namespace.clear_ancestors();
+        namespace.clear_descendants();
+
+        self.push_work(Unit::Ancestors(decl_id));
+
+        for seed_name_id in seed_names {
+            self.queue_ancestor_triggered_invalidation(seed_name_id, queue);
+        }
+    }
+
+    fn detach_declaration_from_ancestors(&mut self, decl_id: DeclarationId) -> Vec<DeclarationId> {
+        let ancestor_ids: Vec<_> = self
+            .declarations
+            .get(&decl_id)
+            .and_then(Declaration::as_namespace)
+            .map(|namespace| {
+                namespace
+                    .clone_ancestors()
+                    .iter()
+                    .filter_map(|ancestor| match ancestor {
+                        Ancestor::Complete(ancestor_id) => Some(*ancestor_id),
+                        Ancestor::Partial(_) => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for ancestor_id in &ancestor_ids {
+            if let Some(ancestor_namespace) = self
+                .declarations
+                .get_mut(ancestor_id)
+                .and_then(Declaration::as_namespace_mut)
+            {
+                ancestor_namespace.remove_descendant(&decl_id);
             }
         }
+
+        ancestor_ids
     }
 
     /// The name's structural dependency is broken (its nesting or parent scope was removed).
@@ -1268,6 +1537,7 @@ impl Graph {
                         if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
                             decl.remove_constant_reference(ref_id);
                         }
+                        queue.push(InvalidationItem::declaration_prune_if_unanchored(old_decl_id));
                         self.push_work(Unit::ConstantRef(*ref_id));
                     }
                     NameDependent::Definition(def_id) => {
@@ -1277,13 +1547,7 @@ impl Graph {
                             decl.remove_definition(def_id);
                         }
 
-                        if self
-                            .declarations
-                            .get(&old_decl_id)
-                            .is_some_and(Declaration::has_no_definitions)
-                        {
-                            queue.push(InvalidationItem::Declaration(old_decl_id));
-                        }
+                        queue.push(InvalidationItem::declaration_changed(old_decl_id));
                     }
                     NameDependent::ChildName(_) | NameDependent::NestedName(_) => {}
                 }
@@ -1301,8 +1565,8 @@ impl Graph {
 
         for dep in &dependents {
             if let NameDependent::Reference(ref_id) = dep {
-                if is_resolved {
-                    self.unresolve_reference(*ref_id);
+                if is_resolved && let Some(old_decl_id) = self.unresolve_reference(*ref_id) {
+                    queue.push(InvalidationItem::declaration_prune_if_unanchored(old_decl_id));
                 }
                 self.push_work(Unit::ConstantRef(*ref_id));
             }
@@ -2398,7 +2662,7 @@ mod incremental_resolution_tests {
     use crate::{
         assert_alias_targets_contain, assert_ancestors_eq, assert_constant_reference_to,
         assert_constant_reference_unresolved, assert_declaration_does_not_exist, assert_declaration_exists,
-        assert_declaration_references_count_eq, assert_members_eq, assert_no_constant_alias_target,
+        assert_declaration_references_count_eq, assert_descendants, assert_members_eq, assert_no_constant_alias_target,
     };
 
     const NO_ANCESTORS: [&str; 0] = [];
@@ -2441,6 +2705,39 @@ mod incremental_resolution_tests {
         assert!(
             extras.is_empty() && missing.is_empty(),
             "Declaration mismatch:\n  Extra: {extras:?}\n  Missing: {missing:?}"
+        );
+    }
+
+    fn assert_singleton_class_id_cleared(context: &GraphTest, declaration_name: &str) {
+        let declaration = context
+            .graph()
+            .declarations()
+            .get(&crate::model::ids::DeclarationId::from(declaration_name))
+            .unwrap_or_else(|| panic!("{declaration_name} should exist"));
+        let namespace = declaration
+            .as_namespace()
+            .unwrap_or_else(|| panic!("{declaration_name} should be a namespace"));
+
+        assert!(
+            namespace.singleton_class().is_none(),
+            "{declaration_name}.singleton_class_id should be cleared after the singleton is removed"
+        );
+    }
+
+    fn assert_descendants_excludes(context: &GraphTest, declaration_name: &str, descendant_name: &str) {
+        let declaration = context
+            .graph()
+            .declarations()
+            .get(&crate::model::ids::DeclarationId::from(declaration_name))
+            .unwrap_or_else(|| panic!("{declaration_name} should exist"));
+        let namespace = declaration
+            .as_namespace()
+            .unwrap_or_else(|| panic!("{declaration_name} should be a namespace"));
+        let descendant_id = crate::model::ids::DeclarationId::from(descendant_name);
+
+        assert!(
+            !namespace.descendants().contains(&descendant_id),
+            "{declaration_name} should not keep stale descendant {descendant_name}"
         );
     }
 
@@ -3975,6 +4272,245 @@ mod incremental_resolution_tests {
     }
 
     #[test]
+    fn singleton_class_survives_when_reopener_is_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.index_uri("file:///reopener.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///reopener.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn singleton_survives_when_singleton_definition_deleted_but_caller_remains() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.index_uri("file:///foo_singleton.rb", "class Foo; class << self; end; end");
+        context.index_uri("file:///whatever.rb", "Foo.new");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///foo_singleton.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn empty_singleton_removed_after_ivar_member_is_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo; @x = 1; end");
+        context.index_uri("file:///b.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>#@x");
+
+        context.delete_uri("file:///a.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#@x");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_singleton_class_id_cleared(&context, "Foo");
+    }
+
+    #[test]
+    fn empty_singleton_removed_after_method_member_is_deleted() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.index_uri("file:///reopener.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///foo.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_singleton_class_id_cleared(&context, "Foo");
+
+        context.index_uri("file:///foo.rb", "class Foo; def self.bar; end; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn singleton_kept_only_by_reference_collected_on_ref_delete() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.index_uri("file:///user.rb", "Foo.new");
+        context.resolve();
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///user.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_singleton_class_id_cleared(&context, "Foo");
+    }
+
+    #[test]
+    fn deleting_extend_only_reopener_removes_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///base.rb", "class Foo; end");
+        context.index_uri("file:///bar.rb", "module Bar; end");
+        context.index_uri("file:///ext.rb", "class Foo; extend Bar; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///ext.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_singleton_class_id_cleared(&context, "Foo");
+    }
+
+    #[test]
+    fn replacing_extend_with_plain_reopener_removes_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///base.rb", "class Foo; end");
+        context.index_uri("file:///bar.rb", "module Bar; end");
+        context.index_uri("file:///ext.rb", "class Foo; extend Bar; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.index_uri("file:///ext.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_singleton_class_id_cleared(&context, "Foo");
+    }
+
+    #[test]
+    fn replacing_extend_relinearizes_singleton_class_ancestors() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///base.rb", "class Foo; end");
+        context.index_uri("file:///bar.rb", "module Bar; end");
+        context.index_uri("file:///baz.rb", "module Baz; end");
+        context.index_uri("file:///ext.rb", "class Foo; extend Bar; end");
+        context.resolve();
+
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Bar",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+
+        context.index_uri("file:///ext.rb", "class Foo; extend Baz; end");
+        context.resolve();
+
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Baz",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+        assert_descendants_excludes(&context, "Bar", "Foo::<Foo>");
+        assert_descendants!(context, "Baz", ["Foo::<Foo>"]);
+    }
+
+    #[test]
+    fn replacing_extend_relinearizes_singleton_class_with_existing_member() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///base.rb", "class Foo; end");
+        context.index_uri("file:///bar.rb", "module Bar; end");
+        context.index_uri("file:///baz.rb", "module Baz; end");
+        context.index_uri("file:///ext.rb", "class Foo; extend Bar; end");
+        context.index_uri("file:///method.rb", "def Foo.run; end");
+        context.resolve();
+
+        context.index_uri("file:///ext.rb", "class Foo; extend Baz; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>#run()");
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Baz",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+        assert_descendants_excludes(&context, "Bar", "Foo::<Foo>");
+        assert_descendants!(context, "Baz", ["Foo::<Foo>"]);
+    }
+
+    #[test]
+    fn deleting_reopener_with_new_removes_reference_only_singleton_class() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///base.rb", "class Foo; end");
+        context.index_uri("file:///user.rb", "class Foo; end; Foo.new");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///user.rb");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_singleton_class_id_cleared(&context, "Foo");
+    }
+
+    #[test]
+    fn deleting_singleton_method_preserves_singleton_class_needed_by_extend() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///bar.rb", "module Bar; end");
+        context.index_uri("file:///foo.rb", "class Foo; extend Bar; end");
+        context.index_uri("file:///method.rb", "def Foo.baz; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.delete_uri("file:///method.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+    }
+
+    #[test]
     fn no_duplicate_definition_on_identical_file_delete_readd() {
         let source = "class Foo; def self.run; end; def run; end; end";
 
@@ -4019,5 +4555,45 @@ mod incremental_resolution_tests {
         assert_declaration_exists!(context, "Bar");
         assert_declaration_exists!(context, "Foo::<Foo>");
         assert_declaration_exists!(context, "Bar::<Bar>");
+    }
+
+    #[test]
+    fn deleting_one_todo_owned_sibling_keeps_shared_parent_and_other_sibling() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///c.rb", "class A::B::C; end");
+        context.index_uri("file:///d.rb", "class A::B::D; end");
+        context.resolve();
+
+        context.delete_uri("file:///c.rb");
+        context.resolve();
+
+        assert_declaration_exists!(context, "A");
+        assert_declaration_exists!(context, "A::B");
+        assert_declaration_does_not_exist!(context, "A::B::C");
+        assert_declaration_exists!(context, "A::B::D");
+        assert_members_eq!(context, "A::B", ["D"]);
+    }
+
+    #[test]
+    fn deleting_todo_owned_siblings_prunes_parent_with_only_surviving_reference() {
+        let mut incremental = GraphTest::new();
+        incremental.index_uri("file:///c.rb", "class A::B::C; end");
+        incremental.index_uri("file:///d.rb", "class A::B::D; end");
+        incremental.index_uri("file:///ref.rb", "A::B::C");
+        incremental.resolve();
+
+        incremental.delete_uri("file:///c.rb");
+        incremental.delete_uri("file:///d.rb");
+        incremental.resolve();
+
+        let mut fresh = GraphTest::new();
+        fresh.index_uri("file:///ref.rb", "A::B::C");
+        fresh.resolve();
+
+        assert_declaration_ids_match(&incremental, &fresh);
+        assert_declaration_does_not_exist!(incremental, "A");
+        assert_declaration_does_not_exist!(incremental, "A::B");
+        assert_declaration_does_not_exist!(incremental, "A::B::C");
+        assert_declaration_does_not_exist!(incremental, "A::B::D");
     }
 } // mod incremental_resolution_tests
