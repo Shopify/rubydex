@@ -13,7 +13,7 @@ use crate::model::definitions::{
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
 use crate::model::name::{Name, ParentScope};
-use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::references::{ConstantReference, InstanceVariableRef, MethodRef};
 use crate::model::visibility::Visibility;
 use crate::offset::Offset;
 
@@ -555,6 +555,15 @@ impl<'a> RubyIndexer<'a> {
         let definition_id = self.local_graph.add_definition(definition);
         self.add_member_to_current_owner(definition_id);
         definition_id
+    }
+
+    fn add_instance_variable_reference(&mut self, location: &ruby_prism::Location) {
+        let name = Self::location_to_string(location);
+        let str_id = self.local_graph.intern_string(name);
+        let offset = Offset::from_prism_location(location);
+        let parent_nesting_id = self.parent_nesting_id();
+        let reference = InstanceVariableRef::new(str_id, self.uri_id, offset, parent_nesting_id);
+        self.local_graph.add_instance_variable_reference(reference);
     }
 
     /// Adds a class variable definition.
@@ -2193,7 +2202,7 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_instance_variable_operator_write_node(&mut self, node: &ruby_prism::InstanceVariableOperatorWriteNode) {
-        self.add_instance_variable_definition(&node.name_loc());
+        self.add_instance_variable_reference(&node.name_loc());
         self.visit(&node.value());
     }
 
@@ -2205,6 +2214,10 @@ impl Visit<'_> for RubyIndexer<'_> {
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
         self.add_instance_variable_definition(&node.name_loc());
         self.visit(&node.value());
+    }
+
+    fn visit_instance_variable_read_node(&mut self, node: &ruby_prism::InstanceVariableReadNode) {
+        self.add_instance_variable_reference(&node.location());
     }
 
     fn visit_class_variable_and_write_node(&mut self, node: &ruby_prism::ClassVariableAndWriteNode) {

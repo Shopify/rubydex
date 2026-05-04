@@ -441,6 +441,28 @@ macro_rules! assert_constant_reference_unresolved {
 
 #[cfg(test)]
 #[macro_export]
+macro_rules! assert_ivar_reference_unresolved {
+    ($context:expr, $ivar_name:expr) => {
+        let ivar_ref = $context
+            .graph()
+            .instance_variable_references()
+            .values()
+            .find(|r| $context.graph().strings().get(r.str_id()).unwrap().as_str() == $ivar_name)
+            .unwrap_or_else(|| panic!("No instance variable reference with name `{}`", $ivar_name));
+
+        assert!(
+            matches!(
+                ivar_ref,
+                $crate::model::references::InstanceVariableReference::Unresolved(_)
+            ),
+            "Expected instance variable reference `{}` to be unresolved, but it was resolved",
+            $ivar_name
+        );
+    };
+}
+
+#[cfg(test)]
+#[macro_export]
 macro_rules! assert_ancestors_eq {
     // Arm with mixed Complete/Partial entries: ["Foo", Partial("M1"), "Object"]
     ($context:expr, $name:expr, [$($entry:tt $( ($partial_name:expr) )?),* $(,)?]) => {{

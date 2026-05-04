@@ -103,6 +103,34 @@ macro_rules! assert_not_promotable {
     }};
 }
 
+macro_rules! assert_instance_variable_references_eq {
+    ($context:expr, $expected_names:expr) => {{
+        let mut actual_references = $context
+            .graph()
+            .instance_variable_references()
+            .values()
+            .map(|r| {
+                (
+                    r.offset().start(),
+                    $context.graph().strings().get(r.str_id()).unwrap().as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        actual_references.sort();
+
+        let actual_names = actual_references.iter().map(|(_, name)| *name).collect::<Vec<_>>();
+
+        assert_eq!(
+            $expected_names,
+            actual_names.as_slice(),
+            "instance variable references mismatch: expected `{:?}`, got `{:?}`",
+            $expected_names,
+            actual_names
+        );
+    }};
+}
+
 fn index_source(source: &str) -> LocalGraphTest {
     LocalGraphTest::new("file:///foo.rb", source)
 }
@@ -1801,6 +1829,38 @@ fn constant_with_colon_colon_call_is_promotable() {
     });
 }
 
+#[test]
+fn instance_variable_reads_are_indexed_as_references() {
+    let context = index_source({
+        "
+        class Foo
+          def bar
+            @baz
+          end
+        end
+        "
+    });
+
+    assert_no_local_diagnostics!(&context);
+    assert_instance_variable_references_eq!(context, ["@baz"]);
+}
+
+#[test]
+fn instance_variable_operator_writes_are_references() {
+    let context = index_source({
+        "
+        class Foo
+          def bar
+            @baz += 1
+          end
+        end
+        "
+    });
+
+    assert_no_local_diagnostics!(&context);
+    assert_instance_variable_references_eq!(context, ["@baz"]);
+}
+
 mod constant_tests {
     use super::*;
 
@@ -2114,11 +2174,6 @@ mod variable_tests {
             });
         });
 
-        assert_definition_at!(&context, "8:1-8:5", InstanceVariable, |def| {
-            assert_def_str_eq!(&context, def, "@bar");
-            assert!(def.lexical_nesting_id().is_none());
-        });
-
         assert_definition_at!(&context, "9:1-9:5", InstanceVariable, |def| {
             assert_def_str_eq!(&context, def, "@baz");
             assert!(def.lexical_nesting_id().is_none());
@@ -2130,24 +2185,20 @@ mod variable_tests {
         });
 
         assert_definition_at!(&context, "12:1-16:4", Class, |bar_class_def| {
-            assert_definition_at!(&context, "13:3-13:7", InstanceVariable, |def| {
-                assert_def_str_eq!(&context, def, "@foo");
-                assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(bar_class_def.members()[0], def.id());
-            });
-
             assert_definition_at!(&context, "14:3-14:7", InstanceVariable, |def| {
                 assert_def_str_eq!(&context, def, "@bar");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(bar_class_def.members()[1], def.id());
+                assert_eq!(bar_class_def.members()[0], def.id());
             });
 
             assert_definition_at!(&context, "15:3-15:7", InstanceVariable, |def| {
                 assert_def_str_eq!(&context, def, "@baz");
                 assert_eq!(bar_class_def.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(bar_class_def.members()[2], def.id());
+                assert_eq!(bar_class_def.members()[1], def.id());
             });
         });
+
+        assert_instance_variable_references_eq!(context, ["@bar", "@foo"]);
     }
 
     #[test]
