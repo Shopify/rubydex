@@ -74,6 +74,12 @@ impl Offset {
         self.end
     }
 
+    /// Returns the source text slice corresponding to this offset.
+    #[must_use]
+    pub fn source_at<'a>(&self, source: &'a str) -> &'a str {
+        &source[self.start as usize..self.end as usize]
+    }
+
     /// Converts an offset to a display range like `1:1-1:5`
     #[must_use]
     pub fn to_display_range(&self, document: &Document) -> String {
