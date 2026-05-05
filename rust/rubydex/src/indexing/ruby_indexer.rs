@@ -1193,39 +1193,8 @@ impl<'a> RubyIndexer<'a> {
     }
 
     fn handle_constant_visibility(&mut self, node: &ruby_prism::CallNode, visibility: Visibility) {
-        let receiver = node.receiver();
-
-        let receiver_name_id = match receiver {
-            Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
-                self.index_constant_reference(&receiver.unwrap(), true)
-            }
-            Some(ruby_prism::Node::SelfNode { .. }) | None => match self.nesting_stack.last() {
-                Some(Nesting::Method(_)) => {
-                    // Dynamic private constant (called from a method), we ignore it but don't report an error since it's valid Ruby
-                    // if being called from a singleton method.
-
-                    return;
-                }
-                None => {
-                    self.local_graph.add_diagnostic(
-                        Rule::InvalidPrivateConstant,
-                        Offset::from_prism_location(&node.location()),
-                        "Private constant called at top level".to_string(),
-                    );
-
-                    return;
-                }
-                _ => None,
-            },
-            _ => {
-                self.local_graph.add_diagnostic(
-                    Rule::InvalidPrivateConstant,
-                    Offset::from_prism_location(&node.location()),
-                    "Dynamic receiver for private constant".to_string(),
-                );
-
-                return;
-            }
+        let Some(receiver_name_id) = self.resolve_visibility_receiver(node, Rule::InvalidPrivateConstant) else {
+            return;
         };
 
         let Some(arguments) = node.arguments() else {
@@ -1233,29 +1202,13 @@ impl<'a> RubyIndexer<'a> {
         };
 
         for argument in &arguments.arguments() {
-            let (name, location) = match argument {
-                ruby_prism::Node::SymbolNode { .. } => {
-                    let symbol = argument.as_symbol_node().unwrap();
-                    if let Some(value_loc) = symbol.value_loc() {
-                        (Self::location_to_string(&value_loc), value_loc)
-                    } else {
-                        continue;
-                    }
-                }
-                ruby_prism::Node::StringNode { .. } => {
-                    let string = argument.as_string_node().unwrap();
-                    let name = String::from_utf8_lossy(string.unescaped()).to_string();
-                    (name, argument.location())
-                }
-                _ => {
-                    self.local_graph.add_diagnostic(
-                        Rule::InvalidPrivateConstant,
-                        Offset::from_prism_location(&argument.location()),
-                        "Private constant called with non-symbol argument".to_string(),
-                    );
-
-                    return;
-                }
+            let Some((name, location)) = Self::extract_literal_name(&argument) else {
+                self.local_graph.add_diagnostic(
+                    Rule::InvalidPrivateConstant,
+                    Offset::from_prism_location(&argument.location()),
+                    "Private constant called with non-symbol argument".to_string(),
+                );
+                return;
             };
 
             let str_id = self.local_graph.intern_string(name);
@@ -1277,153 +1230,7 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn handle_singleton_method_visibility(
-        &mut self,
-        node: &ruby_prism::CallNode,
-        visibility: Visibility,
-        call_name: &str,
-    ) {
-        let receiver = node.receiver();
-
-        let receiver_name_id = match receiver {
-            Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
-                self.index_constant_reference(&receiver.unwrap(), true)
-            }
-            Some(ruby_prism::Node::SelfNode { .. }) | None => match self.nesting_stack.last() {
-                Some(Nesting::Method(_)) => return,
-                None => {
-                    self.local_graph.add_diagnostic(
-                        Rule::InvalidSingletonMethodVisibility,
-                        Offset::from_prism_location(&node.location()),
-                        format!("`{call_name}` called at top level"),
-                    );
-                    return;
-                }
-                _ => None,
-            },
-            _ => {
-                self.local_graph.add_diagnostic(
-                    Rule::InvalidSingletonMethodVisibility,
-                    Offset::from_prism_location(&node.location()),
-                    format!("Dynamic receiver for `{call_name}`"),
-                );
-                return;
-            }
-        };
-
-        let Some(arguments) = node.arguments() else {
-            return;
-        };
-
-        for argument in &arguments.arguments() {
-            match argument {
-                ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. } => {
-                    let Some((name, location)) = Self::extract_visibility_literal(&argument) else {
-                        continue;
-                    };
-                    let str_id = self.local_graph.intern_string(format!("{name}()"));
-                    let offset = Offset::from_prism_location(&location);
-                    let definition =
-                        Definition::SingletonMethodVisibility(Box::new(SingletonMethodVisibilityDefinition::new(
-                            receiver_name_id,
-                            str_id,
-                            visibility,
-                            self.uri_id,
-                            offset,
-                            Box::default(),
-                            DefinitionFlags::empty(),
-                            self.current_nesting_definition_id(),
-                        )));
-                    let definition_id = self.local_graph.add_definition(definition);
-                    self.add_member_to_current_owner(definition_id);
-                }
-                ruby_prism::Node::ArrayNode { .. } => {
-                    let array = argument.as_array_node().unwrap();
-                    for element in &array.elements() {
-                        match element {
-                            ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. } => {
-                                let Some((name, location)) = Self::extract_visibility_literal(&element) else {
-                                    continue;
-                                };
-                                let str_id = self.local_graph.intern_string(format!("{name}()"));
-                                let offset = Offset::from_prism_location(&location);
-                                let definition = Definition::SingletonMethodVisibility(Box::new(
-                                    SingletonMethodVisibilityDefinition::new(
-                                        receiver_name_id,
-                                        str_id,
-                                        visibility,
-                                        self.uri_id,
-                                        offset,
-                                        Box::default(),
-                                        DefinitionFlags::empty(),
-                                        self.current_nesting_definition_id(),
-                                    ),
-                                ));
-                                let definition_id = self.local_graph.add_definition(definition);
-                                self.add_member_to_current_owner(definition_id);
-                            }
-                            _ => {
-                                self.local_graph.add_diagnostic(
-                                    Rule::InvalidSingletonMethodVisibility,
-                                    Offset::from_prism_location(&element.location()),
-                                    format!("`{call_name}` array element must be a Symbol or String"),
-                                );
-                                self.visit(&element);
-                            }
-                        }
-                    }
-                }
-                ruby_prism::Node::DefNode { .. } => {
-                    let def_node = argument.as_def_node().unwrap();
-                    if def_node.receiver().is_none() {
-                        self.local_graph.add_diagnostic(
-                            Rule::InvalidSingletonMethodVisibility,
-                            Offset::from_prism_location(&argument.location()),
-                            format!("`{call_name}` requires a singleton method definition"),
-                        );
-                    } else {
-                        let name_loc = def_node.name_loc();
-                        let name = Self::location_to_string(&name_loc);
-                        let str_id = self.local_graph.intern_string(format!("{name}()"));
-                        let offset = Offset::from_prism_location(&name_loc);
-                        let definition =
-                            Definition::SingletonMethodVisibility(Box::new(SingletonMethodVisibilityDefinition::new(
-                                receiver_name_id,
-                                str_id,
-                                visibility,
-                                self.uri_id,
-                                offset,
-                                Box::default(),
-                                DefinitionFlags::empty(),
-                                self.current_nesting_definition_id(),
-                            )));
-                        let definition_id = self.local_graph.add_definition(definition);
-                        self.add_member_to_current_owner(definition_id);
-                    }
-                    self.visit(&argument);
-                }
-                arg if Self::is_attr_call(&arg) => {
-                    self.local_graph.add_diagnostic(
-                        Rule::InvalidSingletonMethodVisibility,
-                        Offset::from_prism_location(&arg.location()),
-                        format!("`{call_name}` does not accept `attr_*` arguments"),
-                    );
-                    self.visit(&arg);
-                }
-                _ => {
-                    self.local_graph.add_diagnostic(
-                        Rule::InvalidSingletonMethodVisibility,
-                        Offset::from_prism_location(&argument.location()),
-                        format!("`{call_name}` called with a non-literal argument"),
-                    );
-                    self.visit(&argument);
-                }
-            }
-        }
-    }
-
-    fn extract_visibility_literal<'b>(arg: &ruby_prism::Node<'b>) -> Option<(String, ruby_prism::Location<'b>)> {
+    fn extract_literal_name<'b>(arg: &ruby_prism::Node<'b>) -> Option<(String, ruby_prism::Location<'b>)> {
         match arg {
             ruby_prism::Node::SymbolNode { .. } => {
                 let symbol = arg.as_symbol_node().unwrap();
@@ -1437,6 +1244,148 @@ impl<'a> RubyIndexer<'a> {
             }
             _ => None,
         }
+    }
+
+    #[allow(clippy::option_option)]
+    fn resolve_visibility_receiver(&mut self, node: &ruby_prism::CallNode, rule: Rule) -> Option<Option<NameId>> {
+        let receiver = node.receiver();
+        match &receiver {
+            Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
+                Some(self.index_constant_reference(receiver.as_ref().unwrap(), true))
+            }
+            Some(ruby_prism::Node::SelfNode { .. }) | None => match self.nesting_stack.last() {
+                Some(Nesting::Method(_)) => None,
+                None => {
+                    let call_name = String::from_utf8_lossy(node.name().as_slice());
+                    self.local_graph.add_diagnostic(
+                        rule,
+                        Offset::from_prism_location(&node.location()),
+                        format!("`{call_name}` called at top level"),
+                    );
+                    None
+                }
+                _ => Some(None),
+            },
+            Some(other) => {
+                let call_name = String::from_utf8_lossy(node.name().as_slice());
+                self.local_graph.add_diagnostic(
+                    rule,
+                    Offset::from_prism_location(&other.location()),
+                    format!("Dynamic receiver for `{call_name}`"),
+                );
+                None
+            }
+        }
+    }
+
+    fn handle_singleton_method_visibility(
+        &mut self,
+        node: &ruby_prism::CallNode,
+        visibility: Visibility,
+        call_name: &str,
+    ) {
+        let Some(receiver_name_id) = self.resolve_visibility_receiver(node, Rule::InvalidSingletonMethodVisibility)
+        else {
+            return;
+        };
+
+        let Some(arguments) = node.arguments() else {
+            return;
+        };
+
+        for argument in &arguments.arguments() {
+            self.handle_singleton_method_visibility_argument(&argument, receiver_name_id, visibility, call_name);
+        }
+    }
+
+    fn handle_singleton_method_visibility_argument(
+        &mut self,
+        argument: &ruby_prism::Node,
+        receiver_name_id: Option<NameId>,
+        visibility: Visibility,
+        call_name: &str,
+    ) {
+        match argument {
+            ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. } => {
+                if let Some((name, location)) = Self::extract_literal_name(argument) {
+                    self.create_singleton_method_visibility_definition(&name, &location, receiver_name_id, visibility);
+                }
+            }
+            ruby_prism::Node::ArrayNode { .. } => {
+                let array = argument.as_array_node().unwrap();
+                for element in &array.elements() {
+                    if let Some((name, location)) = Self::extract_literal_name(&element) {
+                        self.create_singleton_method_visibility_definition(
+                            &name,
+                            &location,
+                            receiver_name_id,
+                            visibility,
+                        );
+                    } else {
+                        self.local_graph.add_diagnostic(
+                            Rule::InvalidSingletonMethodVisibility,
+                            Offset::from_prism_location(&element.location()),
+                            format!("`{call_name}` array element must be a Symbol or String"),
+                        );
+                        self.visit(&element);
+                    }
+                }
+            }
+            ruby_prism::Node::DefNode { .. } => {
+                let def_node = argument.as_def_node().unwrap();
+                if def_node.receiver().is_none() {
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidSingletonMethodVisibility,
+                        Offset::from_prism_location(&argument.location()),
+                        format!("`{call_name}` requires a singleton method definition"),
+                    );
+                } else {
+                    let name_loc = def_node.name_loc();
+                    let name = Self::location_to_string(&name_loc);
+                    self.create_singleton_method_visibility_definition(&name, &name_loc, receiver_name_id, visibility);
+                }
+                self.visit(argument);
+            }
+            arg if Self::is_attr_call(arg) => {
+                self.local_graph.add_diagnostic(
+                    Rule::InvalidSingletonMethodVisibility,
+                    Offset::from_prism_location(&arg.location()),
+                    format!("`{call_name}` does not accept `attr_*` arguments"),
+                );
+                self.visit(arg);
+            }
+            _ => {
+                self.local_graph.add_diagnostic(
+                    Rule::InvalidSingletonMethodVisibility,
+                    Offset::from_prism_location(&argument.location()),
+                    format!("`{call_name}` called with a non-literal argument"),
+                );
+                self.visit(argument);
+            }
+        }
+    }
+
+    fn create_singleton_method_visibility_definition(
+        &mut self,
+        name: &str,
+        location: &ruby_prism::Location,
+        receiver_name_id: Option<NameId>,
+        visibility: Visibility,
+    ) {
+        let str_id = self.local_graph.intern_string(format!("{name}()"));
+        let offset = Offset::from_prism_location(location);
+        let definition = Definition::SingletonMethodVisibility(Box::new(SingletonMethodVisibilityDefinition::new(
+            receiver_name_id,
+            str_id,
+            visibility,
+            self.uri_id,
+            offset,
+            Box::default(),
+            DefinitionFlags::empty(),
+            self.current_nesting_definition_id(),
+        )));
+        let definition_id = self.local_graph.add_definition(definition);
+        self.add_member_to_current_owner(definition_id);
     }
 
     fn is_attr_call(arg: &ruby_prism::Node) -> bool {
@@ -1493,21 +1442,8 @@ impl<'a> RubyIndexer<'a> {
     }
 
     fn create_method_visibility_definition(&mut self, arg: &ruby_prism::Node, visibility: Visibility) {
-        let (name, location) = match arg {
-            ruby_prism::Node::SymbolNode { .. } => {
-                let symbol = arg.as_symbol_node().unwrap();
-                if let Some(value_loc) = symbol.value_loc() {
-                    (Self::location_to_string(&value_loc), value_loc)
-                } else {
-                    return;
-                }
-            }
-            ruby_prism::Node::StringNode { .. } => {
-                let string = arg.as_string_node().unwrap();
-                let name = String::from_utf8_lossy(string.unescaped()).to_string();
-                (name, arg.location())
-            }
-            _ => return,
+        let Some((name, location)) = Self::extract_literal_name(arg) else {
+            return;
         };
 
         let str_id = self.local_graph.intern_string(format!("{name}()"));
