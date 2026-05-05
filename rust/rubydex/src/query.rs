@@ -10,7 +10,7 @@ use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, Parameter};
 use crate::model::graph::Graph;
 use crate::model::identity_maps::IdentityHashSet;
-use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
+use crate::model::ids::{DeclarationId, DefinitionId, NameId, StringId, UriId};
 use crate::model::keywords::{self, Keyword};
 use crate::model::name::NameRef;
 
@@ -608,6 +608,123 @@ fn method_argument_completion<'a>(
     }
 
     Ok(candidates)
+}
+
+/// Finds the given member on the ancestor chain of the declaration. Use `only_inherited` to skip all ancestors until
+/// the main namespace and start from its parent.
+#[must_use]
+pub fn find_member_in_ancestors(
+    graph: &Graph,
+    declaration_id: DeclarationId,
+    member_str_id: StringId,
+    only_inherited: bool,
+) -> Option<DeclarationId> {
+    let namespace = graph.declarations().get(&declaration_id)?.as_namespace()?;
+    let mut found_main_namespace = false;
+
+    for ancestor in namespace.ancestors() {
+        let Ancestor::Complete(ancestor_id) = ancestor else {
+            continue;
+        };
+
+        if only_inherited && !found_main_namespace {
+            if *ancestor_id == declaration_id {
+                found_main_namespace = true;
+            }
+            continue;
+        }
+
+        if let Some(member_id) = graph
+            .declarations()
+            .get(ancestor_id)?
+            .as_namespace()?
+            .member(&member_str_id)
+        {
+            return Some(*member_id);
+        }
+    }
+
+    None
+}
+
+/// Reasons [`follow_method_alias`] could not produce a target declaration.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AliasResolutionError {
+    /// The provided definition id is not a `MethodAlias`.
+    NotAnAlias,
+    /// The alias's owner could not be resolved (e.g., a `ConstantReceiver` whose name never resolved to a declaration,
+    /// or a singleton-class chain whose attached object isn't resolvable).
+    UnresolvedOwner,
+    /// The chain of aliases forms a cycle. The chain was abandoned at the first revisit.
+    Cycle,
+    /// The alias's `old_name` does not exist on the owner or any of its ancestors.
+    TargetNotFound,
+    /// The resolved target is not a method declaration. Indicates a graph inconsistency since method-name lookups
+    /// should only land on `Declaration::Method`.
+    TargetNotMethod,
+}
+
+/// Follows `alias_id` through any chain of further `MethodAlias` definitions and returns the `DeclarationId` of the
+/// final method declaration that has at least one non-alias definition (a regular `def`, `attr_*`, etc.).
+///
+/// # Errors
+///
+/// Returns an `AliasResolutionError` describing why the chain could not be resolved (not an alias, unresolved owner,
+/// cyclic chain, target missing, or target not a method).
+///
+/// # Panics
+///
+/// Panics if the graph is internally inconsistent
+pub fn follow_method_alias(graph: &Graph, alias_id: DefinitionId) -> Result<DeclarationId, AliasResolutionError> {
+    let mut seen: IdentityHashSet<DeclarationId> = IdentityHashSet::default();
+    let mut current = alias_id;
+
+    loop {
+        let Some(Definition::MethodAlias(alias)) = graph.definitions().get(&current) else {
+            return Err(AliasResolutionError::NotAnAlias);
+        };
+
+        let owner_id = graph
+            .definition_id_to_declaration_id(current)
+            .and_then(|decl_id| graph.declarations().get(decl_id))
+            .map(|decl| *decl.owner_id())
+            .ok_or(AliasResolutionError::UnresolvedOwner)?;
+
+        let target_id = find_member_in_ancestors(graph, owner_id, *alias.old_name_str_id(), false)
+            .ok_or(AliasResolutionError::TargetNotFound)?;
+
+        if !seen.insert(target_id) {
+            return Err(AliasResolutionError::Cycle);
+        }
+
+        let Declaration::Method(target) = graph
+            .declarations()
+            .get(&target_id)
+            .expect("member returned by find_member_in_ancestors must exist")
+        else {
+            return Err(AliasResolutionError::TargetNotMethod);
+        };
+
+        // Stop at the first non-alias definition; otherwise track the smallest alias `DefinitionId` so the trace stays
+        // deterministic across runs. (If two aliases target different methods, we just pick one of them.)
+        let mut maybe_next_alias: Option<DefinitionId> = None;
+
+        for &def_id in target.definitions() {
+            if !matches!(
+                graph
+                    .definitions()
+                    .get(&def_id)
+                    .expect("declaration definition_id must exist in the graph"),
+                Definition::MethodAlias(_),
+            ) {
+                return Ok(target_id);
+            }
+
+            maybe_next_alias = Some(maybe_next_alias.map_or(def_id, |m| m.min(def_id)));
+        }
+
+        current = maybe_next_alias.ok_or(AliasResolutionError::TargetNotFound)?;
+    }
 }
 
 #[cfg(test)]
@@ -2584,6 +2701,316 @@ mod tests {
                 "Kernel",
                 "Outer::Original#original_m()"
             ]
+        );
+    }
+
+    /// Returns the smallest `MethodAlias` `DefinitionId` for the declaration named `alias_decl_fqn`
+    /// (e.g., `"Foo#aliased()"`). Picking the smallest mirrors `follow_method_alias`'s own
+    /// determinism rule for tests where multiple aliases share a declaration (e.g. cross-file fixtures).
+    fn alias_def_id(context: &GraphTest, alias_decl_fqn: &str) -> DefinitionId {
+        let decl = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from(alias_decl_fqn))
+            .unwrap_or_else(|| panic!("expected declaration {alias_decl_fqn}"));
+
+        decl.definitions()
+            .iter()
+            .copied()
+            .filter(|def_id| {
+                matches!(
+                    context.graph().definitions().get(def_id),
+                    Some(Definition::MethodAlias(_)),
+                )
+            })
+            .min()
+            .unwrap_or_else(|| panic!("declaration {alias_decl_fqn} has no MethodAlias definition"))
+    }
+
+    /// Asserts that the alias declared as `$alias_fqn` follows to the declaration `$target_fqn`.
+    macro_rules! assert_alias_target {
+        ($context:expr, $alias_fqn:expr, $target_fqn:expr $(,)?) => {{
+            let context = $context;
+            assert_eq!(
+                follow_method_alias(context.graph(), alias_def_id(context, $alias_fqn)),
+                Ok(DeclarationId::from($target_fqn)),
+            );
+        }};
+    }
+
+    #[test]
+    fn follow_method_alias_to_local_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def original; end
+              alias aliased original
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Foo#aliased()", "Foo#original()");
+    }
+
+    #[test]
+    fn follow_method_alias_through_chain_of_aliases() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def real; end
+              alias mid real
+              alias outer mid
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Foo#outer()", "Foo#real()");
+    }
+
+    #[test]
+    fn follow_method_alias_detects_two_step_cycle() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              alias a b
+              alias b a
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_eq!(
+            follow_method_alias(context.graph(), alias_def_id(&context, "Foo#a()")),
+            Err(AliasResolutionError::Cycle),
+        );
+        assert_eq!(
+            follow_method_alias(context.graph(), alias_def_id(&context, "Foo#b()")),
+            Err(AliasResolutionError::Cycle),
+        );
+    }
+
+    #[test]
+    fn follow_method_alias_detects_multi_step_cycle() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              alias a b
+              alias b c
+              alias c a
+            end
+            ",
+        );
+        context.resolve();
+
+        for alias_fqn in ["Foo#a()", "Foo#b()", "Foo#c()"] {
+            assert_eq!(
+                follow_method_alias(context.graph(), alias_def_id(&context, alias_fqn)),
+                Err(AliasResolutionError::Cycle),
+                "expected {alias_fqn} to be detected as part of the cycle",
+            );
+        }
+    }
+
+    #[test]
+    fn follow_method_alias_detects_self_cycle() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              alias foo foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_eq!(
+            follow_method_alias(context.graph(), alias_def_id(&context, "Foo#foo()")),
+            Err(AliasResolutionError::Cycle),
+        );
+    }
+
+    #[test]
+    fn follow_method_alias_to_inherited_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Parent
+              def inherited_m; end
+            end
+
+            class Child < Parent
+              alias aliased inherited_m
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Child#aliased()", "Parent#inherited_m()");
+    }
+
+    #[test]
+    fn follow_method_alias_with_constant_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Bar
+              def to_s; end
+            end
+
+            class Foo
+              Bar.alias_method(:new_to_s, :to_s)
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Bar#new_to_s()", "Bar#to_s()");
+    }
+
+    #[test]
+    fn follow_method_alias_in_singleton_class_body() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.find; end
+
+              class << self
+                alias_method :find_old, :find
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Foo::<Foo>#find_old()", "Foo::<Foo>#find()");
+    }
+
+    #[test]
+    fn follow_method_alias_in_singleton_class_body_misses_instance_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def regular; end
+
+              class << self
+                alias_method :other, :regular
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_eq!(
+            follow_method_alias(context.graph(), alias_def_id(&context, "Foo::<Foo>#other()")),
+            Err(AliasResolutionError::TargetNotFound),
+        );
+    }
+
+    #[test]
+    fn follow_method_alias_to_attr_reader() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              attr_reader :name
+              alias display name
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Foo#display()", "Foo#name()");
+    }
+
+    #[test]
+    fn follow_method_alias_to_attr_accessor() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              attr_accessor :age
+              alias years age
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Foo#years()", "Foo#age()");
+    }
+
+    #[test]
+    fn follow_method_alias_to_method_in_prepended_module() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module M
+              def original; end
+            end
+
+            class Foo
+              prepend M
+              alias aliased original
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Foo#aliased()", "M#original()");
+    }
+
+    #[test]
+    fn follow_method_alias_ignores_visibility_of_target() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              private def secret; end
+              alias revealed secret
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_alias_target!(&context, "Foo#revealed()", "Foo#secret()");
+    }
+
+    #[test]
+    fn follow_method_alias_returns_target_not_found_when_target_missing() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              alias aliased nonexistent
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_eq!(
+            follow_method_alias(context.graph(), alias_def_id(&context, "Foo#aliased()")),
+            Err(AliasResolutionError::TargetNotFound),
         );
     }
 }

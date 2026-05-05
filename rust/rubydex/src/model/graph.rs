@@ -375,13 +375,15 @@ impl Graph {
                 )
             }
             Definition::MethodAlias(it) => {
-                if let Some(Receiver::SelfReceiver(def_id)) = it.receiver() {
-                    return self.find_self_receiver_declaration(*def_id, *it.new_name_str_id());
-                }
-                (
-                    self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
-                    it.new_name_str_id(),
-                )
+                let nesting_name_id = match it.receiver() {
+                    Some(Receiver::SelfReceiver(def_id)) => {
+                        return self.find_self_receiver_declaration(*def_id, *it.new_name_str_id());
+                    }
+                    Some(Receiver::ConstantReceiver(name_id)) => Some(name_id),
+                    None => self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                };
+
+                (nesting_name_id, it.new_name_str_id())
             }
         };
 
