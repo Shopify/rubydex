@@ -5306,4 +5306,155 @@ mod visibility_resolution_tests {
 
         assert_visibility_eq!(context, "Foo::BAR", Visibility::Private);
     }
+
+    #[test]
+    fn retroactive_singleton_method_visibility_on_direct_member() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.bar; end
+              def self.baz; end
+
+              private_class_method :bar
+              public_class_method :baz
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#baz()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_singleton_method_visibility_via_qualified_receiver() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.bar; end
+            end
+
+            Foo.private_class_method :bar
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_singleton_method_visibility_on_inherited_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Parent
+              def self.foo; end
+            end
+
+            class Child < Parent
+              private_class_method :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Child::<Child>#foo()");
+        assert_visibility_eq!(context, "Child::<Child>#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "Parent::<Parent>#foo()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_singleton_method_visibility_on_undefined_method_emits_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              private_class_method :nonexistent
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &[
+                "undefined-singleton-method-visibility-target: undefined singleton method `nonexistent()` for visibility change in `Foo::<Foo>` (2:25-2:36)"
+            ]
+        );
+    }
+
+    #[test]
+    fn retroactive_singleton_method_visibility_clears_when_call_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Parent
+              def self.foo; end
+            end
+
+            class Child < Parent; end
+            ",
+        );
+        context.index_uri(
+            "file:///vis.rb",
+            r"
+            Child.private_class_method :foo
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Child::<Child>#foo()");
+        assert_visibility_eq!(context, "Child::<Child>#foo()", Visibility::Private);
+
+        context.delete_uri("file:///vis.rb");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "Child::<Child>#foo()");
+        assert_visibility_eq!(context, "Parent::<Parent>#foo()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_singleton_method_visibility_undefined_target_diagnostic_clears_when_file_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///bad.rb",
+            r"
+            class Foo
+              private_class_method :missing
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &[
+                "undefined-singleton-method-visibility-target: undefined singleton method `missing()` for visibility change in `Foo::<Foo>` (2:25-2:32)"
+            ]
+        );
+
+        context.delete_uri("file:///bad.rb");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+    }
 }

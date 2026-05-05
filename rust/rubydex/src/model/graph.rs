@@ -656,6 +656,7 @@ impl Graph {
                     };
                     let visibility = match definition {
                         Definition::MethodVisibility(vis) => Some(*vis.visibility()),
+                        Definition::SingletonMethodVisibility(vis) => Some(*vis.visibility()),
                         Definition::Method(method) => Some(*method.visibility()),
                         Definition::AttrAccessor(attr) => Some(*attr.visibility()),
                         Definition::AttrReader(attr) => Some(*attr.visibility()),
