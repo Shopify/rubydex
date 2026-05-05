@@ -6,7 +6,7 @@ use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::built_in::{OBJECT_ID, add_built_in_data};
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
-use crate::model::definitions::{Definition, Receiver};
+use crate::model::definitions::{Definition, MethodVisibilityDefinition, Receiver};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
@@ -333,10 +333,15 @@ impl Graph {
                     .or_else(|| self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref())),
                 it.target(),
             ),
-            Definition::MethodVisibility(it) => (
-                self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
-                it.str_id(),
-            ),
+            Definition::MethodVisibility(it) => {
+                if it.flags().is_singleton_method_visibility() {
+                    return self.find_singleton_method_visibility_declaration(it);
+                }
+                (
+                    self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
+                    it.str_id(),
+                )
+            }
             Definition::GlobalVariable(it) => (
                 self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
                 it.str_id(),
@@ -411,6 +416,27 @@ impl Graph {
         }
 
         None
+    }
+
+    /// Looks up the declaration for a singleton method visibility through the singleton class.
+    fn find_singleton_method_visibility_declaration(
+        &self,
+        definition: &MethodVisibilityDefinition,
+    ) -> Option<&DeclarationId> {
+        let nesting_name_id = self.find_enclosing_namespace_name_id(definition.lexical_nesting_id().as_ref());
+        let nesting_declaration_id = match nesting_name_id {
+            Some(name_id) => self.name_id_to_declaration_id(*name_id),
+            None => Some(&*OBJECT_ID),
+        }?;
+        let singleton_id = self
+            .declarations
+            .get(nesting_declaration_id)?
+            .as_namespace()?
+            .singleton_class()?;
+        self.declarations
+            .get(singleton_id)?
+            .as_namespace()?
+            .member(definition.str_id())
     }
 
     /// Looks up the declaration for a `SelfReceiver` method/alias through the singleton class.

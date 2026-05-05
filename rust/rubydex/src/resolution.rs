@@ -604,10 +604,8 @@ impl<'a> Resolver<'a> {
                         self.graph.add_document_diagnostic(uri_id, diagnostic);
                     }
                 }
-                Definition::MethodVisibility(visibility_def) => {
-                    if !visibility_def.flags().is_singleton_method_visibility() {
-                        method_visibility_ids.push(id);
-                    }
+                Definition::MethodVisibility(_) => {
+                    method_visibility_ids.push(id);
                 }
                 Definition::Class(_)
                 | Definition::SingletonClass(_)
@@ -622,7 +620,8 @@ impl<'a> Resolver<'a> {
         self.resolve_method_visibilities(method_visibility_ids);
     }
 
-    /// Resolves retroactive method visibility changes (`private :foo`, `protected :foo`, `public :foo`).
+    /// Resolves retroactive method visibility changes (`private :foo`, `protected :foo`, `public :foo`,
+    /// `private_class_method :foo`, `public_class_method :foo`).
     ///
     /// Runs as a second pass after all methods/attrs are declared, so `private :bar` works
     /// regardless of whether `def bar` appeared before or after it in source.
@@ -638,9 +637,19 @@ impl<'a> Resolver<'a> {
             let uri_id = *method_visibility.uri_id();
             let offset = method_visibility.offset().clone();
             let lexical_nesting_id = *method_visibility.lexical_nesting_id();
+            let is_singleton = method_visibility.flags().is_singleton_method_visibility();
 
-            let Some(owner_id) = self.resolve_lexical_owner(lexical_nesting_id, id) else {
+            let Some(lexical_owner_id) = self.resolve_lexical_owner(lexical_nesting_id, id) else {
                 continue;
+            };
+
+            let owner_id = if is_singleton {
+                let Some(singleton_id) = self.get_or_create_singleton_class(lexical_owner_id, true) else {
+                    continue;
+                };
+                singleton_id
+            } else {
+                lexical_owner_id
             };
 
             let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&owner_id) else {
@@ -691,13 +700,20 @@ impl<'a> Resolver<'a> {
                     Rule::UndefinedMethodVisibilityTarget,
                     uri_id,
                     offset,
-                    format!("undefined method `{method_name}` for visibility change in `{owner_name}`"),
+                    format!("undefined method `{owner_name}#{method_name}` for visibility change"),
                 );
-                self.graph
-                    .declarations_mut()
-                    .get_mut(&owner_id)
-                    .unwrap()
-                    .add_diagnostic(diagnostic);
+                if is_singleton {
+                    // Document-scoped: the singleton class may be synthetic (created by this
+                    // visibility resolution) and won't be cleaned up on file delete, so attaching
+                    // the diagnostic to the declaration would leave it orphaned.
+                    self.graph.add_document_diagnostic(uri_id, diagnostic);
+                } else {
+                    self.graph
+                        .declarations_mut()
+                        .get_mut(&owner_id)
+                        .unwrap()
+                        .add_diagnostic(diagnostic);
+                }
             }
         }
 
@@ -1882,7 +1898,7 @@ impl<'a> Resolver<'a> {
                             singleton_methods.push(Unit::Definition(id));
                         }
                         _ => {
-                            others.push(id);
+                            others.push((id, (*definition.uri_id(), definition.offset())));
                         }
                     }
                 }
@@ -1922,14 +1938,15 @@ impl<'a> Resolver<'a> {
             (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
         });
 
+        others.sort_unstable_by_key(|(_, key)| *key);
+
         // Definitions first, then constant refs, then singleton methods, then ancestors
         self.unit_queue.extend(definitions.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(const_refs.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(singleton_methods);
         self.unit_queue.extend(ancestors.into_iter().map(Unit::Ancestors));
 
-        others.shrink_to_fit();
-        others
+        others.into_iter().map(|(id, _)| id).collect()
     }
 
     /// Returns the singleton parent ID for an attached object ID. A singleton class' parent depends on what the attached
