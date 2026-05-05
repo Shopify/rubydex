@@ -3735,6 +3735,96 @@ mod visibility_tests {
             );
         }
     }
+
+    #[test]
+    fn index_private_class_method_calls() {
+        let context = index_source(
+            r#"
+            class Foo
+              def self.bar; end
+              def self.baz; end
+              def self.qux; end
+
+              private_class_method :bar, :baz
+              public_class_method "qux"
+            end
+
+            Foo.private_class_method :other
+            "#,
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "6:25-6:28", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "bar()");
+            assert!(def.receiver().is_none());
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "6:31-6:34", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "baz()");
+            assert!(def.receiver().is_none());
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "7:23-7:28", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "qux()");
+            assert!(def.receiver().is_none());
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+        assert_definition_at!(&context, "10:27-10:32", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "other()");
+            assert_name_path_eq!(&context, "Foo", def.receiver().unwrap());
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_public_class_method_calls() {
+        let context = index_source(
+            r"
+            class Foo
+              def self.bar; end
+
+              public_class_method :bar
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "4:24-4:27", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "bar()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_private_class_method_calls_diagnostics() {
+        let context = index_source(
+            r"
+            private_class_method :NOT_INDEXED
+            self.private_class_method :NOT_INDEXED
+            foo.private_class_method :NOT_INDEXED
+
+            module Foo
+              private_class_method NOT_INDEXED
+
+              def self.qux
+                private_class_method :Bar
+              end
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec![
+                "invalid-singleton-method-visibility: `private_class_method` called at top level (1:1-1:34)",
+                "invalid-singleton-method-visibility: `private_class_method` called at top level (2:1-2:39)",
+                "invalid-singleton-method-visibility: Dynamic receiver for `private_class_method` (3:1-3:38)",
+                "invalid-singleton-method-visibility: `private_class_method` called with a non-literal argument (6:24-6:35)",
+            ]
+        );
+    }
 }
 
 mod attr_accessor_tests {

@@ -9,6 +9,7 @@ use crate::model::definitions::{
     ExtendDefinition, GlobalVariableAliasDefinition, GlobalVariableDefinition, IncludeDefinition,
     InstanceVariableDefinition, MethodAliasDefinition, MethodDefinition, MethodVisibilityDefinition, Mixin,
     ModuleDefinition, Parameter, ParameterStruct, PrependDefinition, Receiver, Signatures, SingletonClassDefinition,
+    SingletonMethodVisibilityDefinition,
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
@@ -1276,6 +1277,88 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
+    fn handle_singleton_method_visibility(
+        &mut self,
+        node: &ruby_prism::CallNode,
+        visibility: Visibility,
+        call_name: &str,
+    ) {
+        let receiver = node.receiver();
+
+        let receiver_name_id = match receiver {
+            Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
+                self.index_constant_reference(&receiver.unwrap(), true)
+            }
+            Some(ruby_prism::Node::SelfNode { .. }) | None => match self.nesting_stack.last() {
+                Some(Nesting::Method(_)) => return,
+                None => {
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidSingletonMethodVisibility,
+                        Offset::from_prism_location(&node.location()),
+                        format!("`{call_name}` called at top level"),
+                    );
+                    return;
+                }
+                _ => None,
+            },
+            _ => {
+                self.local_graph.add_diagnostic(
+                    Rule::InvalidSingletonMethodVisibility,
+                    Offset::from_prism_location(&node.location()),
+                    format!("Dynamic receiver for `{call_name}`"),
+                );
+                return;
+            }
+        };
+
+        let Some(arguments) = node.arguments() else {
+            return;
+        };
+
+        for argument in &arguments.arguments() {
+            let (name, location) = match argument {
+                ruby_prism::Node::SymbolNode { .. } => {
+                    let symbol = argument.as_symbol_node().unwrap();
+                    if let Some(value_loc) = symbol.value_loc() {
+                        (Self::location_to_string(&value_loc), value_loc)
+                    } else {
+                        continue;
+                    }
+                }
+                ruby_prism::Node::StringNode { .. } => {
+                    let string = argument.as_string_node().unwrap();
+                    let name = String::from_utf8_lossy(string.unescaped()).to_string();
+                    (name, argument.location())
+                }
+                _ => {
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidSingletonMethodVisibility,
+                        Offset::from_prism_location(&argument.location()),
+                        format!("`{call_name}` called with a non-literal argument"),
+                    );
+                    return;
+                }
+            };
+
+            let str_id = self.local_graph.intern_string(format!("{name}()"));
+            let offset = Offset::from_prism_location(&location);
+            let definition = Definition::SingletonMethodVisibility(Box::new(SingletonMethodVisibilityDefinition::new(
+                receiver_name_id,
+                str_id,
+                visibility,
+                self.uri_id,
+                offset,
+                Box::default(),
+                DefinitionFlags::empty(),
+                self.current_nesting_definition_id(),
+            )));
+
+            let definition_id = self.local_graph.add_definition(definition);
+
+            self.add_member_to_current_owner(definition_id);
+        }
+    }
+
     fn is_attr_call(arg: &ruby_prism::Node) -> bool {
         arg.as_call_node().is_some_and(|call| {
             let receiver = call.receiver();
@@ -2048,6 +2131,12 @@ impl Visit<'_> for RubyIndexer<'_> {
             }
             "public_constant" => {
                 self.handle_constant_visibility(node, Visibility::Public);
+            }
+            "private_class_method" => {
+                self.handle_singleton_method_visibility(node, Visibility::Private, "private_class_method");
+            }
+            "public_class_method" => {
+                self.handle_singleton_method_visibility(node, Visibility::Public, "public_class_method");
             }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we

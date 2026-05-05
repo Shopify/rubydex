@@ -64,6 +64,7 @@ pub enum Definition {
     ConstantAlias(Box<ConstantAliasDefinition>),
     ConstantVisibility(Box<ConstantVisibilityDefinition>),
     MethodVisibility(Box<MethodVisibilityDefinition>),
+    SingletonMethodVisibility(Box<SingletonMethodVisibilityDefinition>),
     Method(Box<MethodDefinition>),
     AttrAccessor(Box<AttrAccessorDefinition>),
     AttrReader(Box<AttrReaderDefinition>),
@@ -86,6 +87,7 @@ macro_rules! all_definitions {
             Definition::ConstantAlias($var) => $expr,
             Definition::ConstantVisibility($var) => $expr,
             Definition::MethodVisibility($var) => $expr,
+            Definition::SingletonMethodVisibility($var) => $expr,
             Definition::GlobalVariable($var) => $expr,
             Definition::InstanceVariable($var) => $expr,
             Definition::ClassVariable($var) => $expr,
@@ -135,6 +137,7 @@ impl Definition {
             Definition::ConstantAlias(_) => "ConstantAlias",
             Definition::ConstantVisibility(_) => "ConstantVisibility",
             Definition::MethodVisibility(_) => "MethodVisibility",
+            Definition::SingletonMethodVisibility(_) => "SingletonMethodVisibility",
             Definition::Method(_) => "Method",
             Definition::AttrAccessor(_) => "AttrAccessor",
             Definition::AttrReader(_) => "AttrReader",
@@ -157,6 +160,7 @@ impl Definition {
             Definition::ConstantAlias(d) => Some(d.name_id()),
             Definition::ConstantVisibility(_)
             | Definition::MethodVisibility(_)
+            | Definition::SingletonMethodVisibility(_)
             | Definition::GlobalVariable(_)
             | Definition::InstanceVariable(_)
             | Definition::ClassVariable(_)
@@ -867,6 +871,90 @@ impl MethodVisibilityDefinition {
     }
 }
 assert_mem_size!(MethodVisibilityDefinition, 56);
+
+#[derive(Debug)]
+pub struct SingletonMethodVisibilityDefinition {
+    receiver: Option<NameId>,
+    target: StringId,
+    visibility: Visibility,
+    uri_id: UriId,
+    offset: Offset,
+    flags: DefinitionFlags,
+    comments: Box<[Comment]>,
+    lexical_nesting_id: Option<DefinitionId>,
+}
+
+impl SingletonMethodVisibilityDefinition {
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        receiver: Option<NameId>,
+        target: StringId,
+        visibility: Visibility,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Box<[Comment]>,
+        flags: DefinitionFlags,
+        lexical_nesting_id: Option<DefinitionId>,
+    ) -> Self {
+        Self {
+            receiver,
+            target,
+            visibility,
+            uri_id,
+            offset,
+            flags,
+            comments,
+            lexical_nesting_id,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> DefinitionId {
+        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.target))
+    }
+
+    #[must_use]
+    pub fn receiver(&self) -> &Option<NameId> {
+        &self.receiver
+    }
+
+    #[must_use]
+    pub fn target(&self) -> &StringId {
+        &self.target
+    }
+
+    #[must_use]
+    pub fn visibility(&self) -> &Visibility {
+        &self.visibility
+    }
+
+    #[must_use]
+    pub fn uri_id(&self) -> &UriId {
+        &self.uri_id
+    }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        &self.offset
+    }
+
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    #[must_use]
+    pub fn lexical_nesting_id(&self) -> &Option<DefinitionId> {
+        &self.lexical_nesting_id
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> &DefinitionFlags {
+        &self.flags
+    }
+}
+assert_mem_size!(SingletonMethodVisibilityDefinition, 64);
 
 /// The signature of a method
 ///

@@ -262,6 +262,7 @@ impl Graph {
             }
             Definition::ConstantVisibility(it) => it.target(),
             Definition::MethodVisibility(it) => it.str_id(),
+            Definition::SingletonMethodVisibility(it) => it.target(),
             Definition::GlobalVariable(it) => it.str_id(),
             Definition::InstanceVariable(it) => it.str_id(),
             Definition::ClassVariable(it) => it.str_id(),
@@ -337,6 +338,22 @@ impl Graph {
                 self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
                 it.str_id(),
             ),
+            Definition::SingletonMethodVisibility(it) => {
+                let nesting_name_id = it
+                    .receiver()
+                    .as_ref()
+                    .or_else(|| self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()));
+                let nesting_declaration_id = match nesting_name_id {
+                    Some(name_id) => self.name_id_to_declaration_id(*name_id),
+                    None => Some(&*OBJECT_ID),
+                }?;
+                let singleton_id = self
+                    .declarations
+                    .get(nesting_declaration_id)?
+                    .as_namespace()?
+                    .singleton_class()?;
+                return self.declarations.get(singleton_id)?.as_namespace()?.member(it.target());
+            }
             Definition::GlobalVariable(it) => (
                 self.find_enclosing_namespace_name_id(it.lexical_nesting_id().as_ref()),
                 it.str_id(),
@@ -763,6 +780,7 @@ impl Graph {
             | Definition::ConstantAlias(_)
             | Definition::ConstantVisibility(_) => {}
             Definition::MethodVisibility(d) => self.untrack_string(*d.str_id()),
+            Definition::SingletonMethodVisibility(d) => self.untrack_string(*d.target()),
             Definition::Method(d) => self.untrack_string(*d.str_id()),
             Definition::AttrAccessor(d) => self.untrack_string(*d.str_id()),
             Definition::AttrReader(d) => self.untrack_string(*d.str_id()),

@@ -607,6 +607,7 @@ impl<'a> Resolver<'a> {
                 Definition::MethodVisibility(_) => {
                     method_visibility_ids.push(id);
                 }
+                Definition::SingletonMethodVisibility(_) => {}
                 Definition::Class(_)
                 | Definition::SingletonClass(_)
                 | Definition::Module(_)

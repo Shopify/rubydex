@@ -29,6 +29,7 @@ pub enum DefinitionKind {
     ClassVariable = 13,
     MethodAlias = 14,
     GlobalVariableAlias = 15,
+    SingletonMethodVisibility = 16,
 }
 
 #[repr(C)]
@@ -47,6 +48,7 @@ pub(crate) fn map_definition_to_kind(defn: &Definition) -> DefinitionKind {
         Definition::ConstantAlias(_) => DefinitionKind::ConstantAlias,
         Definition::ConstantVisibility(_) => DefinitionKind::ConstantVisibility,
         Definition::MethodVisibility(_) => DefinitionKind::MethodVisibility,
+        Definition::SingletonMethodVisibility(_) => DefinitionKind::SingletonMethodVisibility,
         Definition::Method(_) => DefinitionKind::Method,
         Definition::AttrAccessor(_) => DefinitionKind::AttrAccessor,
         Definition::AttrReader(_) => DefinitionKind::AttrReader,
