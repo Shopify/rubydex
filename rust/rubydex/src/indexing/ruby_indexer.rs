@@ -1274,6 +1274,7 @@ impl<'a> RubyIndexer<'a> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_singleton_method_visibility(
         &mut self,
         node: &ruby_prism::CallNode,
@@ -1307,7 +1308,10 @@ impl<'a> RubyIndexer<'a> {
             return;
         };
 
-        for argument in &arguments.arguments() {
+        let args = arguments.arguments();
+        let arg_count = args.len();
+
+        for argument in &args {
             match argument {
                 ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. } => {
                     self.create_method_visibility_definition(
@@ -1315,6 +1319,88 @@ impl<'a> RubyIndexer<'a> {
                         visibility,
                         DefinitionFlags::SINGLETON_METHOD_VISIBILITY,
                     );
+                }
+                ruby_prism::Node::ArrayNode { .. } if arg_count == 1 => {
+                    let array = argument.as_array_node().unwrap();
+                    for element in &array.elements() {
+                        match element {
+                            ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. } => {
+                                self.create_method_visibility_definition(
+                                    &element,
+                                    visibility,
+                                    DefinitionFlags::SINGLETON_METHOD_VISIBILITY,
+                                );
+                            }
+                            ruby_prism::Node::DefNode { .. } => {
+                                let def_node = element.as_def_node().unwrap();
+                                if def_node.receiver().is_none() {
+                                    self.local_graph.add_diagnostic(
+                                        Rule::InvalidMethodVisibility,
+                                        Offset::from_prism_location(&element.location()),
+                                        format!("`{call_name}` requires a singleton method definition"),
+                                    );
+                                    self.visit(&element);
+                                    continue;
+                                }
+                                let name_loc = def_node.name_loc();
+                                let name = Self::location_to_string(&name_loc);
+                                self.create_method_visibility_definition_from_name(
+                                    &name,
+                                    &name_loc,
+                                    visibility,
+                                    DefinitionFlags::SINGLETON_METHOD_VISIBILITY,
+                                );
+                                self.visit(&element);
+                            }
+                            _ => {
+                                self.local_graph.add_diagnostic(
+                                    Rule::InvalidMethodVisibility,
+                                    Offset::from_prism_location(&element.location()),
+                                    format!(
+                                        "`{call_name}` array element must be a Symbol, String, or method definition"
+                                    ),
+                                );
+                                self.visit(&element);
+                            }
+                        }
+                    }
+                }
+                ruby_prism::Node::DefNode { .. } => {
+                    let def_node = argument.as_def_node().unwrap();
+                    if def_node.receiver().is_none() {
+                        self.local_graph.add_diagnostic(
+                            Rule::InvalidMethodVisibility,
+                            Offset::from_prism_location(&argument.location()),
+                            format!("`{call_name}` requires a singleton method definition"),
+                        );
+                        self.visit(&argument);
+                        continue;
+                    }
+                    let name_loc = def_node.name_loc();
+                    let name = Self::location_to_string(&name_loc);
+                    self.create_method_visibility_definition_from_name(
+                        &name,
+                        &name_loc,
+                        visibility,
+                        DefinitionFlags::SINGLETON_METHOD_VISIBILITY,
+                    );
+                    self.visit(&argument);
+                }
+                arg if Self::is_attr_call(&arg) => {
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidMethodVisibility,
+                        Offset::from_prism_location(&arg.location()),
+                        format!("`{call_name}` does not accept `attr_*` arguments"),
+                    );
+                    self.visit(&arg);
+                }
+                ruby_prism::Node::ArrayNode { .. } => {
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidMethodVisibility,
+                        Offset::from_prism_location(&argument.location()),
+                        format!("`{call_name}` array argument must be the only argument"),
+                    );
+                    self.visit(&argument);
                 }
                 _ => {
                     self.local_graph.add_diagnostic(
@@ -1390,11 +1476,8 @@ impl<'a> RubyIndexer<'a> {
         let (name, location) = match arg {
             ruby_prism::Node::SymbolNode { .. } => {
                 let symbol = arg.as_symbol_node().unwrap();
-                if let Some(value_loc) = symbol.value_loc() {
-                    (Self::location_to_string(&value_loc), value_loc)
-                } else {
-                    return;
-                }
+                let Some(value_loc) = symbol.value_loc() else { return };
+                (Self::location_to_string(&value_loc), value_loc)
             }
             ruby_prism::Node::StringNode { .. } => {
                 let string = arg.as_string_node().unwrap();
@@ -1404,8 +1487,18 @@ impl<'a> RubyIndexer<'a> {
             _ => return,
         };
 
+        self.create_method_visibility_definition_from_name(&name, &location, visibility, flags);
+    }
+
+    fn create_method_visibility_definition_from_name(
+        &mut self,
+        name: &str,
+        location: &ruby_prism::Location,
+        visibility: Visibility,
+        flags: DefinitionFlags,
+    ) {
         let str_id = self.local_graph.intern_string(format!("{name}()"));
-        let arg_offset = Offset::from_prism_location(&location);
+        let arg_offset = Offset::from_prism_location(location);
         let definition = Definition::MethodVisibility(Box::new(MethodVisibilityDefinition::new(
             str_id,
             visibility,
