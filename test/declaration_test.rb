@@ -841,6 +841,41 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_class_method_visibility_inline_def
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          private_class_method def self.bar; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo::<Foo>#bar()"].visibility)
+    end
+  end
+
+  def test_class_method_visibility_array_form
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def self.a; end
+          def self.b; end
+          private_class_method [:a, "b"]
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo::<Foo>#a()"].visibility)
+      assert_equal(:private, graph["Foo::<Foo>#b()"].visibility)
+    end
+  end
+
   def test_constant_alias_visibility
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

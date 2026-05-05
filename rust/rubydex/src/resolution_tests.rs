@@ -5457,4 +5457,45 @@ mod visibility_resolution_tests {
 
         assert_no_diagnostics!(&context);
     }
+
+    #[test]
+    fn retroactive_singleton_method_visibility_inline_def() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              private_class_method def self.bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_singleton_method_visibility_array_form() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r#"
+            class Foo
+              def self.a; end
+              def self.b; end
+              def self.c; end
+
+              private_class_method [:a, "b"]
+              public_class_method [:c]
+            end
+            "#,
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::<Foo>#a()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#b()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#c()", Visibility::Public);
+    }
 }
