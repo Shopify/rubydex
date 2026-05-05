@@ -3807,6 +3807,9 @@ mod visibility_tests {
 
             module Foo
               private_class_method NOT_INDEXED
+              attr_reader :a_attr_target
+              private_class_method attr_reader(:bad)
+              private_class_method def inline; end
 
               def self.qux
                 private_class_method :Bar
@@ -3822,8 +3825,89 @@ mod visibility_tests {
                 "invalid-singleton-method-visibility: `private_class_method` called at top level (2:1-2:39)",
                 "invalid-singleton-method-visibility: Dynamic receiver for `private_class_method` (3:1-3:38)",
                 "invalid-singleton-method-visibility: `private_class_method` called with a non-literal argument (6:24-6:35)",
+                "invalid-singleton-method-visibility: `private_class_method` does not accept `attr_*` arguments (8:24-8:41)",
+                "invalid-singleton-method-visibility: `private_class_method` requires a singleton method definition (9:24-9:39)",
             ]
         );
+    }
+
+    #[test]
+    fn index_private_class_method_inline_def() {
+        let context = index_source(
+            r"
+            class Foo
+              private_class_method def self.inline; end
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "2:33-2:39", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "inline()");
+            assert!(def.receiver().is_none());
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+    }
+
+    #[test]
+    fn index_private_class_method_array_form() {
+        let context = index_source(
+            r#"
+            class Foo
+              def self.flat; end
+              def self.flat2; end
+              def self.mixed; end
+
+              private_class_method [:flat, :flat2]
+              public_class_method [:mixed, "flat"]
+            end
+            "#,
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "6:26-6:30", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "flat()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "6:33-6:38", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "flat2()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+        assert_definition_at!(&context, "7:25-7:30", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "mixed()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+        assert_definition_at!(&context, "7:32-7:38", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "flat()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+    }
+
+    #[test]
+    fn index_private_class_method_array_form_non_literal_element_diagnostic() {
+        let context = index_source(
+            r"
+            class Foo
+              def self.flat; end
+
+              private_class_method [:flat, SOME_CONST]
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec![
+                "invalid-singleton-method-visibility: `private_class_method` array element must be a Symbol or String (4:32-4:42)"
+            ]
+        );
+
+        assert_definition_at!(&context, "4:26-4:30", SingletonMethodVisibility, |def| {
+            assert_string_eq!(&context, def.target(), "flat()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
     }
 }
 
