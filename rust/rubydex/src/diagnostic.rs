@@ -105,6 +105,7 @@ rules! {
     TopLevelMixinSelf;
     InvalidPrivateConstant;
     InvalidMethodVisibility;
+    InvalidSingletonMethodVisibility;
 
     // Resolution
     UndefinedMethodVisibilityTarget;
