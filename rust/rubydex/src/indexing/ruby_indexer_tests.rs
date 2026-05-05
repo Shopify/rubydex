@@ -3333,9 +3333,9 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-private-constant: Private constant called at top level (1:1-1:30)",
-                "invalid-private-constant: Private constant called at top level (2:1-2:35)",
-                "invalid-private-constant: Dynamic receiver for private constant (3:1-3:34)",
+                "invalid-private-constant: `private_constant` called at top level (1:1-1:30)",
+                "invalid-private-constant: `private_constant` called at top level (2:1-2:35)",
+                "invalid-private-constant: Dynamic receiver for `private_constant` (3:1-3:4)",
                 "invalid-private-constant: Private constant called with non-symbol argument (6:20-6:31)",
             ]
         );
@@ -3823,7 +3823,7 @@ mod visibility_tests {
             vec![
                 "invalid-singleton-method-visibility: `private_class_method` called at top level (1:1-1:34)",
                 "invalid-singleton-method-visibility: `private_class_method` called at top level (2:1-2:39)",
-                "invalid-singleton-method-visibility: Dynamic receiver for `private_class_method` (3:1-3:38)",
+                "invalid-singleton-method-visibility: Dynamic receiver for `private_class_method` (3:1-3:4)",
                 "invalid-singleton-method-visibility: `private_class_method` called with a non-literal argument (6:24-6:35)",
                 "invalid-singleton-method-visibility: `private_class_method` does not accept `attr_*` arguments (8:24-8:41)",
                 "invalid-singleton-method-visibility: `private_class_method` requires a singleton method definition (9:24-9:39)",
