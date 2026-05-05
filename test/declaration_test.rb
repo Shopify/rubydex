@@ -789,6 +789,58 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_class_method_visibility_via_private_class_method
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def self.bar; end
+          private_class_method :bar
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo::<Foo>#bar()"].visibility)
+    end
+  end
+
+  def test_class_method_visibility_via_public_class_method
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def self.bar; end
+          public_class_method :bar
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:public, graph["Foo::<Foo>#bar()"].visibility)
+    end
+  end
+
+  def test_class_method_visibility_via_qualified_receiver
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def self.bar; end
+        end
+
+        Foo.private_class_method :bar
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo::<Foo>#bar()"].visibility)
+    end
+  end
+
   def test_constant_alias_visibility
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

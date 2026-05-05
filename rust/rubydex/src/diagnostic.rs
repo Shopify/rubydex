@@ -110,4 +110,5 @@ rules! {
     // Resolution
     UndefinedMethodVisibilityTarget;
     UndefinedConstantVisibilityTarget;
+    UndefinedSingletonMethodVisibilityTarget;
 }

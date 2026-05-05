@@ -274,6 +274,7 @@ impl<'a> Resolver<'a> {
     #[allow(clippy::too_many_lines)]
     fn handle_remaining_definitions(&mut self, other_ids: Vec<DefinitionId>) {
         let mut method_visibility_ids = Vec::new();
+        let mut singleton_method_visibility_ids = Vec::new();
 
         for id in other_ids {
             match self.graph.definitions().get(&id).unwrap() {
@@ -607,7 +608,9 @@ impl<'a> Resolver<'a> {
                 Definition::MethodVisibility(_) => {
                     method_visibility_ids.push(id);
                 }
-                Definition::SingletonMethodVisibility(_) => {}
+                Definition::SingletonMethodVisibility(_) => {
+                    singleton_method_visibility_ids.push(id);
+                }
                 Definition::Class(_)
                 | Definition::SingletonClass(_)
                 | Definition::Module(_)
@@ -619,6 +622,98 @@ impl<'a> Resolver<'a> {
         }
 
         self.resolve_method_visibilities(method_visibility_ids);
+        self.resolve_singleton_method_visibilities(singleton_method_visibility_ids);
+    }
+
+    /// Resolves `private_class_method` / `public_class_method` calls
+    fn resolve_singleton_method_visibilities(&mut self, visibility_ids: Vec<DefinitionId>) {
+        let mut pending_work = Vec::new();
+
+        for id in visibility_ids {
+            let Definition::SingletonMethodVisibility(singleton_visibility) =
+                self.graph.definitions().get(&id).unwrap()
+            else {
+                unreachable!()
+            };
+
+            let str_id = *singleton_visibility.target();
+            let uri_id = *singleton_visibility.uri_id();
+            let offset = singleton_visibility.offset().clone();
+            let lexical_nesting_id = *singleton_visibility.lexical_nesting_id();
+            let receiver = *singleton_visibility.receiver();
+
+            let attached_namespace_id = if let Some(receiver_name_id) = receiver {
+                let NameRef::Resolved(resolved) = self.graph.names().get(&receiver_name_id).unwrap() else {
+                    pending_work.push(Unit::Definition(id));
+                    continue;
+                };
+                let Some(namespace_id) = self.resolve_to_namespace(*resolved.declaration_id()) else {
+                    continue;
+                };
+                namespace_id
+            } else {
+                let Some(decl_id) = self.resolve_lexical_owner(lexical_nesting_id, id) else {
+                    continue;
+                };
+                decl_id
+            };
+
+            let Some(singleton_id) = self.get_or_create_singleton_class(attached_namespace_id, true) else {
+                continue;
+            };
+
+            let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&singleton_id) else {
+                continue;
+            };
+
+            let mut visibility_applied = false;
+            let mut has_partial = false;
+
+            let ancestor_ids: Vec<Ancestor> = namespace.ancestors().iter().copied().collect();
+
+            for ancestor in ancestor_ids {
+                match ancestor {
+                    Ancestor::Complete(ancestor_id) => {
+                        let has_member = self
+                            .graph
+                            .declarations()
+                            .get(&ancestor_id)
+                            .and_then(|decl| decl.as_namespace())
+                            .and_then(|ns| ns.member(&str_id))
+                            .is_some();
+
+                        if has_member {
+                            self.create_declaration(str_id, id, singleton_id, |name| {
+                                Declaration::Method(Box::new(MethodDeclaration::new(name, singleton_id)))
+                            });
+                            visibility_applied = true;
+                            break;
+                        }
+                    }
+                    Ancestor::Partial(_) => has_partial = true,
+                }
+            }
+
+            if visibility_applied {
+                continue;
+            }
+
+            if has_partial {
+                pending_work.push(Unit::Definition(id));
+            } else {
+                let method_name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
+                let owner_name = self.graph.declarations().get(&singleton_id).unwrap().name().to_string();
+                let diagnostic = Diagnostic::new(
+                    Rule::UndefinedSingletonMethodVisibilityTarget,
+                    uri_id,
+                    offset,
+                    format!("undefined singleton method `{method_name}` for visibility change in `{owner_name}`"),
+                );
+                self.graph.add_document_diagnostic(uri_id, diagnostic);
+            }
+        }
+
+        self.graph.extend_work(pending_work);
     }
 
     /// Resolves retroactive method visibility changes (`private :foo`, `protected :foo`, `public :foo`).
