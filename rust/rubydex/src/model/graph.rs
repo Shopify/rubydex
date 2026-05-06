@@ -1138,6 +1138,7 @@ impl Graph {
     ///   without changing ancestors (e.g. adding a method in a new file). In that case
     ///   the ancestor re-resolution is redundant — a future optimization could skip it
     ///   by tracking why the declaration was seeded.
+    #[allow(clippy::too_many_lines)]
     fn invalidate_declaration(
         &mut self,
         decl_id: DeclarationId,
@@ -1218,13 +1219,39 @@ impl Graph {
                     }
                 }
 
-                // Detach from each complete ancestor's descendant set so we don't leave a stale id in descendants
+                // If the owner was purely on-demand (no definitions of its own) and this removal left it with nothing,
+                // queue it for cleanup. Typical case: a singleton class like `Foo::<Foo>` is created only to host `def
+                // self.m`; removing `m` leaves it empty.
+                if self
+                    .declarations
+                    .get(&owner_id)
+                    .is_some_and(|d| d.is_on_demand_orphan(owner_id))
+                {
+                    queue.push(InvalidationItem::Declaration(owner_id));
+                }
+
+                // Detach from each complete ancestor's descendant set so we don't leave a stale id in descendants.
+                // If an ancestor was only kept alive on-demand (no definitions of its own) and now has no
+                // remaining descendants, it is orphaned and must be removed too. This cascades through
+                // implicit singleton-class chains: e.g. `<Object>` and `<BasicObject>` are only created to
+                // support `<Foo>`'s ancestor chain and must go when `<Foo>` goes.
                 for ancestor in ancestors_to_detach {
-                    if let Ancestor::Complete(ancestor_id) = ancestor
-                        && let Some(anc_decl) = self.declarations.get_mut(&ancestor_id)
+                    let Ancestor::Complete(ancestor_id) = ancestor else {
+                        continue;
+                    };
+
+                    if let Some(anc_decl) = self.declarations.get_mut(&ancestor_id)
                         && let Some(ns) = anc_decl.as_namespace_mut()
                     {
                         ns.remove_descendant(&decl_id);
+                    }
+
+                    if self
+                        .declarations
+                        .get(&ancestor_id)
+                        .is_some_and(|d| d.is_on_demand_orphan(ancestor_id))
+                    {
+                        queue.push(InvalidationItem::Declaration(ancestor_id));
                     }
                 }
             }
@@ -4067,5 +4094,53 @@ mod incremental_resolution_tests {
                 "Kernel has stale descendant id {id:?} with no backing declaration"
             );
         }
+    }
+
+    #[test]
+    fn singleton_class_not_cleaned_up_when_def_self_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; def self.m; end; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_exists!(context, "Foo::<Foo>#m()");
+        assert_declaration_exists!(context, "Object::<Object>");
+        assert_declaration_exists!(context, "BasicObject::<BasicObject>");
+
+        context.index_uri("file:///foo.rb", "class Foo; def m; end; end");
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#m()");
+        assert_declaration_does_not_exist!(context, "Object::<Object>");
+        assert_declaration_does_not_exist!(context, "BasicObject::<BasicObject>");
+    }
+
+    #[test]
+    fn singleton_classes_are_not_cleaned_up_when_there_are_still_references() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              class << self
+              end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///foo2.rb",
+            "
+            Foo.methods
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
     }
 } // mod incremental_resolution_tests

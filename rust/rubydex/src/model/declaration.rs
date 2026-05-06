@@ -349,6 +349,22 @@ impl Declaration {
         all_declarations!(self, it => it.definition_ids.is_empty())
     }
 
+    /// Returns true when this declaration is a purely on-demand namespace whose last anchor was just removed: it has no
+    /// definitions of its own, no members, no singleton child, and no descendants beyond itself. A namespace's
+    /// `descendants` set always contains itself, so "no real descendants" means len 0 or only self.
+    #[must_use]
+    pub fn is_on_demand_orphan(&self, decl_id: DeclarationId) -> bool {
+        if !self.has_no_definitions() {
+            return false;
+        }
+
+        let Some(ns) = self.as_namespace() else {
+            return false;
+        };
+
+        ns.members().is_empty() && ns.singleton_class().is_none() && ns.descendants().iter().all(|id| *id == decl_id)
+    }
+
     pub fn add_definition(&mut self, definition_id: DefinitionId) {
         all_declarations!(self, it => {
             debug_assert!(
