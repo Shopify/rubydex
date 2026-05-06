@@ -16,6 +16,28 @@ static VALUE cKeywordParameter;
 // Interned once in `rdxi_initialize_graph` to avoid repeated symbol-table lookups on hot completion paths.
 static ID id_self_receiver;
 
+// Extracts the optional `self_receiver:` kwarg from `opts`. Returns NULL when the kwarg is
+// absent or nil; raises ArgumentError when the value is the wrong type or empty.
+static const char *extract_self_receiver(VALUE opts) {
+    if (NIL_P(opts)) {
+        return NULL;
+    }
+
+    VALUE kwarg_val;
+    rb_get_kwargs(opts, &id_self_receiver, 0, 1, &kwarg_val);
+
+    if (kwarg_val == Qundef || NIL_P(kwarg_val)) {
+        return NULL;
+    }
+
+    Check_Type(kwarg_val, T_STRING);
+    if (RSTRING_LEN(kwarg_val) == 0) {
+        rb_raise(rb_eArgError, "self_receiver cannot be empty");
+    }
+
+    return StringValueCStr(kwarg_val);
+}
+
 // Free function for the custom Graph allocator. We always have to call into Rust to free data allocated by it
 static void graph_free(void *ptr) {
     if (ptr) {
@@ -577,19 +599,7 @@ static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
     rb_scan_args(argc, argv, "1:", &nesting, &opts);
     rdxi_check_array_of_strings(nesting);
 
-    const char *self_receiver = NULL;
-    if (!NIL_P(opts)) {
-        VALUE kwarg_val;
-        rb_get_kwargs(opts, &id_self_receiver, 0, 1, &kwarg_val);
-
-        if (kwarg_val != Qundef && !NIL_P(kwarg_val)) {
-            Check_Type(kwarg_val, T_STRING);
-            if (RSTRING_LEN(kwarg_val) == 0) {
-                rb_raise(rb_eArgError, "self_receiver cannot be empty");
-            }
-            self_receiver = StringValueCStr(kwarg_val);
-        }
-    }
+    const char *self_receiver = extract_self_receiver(opts);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -604,27 +614,41 @@ static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_namespace_access: (String name) -> Array[Declaration]
+// Graph#complete_namespace_access: (String name, self_receiver: nil) -> Array[Declaration]
 // Returns completion candidates after a namespace access operator (e.g., `Foo::`).
-static VALUE rdxr_graph_complete_namespace_access(VALUE self, VALUE name) {
+// The optional self_receiver kwarg is the caller's runtime self type, used to filter
+// visibility-restricted singleton methods (e.g., `private_class_method`).
+static VALUE rdxr_graph_complete_namespace_access(int argc, VALUE *argv, VALUE self) {
+    VALUE name, opts;
+    rb_scan_args(argc, argv, "1:", &name, &opts);
     Check_Type(name, T_STRING);
+
+    const char *self_receiver = extract_self_receiver(opts);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    struct CompletionResult result = rdx_graph_complete_namespace_access(graph, StringValueCStr(name));
+    struct CompletionResult result =
+        rdx_graph_complete_namespace_access(graph, StringValueCStr(name), self_receiver);
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_method_call: (String name) -> Array[Declaration]
+// Graph#complete_method_call: (String name, self_receiver: nil) -> Array[Declaration]
 // Returns completion candidates after a method call operator (e.g., `foo.`).
-static VALUE rdxr_graph_complete_method_call(VALUE self, VALUE name) {
+// The optional self_receiver kwarg is the caller's runtime self type, used for MRI-style
+// visibility checks (private/protected).
+static VALUE rdxr_graph_complete_method_call(int argc, VALUE *argv, VALUE self) {
+    VALUE name, opts;
+    rb_scan_args(argc, argv, "1:", &name, &opts);
     Check_Type(name, T_STRING);
+
+    const char *self_receiver = extract_self_receiver(opts);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    struct CompletionResult result = rdx_graph_complete_method_call(graph, StringValueCStr(name));
+    struct CompletionResult result =
+        rdx_graph_complete_method_call(graph, StringValueCStr(name), self_receiver);
     return completion_result_to_ruby_array(result, self);
 }
 
@@ -638,19 +662,7 @@ static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE se
     Check_Type(name, T_STRING);
     rdxi_check_array_of_strings(nesting);
 
-    const char *self_receiver = NULL;
-    if (!NIL_P(opts)) {
-        VALUE kwarg_val;
-        rb_get_kwargs(opts, &id_self_receiver, 0, 1, &kwarg_val);
-
-        if (kwarg_val != Qundef && !NIL_P(kwarg_val)) {
-            Check_Type(kwarg_val, T_STRING);
-            if (RSTRING_LEN(kwarg_val) == 0) {
-                rb_raise(rb_eArgError, "self_receiver cannot be empty");
-            }
-            self_receiver = StringValueCStr(kwarg_val);
-        }
-    }
+    const char *self_receiver = extract_self_receiver(opts);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -752,8 +764,8 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
     rb_define_method(cGraph, "require_paths", rdxr_graph_require_paths, 1);
     rb_define_method(cGraph, "complete_expression", rdxr_graph_complete_expression, -1);
-    rb_define_method(cGraph, "complete_namespace_access", rdxr_graph_complete_namespace_access, 1);
-    rb_define_method(cGraph, "complete_method_call", rdxr_graph_complete_method_call, 1);
+    rb_define_method(cGraph, "complete_namespace_access", rdxr_graph_complete_namespace_access, -1);
+    rb_define_method(cGraph, "complete_method_call", rdxr_graph_complete_method_call, -1);
     rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, -1);
     rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
     rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);

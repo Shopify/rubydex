@@ -1048,6 +1048,78 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_complete_method_call_excludes_private_method_from_external_context
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def public_one; end
+
+        private
+
+        def secret; end
+      end
+    RUBY
+    graph.resolve
+
+    external = graph.complete_method_call("Foo").map(&:name)
+    assert_includes(external, "Foo#public_one()")
+    refute_includes(external, "Foo#secret()")
+
+    internal = graph.complete_method_call("Foo", self_receiver: "Foo").map(&:name)
+    assert_includes(internal, "Foo#public_one()")
+    assert_includes(internal, "Foo#secret()")
+  end
+
+  def test_complete_method_call_includes_protected_method_when_caller_shares_class
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        protected
+
+        def shielded; end
+      end
+
+      class Bar < Foo
+      end
+
+      class Other
+      end
+    RUBY
+    graph.resolve
+
+    # Same class as receiver: protected access allowed.
+    same_class = graph.complete_method_call("Foo", self_receiver: "Foo").map(&:name)
+    assert_includes(same_class, "Foo#shielded()")
+
+    # Subclass calling on its parent: caller and receiver both descend from Foo.
+    subclass = graph.complete_method_call("Foo", self_receiver: "Bar").map(&:name)
+    assert_includes(subclass, "Foo#shielded()")
+
+    # Unrelated class: protected access denied.
+    unrelated = graph.complete_method_call("Foo", self_receiver: "Other").map(&:name)
+    refute_includes(unrelated, "Foo#shielded()")
+
+    # External context: protected access denied.
+    external = graph.complete_method_call("Foo").map(&:name)
+    refute_includes(external, "Foo#shielded()")
+  end
+
+  def test_complete_namespace_access_excludes_private_constant
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        PUBLIC_CONST = 1
+        SECRET = 2
+        private_constant :SECRET
+      end
+    RUBY
+    graph.resolve
+
+    candidates = graph.complete_namespace_access("Foo").map(&:name)
+    assert_includes(candidates, "Foo::PUBLIC_CONST")
+    refute_includes(candidates, "Foo::SECRET")
+  end
+
   def test_complete_method_argument
     graph = Rubydex::Graph.new
     graph.index_source("file:///foo.rb", "class Foo\n  def bar(name:); end\nend", "ruby")

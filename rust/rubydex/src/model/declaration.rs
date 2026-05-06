@@ -340,6 +340,54 @@ impl Declaration {
     }
 
     #[must_use]
+    pub fn as_constant(&self) -> Option<&ConstantDeclaration> {
+        match self {
+            Declaration::Constant(constant) => Some(constant),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_constant_alias(&self) -> Option<&ConstantAliasDeclaration> {
+        match self {
+            Declaration::ConstantAlias(alias) => Some(alias),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_method(&self) -> Option<&MethodDeclaration> {
+        match self {
+            Declaration::Method(method) => Some(method),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_global_variable(&self) -> Option<&GlobalVariableDeclaration> {
+        match self {
+            Declaration::GlobalVariable(global) => Some(global),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_class_variable(&self) -> Option<&ClassVariableDeclaration> {
+        match self {
+            Declaration::ClassVariable(cvar) => Some(cvar),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_instance_variable(&self) -> Option<&InstanceVariableDeclaration> {
+        match self {
+            Declaration::InstanceVariable(ivar) => Some(ivar),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn definitions(&self) -> &[DefinitionId] {
         all_declarations!(self, it => &it.definition_ids)
     }

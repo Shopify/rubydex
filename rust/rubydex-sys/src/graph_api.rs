@@ -830,19 +830,27 @@ pub unsafe extern "C" fn rdx_graph_complete_expression(
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - `name` must be a valid, null-terminated UTF-8 string (FQN of the namespace).
+/// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. When non-null, it
+///   is the caller's runtime self type (e.g., for filtering `private_class_method` visibility).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
     pointer: GraphPointer,
     name: *const c_char,
+    self_receiver: *const c_char,
 ) -> CompletionResult {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
         return CompletionResult::success(ptr::null_mut());
     };
 
     with_mut_graph(pointer, |graph| {
+        let self_decl_id = unsafe { decl_id_from_char_ptr(self_receiver) };
+
         run_and_finalize_completion(
             graph,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from(name_str.as_str())),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id,
+                namespace_decl_id: DeclarationId::from(name_str.as_str()),
+            },
             Vec::new(),
         )
     })
@@ -856,19 +864,27 @@ pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - `name` must be a valid, null-terminated UTF-8 string (FQN of the receiver).
+/// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. When non-null, it
+///   is the caller's runtime self type, used for MRI-style visibility checks.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_complete_method_call(
     pointer: GraphPointer,
     name: *const c_char,
+    self_receiver: *const c_char,
 ) -> CompletionResult {
     let Ok(name_str) = (unsafe { utils::convert_char_ptr_to_string(name) }) else {
         return CompletionResult::success(ptr::null_mut());
     };
 
     with_mut_graph(pointer, |graph| {
+        let self_decl_id = unsafe { decl_id_from_char_ptr(self_receiver) };
+
         run_and_finalize_completion(
             graph,
-            CompletionReceiver::MethodCall(DeclarationId::from(name_str.as_str())),
+            CompletionReceiver::MethodCall {
+                self_decl_id,
+                receiver_decl_id: DeclarationId::from(name_str.as_str()),
+            },
             Vec::new(),
         )
     })

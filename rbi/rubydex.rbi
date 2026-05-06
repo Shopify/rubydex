@@ -332,13 +332,29 @@ class Rubydex::Graph
 
   # Returns completion candidates after a namespace access operator (e.g., `Foo::`). This includes all constants and
   # singleton methods for the namespace and its ancestors.
-  sig { params(name: String).returns(T::Array[Rubydex::Declaration]) }
-  def complete_namespace_access(name); end
+  #
+  # The optional `self_receiver` kwarg is the caller's runtime self type. It's used to filter visibility-restricted
+  # singleton methods (e.g., `private_class_method`). Pass `nil` (the default) for top-level/script scope.
+  sig do
+    params(
+      name: String,
+      self_receiver: T.nilable(String),
+    ).returns(T::Array[Rubydex::Declaration])
+  end
+  def complete_namespace_access(name, self_receiver: nil); end
 
   # Returns completion candidates after a method call operator (e.g., `foo.`). This includes all methods that exist on
   # the type of the receiver and its ancestors.
-  sig { params(name: String).returns(T::Array[Rubydex::Method]) }
-  def complete_method_call(name); end
+  #
+  # The optional `self_receiver` kwarg is the caller's runtime self type. It's used for visibility checks for `private`
+  # and `protected` methods. Pass `nil` (the default) for top-level/script scope.
+  sig do
+    params(
+      name: String,
+      self_receiver: T.nilable(String),
+    ).returns(T::Array[Rubydex::Method])
+  end
+  def complete_method_call(name, self_receiver: nil); end
 
   # Returns completion candidates inside a method call's argument list (e.g., `foo.bar(|)`). This includes everything
   # that expression completion provides plus keyword argument names of the method being called.

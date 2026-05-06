@@ -13,6 +13,7 @@ use crate::model::identity_maps::IdentityHashSet;
 use crate::model::ids::{DeclarationId, NameId, StringId, UriId};
 use crate::model::keywords::{self, Keyword};
 use crate::model::name::NameRef;
+use crate::model::visibility::Visibility;
 
 /// Controls how declaration names are matched against the search query.
 #[derive(Default)]
@@ -181,12 +182,18 @@ pub enum CompletionReceiver {
         nesting_name_id: NameId,
     },
     /// Completion requested after a namespace access operator (e.g.: `Foo::`)
-    /// Includes: all constants and singleton methods for the namespace and its ancestors
-    NamespaceAccess(DeclarationId),
+    /// Includes: all constants and singleton methods for the namespace and its ancestors.
+    NamespaceAccess {
+        self_decl_id: Option<DeclarationId>,
+        namespace_decl_id: DeclarationId,
+    },
     /// Completion requested after a method call operator (e.g.: `foo.`, `@bar.`, `@@baz.`, `Qux.`).
     /// In the case of singleton completion (e.g.: `Foo.`), the declaration ID should be for the singleton class (i.e.: `Foo::<Foo>`)
-    /// Includes: all methods that exist on the type of the receiver and its ancestors
-    MethodCall(DeclarationId),
+    /// Includes: all methods that exist on the type of the receiver and its ancestors.
+    MethodCall {
+        self_decl_id: Option<DeclarationId>,
+        receiver_decl_id: DeclarationId,
+    },
     /// Completion requested inside a method call's argument list (e.g.: `foo.bar(|)`)
     /// Includes: everything expressions do plus keyword parameter names of the method being called
     ///
@@ -217,26 +224,58 @@ impl<'a> CompletionContext<'a> {
     }
 }
 
-/// Collects completion candidate members
-macro_rules! collect_candidates {
-    // Collect all members with no filtering
-    ($declaration:expr, $context:expr, $candidates:expr) => {
-        for (member_str_id, member_declaration_id) in $declaration.members() {
-            if $context.dedup(member_str_id) {
-                $candidates.push(CompletionCandidate::Declaration(*member_declaration_id));
-            }
-        }
+/// Method visibility depends both on the type of self and the current lexical scope (due to protected methods)
+fn method_visible_at_call(
+    graph: &Graph,
+    method_id: DeclarationId,
+    defined_in: DeclarationId,
+    caller_self: Option<DeclarationId>,
+    receiver: DeclarationId,
+) -> bool {
+    let Some(visibility) = graph.visibility(&method_id) else {
+        return true;
     };
-    // Collect only members matching certain kinds
-    ($graph:expr, $declaration:expr, $context:expr, $candidates:expr, $kinds:pat) => {
-        for (member_str_id, member_declaration_id) in $declaration.members() {
-            let member = $graph.declarations().get(member_declaration_id).unwrap();
 
-            if matches!(member, $kinds) && $context.dedup(member_str_id) {
-                $candidates.push(CompletionCandidate::Declaration(*member_declaration_id));
-            }
+    match visibility {
+        Visibility::Public => true,
+        Visibility::Private | Visibility::ModuleFunction => caller_self == Some(receiver),
+        Visibility::Protected => caller_self.is_some_and(|cs| {
+            let defined_in = graph.declarations().get(&defined_in).unwrap().as_namespace().unwrap();
+            let descendants = defined_in.descendants();
+            descendants.contains(&cs) && descendants.contains(&receiver)
+        }),
+    }
+}
+
+/// Walks one namespace's direct members. `kind_filter` selects the declaration kinds to surface; `visibility_filter`
+/// decides whether each surviving candidate is reachable from the access site.
+fn collect_members<'a>(
+    graph: &'a Graph,
+    namespace_id: DeclarationId,
+    kind_filter: fn(&Declaration) -> bool,
+    visibility_filter: impl Fn(DeclarationId) -> bool,
+    completion_ctx: &mut CompletionContext<'a>,
+    candidates: &mut Vec<CompletionCandidate>,
+) {
+    let namespace = graph.declarations().get(&namespace_id).unwrap().as_namespace().unwrap();
+
+    for (member_str_id, member_decl_id) in namespace.members() {
+        let member = graph.declarations().get(member_decl_id).unwrap();
+
+        if !kind_filter(member) {
+            continue;
         }
-    };
+
+        if !completion_ctx.dedup(member_str_id) {
+            continue;
+        }
+
+        if !visibility_filter(*member_decl_id) {
+            continue;
+        }
+
+        candidates.push(CompletionCandidate::Declaration(*member_decl_id));
+    }
 }
 
 /// Determines all possible completion candidates based on the current context of the cursor. There are multiple cases
@@ -246,7 +285,6 @@ macro_rules! collect_candidates {
 ///   global variables that are reacheable from the current lexical scope and self type
 /// - Expression in method arguments collects everything that expressions do and all keyword parameter names that are
 ///   applicable to the method being called
-///   everything else
 /// - Namespace access (e.g.: `Foo::`) collects all constants and singleton methods for the namespace that `Foo`
 ///   resolves to
 /// - Method calls on anything (e.g.: `foo.`, `@bar.`, `@@baz.`, `Qux.`) collects all methods that exist on the type
@@ -269,8 +307,14 @@ pub fn completion_candidates<'a>(
             self_decl_id,
             nesting_name_id,
         } => expression_completion(graph, self_decl_id, nesting_name_id, context),
-        CompletionReceiver::NamespaceAccess(decl_id) => namespace_access_completion(graph, decl_id, context),
-        CompletionReceiver::MethodCall(decl_id) => method_call_completion(graph, decl_id, context),
+        CompletionReceiver::NamespaceAccess {
+            self_decl_id,
+            namespace_decl_id,
+        } => namespace_access_completion(graph, self_decl_id, namespace_decl_id, context),
+        CompletionReceiver::MethodCall {
+            self_decl_id,
+            receiver_decl_id,
+        } => method_call_completion(graph, self_decl_id, receiver_decl_id, context),
         CompletionReceiver::MethodArgument {
             self_decl_id,
             nesting_name_id,
@@ -304,12 +348,14 @@ fn resolve_to_namespace(graph: &Graph, decl_id: DeclarationId) -> Result<Option<
 /// Collect completion for a namespace access (e.g.: `Foo::`)
 fn namespace_access_completion<'a>(
     graph: &'a Graph,
+    self_decl_id: Option<DeclarationId>,
     namespace_decl_id: DeclarationId,
     mut context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
     let Some(resolved_id) = resolve_to_namespace(graph, namespace_decl_id)? else {
         return Ok(Vec::new());
     };
+    let resolved_caller_self_id = self_decl_id.map(|id| resolve_self_namespace(graph, id)).transpose()?;
     let namespace = graph.declarations().get(&resolved_id).unwrap().as_namespace().unwrap();
     let mut candidates = Vec::new();
 
@@ -323,26 +369,35 @@ fn namespace_access_completion<'a>(
                 break;
             }
 
-            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-
-            collect_candidates!(
+            collect_members(
                 graph,
-                &ancestor_decl,
-                context,
-                candidates,
-                Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
+                *ancestor_id,
+                |d| d.as_namespace().is_some() || d.as_constant().is_some() || d.as_constant_alias().is_some(),
+                |id| !matches!(graph.visibility(&id), Some(Visibility::Private)),
+                &mut context,
+                &mut candidates,
             );
         }
     }
 
-    // Collect singleton methods from the singleton class and its ancestors
+    // The receiver of an explicit `Foo::` call is the singleton class, so visibility checks
+    // compare against it (not against `Foo` itself).
     if let Some(singleton_id) = namespace.singleton_class() {
         let singleton = graph.declarations().get(singleton_id).unwrap().as_namespace().unwrap();
+        let receiver = *singleton_id;
 
         for ancestor in singleton.ancestors() {
             if let Ancestor::Complete(ancestor_id) = ancestor {
-                let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-                collect_candidates!(graph, &ancestor_decl, context, candidates, Declaration::Method(_));
+                let defined_in = *ancestor_id;
+
+                collect_members(
+                    graph,
+                    defined_in,
+                    |d| d.as_method().is_some(),
+                    |id| method_visible_at_call(graph, id, defined_in, resolved_caller_self_id, receiver),
+                    &mut context,
+                    &mut candidates,
+                );
             }
         }
     }
@@ -353,23 +408,37 @@ fn namespace_access_completion<'a>(
 /// Collect completion for a method call (e.g.: `foo.`, `@bar.`, `Baz.`)
 fn method_call_completion<'a>(
     graph: &'a Graph,
+    self_decl_id: Option<DeclarationId>,
     receiver_decl_id: DeclarationId,
     mut context: CompletionContext<'a>,
 ) -> Result<Vec<CompletionCandidate>, Box<dyn Error>> {
     let Some(resolved_id) = resolve_to_namespace(graph, receiver_decl_id)? else {
         return Ok(Vec::new());
     };
+    let resolved_caller_self_id = self_decl_id.map(|id| resolve_self_namespace(graph, id)).transpose()?;
     let namespace = graph.declarations().get(&resolved_id).unwrap().as_namespace().unwrap();
     let mut candidates = Vec::new();
 
     for ancestor in namespace.ancestors() {
         if let Ancestor::Complete(ancestor_id) = ancestor {
-            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-            collect_candidates!(graph, &ancestor_decl, context, candidates, Declaration::Method(_));
+            let defined_in = *ancestor_id;
+            collect_members(
+                graph,
+                defined_in,
+                |d| d.as_method().is_some(),
+                |id| method_visible_at_call(graph, id, defined_in, resolved_caller_self_id, resolved_id),
+                &mut context,
+                &mut candidates,
+            );
         }
     }
 
     Ok(candidates)
+}
+
+fn resolve_self_namespace(graph: &Graph, decl_id: DeclarationId) -> Result<DeclarationId, Box<dyn Error>> {
+    resolve_to_namespace(graph, decl_id)?
+        .ok_or_else(|| format!("self declaration {decl_id:?} not found in graph").into())
 }
 
 /// Collect completion for an expression
@@ -390,9 +459,7 @@ fn expression_completion<'a>(
     // resolves to without having to unwrap aliases themselves. Missing or non-namespace decls are graph
     // inconsistencies and surfaced as errors.
     let resolved_self_decl_id = match self_decl_id {
-        Some(id) => {
-            resolve_to_namespace(graph, id)?.ok_or_else(|| format!("self declaration {id:?} not found in graph"))?
-        }
+        Some(id) => resolve_self_namespace(graph, id)?,
         None => *name_ref.declaration_id(),
     };
     let self_decl = graph
@@ -418,8 +485,14 @@ fn expression_completion<'a>(
     collect_class_variables_from_lexical_scope(graph, name_ref, &mut context, &mut candidates);
 
     // Globals are accessible from anywhere, regardless of lexical scope or `self` type.
-    let object = graph.declarations().get(&OBJECT_ID).unwrap().as_namespace().unwrap();
-    collect_candidates!(graph, &object, context, candidates, Declaration::GlobalVariable(_));
+    collect_members(
+        graph,
+        *OBJECT_ID,
+        |d| d.as_global_variable().is_some(),
+        |_| true,
+        &mut context,
+        &mut candidates,
+    );
 
     // Collect methods and instance variables, which are based on the inheritance chain of the `self` type (which may
     // not match the immediate lexical scope)
@@ -440,14 +513,13 @@ fn collect_constants_from_lexical_scope<'a>(
 ) {
     for ancestor in innermost_lexical_decl.ancestors() {
         if let Ancestor::Complete(ancestor_id) = ancestor {
-            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-
-            collect_candidates!(
+            collect_members(
                 graph,
-                &ancestor_decl,
+                *ancestor_id,
+                |d| d.as_namespace().is_some() || d.as_constant().is_some() || d.as_constant_alias().is_some(),
+                |_| true,
                 context,
                 candidates,
-                Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
             );
         }
     }
@@ -457,14 +529,13 @@ fn collect_constants_from_lexical_scope<'a>(
 
         for ancestor in object.ancestors() {
             if let Ancestor::Complete(ancestor_id) = ancestor {
-                let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-
-                collect_candidates!(
+                collect_members(
                     graph,
-                    &ancestor_decl,
+                    *ancestor_id,
+                    |d| d.as_namespace().is_some() || d.as_constant().is_some() || d.as_constant_alias().is_some(),
+                    |_| true,
                     context,
                     candidates,
-                    Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
                 );
             }
         }
@@ -508,13 +579,13 @@ fn collect_class_variables_from_lexical_scope<'a>(
 
     for ancestor in decl.ancestors() {
         if let Ancestor::Complete(ancestor_id) = ancestor {
-            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-            collect_candidates!(
+            collect_members(
                 graph,
-                &ancestor_decl,
+                *ancestor_id,
+                |d| d.as_class_variable().is_some(),
+                |_| true,
                 context,
                 candidates,
-                Declaration::ClassVariable(_)
             );
         }
     }
@@ -535,19 +606,13 @@ fn collect_constants_from_outer_nesting<'a>(
             break;
         };
 
-        let nesting_decl = graph
-            .declarations()
-            .get(parent_ref.declaration_id())
-            .unwrap()
-            .as_namespace()
-            .unwrap();
-
-        collect_candidates!(
+        collect_members(
             graph,
-            &nesting_decl,
+            *parent_ref.declaration_id(),
+            |d| d.as_namespace().is_some() || d.as_constant().is_some() || d.as_constant_alias().is_some(),
+            |_| true,
             context,
             candidates,
-            Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
         );
 
         current_name_id = *parent_ref.nesting();
@@ -564,14 +629,13 @@ fn collect_methods_and_ivars_from_self<'a>(
 ) {
     for ancestor in self_decl.ancestors() {
         if let Ancestor::Complete(ancestor_id) = ancestor {
-            let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-
-            collect_candidates!(
+            collect_members(
                 graph,
-                &ancestor_decl,
+                *ancestor_id,
+                |d| d.as_method().is_some() || d.as_instance_variable().is_some(),
+                |_| true,
                 context,
                 candidates,
-                Declaration::Method(_) | Declaration::InstanceVariable(_)
             );
         }
     }
@@ -1271,7 +1335,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Foo")
+            },
             ["Foo::CONST", "Foo::Bar", "Foo::<Foo>#class_method()"]
         );
     }
@@ -1304,7 +1371,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Child")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Child")
+            },
             [
                 "Child::CHILD_CONST",
                 "Parent::PARENT_CONST",
@@ -1342,7 +1412,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Child")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Child")
+            },
             ["Child::CONST", "Child::<Child>#shared_method()"]
         );
     }
@@ -1365,7 +1438,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Foo")
+            },
             ["Foo::CONST"]
         );
     }
@@ -1387,7 +1463,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Foo")
+            },
             ["Foo::CONST", "Foo::Bar"]
         );
     }
@@ -1417,7 +1496,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo::MyOriginal")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Foo::MyOriginal")
+            },
             [
                 "Original::CONST",
                 "Original::Nested",
@@ -1449,7 +1531,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Alias2")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Alias2")
+            },
             ["Original::CONST", "Original::<Original>#class_method()"]
         );
     }
@@ -1476,7 +1561,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Foo")
+            },
             ["Foo::CONST", "Foo::<Foo>#class_method()"]
         );
     }
@@ -1510,7 +1598,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo")),
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Foo")
+            },
             ["Foo::FOO_CONST", "Bar::CONST", "Foo::<Foo>#foo_class_method()"]
         );
     }
@@ -1538,7 +1629,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::MethodCall(DeclarationId::from("Foo")),
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Foo")
+            },
             ["Foo#baz()", "Foo#bar()"]
         );
     }
@@ -1568,7 +1662,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::MethodCall(DeclarationId::from("Foo::MyOriginal")),
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Foo::MyOriginal")
+            },
             ["Original#baz()", "Original#bar()"]
         );
     }
@@ -1593,7 +1690,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::MethodCall(DeclarationId::from("Child")),
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Child")
+            },
             ["Child#child_method()", "Parent#parent_method()"]
         );
     }
@@ -1620,7 +1720,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::MethodCall(DeclarationId::from("Foo")),
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Foo")
+            },
             ["Foo#foo_method()", "Mixin#mixin_method()"]
         );
     }
@@ -1647,7 +1750,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::MethodCall(DeclarationId::from("Child")),
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Child")
+            },
             ["Child#shared_method()", "Child#child_only()", "Parent#parent_only()"]
         );
     }
@@ -1675,7 +1781,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::MethodCall(DeclarationId::from("Foo")),
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Foo")
+            },
             ["Foo#initialize()", "Foo#bar()"]
         );
     }
@@ -1700,7 +1809,10 @@ mod tests {
 
         assert_completion_eq!(
             context,
-            CompletionReceiver::MethodCall(DeclarationId::from("Foo::<Foo>")),
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Foo::<Foo>")
+            },
             ["Foo::<Foo>#baz()", "Foo::<Foo>#bar()"]
         );
     }
@@ -1988,7 +2100,10 @@ mod tests {
 
         let candidates = completion_candidates(
             context.graph(),
-            CompletionContext::new(CompletionReceiver::NamespaceAccess(DeclarationId::from("Foo"))),
+            CompletionContext::new(CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Foo"),
+            }),
         )
         .unwrap();
 
@@ -2003,7 +2118,10 @@ mod tests {
 
         let candidates = completion_candidates(
             context.graph(),
-            CompletionContext::new(CompletionReceiver::MethodCall(DeclarationId::from("Foo"))),
+            CompletionContext::new(CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Foo"),
+            }),
         )
         .unwrap();
 
@@ -2583,6 +2701,456 @@ mod tests {
                 "Outer",
                 "Kernel",
                 "Outer::Original#original_m()"
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_completion_includes_private_singleton_method_when_self_matches_owner() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def self.bar; end
+              private_class_method :bar
+            end
+
+            class Bar
+              def Foo.baz
+                # completion here
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Foo::<Foo>")),
+                nesting_name_id: name_id,
+            },
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Foo::<Foo>#bar()",
+                "Foo::<Foo>#baz()"
+            ]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_excludes_private_method_for_external_call() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              private
+
+              def bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Foo")
+            },
+            [] as [&str; 0]
+        );
+    }
+
+    #[test]
+    fn expression_completion_includes_private_instance_method_inside_self_ancestor_chain() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def baz
+                # completion here
+              end
+
+              private
+
+              def bar; end
+            end
+
+            class Bar < Foo
+              def qux
+                # completion here
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let foo_name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: foo_name_id,
+            },
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Foo#baz()",
+                "Foo#bar()"
+            ]
+        );
+
+        let bar_name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: bar_name_id,
+            },
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Bar",
+                "Foo#baz()",
+                "Foo#bar()",
+                "Bar#qux()"
+            ]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_includes_protected_method_when_caller_shares_ancestor_with_receiver() {
+        let mut context = GraphTest::new();
+
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Account
+              protected
+
+              def balance; end
+            end
+
+            class Savings < Account
+            end
+
+            class Checking < Account
+            end
+            ",
+        );
+        context.resolve();
+
+        // Caller's self is `Account` (or any descendant). Both caller and receiver descend from
+        // the defining class, satisfying MRI's `caller.class <= defined_class && recv.class <= defined_class`.
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: Some(DeclarationId::from("Account")),
+                receiver_decl_id: DeclarationId::from("Savings"),
+            },
+            ["Account#balance()"]
+        );
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: Some(DeclarationId::from("Savings")),
+                receiver_decl_id: DeclarationId::from("Checking"),
+            },
+            ["Account#balance()"]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_excludes_protected_method_when_caller_does_not_share_ancestor() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Account
+              protected
+
+              def balance; end
+            end
+
+            class Unrelated
+            end
+            ",
+        );
+        context.resolve();
+
+        // Receiver is `Account`; caller's self is `Unrelated`. Caller is not a descendant of the
+        // defining class, so the protected check fails and `balance` is hidden.
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: Some(DeclarationId::from("Unrelated")),
+                receiver_decl_id: DeclarationId::from("Account"),
+            },
+            [] as [&str; 0]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_includes_private_method_when_receiver_is_self() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def public_method; end
+
+              private
+
+              def private_method; end
+            end
+            ",
+        );
+        context.resolve();
+
+        // Caller's self is `Foo`, matching the receiver — `private_method` becomes visible
+        // (Ruby 3.0+ allows `self.foo` for private methods, and our completion treats receiver-equals-self as the
+        // implicit-receiver case).
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: Some(DeclarationId::from("Foo")),
+                receiver_decl_id: DeclarationId::from("Foo"),
+            },
+            ["Foo#public_method()", "Foo#private_method()"]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_includes_protected_method_through_included_module() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Sharable
+              protected
+
+              def shared_secret; end
+            end
+
+            class A
+              include Sharable
+            end
+
+            class B
+              include Sharable
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: Some(DeclarationId::from("A")),
+                receiver_decl_id: DeclarationId::from("B"),
+            },
+            ["Sharable#shared_secret()"]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_excludes_protected_when_caller_class_is_not_descendant_of_defined_class() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Animal
+            end
+
+            class Dog < Animal
+              protected
+
+              def secret_trick; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: Some(DeclarationId::from("Animal")),
+                receiver_decl_id: DeclarationId::from("Dog"),
+            },
+            [] as [&str; 0]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_excludes_visibility_restricted_methods_at_top_level() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              def pub_inst; end
+
+              protected
+
+              def prot_inst; end
+
+              private
+
+              def priv_inst; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Foo"),
+            },
+            ["Foo#pub_inst()"]
+        );
+    }
+
+    #[test]
+    fn method_call_completion_hides_method_when_subclass_overrides_with_stricter_visibility() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Parent
+              def foo; end
+            end
+
+            class Child < Parent
+              private
+
+              def foo; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: None,
+                receiver_decl_id: DeclarationId::from("Child"),
+            },
+            [] as [&str; 0]
+        );
+    }
+
+    #[test]
+    fn namespace_access_completion_excludes_private_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              PUB = 1
+              PRIV = 2
+              private_constant :PRIV
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Foo"),
+            },
+            ["Foo::PUB"]
+        );
+    }
+
+    #[test]
+    fn namespace_access_completion_excludes_inherited_private_constant() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Parent
+              SECRET = 1
+              private_constant :SECRET
+            end
+
+            class Child < Parent
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::NamespaceAccess {
+                self_decl_id: None,
+                namespace_decl_id: DeclarationId::from("Child"),
+            },
+            [] as [&str; 0]
+        );
+    }
+
+    #[test]
+    fn expression_completion_includes_private_constant_within_lexical_scope() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              SECRET = 1
+              private_constant :SECRET
+
+              def use_it
+                # completion here
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let foo_name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: None,
+                nesting_name_id: foo_name_id,
+            },
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Foo::SECRET",
+                "Foo#use_it()"
             ]
         );
     }
