@@ -197,42 +197,19 @@ pub unsafe extern "C" fn rdx_declaration_find_member(
 
     with_graph(pointer, |graph| {
         let id = DeclarationId::new(declaration_id);
+        let member_id = StringId::from(member_str.as_str());
 
-        let Some(Declaration::Namespace(decl)) = graph.declarations().get(&id) else {
-            return ptr::null();
+        let member_decl_id = match rubydex::query::find_member_in_ancestors(graph, id, member_id, only_inherited) {
+            Ok(decl_id) => decl_id,
+            Err(rubydex::query::FindMemberError::MemberNotFound) => return ptr::null(),
+            Err(err) => unreachable!(
+                "Namespace#find_member is only exposed on namespace declarations, so the declaration must exist and be \
+                 a namespace, got {err:?}"
+            ),
         };
 
-        let member_id = StringId::from(member_str.as_str());
-        let mut found_main_namespace = false;
-
-        decl.ancestors()
-            .iter()
-            .find_map(|ancestor| match ancestor {
-                Ancestor::Complete(ancestor_id) => {
-                    // When only_inherited, skip self and prepended modules
-                    if only_inherited {
-                        let is_self = *ancestor_id == id;
-                        if is_self {
-                            found_main_namespace = true;
-                        }
-                        if is_self || !found_main_namespace {
-                            return None;
-                        }
-                    }
-
-                    let ancestor_decl = graph.declarations().get(ancestor_id).unwrap().as_namespace().unwrap();
-
-                    if let Some(member_decl_id) = ancestor_decl.member(&member_id) {
-                        return Some((member_decl_id, graph.declarations().get(member_decl_id).unwrap()));
-                    }
-
-                    None
-                }
-                Ancestor::Partial(_) => None,
-            })
-            .map_or(ptr::null(), |(member_decl_id, member_decl)| {
-                Box::into_raw(Box::new(CDeclaration::from_declaration(*member_decl_id, member_decl))).cast_const()
-            })
+        let member_decl = graph.declarations().get(&member_decl_id).unwrap();
+        Box::into_raw(Box::new(CDeclaration::from_declaration(member_decl_id, member_decl))).cast_const()
     })
 }
 
