@@ -3,6 +3,7 @@
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::location_api::{Location, create_location_for_uri_and_offset};
 use libc::c_char;
+use rubydex::model::declaration::Declaration;
 use rubydex::model::definitions::{Definition, MethodDefinition, Parameter};
 use rubydex::model::graph::Graph;
 use rubydex::model::ids::DefinitionId;
@@ -123,6 +124,49 @@ fn collect_method_signatures(graph: &Graph, method_def: &MethodDefinition) -> Ve
             }
         })
         .collect()
+}
+
+/// Returns signatures for a `MethodAliasDefinition` by following the alias chain.
+/// Always returns a valid `SignatureArray` pointer (possibly with `len == 0`).
+/// Errors during alias resolution (unresolved receivers, circular chains, etc.)
+/// are silently ignored.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `definition_id` must be a valid definition id.
+///
+/// # Panics
+/// Panics if `definition_id` does not exist or is not a `MethodAliasDefinition`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_method_alias_definition_signatures(
+    pointer: GraphPointer,
+    definition_id: u64,
+) -> *mut SignatureArray {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let resolved = rubydex::query::follow_method_alias(graph, def_id);
+
+        let mut sig_entries: Vec<SignatureEntry> = Vec::new();
+
+        if let Ok(declaration_id) = resolved {
+            if let Some(Declaration::Method(method_def)) = graph.declarations().get(&declaration_id) {
+                for definition_id in method_def.definitions() {
+                    if let Some(Definition::Method(method_definition)) = graph.definitions().get(definition_id) {
+                        sig_entries.extend(collect_method_signatures(graph, method_definition));
+                    }
+                }
+            } else {
+                panic!("expected a method declaration");
+            }
+        }
+
+        let mut boxed = sig_entries.into_boxed_slice();
+        let len = boxed.len();
+        let items_ptr = boxed.as_mut_ptr();
+        std::mem::forget(boxed);
+
+        Box::into_raw(Box::new(SignatureArray { items: items_ptr, len }))
+    })
 }
 
 /// Frees a `SignatureArray` previously returned by `rdx_definition_signatures`.
