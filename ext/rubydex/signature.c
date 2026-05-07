@@ -1,6 +1,8 @@
 #include "signature.h"
 #include "location.h"
 
+static VALUE empty_params = Qundef;
+
 VALUE cSignature;
 VALUE cParameter;
 VALUE cPositionalParameter;
@@ -34,20 +36,25 @@ VALUE rdxi_signatures_to_ruby(SignatureArray *arr) {
     for (size_t i = 0; i < arr->len; i++) {
         SignatureEntry sig_entry = arr->items[i];
 
-        VALUE parameters = rb_ary_new_capa((long)sig_entry.parameters_len);
-        for (size_t j = 0; j < sig_entry.parameters_len; j++) {
-            ParameterEntry param_entry = sig_entry.parameters[j];
+        VALUE signature;
+        if (sig_entry.parameters_len == 0) {
+            signature = rb_class_new_instance(1, &empty_params, cSignature);
+        } else {
+            VALUE parameters = rb_ary_new_capa((long)sig_entry.parameters_len);
+            for (size_t j = 0; j < sig_entry.parameters_len; j++) {
+                ParameterEntry param_entry = sig_entry.parameters[j];
 
-            VALUE param_class = parameter_class_for_kind(param_entry.kind);
-            VALUE name_sym = rb_str_intern(rb_utf8_str_new_cstr(param_entry.name));
-            VALUE location = rdxi_build_location_value(param_entry.location);
-            VALUE param_argv[] = {name_sym, location};
-            VALUE param = rb_class_new_instance(2, param_argv, param_class);
+                VALUE param_class = parameter_class_for_kind(param_entry.kind);
+                VALUE name_sym = rb_str_intern(rb_utf8_str_new_cstr(param_entry.name));
+                VALUE location = rdxi_build_location_value(param_entry.location);
+                VALUE param_argv[] = {name_sym, location};
+                VALUE param = rb_class_new_instance(2, param_argv, param_class);
 
-            rb_ary_push(parameters, param);
+                rb_ary_push(parameters, param);
+            }
+
+            signature = rb_class_new_instance(1, &parameters, cSignature);
         }
-
-        VALUE signature = rb_class_new_instance(1, &parameters, cSignature);
 
         rb_ary_push(signatures, signature);
     }
@@ -69,4 +76,8 @@ void rdxi_initialize_signature(VALUE mRubydex) {
     cRestKeywordParameter = rb_define_class_under(cSignature, "RestKeywordParameter", cParameter);
     cForwardParameter = rb_define_class_under(cSignature, "ForwardParameter", cParameter);
     cBlockParameter = rb_define_class_under(cSignature, "BlockParameter", cParameter);
+
+    empty_params = rb_ary_new();
+    OBJ_FREEZE(empty_params);
+    rb_gc_register_mark_object(empty_params);
 }
