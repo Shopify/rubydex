@@ -5,6 +5,7 @@
 #include "graph.h"
 #include "location.h"
 #include "reference.h"
+#include "signature.h"
 
 VALUE mRubydex;
 
@@ -19,4 +20,5 @@ void Init_rubydex(void) {
     rdxi_initialize_location(mRubydex);
     rdxi_initialize_diagnostic(mRubydex);
     rdxi_initialize_reference(mRubydex);
+    rdxi_initialize_signature(mRubydex);
 }

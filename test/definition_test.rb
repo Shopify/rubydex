@@ -370,6 +370,258 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_method_definition_signatures_ruby
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bar(a, b = 1, *c, d, e:, f: 1, **g, &h); end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      method_def = graph["Foo#bar()"].definitions.first
+
+      sigs = method_def.signatures
+      assert_equal(1, sigs.length)
+
+      sig = sigs[0]
+      assert_equal(8, sig.parameters.length)
+
+      path = context.absolute_path_to("file1.rb")
+
+      sig.parameters[0].tap do |param|
+        assert_instance_of(Rubydex::Signature::PositionalParameter, param)
+        assert_equal(:a, param.name)
+        assert_equal("#{path}:2:11-2:12", param.location.to_display.to_s)
+      end
+
+      sig.parameters[1].tap do |param|
+        assert_instance_of(Rubydex::Signature::OptionalPositionalParameter, param)
+        assert_equal(:b, param.name)
+        assert_equal("#{path}:2:14-2:15", param.location.to_display.to_s)
+      end
+
+      sig.parameters[2].tap do |param|
+        assert_instance_of(Rubydex::Signature::RestPositionalParameter, param)
+        assert_equal(:c, param.name)
+        assert_equal("#{path}:2:22-2:23", param.location.to_display.to_s)
+      end
+
+      sig.parameters[3].tap do |param|
+        assert_instance_of(Rubydex::Signature::PostParameter, param)
+        assert_equal(:d, param.name)
+        assert_equal("#{path}:2:25-2:26", param.location.to_display.to_s)
+      end
+
+      sig.parameters[4].tap do |param|
+        assert_instance_of(Rubydex::Signature::KeywordParameter, param)
+        assert_equal(:e, param.name)
+        assert_equal("#{path}:2:28-2:29", param.location.to_display.to_s)
+      end
+
+      sig.parameters[5].tap do |param|
+        assert_instance_of(Rubydex::Signature::OptionalKeywordParameter, param)
+        assert_equal(:f, param.name)
+        assert_equal("#{path}:2:32-2:33", param.location.to_display.to_s)
+      end
+
+      sig.parameters[6].tap do |param|
+        assert_instance_of(Rubydex::Signature::RestKeywordParameter, param)
+        assert_equal(:g, param.name)
+        assert_equal("#{path}:2:40-2:41", param.location.to_display.to_s)
+      end
+
+      sig.parameters[7].tap do |param|
+        assert_instance_of(Rubydex::Signature::BlockParameter, param)
+        assert_equal(:h, param.name)
+        assert_equal("#{path}:2:44-2:45", param.location.to_display.to_s)
+      end
+    end
+  end
+
+  def test_method_definition_signatures_singleton_method
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def self.bar(...); end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      sig = graph["Foo::<Foo>#bar()"].definitions.first.signatures[0]
+      assert_equal(1, sig.parameters.length)
+
+      sig.parameters[0].tap do |param|
+        assert_instance_of(Rubydex::Signature::ForwardParameter, param)
+        assert_equal(:"...", param.name)
+        path = context.absolute_path_to("file1.rb")
+        assert_equal("#{path}:2:16-2:19", param.location.to_display.to_s)
+      end
+    end
+  end
+
+  def test_method_definition_signatures_rbs
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def baz: (Integer a, ?String b, *Symbol c, Integer d, name: String, ?age: Integer, **String rest) { () -> void } -> void
+        end
+      RBS
+
+      path = context.absolute_path_to("foo.rbs")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.{rb,rbs}"))
+      graph.resolve
+
+      method_def = graph["Foo#baz()"].definitions.first
+
+      assert_equal(1, method_def.signatures.length)
+
+      sig = method_def.signatures[0]
+
+      sig.parameters[0].tap do |param|
+        assert_instance_of(Rubydex::Signature::PositionalParameter, param)
+        assert_equal(:a, param.name)
+        assert_equal("#{path}:2:21-2:22", param.location.to_display.to_s)
+      end
+
+      sig.parameters[1].tap do |param|
+        assert_instance_of(Rubydex::Signature::OptionalPositionalParameter, param)
+        assert_equal(:b, param.name)
+        assert_equal("#{path}:2:32-2:33", param.location.to_display.to_s)
+      end
+
+      sig.parameters[2].tap do |param|
+        assert_instance_of(Rubydex::Signature::RestPositionalParameter, param)
+        assert_equal(:c, param.name)
+        assert_equal("#{path}:2:43-2:44", param.location.to_display.to_s)
+      end
+
+      sig.parameters[3].tap do |param|
+        assert_instance_of(Rubydex::Signature::PostParameter, param)
+        assert_equal(:d, param.name)
+        assert_equal("#{path}:2:54-2:55", param.location.to_display.to_s)
+      end
+
+      sig.parameters[4].tap do |param|
+        assert_instance_of(Rubydex::Signature::KeywordParameter, param)
+        assert_equal(:name, param.name)
+        assert_equal("#{path}:2:57-2:61", param.location.to_display.to_s)
+      end
+
+      sig.parameters[5].tap do |param|
+        assert_instance_of(Rubydex::Signature::OptionalKeywordParameter, param)
+        assert_equal(:age, param.name)
+        assert_equal("#{path}:2:72-2:75", param.location.to_display.to_s)
+      end
+
+      sig.parameters[6].tap do |param|
+        assert_instance_of(Rubydex::Signature::RestKeywordParameter, param)
+        assert_equal(:rest, param.name)
+        assert_equal("#{path}:2:95-2:99", param.location.to_display.to_s)
+      end
+
+      sig.parameters[7].tap do |param|
+        assert_instance_of(Rubydex::Signature::BlockParameter, param)
+        assert_equal(:block, param.name)
+        assert_equal("#{path}:2:101-2:115", param.location.to_display.to_s)
+      end
+    end
+  end
+
+  def test_method_definition_signatures_rbs_singleton_method
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def self.bar: (Integer a) -> void
+        end
+      RBS
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.{rb,rbs}"))
+      graph.resolve
+
+      method_def = graph["Foo::<Foo>#bar()"].definitions.first
+
+      sig = method_def.signatures[0]
+      assert_equal(1, sig.parameters.length)
+
+      sig.parameters[0].tap do |param|
+        assert_instance_of(Rubydex::Signature::PositionalParameter, param)
+        assert_equal(:a, param.name)
+        path = context.absolute_path_to("foo.rbs")
+        assert_equal("#{path}:2:26-2:27", param.location.to_display.to_s)
+      end
+    end
+  end
+
+  def test_method_definition_signatures_rbs_overload
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def foo: (String a) -> void
+                 | (Integer b) -> void
+        end
+      RBS
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.{rb,rbs}"))
+      graph.resolve
+
+      method_def = graph["Foo#foo()"].definitions.first
+
+      assert_equal(2, method_def.signatures.length)
+
+      path = context.absolute_path_to("foo.rbs")
+
+      method_def.signatures[0].tap do |sig|
+        assert_equal(1, sig.parameters.length)
+        sig.parameters[0].tap do |param|
+          assert_instance_of(Rubydex::Signature::PositionalParameter, param)
+          assert_equal(:a, param.name)
+          assert_equal("#{path}:2:20-2:21", param.location.to_display.to_s)
+        end
+      end
+
+      method_def.signatures[1].tap do |sig|
+        assert_equal(1, sig.parameters.length)
+        sig.parameters[0].tap do |param|
+          assert_instance_of(Rubydex::Signature::PositionalParameter, param)
+          assert_equal(:b, param.name)
+          assert_equal("#{path}:3:21-3:22", param.location.to_display.to_s)
+        end
+      end
+    end
+  end
+
+  def test_method_definition_signatures_rbs_untyped_parameters
+    with_context do |context|
+      context.write!("foo.rbs", <<~RBS)
+        class Foo
+          def baz: (?) -> void
+        end
+      RBS
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.{rb,rbs}"))
+      graph.resolve
+
+      method_def = graph["Foo#baz()"].definitions.first
+
+      assert_equal(1, method_def.signatures.length)
+
+      # It currently translates to 0 parameter signature
+      assert_empty(method_def.signatures[0].parameters)
+    end
+  end
+
   private
 
   # Comment locations on Windows include the carriage return. This means that the end column is off by one when compared
