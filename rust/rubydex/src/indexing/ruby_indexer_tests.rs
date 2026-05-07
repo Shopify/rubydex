@@ -1768,9 +1768,9 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-private-constant: Private constant called at top level (1:1-1:30)",
-                "invalid-private-constant: Private constant called at top level (2:1-2:35)",
-                "invalid-private-constant: Dynamic receiver for private constant (3:1-3:34)",
+                "invalid-private-constant: `private_constant` called at top level (1:1-1:30)",
+                "invalid-private-constant: `private_constant` called at top level (2:1-2:35)",
+                "invalid-private-constant: Dynamic receiver for `private_constant` (3:1-3:4)",
                 "invalid-private-constant: Private constant called with non-symbol argument (6:20-6:31)",
                 "invalid-private-constant: Private constant called with non-symbol argument (6:33-6:44)",
             ]
