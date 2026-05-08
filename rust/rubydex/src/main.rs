@@ -172,7 +172,7 @@ fn main() {
 
     // Generate visualization or print statistics
     if args.dot {
-        println!("{}", dot::generate(&graph));
+        println!("{}", dot::DotBuilder::generate(&graph));
     } else {
         println!("Indexed {} files", graph.documents().len());
         println!("Found {} names", graph.declarations().len());

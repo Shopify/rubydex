@@ -1,109 +1,150 @@
-//! DOT format generator for Graphviz visualization of the graph structure.
-
 use std::fmt::Write;
 
-use crate::model::graph::Graph;
+use crate::model::{
+    declaration::Declaration,
+    definitions::Definition,
+    document::Document,
+    graph::Graph,
+};
 
 const NAME_NODE_SHAPE: &str = "hexagon";
 const DEFINITION_NODE_SHAPE: &str = "ellipse";
 const URI_NODE_SHAPE: &str = "box";
 
-/// Escapes a string for use in DOT format labels and identifiers.
-fn escape_dot_string(s: &str) -> String {
-    if !s.contains('"') {
-        return s.to_string();
-    }
+pub struct DotBuilder<'a> {
+    output: String,
+    graph: &'a Graph,
+}
 
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => result.push_str("\\\""),
-            _ => result.push(c),
+impl<'a> DotBuilder<'a> {
+    #[must_use]
+    fn new(graph: &'a Graph) -> Self {
+        Self {
+            output: String::new(),
+            graph,
         }
     }
-    result
+
+    fn graph(&self) -> &'a Graph {
+        self.graph
+    }
+
+    fn writeln(&mut self, s: &str) {
+        self.output.push_str(s);
+        self.output.push('\n');
+    }
+
+    fn escape(s: &str) -> String {
+        if !s.contains('"') {
+            return s.to_string();
+        }
+
+        let mut result = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '"' => result.push_str("\\\""),
+                _ => result.push(c),
+            }
+        }
+        result
+    }
+
+    #[must_use]
+    pub fn generate(graph: &'a Graph) -> String {
+        let mut builder = Self::new(graph);
+        builder.writeln("digraph {");
+        builder.writeln("    rankdir=TB;\n");
+
+        let mut declarations: Vec<_> = graph.declarations().values().collect();
+        declarations.sort_by(|a, b| a.name().cmp(b.name()));
+        for declaration in declarations {
+            declaration.to_dot(&mut builder);
+        }
+        builder.output.push('\n');
+
+        let mut definitions: Vec<_> = graph
+            .definitions()
+            .iter()
+            .filter_map(|(_, definition)| {
+                let decl_id = graph.definition_to_declaration_id(definition)?;
+                let declaration = graph.declarations().get(decl_id)?;
+                let sort_key = format!("{}({})", definition.kind(), declaration.name());
+                Some((sort_key, definition))
+            })
+            .collect();
+        definitions.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, definition) in definitions {
+            definition.to_dot(&mut builder);
+        }
+        builder.output.push('\n');
+
+        let mut documents: Vec<_> = graph.documents().values().collect();
+        documents.sort_by(|a, b| a.uri().cmp(b.uri()));
+        for document in documents {
+            document.to_dot(&mut builder);
+        }
+        builder.output.push('\n');
+
+        builder.writeln("}");
+        builder.output
+    }
 }
 
-#[must_use]
-pub fn generate(graph: &Graph) -> String {
-    let mut output = String::new();
-    output.push_str("digraph {\n");
-    output.push_str("    rankdir=TB;\n\n");
-
-    write_declaration_nodes(&mut output, graph);
-    write_definition_nodes(&mut output, graph);
-    write_document_nodes(&mut output, graph);
-
-    output.push_str("}\n");
-    output
+pub trait ToDot {
+    fn to_dot(&self, builder: &mut DotBuilder);
 }
 
-fn write_declaration_nodes(output: &mut String, graph: &Graph) {
-    let mut declarations: Vec<_> = graph.declarations().values().collect();
-    declarations.sort_by(|a, b| a.name().cmp(b.name()));
-
-    for declaration in declarations {
-        let name = declaration.name();
-        let escaped_name = escape_dot_string(name);
+impl ToDot for Declaration {
+    fn to_dot(&self, builder: &mut DotBuilder) {
+        let name = self.name();
+        let escaped_name = DotBuilder::escape(name);
         let node_id = format!("Name:{name}");
         let _ = writeln!(
-            output,
+            builder.output,
             "    \"{node_id}\" [label=\"{escaped_name}\",shape={NAME_NODE_SHAPE}];"
         );
 
-        for def_id in declaration.definitions() {
-            let _ = writeln!(output, "    \"{node_id}\" -> \"def_{def_id}\" [dir=both];");
+        for def_id in self.definitions() {
+            let _ = writeln!(builder.output, "    \"{node_id}\" -> \"def_{def_id}\" [dir=both];");
         }
     }
-
-    output.push('\n');
 }
 
-fn write_definition_nodes(output: &mut String, graph: &Graph) {
-    let mut definitions: Vec<_> = graph
-        .definitions()
-        .iter()
-        .filter_map(|(def_id, definition)| {
-            graph
-                .declarations()
-                .get(graph.definition_to_declaration_id(definition).unwrap())
-                .map(|declaration| {
-                    let def_type = definition.kind();
-                    let escaped_name = escape_dot_string(declaration.name());
-                    let label = format!("{def_type}({escaped_name})");
-                    let line = format!("    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];\n");
-                    (label, line)
-                })
-        })
-        .collect();
+impl ToDot for Definition {
+    fn to_dot(&self, builder: &mut DotBuilder) {
+        let def_id = self.id();
+        let Some(decl_id) = builder.graph().definition_to_declaration_id(self) else {
+            return;
+        };
+        let Some(declaration) = builder.graph().declarations().get(decl_id) else {
+            return;
+        };
 
-    definitions.sort_by(|a, b| a.0.cmp(&b.0));
-
-    for (_, line) in definitions {
-        output.push_str(&line);
-    }
-    output.push('\n');
-}
-
-fn write_document_nodes(output: &mut String, graph: &Graph) {
-    let mut documents: Vec<_> = graph.documents().values().collect();
-    documents.sort_by(|a, b| a.uri().cmp(b.uri()));
-
-    for document in documents {
-        let uri = document.uri();
-        let label = uri.rsplit('/').next().unwrap_or(uri);
-        let escaped_uri = escape_dot_string(uri);
-        let escaped_label = escape_dot_string(label);
+        let def_type = self.kind();
+        let escaped_name = DotBuilder::escape(declaration.name());
+        let label = format!("{def_type}({escaped_name})");
         let _ = writeln!(
-            output,
+            builder.output,
+            "    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];"
+        );
+    }
+}
+
+impl ToDot for Document {
+    fn to_dot(&self, builder: &mut DotBuilder) {
+        let uri = self.uri();
+        let label = uri.rsplit('/').next().unwrap_or(uri);
+        let escaped_uri = DotBuilder::escape(uri);
+        let escaped_label = DotBuilder::escape(label);
+        let _ = writeln!(
+            builder.output,
             "    \"{escaped_uri}\" [label=\"{escaped_label}\",shape={URI_NODE_SHAPE}];"
         );
 
-        for def_id in document.definitions() {
-            let _ = writeln!(output, "    \"def_{def_id}\" -> \"{escaped_uri}\";");
+        for def_id in self.definitions() {
+            let _ = writeln!(builder.output, "    \"def_{def_id}\" -> \"{escaped_uri}\";");
         }
     }
-    output.push('\n');
 }
 
 #[cfg(test)]
@@ -127,7 +168,6 @@ mod tests {
         graph_test
     }
 
-    /// Finds the first definition ID for the declaration with the given name.
     fn def_id_for(graph: &Graph, name: &str) -> String {
         let decl = graph.declarations().get(&DeclarationId::from(name)).unwrap();
         decl.definitions().first().unwrap().to_string()
@@ -136,7 +176,7 @@ mod tests {
     #[test]
     fn test_dot_generation() {
         let context = create_test_graph();
-        let dot_output = generate(context.graph());
+        let dot_output = DotBuilder::generate(context.graph());
 
         let basic_object_def = def_id_for(context.graph(), "BasicObject");
         let class_def = def_id_for(context.graph(), "Class");
