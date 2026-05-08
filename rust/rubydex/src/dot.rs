@@ -7,6 +7,13 @@ use crate::model::{
     graph::Graph,
 };
 
+const DOC_COLOR: &str = "#4a90d9";
+const DOC_FILL: &str = "#dce8f5";
+const DEF_COLOR: &str = "#e8912d";
+const DEF_FILL: &str = "#fdf0e0";
+const DECL_COLOR: &str = "#5ba55b";
+const DECL_FILL: &str = "#e0f0e0";
+
 pub struct DotBuilder<'a> {
     output: String,
     graph: &'a Graph,
@@ -29,15 +36,15 @@ impl<'a> DotBuilder<'a> {
         self.output.push('\n');
     }
 
-    fn label(type_name: &str, name: &str) -> String {
+    fn label(type_name: &str, name: &str, color: &str) -> String {
         format!(
             concat!(
                 "<<table border=\"0\" cellborder=\"0\" cellspacing=\"0\" align=\"center\">",
-                "<tr><td align=\"center\"><font point-size=\"8\">{}</font></td></tr>",
+                "<tr><td align=\"center\"><font point-size=\"8\" color=\"{}\">{}</font></td></tr>",
                 "<tr><td align=\"center\"><b>{}</b></td></tr>",
                 "</table>>",
             ),
-            type_name, name,
+            color, type_name, name,
         )
     }
 
@@ -88,7 +95,7 @@ impl<'a> DotBuilder<'a> {
             for def_id in document.definitions() {
                 let _ = writeln!(
                     builder.output,
-                    "  {doc_id} -> \"def_{def_id}\" [label=\"defines\"]"
+                    "  {doc_id} -> \"def_{def_id}\" [label=\"defines\" color=\"{DEF_COLOR}\" fontcolor=\"{DEF_COLOR}\"]"
                 );
             }
         }
@@ -102,7 +109,7 @@ impl<'a> DotBuilder<'a> {
                     let decl_node = Self::decl_node_id(declaration.name());
                     let _ = writeln!(
                         builder.output,
-                        "  \"def_{def_id}\" -> {decl_node} [label=\"declares\"]"
+                        "  \"def_{def_id}\" -> {decl_node} [label=\"declares\" color=\"{DECL_COLOR}\" fontcolor=\"{DECL_COLOR}\"]"
                     );
                 }
             }
@@ -120,7 +127,7 @@ impl<'a> DotBuilder<'a> {
                         let member_node = Self::decl_node_id(member.name());
                         let _ = writeln!(
                             builder.output,
-                            "  {owner_node} -> {member_node} [label=\"member\"]"
+                            "  {owner_node} -> {member_node} [label=\"member\" style=dashed color=\"#666666\" fontcolor=\"#666666\"]"
                         );
                     }
                 }
@@ -149,10 +156,10 @@ impl ToDot for Document {
         let uri = self.uri();
         let label = uri.rsplit('/').next().unwrap_or(uri);
         let node_id = DotBuilder::doc_node_id(uri);
-        let html_label = DotBuilder::label("Document", label);
+        let html_label = DotBuilder::label("Document", label, DOC_COLOR);
         let _ = writeln!(
             builder.output,
-            "  {node_id} [label={html_label} shape=note]"
+            "  {node_id} [label={html_label} shape=note color=\"{DOC_COLOR}\" fillcolor=\"{DOC_FILL}\" style=filled]"
         );
     }
 }
@@ -168,10 +175,10 @@ impl ToDot for Definition {
         };
 
         let type_label = format!("{}Def", self.kind());
-        let html_label = DotBuilder::label(&type_label, declaration.name());
+        let html_label = DotBuilder::label(&type_label, declaration.name(), DEF_COLOR);
         let _ = writeln!(
             builder.output,
-            "  \"def_{def_id}\" [label={html_label} style=rounded]"
+            "  \"def_{def_id}\" [label={html_label} style=rounded color=\"{DEF_COLOR}\" fillcolor=\"{DEF_FILL}\" style=\"rounded,filled\"]"
         );
     }
 }
@@ -180,10 +187,10 @@ impl ToDot for Declaration {
     fn to_dot(&self, builder: &mut DotBuilder) {
         let type_label = format!("{}Decl", self.kind());
         let node_id = DotBuilder::decl_node_id(self.name());
-        let html_label = DotBuilder::label(&type_label, self.name());
+        let html_label = DotBuilder::label(&type_label, self.name(), DECL_COLOR);
         let _ = writeln!(
             builder.output,
-            "  {node_id} [label={html_label}]"
+            "  {node_id} [label={html_label} color=\"{DECL_COLOR}\" fillcolor=\"{DECL_FILL}\" style=filled]"
         );
     }
 }
