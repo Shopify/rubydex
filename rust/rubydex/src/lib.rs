@@ -1,5 +1,6 @@
 pub mod compile_assertions;
 pub mod diagnostic;
+pub mod dot;
 pub mod errors;
 pub mod indexing;
 pub mod integrity;
@@ -12,7 +13,6 @@ pub mod position;
 pub mod query;
 pub mod resolution;
 pub mod stats;
-pub mod dot;
 
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;

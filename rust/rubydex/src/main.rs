@@ -2,6 +2,7 @@ use clap::{Parser, ValueEnum};
 use std::{collections::HashSet, mem};
 
 use rubydex::{
+    dot,
     indexing::{self, IndexerBackend},
     integrity, listing,
     model::graph::Graph,
@@ -10,7 +11,6 @@ use rubydex::{
         memory::MemoryStats,
         timer::{Timer, time_it},
     },
-    dot,
 };
 
 #[derive(Parser, Debug)]

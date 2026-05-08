@@ -21,7 +21,6 @@ const MEMBER_COLOR: &str = "#a3d9a3";
 const SUPERCLASS_COLOR: &str = "#d94a7a";
 const MIXIN_COLOR: &str = "#8b5fc7";
 
-
 pub struct DotBuilder<'a> {
     output: String,
     graph: &'a Graph,
@@ -44,7 +43,12 @@ impl<'a> DotBuilder<'a> {
         self.output.push('\n');
     }
 
+    fn html_escape(s: &str) -> String {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    }
+
     fn label(type_name: &str, name: &str, color: &str) -> String {
+        let escaped = Self::html_escape(name);
         format!(
             concat!(
                 "<<table border=\"0\" cellborder=\"0\" cellspacing=\"0\" align=\"center\">",
@@ -52,7 +56,7 @@ impl<'a> DotBuilder<'a> {
                 "<tr><td align=\"center\"><b>{}</b></td></tr>",
                 "</table>>",
             ),
-            color, type_name, name,
+            color, type_name, escaped,
         )
     }
 
@@ -60,93 +64,143 @@ impl<'a> DotBuilder<'a> {
     pub fn generate(graph: &'a Graph, show_builtins: bool) -> String {
         let mut builder = Self::new(graph);
 
-        builder.writeln("digraph rubydex {");
-        builder.writeln("  rankdir=TB");
-        builder.writeln("  node [fontname=\"Courier\" fontsize=10 shape=box]");
-        builder.writeln("  edge [fontsize=9 fontname=\"Courier\"]");
-        builder.output.push('\n');
+        builder.write_header();
 
-        // 1. Collect documents, write nodes, collect definition IDs
-        let mut documents: Vec<_> = graph.documents().values()
+        let documents = builder.visible_documents(show_builtins);
+        let def_ids = builder.write_document_nodes(&documents);
+        let definitions = builder.visible_definitions(&def_ids);
+        let decl_ids = builder.write_definition_nodes(&definitions);
+        let declarations = builder.visible_declarations(&decl_ids);
+        builder.write_declaration_nodes(&declarations);
+
+        builder.write_document_definition_edges(&documents, &def_ids);
+        builder.write_definition_declaration_edges(&definitions);
+        builder.write_definition_nesting_edges(&definitions, &def_ids);
+        builder.write_superclass_edges(&definitions, &decl_ids);
+        builder.write_mixin_edges(&definitions, &decl_ids);
+        builder.write_member_edges(&declarations, &decl_ids);
+
+        builder.writeln("}");
+        builder.output
+    }
+
+    fn write_header(&mut self) {
+        self.writeln("digraph rubydex {");
+        self.writeln("  rankdir=TB");
+        self.writeln("  node [fontname=\"Courier\" fontsize=10 shape=box]");
+        self.writeln("  edge [fontsize=9 fontname=\"Courier\"]");
+        self.output.push('\n');
+    }
+
+    fn visible_documents(&self, show_builtins: bool) -> Vec<&'a Document> {
+        let mut documents: Vec<_> = self
+            .graph
+            .documents()
+            .values()
             .filter(|d| show_builtins || d.uri() != built_in::BUILT_IN_URI)
             .collect();
         documents.sort_by(|a, b| a.uri().cmp(b.uri()));
+        documents
+    }
 
-        let mut def_ids: HashSet<&DefinitionId> = HashSet::new();
-        for document in &documents {
-            document.to_dot(&mut builder);
+    fn write_document_nodes(&mut self, documents: &[&'a Document]) -> HashSet<&'a DefinitionId> {
+        let mut def_ids = HashSet::new();
+        for document in documents {
+            document.to_dot(self);
             for def_id in document.definitions() {
                 def_ids.insert(def_id);
             }
         }
-        builder.output.push('\n');
+        self.output.push('\n');
+        def_ids
+    }
 
-        // 2. Collect definitions from documents, write nodes, collect declaration IDs
-        let mut definitions: Vec<_> = graph
+    fn visible_definitions(&self, def_ids: &HashSet<&DefinitionId>) -> Vec<(String, &'a Definition)> {
+        let mut definitions: Vec<_> = self
+            .graph
             .definitions()
             .iter()
             .filter(|(id, _)| def_ids.contains(id))
             .filter_map(|(_, definition)| {
-                let decl_id = graph.definition_to_declaration_id(definition)?;
-                let declaration = graph.declarations().get(decl_id)?;
+                let decl_id = self.graph.definition_to_declaration_id(definition)?;
+                let declaration = self.graph.declarations().get(decl_id)?;
                 let sort_key = format!("{}({})", definition.kind(), declaration.name());
                 Some((sort_key, definition))
             })
             .collect();
         definitions.sort_by(|a, b| a.0.cmp(&b.0));
+        definitions
+    }
 
-        let mut decl_ids: HashSet<&DeclarationId> = HashSet::new();
-        for (_, definition) in &definitions {
-            definition.to_dot(&mut builder);
-            if let Some(decl_id) = graph.definition_to_declaration_id(definition) {
+    fn write_definition_nodes(&mut self, definitions: &[(String, &'a Definition)]) -> HashSet<&'a DeclarationId> {
+        let mut decl_ids = HashSet::new();
+        for (_, definition) in definitions {
+            definition.to_dot(self);
+            if let Some(decl_id) = self.graph.definition_to_declaration_id(definition) {
                 decl_ids.insert(decl_id);
             }
         }
-        builder.output.push('\n');
+        self.output.push('\n');
+        decl_ids
+    }
 
-        // 3. Collect declarations from definitions, write nodes
-        let mut declarations: Vec<_> = graph.declarations().iter()
+    fn visible_declarations(&self, decl_ids: &HashSet<&DeclarationId>) -> Vec<&'a Declaration> {
+        let mut declarations: Vec<_> = self
+            .graph
+            .declarations()
+            .iter()
             .filter(|(id, _)| decl_ids.contains(id))
             .map(|(_, decl)| decl)
             .collect();
         declarations.sort_by(|a, b| a.name().cmp(b.name()));
-        for declaration in &declarations {
-            declaration.to_dot(&mut builder);
-        }
-        builder.output.push('\n');
+        declarations
+    }
 
-        // Document -> Definition edges (defines)
-        for document in &documents {
+    fn write_declaration_nodes(&mut self, declarations: &[&Declaration]) {
+        for declaration in declarations {
+            declaration.to_dot(self);
+        }
+        self.output.push('\n');
+    }
+
+    fn write_document_definition_edges(&mut self, documents: &[&Document], def_ids: &HashSet<&DefinitionId>) {
+        for document in documents {
             let uri = document.uri();
             let doc_id = Self::doc_node_id(uri);
             for def_id in document.definitions() {
                 if def_ids.contains(def_id) {
                     let _ = writeln!(
-                        builder.output,
+                        self.output,
                         "  {doc_id} -> \"def_{def_id}\" [label=\"defines\" color=\"{DEF_COLOR}\" fontcolor=\"{DEF_COLOR}\"]"
                     );
                 }
             }
         }
-        builder.output.push('\n');
+        self.output.push('\n');
+    }
 
-        // Definition -> Declaration edges (declares)
-        for (_, definition) in &definitions {
+    fn write_definition_declaration_edges(&mut self, definitions: &[(String, &'a Definition)]) {
+        for (_, definition) in definitions {
             let def_id = definition.id();
-            if let Some(decl_id) = graph.definition_to_declaration_id(definition) {
-                if let Some(declaration) = graph.declarations().get(decl_id) {
-                    let decl_node = Self::decl_node_id(declaration.name());
-                    let _ = writeln!(
-                        builder.output,
-                        "  \"def_{def_id}\" -> {decl_node} [label=\"declares\" color=\"{DECL_COLOR}\" fontcolor=\"{DECL_COLOR}\"]"
-                    );
-                }
+            if let Some(decl_id) = self.graph.definition_to_declaration_id(definition)
+                && let Some(declaration) = self.graph.declarations().get(decl_id)
+            {
+                let decl_node = Self::decl_node_id(declaration.name());
+                let _ = writeln!(
+                    self.output,
+                    "  \"def_{def_id}\" -> {decl_node} [label=\"declares\" color=\"{DECL_COLOR}\" fontcolor=\"{DECL_COLOR}\"]"
+                );
             }
         }
-        builder.output.push('\n');
+        self.output.push('\n');
+    }
 
-        // Definition -> Definition edges (nesting)
-        for (_, definition) in &definitions {
+    fn write_definition_nesting_edges(
+        &mut self,
+        definitions: &[(String, &'a Definition)],
+        def_ids: &HashSet<&DefinitionId>,
+    ) {
+        for (_, definition) in definitions {
             let parent_id = definition.id();
             let children: &[DefinitionId] = match definition {
                 Definition::Class(d) => d.members(),
@@ -157,42 +211,51 @@ impl<'a> DotBuilder<'a> {
             for child_id in children {
                 if def_ids.contains(child_id) {
                     let _ = writeln!(
-                        builder.output,
+                        self.output,
                         "  \"def_{parent_id}\" -> \"def_{child_id}\" [label=\"contains\" style=dashed arrowhead=onormal color=\"{NESTS_COLOR}\" fontcolor=\"{NESTS_COLOR}\"]"
                     );
                 }
             }
         }
-        builder.output.push('\n');
+        self.output.push('\n');
+    }
 
-        // Declaration -> Declaration edges (superclass)
-        for (_, definition) in &definitions {
-            if let Definition::Class(class_def) = definition {
-                if let Some(superclass_ref_id) = class_def.superclass_ref() {
-                    if let Some(decl_id) = builder.resolve_ref(superclass_ref_id) {
-                        if !decl_ids.contains(decl_id) {
-                            continue;
-                        }
-                        if let Some(declaration) = graph.declarations().get(decl_id) {
-                            if let Some(child_decl_id) = graph.definition_to_declaration_id(definition) {
-                                if let Some(child_decl) = graph.declarations().get(child_decl_id) {
-                                    let child_node = Self::decl_node_id(child_decl.name());
-                                    let parent_node = Self::decl_node_id(declaration.name());
-                                    let _ = writeln!(
-                                        builder.output,
-                                        "  {child_node} -> {parent_node} [label=\"inherits\" color=\"{SUPERCLASS_COLOR}\" fontcolor=\"{SUPERCLASS_COLOR}\"]"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
+    fn write_superclass_edges(&mut self, definitions: &[(String, &'a Definition)], decl_ids: &HashSet<&DeclarationId>) {
+        for (_, definition) in definitions {
+            let Definition::Class(class_def) = definition else {
+                continue;
+            };
+            let Some(superclass_ref_id) = class_def.superclass_ref() else {
+                continue;
+            };
+            let Some(decl_id) = self.resolve_ref(*superclass_ref_id) else {
+                continue;
+            };
+            if !decl_ids.contains(decl_id) {
+                continue;
             }
-        }
-        builder.output.push('\n');
+            let Some(declaration) = self.graph.declarations().get(decl_id) else {
+                continue;
+            };
+            let Some(child_decl_id) = self.graph.definition_to_declaration_id(definition) else {
+                continue;
+            };
+            let Some(child_decl) = self.graph.declarations().get(child_decl_id) else {
+                continue;
+            };
 
-        // Declaration -> Declaration edges (mixins: include/prepend/extend)
-        for (_, definition) in &definitions {
+            let child_node = Self::decl_node_id(child_decl.name());
+            let parent_node = Self::decl_node_id(declaration.name());
+            let _ = writeln!(
+                self.output,
+                "  {child_node} -> {parent_node} [label=\"inherits\" color=\"{SUPERCLASS_COLOR}\" fontcolor=\"{SUPERCLASS_COLOR}\"]"
+            );
+        }
+        self.output.push('\n');
+    }
+
+    fn write_mixin_edges(&mut self, definitions: &[(String, &'a Definition)], decl_ids: &HashSet<&DeclarationId>) {
+        for (_, definition) in definitions {
             let mixins: &[Mixin] = match definition {
                 Definition::Class(d) => d.mixins(),
                 Definition::Module(d) => d.mixins(),
@@ -202,61 +265,67 @@ impl<'a> DotBuilder<'a> {
             if mixins.is_empty() {
                 continue;
             }
-            let Some(decl_id) = graph.definition_to_declaration_id(definition) else {
+            let Some(decl_id) = self.graph.definition_to_declaration_id(definition) else {
                 continue;
             };
-            let Some(decl) = graph.declarations().get(decl_id) else {
+            let Some(decl) = self.graph.declarations().get(decl_id) else {
                 continue;
             };
             let src_node = Self::decl_node_id(decl.name());
             for mixin in mixins {
-                let mixin_label = match mixin {
-                    Mixin::Include(_) => "includes",
-                    Mixin::Prepend(_) => "prepends",
-                    Mixin::Extend(_) => "extends",
-                };
-                if let Some(target_decl_id) = builder.resolve_ref(mixin.constant_reference_id()) {
-                    if !decl_ids.contains(target_decl_id) {
-                        continue;
-                    }
-                    if let Some(target_decl) = graph.declarations().get(target_decl_id) {
-                        let target_node = Self::decl_node_id(target_decl.name());
-                        let _ = writeln!(
-                            builder.output,
-                            "  {src_node} -> {target_node} [label=\"{mixin_label}\" color=\"{MIXIN_COLOR}\" fontcolor=\"{MIXIN_COLOR}\"]"
-                        );
-                    }
-                }
+                self.write_mixin_edge(mixin, &src_node, decl_ids);
             }
         }
-        builder.output.push('\n');
+        self.output.push('\n');
+    }
 
-        // Declaration -> Declaration edges (member)
-        for declaration in &declarations {
+    fn write_mixin_edge(&mut self, mixin: &Mixin, src_node: &str, decl_ids: &HashSet<&DeclarationId>) {
+        let mixin_label = match mixin {
+            Mixin::Include(_) => "includes",
+            Mixin::Prepend(_) => "prepends",
+            Mixin::Extend(_) => "extends",
+        };
+        let Some(target_decl_id) = self.resolve_ref(*mixin.constant_reference_id()) else {
+            return;
+        };
+        if !decl_ids.contains(target_decl_id) {
+            return;
+        }
+        let Some(target_decl) = self.graph.declarations().get(target_decl_id) else {
+            return;
+        };
+        let target_node = Self::decl_node_id(target_decl.name());
+        let _ = writeln!(
+            self.output,
+            "  {src_node} -> {target_node} [label=\"{mixin_label}\" color=\"{MIXIN_COLOR}\" fontcolor=\"{MIXIN_COLOR}\"]"
+        );
+    }
+
+    fn write_member_edges(&mut self, declarations: &[&Declaration], decl_ids: &HashSet<&DeclarationId>) {
+        for declaration in declarations {
             if let Some(namespace) = declaration.as_namespace() {
                 let owner_node = Self::decl_node_id(declaration.name());
-                let mut members: Vec<_> = namespace.members().values()
+                let mut members: Vec<_> = namespace
+                    .members()
+                    .values()
                     .filter(|id| decl_ids.contains(id))
                     .collect();
                 members.sort();
                 for member_id in members {
-                    if let Some(member) = graph.declarations().get(member_id) {
+                    if let Some(member) = self.graph.declarations().get(member_id) {
                         let member_node = Self::decl_node_id(member.name());
                         let _ = writeln!(
-                            builder.output,
+                            self.output,
                             "  {owner_node} -> {member_node} [label=\"owns\" style=dashed arrowhead=onormal color=\"{MEMBER_COLOR}\" fontcolor=\"{MEMBER_COLOR}\"]"
                         );
                     }
                 }
             }
         }
-
-        builder.writeln("}");
-        builder.output
     }
 
-    fn resolve_ref(&self, ref_id: &crate::model::ids::ConstantReferenceId) -> Option<&'a DeclarationId> {
-        let constant_ref = self.graph.constant_references().get(ref_id)?;
+    fn resolve_ref(&self, ref_id: crate::model::ids::ConstantReferenceId) -> Option<&'a DeclarationId> {
+        let constant_ref = self.graph.constant_references().get(&ref_id)?;
         self.graph.name_id_to_declaration_id(*constant_ref.name_id())
     }
 
