@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
 use crate::model::{
+    built_in,
     declaration::Declaration,
     definitions::{Definition, Mixin},
     document::Document,
@@ -19,17 +20,37 @@ const MEMBER_COLOR: &str = "#a3d9a3";
 const SUPERCLASS_COLOR: &str = "#d94a7a";
 const MIXIN_COLOR: &str = "#8b5fc7";
 
+
 pub struct DotBuilder<'a> {
     output: String,
     graph: &'a Graph,
+    hide_builtins: bool,
 }
 
 impl<'a> DotBuilder<'a> {
-    fn new(graph: &'a Graph) -> Self {
+    fn new(graph: &'a Graph, hide_builtins: bool) -> Self {
         Self {
             output: String::new(),
             graph,
+            hide_builtins,
         }
+    }
+
+    fn is_builtin_uri(&self, uri: &str) -> bool {
+        self.hide_builtins && uri == built_in::BUILT_IN_URI
+    }
+
+    fn is_builtin_def(&self, definition: &Definition) -> bool {
+        self.hide_builtins && *definition.uri_id() == *built_in::BUILT_IN_URI_ID
+    }
+
+    fn is_builtin_decl_id(&self, decl_id: &DeclarationId) -> bool {
+        self.hide_builtins
+            && (*decl_id == *built_in::BASIC_OBJECT_ID
+                || *decl_id == *built_in::OBJECT_ID
+                || *decl_id == *built_in::MODULE_ID
+                || *decl_id == *built_in::CLASS_ID
+                || *decl_id == *built_in::KERNEL_ID)
     }
 
     fn graph(&self) -> &'a Graph {
@@ -54,8 +75,8 @@ impl<'a> DotBuilder<'a> {
     }
 
     #[must_use]
-    pub fn generate(graph: &'a Graph) -> String {
-        let mut builder = Self::new(graph);
+    pub fn generate(graph: &'a Graph, hide_builtins: bool) -> String {
+        let mut builder = Self::new(graph, hide_builtins);
 
         builder.writeln("digraph rubydex {");
         builder.writeln("  rankdir=TB");
@@ -63,7 +84,9 @@ impl<'a> DotBuilder<'a> {
         builder.writeln("  edge [fontsize=9 fontname=\"Courier\"]");
         builder.output.push('\n');
 
-        let mut documents: Vec<_> = graph.documents().values().collect();
+        let mut documents: Vec<_> = graph.documents().values()
+            .filter(|d| !builder.is_builtin_uri(d.uri()))
+            .collect();
         documents.sort_by(|a, b| a.uri().cmp(b.uri()));
         for document in &documents {
             document.to_dot(&mut builder);
@@ -73,6 +96,7 @@ impl<'a> DotBuilder<'a> {
         let mut definitions: Vec<_> = graph
             .definitions()
             .iter()
+            .filter(|(_, definition)| !builder.is_builtin_def(definition))
             .filter_map(|(_, definition)| {
                 let decl_id = graph.definition_to_declaration_id(definition)?;
                 let declaration = graph.declarations().get(decl_id)?;
@@ -86,7 +110,10 @@ impl<'a> DotBuilder<'a> {
         }
         builder.output.push('\n');
 
-        let mut declarations: Vec<_> = graph.declarations().values().collect();
+        let mut declarations: Vec<_> = graph.declarations().iter()
+            .filter(|(id, _)| !builder.is_builtin_decl_id(id))
+            .map(|(_, decl)| decl)
+            .collect();
         declarations.sort_by(|a, b| a.name().cmp(b.name()));
         for declaration in &declarations {
             declaration.to_dot(&mut builder);
@@ -146,6 +173,9 @@ impl<'a> DotBuilder<'a> {
             if let Definition::Class(class_def) = definition {
                 if let Some(superclass_ref_id) = class_def.superclass_ref() {
                     if let Some(decl_id) = builder.resolve_ref(superclass_ref_id) {
+                        if builder.is_builtin_decl_id(decl_id) {
+                            continue;
+                        }
                         if let Some(declaration) = graph.declarations().get(decl_id) {
                             if let Some(child_decl_id) = graph.definition_to_declaration_id(definition) {
                                 if let Some(child_decl) = graph.declarations().get(child_decl_id) {
@@ -189,6 +219,9 @@ impl<'a> DotBuilder<'a> {
                     Mixin::Extend(_) => "extends",
                 };
                 if let Some(target_decl_id) = builder.resolve_ref(mixin.constant_reference_id()) {
+                    if builder.is_builtin_decl_id(target_decl_id) {
+                        continue;
+                    }
                     if let Some(target_decl) = graph.declarations().get(target_decl_id) {
                         let target_node = Self::decl_node_id(target_decl.name());
                         let _ = writeln!(
@@ -304,7 +337,7 @@ mod tests {
             ",
         );
         context.resolve();
-        let dot_output = DotBuilder::generate(context.graph());
+        let dot_output = DotBuilder::generate(context.graph(), false);
 
         assert!(dot_output.contains("digraph rubydex"));
 
@@ -339,7 +372,7 @@ mod tests {
             ",
         );
         context.resolve();
-        let dot_output = DotBuilder::generate(context.graph());
+        let dot_output = DotBuilder::generate(context.graph(), false);
         assert!(dot_output.contains("contains"));
     }
 
@@ -357,7 +390,7 @@ mod tests {
             ",
         );
         context.resolve();
-        let dot_output = DotBuilder::generate(context.graph());
+        let dot_output = DotBuilder::generate(context.graph(), false);
         assert!(dot_output.contains("inherits"));
     }
 
@@ -376,7 +409,7 @@ mod tests {
             ",
         );
         context.resolve();
-        let dot_output = DotBuilder::generate(context.graph());
+        let dot_output = DotBuilder::generate(context.graph(), false);
         assert!(dot_output.contains("includes"));
     }
 }

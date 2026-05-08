@@ -26,6 +26,9 @@ struct Args {
     #[arg(long = "dot", help = "Output a DOT graph visualization")]
     dot: bool,
 
+    #[arg(long = "hide-builtins", help = "Hide built-in declarations in DOT output")]
+    hide_builtins: bool,
+
     #[arg(long = "stats", help = "Show detailed performance statistics")]
     stats: bool,
 
@@ -172,7 +175,7 @@ fn main() {
 
     // Generate visualization or print statistics
     if args.dot {
-        println!("{}", dot::DotBuilder::generate(&graph));
+        println!("{}", dot::DotBuilder::generate(&graph, args.hide_builtins));
     } else {
         println!("Indexed {} files", graph.documents().len());
         println!("Found {} names", graph.declarations().len());

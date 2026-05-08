@@ -7,9 +7,12 @@ use crate::{
     model::{
         declaration::{ClassDeclaration, Declaration, Namespace},
         graph::Graph,
-        ids::DeclarationId,
+        ids::{DeclarationId, UriId},
     },
 };
+
+pub const BUILT_IN_URI: &str = "rubydex:built-in";
+pub static BUILT_IN_URI_ID: LazyLock<UriId> = LazyLock::new(|| UriId::from(BUILT_IN_URI));
 
 pub static KERNEL_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Kernel"));
 pub static BASIC_OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("BasicObject"));
@@ -27,7 +30,7 @@ pub fn add_built_in_data(graph: &mut Graph) {
     // We need definitions to ensure that ancestor linearization happens naturally through the algorithm. Trying to set
     // ancestors directly on declarations doesn't work because the algorithm erases the ancestors and there are no
     // definitions to inform it of the superclasses and mixins.
-    let uri = Url::parse("rubydex:built-in").unwrap();
+    let uri = Url::parse(BUILT_IN_URI).unwrap();
     let source = r"
       class BasicObject
       end
