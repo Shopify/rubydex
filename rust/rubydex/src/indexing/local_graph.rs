@@ -206,6 +206,44 @@ impl LocalGraph {
         &self.name_dependents
     }
 
+    /// Creates a `LocalGraph` from pre-built parts (used by the operation applier pipeline).
+    #[must_use]
+    pub fn from_parts(
+        uri_id: UriId,
+        document: Document,
+        strings: IdentityHashMap<StringId, StringRef>,
+        names: IdentityHashMap<NameId, NameRef>,
+    ) -> Self {
+        let mut name_dependents: IdentityHashMap<NameId, Vec<NameDependent>> = IdentityHashMap::default();
+        for (name_id, name_ref) in &names {
+            if let NameRef::Unresolved(name) = name_ref {
+                if let Some(&parent_scope) = name.parent_scope().as_ref() {
+                    name_dependents
+                        .entry(parent_scope)
+                        .or_default()
+                        .push(NameDependent::ChildName(*name_id));
+                }
+                if let Some(&nesting_id) = name.nesting().as_ref() {
+                    name_dependents
+                        .entry(nesting_id)
+                        .or_default()
+                        .push(NameDependent::NestedName(*name_id));
+                }
+            }
+        }
+
+        Self {
+            uri_id,
+            document,
+            definitions: IdentityHashMap::default(),
+            strings,
+            names,
+            constant_references: IdentityHashMap::default(),
+            method_references: IdentityHashMap::default(),
+            name_dependents,
+        }
+    }
+
     // Into parts
 
     #[must_use]
