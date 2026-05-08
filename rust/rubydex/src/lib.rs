@@ -12,7 +12,7 @@ pub mod position;
 pub mod query;
 pub mod resolution;
 pub mod stats;
-pub mod visualization;
+pub mod dot;
 
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;
