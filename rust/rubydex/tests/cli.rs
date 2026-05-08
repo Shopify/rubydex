@@ -21,7 +21,7 @@ fn prints_help() {
         .stdout(predicate::str::contains("A Static Analysis Toolkit for Ruby"))
         .stdout(predicate::str::contains("Usage:"))
         .stdout(predicate::str::contains("--stats"))
-        .stdout(predicate::str::contains("--visualize"))
+        .stdout(predicate::str::contains("--dot"))
         .stdout(predicate::str::contains("--stop-after"));
 }
 
@@ -81,7 +81,7 @@ fn visualize_simple_class() {
     with_context(|context| {
         context.write("simple.rb", "class SimpleClass\nend\n");
 
-        let output = rdx_cmd(&[context.absolute_path().to_str().unwrap(), "--visualize"])
+        let output = rdx_cmd(&[context.absolute_path().to_str().unwrap(), "--dot"])
             .output()
             .unwrap();
 

@@ -23,8 +23,8 @@ struct Args {
     #[arg(long = "stop-after", help = "Stop after the given stage")]
     stop_after: Option<StopAfter>,
 
-    #[arg(long = "visualize")]
-    visualize: bool,
+    #[arg(long = "dot", help = "Output a DOT graph visualization")]
+    dot: bool,
 
     #[arg(long = "stats", help = "Show detailed performance statistics")]
     stats: bool,
@@ -171,7 +171,7 @@ fn main() {
     }
 
     // Generate visualization or print statistics
-    if args.visualize {
+    if args.dot {
         println!("{}", dot::generate(&graph));
     } else {
         println!("Indexed {} files", graph.documents().len());
