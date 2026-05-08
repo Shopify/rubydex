@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::model::{
@@ -6,7 +7,7 @@ use crate::model::{
     definitions::{Definition, Mixin},
     document::Document,
     graph::Graph,
-    ids::DeclarationId,
+    ids::{DeclarationId, DefinitionId},
 };
 
 const DOC_COLOR: &str = "#4a90d9";
@@ -24,33 +25,14 @@ const MIXIN_COLOR: &str = "#8b5fc7";
 pub struct DotBuilder<'a> {
     output: String,
     graph: &'a Graph,
-    hide_builtins: bool,
 }
 
 impl<'a> DotBuilder<'a> {
-    fn new(graph: &'a Graph, hide_builtins: bool) -> Self {
+    fn new(graph: &'a Graph) -> Self {
         Self {
             output: String::new(),
             graph,
-            hide_builtins,
         }
-    }
-
-    fn is_builtin_uri(&self, uri: &str) -> bool {
-        self.hide_builtins && uri == built_in::BUILT_IN_URI
-    }
-
-    fn is_builtin_def(&self, definition: &Definition) -> bool {
-        self.hide_builtins && *definition.uri_id() == *built_in::BUILT_IN_URI_ID
-    }
-
-    fn is_builtin_decl_id(&self, decl_id: &DeclarationId) -> bool {
-        self.hide_builtins
-            && (*decl_id == *built_in::BASIC_OBJECT_ID
-                || *decl_id == *built_in::OBJECT_ID
-                || *decl_id == *built_in::MODULE_ID
-                || *decl_id == *built_in::CLASS_ID
-                || *decl_id == *built_in::KERNEL_ID)
     }
 
     fn graph(&self) -> &'a Graph {
@@ -75,8 +57,8 @@ impl<'a> DotBuilder<'a> {
     }
 
     #[must_use]
-    pub fn generate(graph: &'a Graph, hide_builtins: bool) -> String {
-        let mut builder = Self::new(graph, hide_builtins);
+    pub fn generate(graph: &'a Graph, show_builtins: bool) -> String {
+        let mut builder = Self::new(graph);
 
         builder.writeln("digraph rubydex {");
         builder.writeln("  rankdir=TB");
@@ -84,19 +66,26 @@ impl<'a> DotBuilder<'a> {
         builder.writeln("  edge [fontsize=9 fontname=\"Courier\"]");
         builder.output.push('\n');
 
+        // 1. Collect documents, write nodes, collect definition IDs
         let mut documents: Vec<_> = graph.documents().values()
-            .filter(|d| !builder.is_builtin_uri(d.uri()))
+            .filter(|d| show_builtins || d.uri() != built_in::BUILT_IN_URI)
             .collect();
         documents.sort_by(|a, b| a.uri().cmp(b.uri()));
+
+        let mut def_ids: HashSet<&DefinitionId> = HashSet::new();
         for document in &documents {
             document.to_dot(&mut builder);
+            for def_id in document.definitions() {
+                def_ids.insert(def_id);
+            }
         }
         builder.output.push('\n');
 
+        // 2. Collect definitions from documents, write nodes, collect declaration IDs
         let mut definitions: Vec<_> = graph
             .definitions()
             .iter()
-            .filter(|(_, definition)| !builder.is_builtin_def(definition))
+            .filter(|(id, _)| def_ids.contains(id))
             .filter_map(|(_, definition)| {
                 let decl_id = graph.definition_to_declaration_id(definition)?;
                 let declaration = graph.declarations().get(decl_id)?;
@@ -105,13 +94,19 @@ impl<'a> DotBuilder<'a> {
             })
             .collect();
         definitions.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut decl_ids: HashSet<&DeclarationId> = HashSet::new();
         for (_, definition) in &definitions {
             definition.to_dot(&mut builder);
+            if let Some(decl_id) = graph.definition_to_declaration_id(definition) {
+                decl_ids.insert(decl_id);
+            }
         }
         builder.output.push('\n');
 
+        // 3. Collect declarations from definitions, write nodes
         let mut declarations: Vec<_> = graph.declarations().iter()
-            .filter(|(id, _)| !builder.is_builtin_decl_id(id))
+            .filter(|(id, _)| decl_ids.contains(id))
             .map(|(_, decl)| decl)
             .collect();
         declarations.sort_by(|a, b| a.name().cmp(b.name()));
@@ -125,10 +120,12 @@ impl<'a> DotBuilder<'a> {
             let uri = document.uri();
             let doc_id = Self::doc_node_id(uri);
             for def_id in document.definitions() {
-                let _ = writeln!(
-                    builder.output,
-                    "  {doc_id} -> \"def_{def_id}\" [label=\"defines\" color=\"{DEF_COLOR}\" fontcolor=\"{DEF_COLOR}\"]"
-                );
+                if def_ids.contains(def_id) {
+                    let _ = writeln!(
+                        builder.output,
+                        "  {doc_id} -> \"def_{def_id}\" [label=\"defines\" color=\"{DEF_COLOR}\" fontcolor=\"{DEF_COLOR}\"]"
+                    );
+                }
             }
         }
         builder.output.push('\n');
@@ -151,14 +148,14 @@ impl<'a> DotBuilder<'a> {
         // Definition -> Definition edges (nesting)
         for (_, definition) in &definitions {
             let parent_id = definition.id();
-            let children: &[crate::model::ids::DefinitionId] = match definition {
+            let children: &[DefinitionId] = match definition {
                 Definition::Class(d) => d.members(),
                 Definition::Module(d) => d.members(),
                 Definition::SingletonClass(d) => d.members(),
                 _ => &[],
             };
             for child_id in children {
-                if graph.definitions().contains_key(child_id) {
+                if def_ids.contains(child_id) {
                     let _ = writeln!(
                         builder.output,
                         "  \"def_{parent_id}\" -> \"def_{child_id}\" [label=\"contains\" style=dashed arrowhead=onormal color=\"{NESTS_COLOR}\" fontcolor=\"{NESTS_COLOR}\"]"
@@ -173,7 +170,7 @@ impl<'a> DotBuilder<'a> {
             if let Definition::Class(class_def) = definition {
                 if let Some(superclass_ref_id) = class_def.superclass_ref() {
                     if let Some(decl_id) = builder.resolve_ref(superclass_ref_id) {
-                        if builder.is_builtin_decl_id(decl_id) {
+                        if !decl_ids.contains(decl_id) {
                             continue;
                         }
                         if let Some(declaration) = graph.declarations().get(decl_id) {
@@ -219,7 +216,7 @@ impl<'a> DotBuilder<'a> {
                     Mixin::Extend(_) => "extends",
                 };
                 if let Some(target_decl_id) = builder.resolve_ref(mixin.constant_reference_id()) {
-                    if builder.is_builtin_decl_id(target_decl_id) {
+                    if !decl_ids.contains(target_decl_id) {
                         continue;
                     }
                     if let Some(target_decl) = graph.declarations().get(target_decl_id) {
@@ -238,7 +235,9 @@ impl<'a> DotBuilder<'a> {
         for declaration in &declarations {
             if let Some(namespace) = declaration.as_namespace() {
                 let owner_node = Self::decl_node_id(declaration.name());
-                let mut members: Vec<_> = namespace.members().values().collect();
+                let mut members: Vec<_> = namespace.members().values()
+                    .filter(|id| decl_ids.contains(id))
+                    .collect();
                 members.sort();
                 for member_id in members {
                     if let Some(member) = graph.declarations().get(member_id) {
@@ -337,7 +336,7 @@ mod tests {
             ",
         );
         context.resolve();
-        let dot_output = DotBuilder::generate(context.graph(), false);
+        let dot_output = DotBuilder::generate(context.graph(), true);
 
         assert!(dot_output.contains("digraph rubydex"));
 
@@ -411,5 +410,23 @@ mod tests {
         context.resolve();
         let dot_output = DotBuilder::generate(context.graph(), false);
         assert!(dot_output.contains("includes"));
+    }
+
+    #[test]
+    fn test_dot_reopened_builtin_not_hidden() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///test.rb",
+            "
+                class Object
+                  def test; end
+                end
+            ",
+        );
+        context.resolve();
+        let dot_output = DotBuilder::generate(context.graph(), false);
+
+        assert!(dot_output.contains("ClassDecl"));
+        assert!(dot_output.contains("Object"));
     }
 }
