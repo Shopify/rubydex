@@ -2,9 +2,10 @@ use std::fmt::Write;
 
 use crate::model::{
     declaration::Declaration,
-    definitions::Definition,
+    definitions::{Definition, Mixin},
     document::Document,
     graph::Graph,
+    ids::DeclarationId,
 };
 
 const DOC_COLOR: &str = "#4a90d9";
@@ -13,6 +14,10 @@ const DEF_COLOR: &str = "#e8912d";
 const DEF_FILL: &str = "#fdf0e0";
 const DECL_COLOR: &str = "#5ba55b";
 const DECL_FILL: &str = "#e0f0e0";
+const NESTS_COLOR: &str = "#f0c08a";
+const MEMBER_COLOR: &str = "#a3d9a3";
+const SUPERCLASS_COLOR: &str = "#d94a7a";
+const MIXIN_COLOR: &str = "#8b5fc7";
 
 pub struct DotBuilder<'a> {
     output: String,
@@ -116,6 +121,86 @@ impl<'a> DotBuilder<'a> {
         }
         builder.output.push('\n');
 
+        // Definition -> Definition edges (nesting)
+        for (_, definition) in &definitions {
+            let parent_id = definition.id();
+            let children: &[crate::model::ids::DefinitionId] = match definition {
+                Definition::Class(d) => d.members(),
+                Definition::Module(d) => d.members(),
+                Definition::SingletonClass(d) => d.members(),
+                _ => &[],
+            };
+            for child_id in children {
+                if graph.definitions().contains_key(child_id) {
+                    let _ = writeln!(
+                        builder.output,
+                        "  \"def_{parent_id}\" -> \"def_{child_id}\" [label=\"contains\" style=dashed arrowhead=onormal color=\"{NESTS_COLOR}\" fontcolor=\"{NESTS_COLOR}\"]"
+                    );
+                }
+            }
+        }
+        builder.output.push('\n');
+
+        // Declaration -> Declaration edges (superclass)
+        for (_, definition) in &definitions {
+            if let Definition::Class(class_def) = definition {
+                if let Some(superclass_ref_id) = class_def.superclass_ref() {
+                    if let Some(decl_id) = builder.resolve_ref(superclass_ref_id) {
+                        if let Some(declaration) = graph.declarations().get(decl_id) {
+                            if let Some(child_decl_id) = graph.definition_to_declaration_id(definition) {
+                                if let Some(child_decl) = graph.declarations().get(child_decl_id) {
+                                    let child_node = Self::decl_node_id(child_decl.name());
+                                    let parent_node = Self::decl_node_id(declaration.name());
+                                    let _ = writeln!(
+                                        builder.output,
+                                        "  {child_node} -> {parent_node} [label=\"inherits\" color=\"{SUPERCLASS_COLOR}\" fontcolor=\"{SUPERCLASS_COLOR}\"]"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        builder.output.push('\n');
+
+        // Declaration -> Declaration edges (mixins: include/prepend/extend)
+        for (_, definition) in &definitions {
+            let mixins: &[Mixin] = match definition {
+                Definition::Class(d) => d.mixins(),
+                Definition::Module(d) => d.mixins(),
+                Definition::SingletonClass(d) => d.mixins(),
+                _ => &[],
+            };
+            if mixins.is_empty() {
+                continue;
+            }
+            let Some(decl_id) = graph.definition_to_declaration_id(definition) else {
+                continue;
+            };
+            let Some(decl) = graph.declarations().get(decl_id) else {
+                continue;
+            };
+            let src_node = Self::decl_node_id(decl.name());
+            for mixin in mixins {
+                let mixin_label = match mixin {
+                    Mixin::Include(_) => "includes",
+                    Mixin::Prepend(_) => "prepends",
+                    Mixin::Extend(_) => "extends",
+                };
+                if let Some(target_decl_id) = builder.resolve_ref(mixin.constant_reference_id()) {
+                    if let Some(target_decl) = graph.declarations().get(target_decl_id) {
+                        let target_node = Self::decl_node_id(target_decl.name());
+                        let _ = writeln!(
+                            builder.output,
+                            "  {src_node} -> {target_node} [label=\"{mixin_label}\" color=\"{MIXIN_COLOR}\" fontcolor=\"{MIXIN_COLOR}\"]"
+                        );
+                    }
+                }
+            }
+        }
+        builder.output.push('\n');
+
         // Declaration -> Declaration edges (member)
         for declaration in &declarations {
             if let Some(namespace) = declaration.as_namespace() {
@@ -127,7 +212,7 @@ impl<'a> DotBuilder<'a> {
                         let member_node = Self::decl_node_id(member.name());
                         let _ = writeln!(
                             builder.output,
-                            "  {owner_node} -> {member_node} [label=\"member\" style=dashed color=\"#666666\" fontcolor=\"#666666\"]"
+                            "  {owner_node} -> {member_node} [label=\"owns\" style=dashed arrowhead=onormal color=\"{MEMBER_COLOR}\" fontcolor=\"{MEMBER_COLOR}\"]"
                         );
                     }
                 }
@@ -136,6 +221,11 @@ impl<'a> DotBuilder<'a> {
 
         builder.writeln("}");
         builder.output
+    }
+
+    fn resolve_ref(&self, ref_id: &crate::model::ids::ConstantReferenceId) -> Option<&'a DeclarationId> {
+        let constant_ref = self.graph.constant_references().get(ref_id)?;
+        self.graph.name_id_to_declaration_id(*constant_ref.name_id())
     }
 
     fn doc_node_id(uri: &str) -> String {
@@ -233,6 +323,60 @@ mod tests {
         // Edges
         assert!(dot_output.contains("defines"));
         assert!(dot_output.contains("declares"));
-        assert!(dot_output.contains("member"));
+        assert!(dot_output.contains("owns"));
+    }
+
+    #[test]
+    fn test_dot_nesting_edges() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///test.rb",
+            "
+                module Outer
+                  class Inner
+                  end
+                end
+            ",
+        );
+        context.resolve();
+        let dot_output = DotBuilder::generate(context.graph());
+        assert!(dot_output.contains("contains"));
+    }
+
+    #[test]
+    fn test_dot_superclass_edges() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///test.rb",
+            "
+                class Parent
+                end
+
+                class Child < Parent
+                end
+            ",
+        );
+        context.resolve();
+        let dot_output = DotBuilder::generate(context.graph());
+        assert!(dot_output.contains("inherits"));
+    }
+
+    #[test]
+    fn test_dot_mixin_edges() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///test.rb",
+            "
+                module Mixin
+                end
+
+                class Klass
+                  include Mixin
+                end
+            ",
+        );
+        context.resolve();
+        let dot_output = DotBuilder::generate(context.graph());
+        assert!(dot_output.contains("includes"));
     }
 }
