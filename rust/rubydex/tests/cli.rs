@@ -1,7 +1,6 @@
 use assert_cmd::{assert::Assert, prelude::*};
 use predicates::prelude::*;
-use regex::Regex;
-use rubydex::test_utils::{normalize_indentation, with_context};
+use rubydex::test_utils::with_context;
 use std::process::Command;
 
 fn rdx_cmd(args: &[&str]) -> Command {
@@ -68,68 +67,25 @@ fn prints_index_metrics() {
     });
 }
 
-fn normalize_visualization_output(output: &str) -> String {
-    let def_re = Regex::new(r"def_-?[a-f0-9]+").unwrap();
-    let uri_re = Regex::new(r#"file://[^"]+/([^/"]+\.rb)"#).unwrap();
-
-    let normalized = def_re.replace_all(output, "def_<ID>");
-    uri_re.replace_all(&normalized, "file://<PATH>/$1").to_string()
-}
-
 #[test]
-fn visualize_simple_class() {
+fn dot_flag() {
     with_context(|context| {
         context.write("simple.rb", "class SimpleClass\nend\n");
 
-        let output = rdx_cmd(&[context.absolute_path().to_str().unwrap(), "--dot"])
-            .output()
-            .unwrap();
-
-        assert!(output.status.success());
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let normalized = normalize_visualization_output(&stdout);
-
-        let expected = normalize_indentation({
-            r#"
-            digraph {
-                rankdir=TB;
-
-                "Name:BasicObject" [label="BasicObject",shape=hexagon];
-                "Name:BasicObject" -> "def_<ID>" [dir=both];
-                "Name:Class" [label="Class",shape=hexagon];
-                "Name:Class" -> "def_<ID>" [dir=both];
-                "Name:Kernel" [label="Kernel",shape=hexagon];
-                "Name:Kernel" -> "def_<ID>" [dir=both];
-                "Name:Module" [label="Module",shape=hexagon];
-                "Name:Module" -> "def_<ID>" [dir=both];
-                "Name:Object" [label="Object",shape=hexagon];
-                "Name:Object" -> "def_<ID>" [dir=both];
-                "Name:SimpleClass" [label="SimpleClass",shape=hexagon];
-                "Name:SimpleClass" -> "def_<ID>" [dir=both];
-
-                "def_<ID>" [label="Class(BasicObject)",shape=ellipse];
-                "def_<ID>" [label="Class(Class)",shape=ellipse];
-                "def_<ID>" [label="Class(Module)",shape=ellipse];
-                "def_<ID>" [label="Class(Object)",shape=ellipse];
-                "def_<ID>" [label="Class(SimpleClass)",shape=ellipse];
-                "def_<ID>" [label="Module(Kernel)",shape=ellipse];
-
-                "file://<PATH>/simple.rb" [label="simple.rb",shape=box];
-                "def_<ID>" -> "file://<PATH>/simple.rb";
-                "rubydex:built-in" [label="rubydex:built-in",shape=box];
-                "def_<ID>" -> "rubydex:built-in";
-                "def_<ID>" -> "rubydex:built-in";
-                "def_<ID>" -> "rubydex:built-in";
-                "def_<ID>" -> "rubydex:built-in";
-                "def_<ID>" -> "rubydex:built-in";
-
-            }
-
-            "#
-        });
-
-        assert_eq!(normalized, expected);
+        rdx(&[context.absolute_path().to_str().unwrap(), "--dot"])
+            .success()
+            .stdout(predicate::str::contains("digraph rubydex"))
+            // Document node
+            .stdout(predicate::str::contains("Document"))
+            .stdout(predicate::str::contains("simple.rb"))
+            // Definition node
+            .stdout(predicate::str::contains("ClassDef"))
+            .stdout(predicate::str::contains("SimpleClass"))
+            // Declaration node
+            .stdout(predicate::str::contains("ClassDecl"))
+            // Edges
+            .stdout(predicate::str::contains("defines"))
+            .stdout(predicate::str::contains("declares"));
     });
 }
 

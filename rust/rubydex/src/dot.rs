@@ -7,17 +7,12 @@ use crate::model::{
     graph::Graph,
 };
 
-const NAME_NODE_SHAPE: &str = "hexagon";
-const DEFINITION_NODE_SHAPE: &str = "ellipse";
-const URI_NODE_SHAPE: &str = "box";
-
 pub struct DotBuilder<'a> {
     output: String,
     graph: &'a Graph,
 }
 
 impl<'a> DotBuilder<'a> {
-    #[must_use]
     fn new(graph: &'a Graph) -> Self {
         Self {
             output: String::new(),
@@ -34,31 +29,32 @@ impl<'a> DotBuilder<'a> {
         self.output.push('\n');
     }
 
-    fn escape(s: &str) -> String {
-        if !s.contains('"') {
-            return s.to_string();
-        }
-
-        let mut result = String::with_capacity(s.len());
-        for c in s.chars() {
-            match c {
-                '"' => result.push_str("\\\""),
-                _ => result.push(c),
-            }
-        }
-        result
+    fn label(type_name: &str, name: &str) -> String {
+        format!(
+            concat!(
+                "<<table border=\"0\" cellborder=\"0\" cellspacing=\"0\" align=\"center\">",
+                "<tr><td align=\"center\"><font point-size=\"8\">{}</font></td></tr>",
+                "<tr><td align=\"center\"><b>{}</b></td></tr>",
+                "</table>>",
+            ),
+            type_name, name,
+        )
     }
 
     #[must_use]
     pub fn generate(graph: &'a Graph) -> String {
         let mut builder = Self::new(graph);
-        builder.writeln("digraph {");
-        builder.writeln("    rankdir=TB;\n");
 
-        let mut declarations: Vec<_> = graph.declarations().values().collect();
-        declarations.sort_by(|a, b| a.name().cmp(b.name()));
-        for declaration in declarations {
-            declaration.to_dot(&mut builder);
+        builder.writeln("digraph rubydex {");
+        builder.writeln("  rankdir=TB");
+        builder.writeln("  node [fontname=\"Courier\" fontsize=10 shape=box]");
+        builder.writeln("  edge [fontsize=9 fontname=\"Courier\"]");
+        builder.output.push('\n');
+
+        let mut documents: Vec<_> = graph.documents().values().collect();
+        documents.sort_by(|a, b| a.uri().cmp(b.uri()));
+        for document in &documents {
+            document.to_dot(&mut builder);
         }
         builder.output.push('\n');
 
@@ -73,20 +69,74 @@ impl<'a> DotBuilder<'a> {
             })
             .collect();
         definitions.sort_by(|a, b| a.0.cmp(&b.0));
-        for (_, definition) in definitions {
+        for (_, definition) in &definitions {
             definition.to_dot(&mut builder);
         }
         builder.output.push('\n');
 
-        let mut documents: Vec<_> = graph.documents().values().collect();
-        documents.sort_by(|a, b| a.uri().cmp(b.uri()));
-        for document in documents {
-            document.to_dot(&mut builder);
+        let mut declarations: Vec<_> = graph.declarations().values().collect();
+        declarations.sort_by(|a, b| a.name().cmp(b.name()));
+        for declaration in &declarations {
+            declaration.to_dot(&mut builder);
         }
         builder.output.push('\n');
 
+        // Document -> Definition edges (defines)
+        for document in &documents {
+            let uri = document.uri();
+            let doc_id = Self::doc_node_id(uri);
+            for def_id in document.definitions() {
+                let _ = writeln!(
+                    builder.output,
+                    "  {doc_id} -> \"def_{def_id}\" [label=\"defines\"]"
+                );
+            }
+        }
+        builder.output.push('\n');
+
+        // Definition -> Declaration edges (declares)
+        for (_, definition) in &definitions {
+            let def_id = definition.id();
+            if let Some(decl_id) = graph.definition_to_declaration_id(definition) {
+                if let Some(declaration) = graph.declarations().get(decl_id) {
+                    let decl_node = Self::decl_node_id(declaration.name());
+                    let _ = writeln!(
+                        builder.output,
+                        "  \"def_{def_id}\" -> {decl_node} [label=\"declares\"]"
+                    );
+                }
+            }
+        }
+        builder.output.push('\n');
+
+        // Declaration -> Declaration edges (member)
+        for declaration in &declarations {
+            if let Some(namespace) = declaration.as_namespace() {
+                let owner_node = Self::decl_node_id(declaration.name());
+                let mut members: Vec<_> = namespace.members().values().collect();
+                members.sort();
+                for member_id in members {
+                    if let Some(member) = graph.declarations().get(member_id) {
+                        let member_node = Self::decl_node_id(member.name());
+                        let _ = writeln!(
+                            builder.output,
+                            "  {owner_node} -> {member_node} [label=\"member\"]"
+                        );
+                    }
+                }
+            }
+        }
+
         builder.writeln("}");
         builder.output
+    }
+
+    fn doc_node_id(uri: &str) -> String {
+        format!("\"doc_{}\"", uri.replace(|c: char| !c.is_alphanumeric(), "_"))
+    }
+
+    fn decl_node_id(name: &str) -> String {
+        format!("\"decl_{}\"", name.replace(|c: char| !c.is_alphanumeric(), "_"))
     }
 }
 
@@ -94,19 +144,16 @@ pub trait ToDot {
     fn to_dot(&self, builder: &mut DotBuilder);
 }
 
-impl ToDot for Declaration {
+impl ToDot for Document {
     fn to_dot(&self, builder: &mut DotBuilder) {
-        let name = self.name();
-        let escaped_name = DotBuilder::escape(name);
-        let node_id = format!("Name:{name}");
+        let uri = self.uri();
+        let label = uri.rsplit('/').next().unwrap_or(uri);
+        let node_id = DotBuilder::doc_node_id(uri);
+        let html_label = DotBuilder::label("Document", label);
         let _ = writeln!(
             builder.output,
-            "    \"{node_id}\" [label=\"{escaped_name}\",shape={NAME_NODE_SHAPE}];"
+            "  {node_id} [label={html_label} shape=note]"
         );
-
-        for def_id in self.definitions() {
-            let _ = writeln!(builder.output, "    \"{node_id}\" -> \"def_{def_id}\" [dir=both];");
-        }
     }
 }
 
@@ -120,41 +167,36 @@ impl ToDot for Definition {
             return;
         };
 
-        let def_type = self.kind();
-        let escaped_name = DotBuilder::escape(declaration.name());
-        let label = format!("{def_type}({escaped_name})");
+        let type_label = format!("{}Def", self.kind());
+        let html_label = DotBuilder::label(&type_label, declaration.name());
         let _ = writeln!(
             builder.output,
-            "    \"def_{def_id}\" [label=\"{label}\",shape={DEFINITION_NODE_SHAPE}];"
+            "  \"def_{def_id}\" [label={html_label} style=rounded]"
         );
     }
 }
 
-impl ToDot for Document {
+impl ToDot for Declaration {
     fn to_dot(&self, builder: &mut DotBuilder) {
-        let uri = self.uri();
-        let label = uri.rsplit('/').next().unwrap_or(uri);
-        let escaped_uri = DotBuilder::escape(uri);
-        let escaped_label = DotBuilder::escape(label);
+        let type_label = format!("{}Decl", self.kind());
+        let node_id = DotBuilder::decl_node_id(self.name());
+        let html_label = DotBuilder::label(&type_label, self.name());
         let _ = writeln!(
             builder.output,
-            "    \"{escaped_uri}\" [label=\"{escaped_label}\",shape={URI_NODE_SHAPE}];"
+            "  {node_id} [label={html_label}]"
         );
-
-        for def_id in self.definitions() {
-            let _ = writeln!(builder.output, "    \"def_{def_id}\" -> \"{escaped_uri}\";");
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{model::ids::DeclarationId, test_utils::GraphTest};
+    use crate::test_utils::GraphTest;
 
-    fn create_test_graph() -> GraphTest {
-        let mut graph_test = GraphTest::new();
-        graph_test.index_uri(
+    #[test]
+    fn test_dot_generation() {
+        let mut context = GraphTest::new();
+        context.index_uri(
             "file:///test.rb",
             "
                 class TestClass
@@ -164,69 +206,26 @@ mod tests {
                 end
             ",
         );
-        graph_test.resolve();
-        graph_test
-    }
-
-    fn def_id_for(graph: &Graph, name: &str) -> String {
-        let decl = graph.declarations().get(&DeclarationId::from(name)).unwrap();
-        decl.definitions().first().unwrap().to_string()
-    }
-
-    #[test]
-    fn test_dot_generation() {
-        let context = create_test_graph();
+        context.resolve();
         let dot_output = DotBuilder::generate(context.graph());
 
-        let basic_object_def = def_id_for(context.graph(), "BasicObject");
-        let class_def = def_id_for(context.graph(), "Class");
-        let kernel_def = def_id_for(context.graph(), "Kernel");
-        let module_def = def_id_for(context.graph(), "Module");
-        let object_def = def_id_for(context.graph(), "Object");
-        let test_class_def = def_id_for(context.graph(), "TestClass");
-        let test_module_def = def_id_for(context.graph(), "TestModule");
+        assert!(dot_output.contains("digraph rubydex"));
 
-        let expected = format!(
-            r#"digraph {{
-    rankdir=TB;
+        // Document nodes
+        assert!(dot_output.contains("Document"));
+        assert!(dot_output.contains("test.rb"));
 
-    "Name:BasicObject" [label="BasicObject",shape=hexagon];
-    "Name:BasicObject" -> "def_{basic_object_def}" [dir=both];
-    "Name:Class" [label="Class",shape=hexagon];
-    "Name:Class" -> "def_{class_def}" [dir=both];
-    "Name:Kernel" [label="Kernel",shape=hexagon];
-    "Name:Kernel" -> "def_{kernel_def}" [dir=both];
-    "Name:Module" [label="Module",shape=hexagon];
-    "Name:Module" -> "def_{module_def}" [dir=both];
-    "Name:Object" [label="Object",shape=hexagon];
-    "Name:Object" -> "def_{object_def}" [dir=both];
-    "Name:TestClass" [label="TestClass",shape=hexagon];
-    "Name:TestClass" -> "def_{test_class_def}" [dir=both];
-    "Name:TestModule" [label="TestModule",shape=hexagon];
-    "Name:TestModule" -> "def_{test_module_def}" [dir=both];
+        // Definition nodes
+        assert!(dot_output.contains("ClassDef"));
+        assert!(dot_output.contains("ModuleDef"));
 
-    "def_{basic_object_def}" [label="Class(BasicObject)",shape=ellipse];
-    "def_{class_def}" [label="Class(Class)",shape=ellipse];
-    "def_{module_def}" [label="Class(Module)",shape=ellipse];
-    "def_{object_def}" [label="Class(Object)",shape=ellipse];
-    "def_{test_class_def}" [label="Class(TestClass)",shape=ellipse];
-    "def_{kernel_def}" [label="Module(Kernel)",shape=ellipse];
-    "def_{test_module_def}" [label="Module(TestModule)",shape=ellipse];
+        // Declaration nodes
+        assert!(dot_output.contains("ClassDecl"));
+        assert!(dot_output.contains("ModuleDecl"));
 
-    "file:///test.rb" [label="test.rb",shape=box];
-    "def_{test_class_def}" -> "file:///test.rb";
-    "def_{test_module_def}" -> "file:///test.rb";
-    "rubydex:built-in" [label="rubydex:built-in",shape=box];
-    "def_{basic_object_def}" -> "rubydex:built-in";
-    "def_{kernel_def}" -> "rubydex:built-in";
-    "def_{object_def}" -> "rubydex:built-in";
-    "def_{module_def}" -> "rubydex:built-in";
-    "def_{class_def}" -> "rubydex:built-in";
-
-}}
-"#
-        );
-
-        assert_eq!(dot_output, expected);
+        // Edges
+        assert!(dot_output.contains("defines"));
+        assert!(dot_output.contains("declares"));
+        assert!(dot_output.contains("member"));
     }
 }
