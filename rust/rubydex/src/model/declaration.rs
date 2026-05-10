@@ -408,11 +408,23 @@ impl Declaration {
         });
     }
 
+    pub fn insert_definition(&mut self, definition_id: DefinitionId, index: usize) {
+        all_declarations!(self, it => {
+            debug_assert!(
+                !it.definition_ids.contains(&definition_id),
+                "Cannot add the same exact definition to a declaration twice. Duplicate definition IDs"
+            );
+
+            it.definition_ids.insert(index.min(it.definition_ids.len()), definition_id);
+        });
+    }
+
     // Deletes a definition from this declaration
     pub fn remove_definition(&mut self, definition_id: &DefinitionId) -> bool {
         all_declarations!(self, it => {
             if let Some(pos) = it.definition_ids.iter().position(|id| id == definition_id) {
-                it.definition_ids.swap_remove(pos);
+                // Definition order is semantic for retroactive visibility; keep it stable.
+                it.definition_ids.remove(pos);
                 it.definition_ids.shrink_to_fit();
                 true
             } else {
@@ -450,6 +462,13 @@ impl Declaration {
 
     pub fn clear_diagnostics(&mut self) {
         all_declarations!(self, it => it.diagnostics.clear());
+    }
+
+    pub fn retain_diagnostics<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&Diagnostic) -> bool,
+    {
+        all_declarations!(self, it => it.diagnostics.retain(|diagnostic| f(diagnostic)));
     }
 
     #[must_use]
@@ -682,6 +701,24 @@ mod tests {
         // The second call will panic because we're adding the same exact ID twice
         decl.add_definition(def_id);
         decl.add_definition(def_id);
+    }
+
+    #[test]
+    fn removing_definition_preserves_remaining_order() {
+        let mut decl = Declaration::Method(Box::new(MethodDeclaration::new(
+            "Foo#bar()".to_string(),
+            DeclarationId::from("Foo"),
+        )));
+        let first = DefinitionId::new(1);
+        let second = DefinitionId::new(2);
+        let third = DefinitionId::new(3);
+
+        decl.add_definition(first);
+        decl.add_definition(second);
+        decl.add_definition(third);
+
+        assert!(decl.remove_definition(&first));
+        assert_eq!(decl.definitions(), [second, third]);
     }
 
     #[test]

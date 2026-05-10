@@ -2606,7 +2606,11 @@ mod method_tests {
         assert_members_eq!(context, "Foo::<Foo>", ["setup()"]);
 
         // All attr_* should be owned by Foo, not by setup
-        assert_members_eq!(context, "Foo", ["accessor_attr()", "reader_attr()", "writer_attr()"]);
+        assert_members_eq!(
+            context,
+            "Foo",
+            ["accessor_attr()", "accessor_attr=()", "reader_attr()", "writer_attr=()"]
+        );
     }
 }
 
@@ -3642,11 +3646,9 @@ mod fqn_and_naming_tests {
         assert_declaration_exists!(context, "Foo::Bar::CONST");
         assert_declaration_exists!(context, "Foo::Bar::<Bar>#@class_ivar");
         assert_declaration_exists!(context, "Foo::Bar#baz()");
-        // TODO: needs the fix for attributes
-        // assert_declaration_exists!(context, "Foo::Bar#qux=()");
+        assert_declaration_exists!(context, "Foo::Bar#qux=()");
         assert_declaration_exists!(context, "Foo::Bar#zip()");
-        // TODO: needs the fix for attributes
-        // assert_declaration_exists!(context, "Foo::Bar#zip=()");
+        assert_declaration_exists!(context, "Foo::Bar#zip=()");
         assert_declaration_exists!(context, "Foo::Bar#instance_m()");
         assert_declaration_exists!(context, "Foo::Bar#@@class_var");
         assert_declaration_exists!(context, "Foo::Bar::<Bar>#singleton_m()");
@@ -4909,7 +4911,7 @@ mod rbs_tests {
 
 mod visibility_resolution_tests {
     use super::*;
-    use crate::model::visibility::Visibility;
+    use crate::model::{definitions::Definition, definitions::Parameter, visibility::Visibility};
 
     macro_rules! assert_visibility_eq {
         ($context:expr, $declaration_name:expr, $expected_visibility:expr) => {
@@ -4924,6 +4926,78 @@ mod visibility_resolution_tests {
                 $declaration_name, $expected_visibility, actual
             );
         };
+    }
+
+    fn method_required_parameter_count(context: &GraphTest, declaration_name: &str) -> usize {
+        method_definition(context, declaration_name).signatures().as_slice()[0].len()
+    }
+
+    fn latest_method_required_parameter_count(context: &GraphTest, declaration_name: &str) -> usize {
+        latest_method_definition(context, declaration_name)
+            .signatures()
+            .as_slice()[0]
+            .len()
+    }
+
+    fn method_required_parameter_names(context: &GraphTest, declaration_name: &str) -> Vec<String> {
+        method_definition(context, declaration_name).signatures().as_slice()[0]
+            .iter()
+            .filter_map(|parameter| match parameter {
+                Parameter::RequiredPositional(parameter) => Some(
+                    context
+                        .graph()
+                        .strings()
+                        .get(parameter.str())
+                        .unwrap()
+                        .as_str()
+                        .to_string(),
+                ),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn method_definition<'a>(
+        context: &'a GraphTest,
+        declaration_name: &str,
+    ) -> &'a crate::model::definitions::MethodDefinition {
+        let declaration = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from(declaration_name))
+            .unwrap();
+        declaration
+            .definitions()
+            .iter()
+            .find_map(
+                |definition_id| match context.graph().definitions().get(definition_id).unwrap() {
+                    Definition::Method(method) => Some(method),
+                    _ => None,
+                },
+            )
+            .unwrap()
+    }
+
+    fn latest_method_definition<'a>(
+        context: &'a GraphTest,
+        declaration_name: &str,
+    ) -> &'a crate::model::definitions::MethodDefinition {
+        let declaration = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from(declaration_name))
+            .unwrap();
+        declaration
+            .definitions()
+            .iter()
+            .rev()
+            .find_map(
+                |definition_id| match context.graph().definitions().get(definition_id).unwrap() {
+                    Definition::Method(method) => Some(method),
+                    _ => None,
+                },
+            )
+            .unwrap()
     }
 
     #[test]
@@ -4972,6 +5046,1217 @@ mod visibility_resolution_tests {
     }
 
     #[test]
+    fn retroactive_module_function_creates_private_instance_and_public_singleton_copy() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar; end
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo#bar()");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+        assert_members_eq!(context, "Foo", ["bar()"]);
+        assert_members_eq!(context, "Foo::<Foo>", ["bar()"]);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_module_function_copies_the_method_at_the_call_site() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar(first); end
+              module_function :bar
+              def bar(first, second); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+
+        let singleton = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>#bar()"))
+            .unwrap();
+        let method = singleton
+            .definitions()
+            .iter()
+            .find_map(
+                |definition_id| match context.graph().definitions().get(definition_id).unwrap() {
+                    Definition::Method(method) => Some(method),
+                    _ => None,
+                },
+            )
+            .expect("module_function should create a copied singleton method definition");
+
+        assert_eq!(method.signatures().as_slice().len(), 1);
+        assert_eq!(method.signatures().as_slice()[0].len(), 1);
+    }
+
+    #[test]
+    fn retroactive_module_function_uses_uri_order_for_cross_file_source_selection() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a_source.rb",
+            r"
+            module Foo
+              def bar(first); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///z_source.rb",
+            r"
+            module Foo
+              def bar(first, second); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///m_visibility.rb",
+            r"
+            module Foo
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 1);
+        assert_eq!(method_required_parameter_names(&context, "Foo::<Foo>#bar()"), ["first"]);
+    }
+
+    #[test]
+    fn retroactive_module_function_ignores_cross_file_source_after_visibility_uri() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///z_source.rb",
+            r"
+            module Foo
+              def bar(first); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///m_visibility.rb",
+            r"
+            module Foo
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+        assert_diagnostics_eq!(
+            &context,
+            vec!["undefined-method-visibility-target: undefined method `Foo#bar()` for visibility change (2:20-2:23)"]
+        );
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_uses_uri_order_for_cross_file_visibility_snapshot() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a_source.rb",
+            r"
+            module A
+              def foo; end
+              private :foo
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///z_source.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///m_visibility.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "B#foo()");
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 0);
+    }
+
+    #[test]
+    fn retroactive_module_function_instance_copy_does_not_override_later_alias_method_definition() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def original(first); end
+              alias copied original
+              module_function :copied
+              def copied(first, second); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#copied()", Visibility::Public);
+        assert_visibility_eq!(context, "Foo::<Foo>#copied()", Visibility::Public);
+        assert_eq!(latest_method_required_parameter_count(&context, "Foo#copied()"), 2);
+        assert_eq!(
+            latest_method_required_parameter_count(&context, "Foo::<Foo>#copied()"),
+            1
+        );
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_instance_copy_does_not_override_later_direct_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+              def foo(x, y); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "B#foo()", Visibility::Public);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(latest_method_required_parameter_count(&context, "B#foo()"), 2);
+        assert_eq!(latest_method_required_parameter_count(&context, "B::<B>#foo()"), 1);
+    }
+
+    #[test]
+    fn retroactive_module_function_singleton_copy_does_not_override_later_singleton_method_definition() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar(first); end
+              module_function :bar
+              def self.bar(first, second); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+        assert_eq!(latest_method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 2);
+    }
+
+    #[test]
+    fn retroactive_module_function_copies_method_alias_target() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def original(first); end
+              alias copied original
+              module_function :copied
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo#copied()");
+        assert_declaration_exists!(context, "Foo::<Foo>#copied()");
+        assert_visibility_eq!(context, "Foo#copied()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#copied()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo#copied()"), 1);
+        assert_eq!(method_required_parameter_names(&context, "Foo#copied()"), ["first"]);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#copied()"), 1);
+        assert_eq!(
+            method_required_parameter_names(&context, "Foo::<Foo>#copied()"),
+            ["first"]
+        );
+    }
+
+    #[test]
+    fn retroactive_module_function_direct_alias_to_private_target_stays_private_when_target_later_public() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def original; end
+              private :original
+              alias copied original
+              public :original
+              module_function :copied
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo#copied()");
+        assert_declaration_exists!(context, "Foo::<Foo>#copied()");
+        assert_visibility_eq!(context, "Foo#original()", Visibility::Public);
+        assert_visibility_eq!(context, "Foo#copied()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#copied()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_module_function_alias_uses_target_available_at_alias_time() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Parent
+              def original(first); end
+            end
+
+            module Foo
+              include Parent
+              alias copied original
+              def original(first, second); end
+              module_function :copied
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo#copied()");
+        assert_declaration_exists!(context, "Foo::<Foo>#copied()");
+        assert_visibility_eq!(context, "Foo#copied()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#copied()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#copied()"), 1);
+        assert_eq!(
+            method_required_parameter_names(&context, "Foo::<Foo>#copied()"),
+            ["first"]
+        );
+    }
+
+    #[test]
+    fn retroactive_module_function_can_copy_multiple_aliases_to_the_same_method() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def original(first); end
+              alias copied original
+              alias also_copied original
+              module_function :copied
+              module_function :also_copied
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo#copied()");
+        assert_declaration_exists!(context, "Foo#also_copied()");
+        assert_declaration_exists!(context, "Foo::<Foo>#copied()");
+        assert_declaration_exists!(context, "Foo::<Foo>#also_copied()");
+        assert_eq!(method_required_parameter_count(&context, "Foo#copied()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "Foo#also_copied()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#copied()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#also_copied()"), 1);
+    }
+
+    #[test]
+    fn retroactive_module_function_copy_updates_when_intermediate_alias_changes() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def original(first); end
+              def replacement(first, second); end
+              alias middle original
+              alias copied middle
+              module_function :copied
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_eq!(method_required_parameter_count(&context, "Foo#copied()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#copied()"), 1);
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def original(first); end
+              def replacement(first, second); end
+              alias middle replacement
+              alias copied middle
+              module_function :copied
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#copied()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#copied()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo#copied()"), 2);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#copied()"), 2);
+    }
+
+    #[test]
+    fn retroactive_module_function_copy_clears_when_alias_is_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def original(first); end
+              alias copied original
+              module_function :copied
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#copied()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#copied()", Visibility::Public);
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def original(first); end
+              module_function :copied
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo#copied()");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#copied()");
+        assert_diagnostics_eq!(
+            &context,
+            vec![
+                "undefined-method-visibility-target: undefined method `Foo#copied()` for visibility change (3:20-3:26)"
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_retroactive_module_function_reuses_the_existing_copy() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar; end
+              module_function :bar
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+
+        let singleton = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>#bar()"))
+            .unwrap();
+        let copied_method_count = singleton
+            .definitions()
+            .iter()
+            .filter(|definition_id| {
+                matches!(
+                    context.graph().definitions().get(definition_id).unwrap(),
+                    Definition::Method(_)
+                )
+            })
+            .count();
+
+        assert_eq!(copied_method_count, 1);
+    }
+
+    #[test]
+    fn retroactive_module_function_copy_survives_when_one_of_multiple_visibility_triggers_is_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///source.rb",
+            r"
+            module Foo
+              def bar(first); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///visibility_a.rb",
+            r"
+            module Foo
+              module_function :bar
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///visibility_b.rb",
+            r"
+            module Foo
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 1);
+
+        context.delete_uri("file:///visibility_a.rb");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 1);
+
+        context.delete_uri("file:///visibility_b.rb");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_module_function_reuses_inline_module_function_copy() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module_function def bar(first); end
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 1);
+
+        let singleton = context
+            .graph()
+            .declarations()
+            .get(&DeclarationId::from("Foo::<Foo>#bar()"))
+            .unwrap();
+        let copied_method_count = singleton
+            .definitions()
+            .iter()
+            .filter(|definition_id| {
+                matches!(
+                    context.graph().definitions().get(definition_id).unwrap(),
+                    Definition::Method(_)
+                )
+            })
+            .count();
+
+        assert_eq!(copied_method_count, 1);
+    }
+
+    #[test]
+    fn retroactive_module_function_reusing_cross_file_inline_copy_clears_when_source_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module Foo
+              module_function def bar(first); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module Foo
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 1);
+
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Foo#bar()");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+        assert_diagnostics_eq!(
+            &context,
+            vec!["undefined-method-visibility-target: undefined method `Foo#bar()` for visibility change (2:20-2:23)"]
+        );
+    }
+
+    #[test]
+    fn retroactive_module_function_reusing_cross_file_inline_copy_updates_when_source_changes() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module Foo
+              module_function def bar(first); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module Foo
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 1);
+
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module Foo
+              module_function def bar(first, second); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 2);
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_creates_direct_private_instance_and_singleton_copy() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "B#foo()");
+        assert_declaration_exists!(context, "B::<B>#foo()");
+        assert_members_eq!(context, "B", ["foo()"]);
+        assert_members_eq!(context, "B::<B>", ["foo()"]);
+        assert_visibility_eq!(context, "B#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B#foo()"), 1);
+        assert_eq!(method_required_parameter_names(&context, "B#foo()"), ["x"]);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 1);
+        assert_eq!(method_required_parameter_names(&context, "B::<B>#foo()"), ["x"]);
+    }
+
+    #[test]
+    fn inherited_private_retroactive_module_function_creates_only_singleton_copy() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+              private :foo
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "B#foo()");
+        assert_declaration_exists!(context, "B::<B>#foo()");
+        assert_visibility_eq!(context, "A#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 1);
+        assert_eq!(method_required_parameter_names(&context, "B::<B>#foo()"), ["x"]);
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_uses_private_visibility_at_call_site() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module A
+              def foo; end
+              private :foo
+            end
+
+            module B
+              include A
+              module_function :foo
+            end
+
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "B#foo()");
+        assert_declaration_exists!(context, "B::<B>#foo()");
+        assert_visibility_eq!(context, "A#foo()", Visibility::Public);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(latest_method_required_parameter_count(&context, "A#foo()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 0);
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_uses_public_visibility_at_call_site() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+
+            module B
+              include A
+              module_function :foo
+            end
+
+            module A
+              private :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "B#foo()");
+        assert_declaration_exists!(context, "B::<B>#foo()");
+        assert_visibility_eq!(context, "A#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "B#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B#foo()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 1);
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_uses_alias_visibility_snapshot() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module A
+              def foo(x); end
+              private :foo
+              alias bar foo
+              public :foo
+            end
+
+            module B
+              include A
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "B#bar()");
+        assert_declaration_exists!(context, "B::<B>#bar()");
+        assert_visibility_eq!(context, "A#foo()", Visibility::Public);
+        assert_visibility_eq!(context, "B::<B>#bar()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#bar()"), 1);
+        assert_eq!(method_required_parameter_names(&context, "B::<B>#bar()"), ["x"]);
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_copy_updates_when_source_method_changes() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_eq!(method_required_parameter_count(&context, "B#foo()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 1);
+
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x, y); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "B#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B#foo()"), 2);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 2);
+    }
+
+    #[test]
+    fn chained_inherited_retroactive_module_function_copy_updates_when_root_source_changes() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///c.rb",
+            r"
+            module C
+              include B
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "B#foo()");
+        assert_declaration_does_not_exist!(context, "C#foo()");
+        assert_eq!(method_required_parameter_count(&context, "B#foo()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "C::<C>#foo()"), 1);
+
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x, y); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "B#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_declaration_does_not_exist!(context, "C#foo()");
+        assert_visibility_eq!(context, "C::<C>#foo()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B#foo()"), 2);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 2);
+        assert_eq!(method_required_parameter_count(&context, "C::<C>#foo()"), 2);
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_copy_updates_when_ancestor_chain_changes() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///c.rb",
+            r"
+            module C
+              def foo(x, y); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module M
+              include A
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///z_b.rb",
+            r"
+            module B
+              include M
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_eq!(method_required_parameter_count(&context, "B#foo()"), 1);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 1);
+
+        context.index_uri(
+            "file:///m.rb",
+            r"
+            module M
+              include A
+              include C
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "B#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B#foo()"), 2);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 2);
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_copy_clears_when_source_method_is_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "B#foo()");
+        assert_declaration_exists!(context, "B::<B>#foo()");
+
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "B#foo()");
+        assert_declaration_does_not_exist!(context, "B::<B>#foo()");
+        assert_diagnostics_eq!(
+            &context,
+            vec!["undefined-method-visibility-target: undefined method `B#foo()` for visibility change (3:20-3:23)"]
+        );
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_copy_appears_when_source_method_is_added() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "B#foo()");
+        assert_declaration_does_not_exist!(context, "B::<B>#foo()");
+        assert_diagnostics_eq!(
+            &context,
+            vec!["undefined-method-visibility-target: undefined method `B#foo()` for visibility change (3:20-3:23)"]
+        );
+
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "B#foo()");
+        assert_declaration_exists!(context, "B::<B>#foo()");
+        assert_visibility_eq!(context, "B#foo()", Visibility::Private);
+        assert_visibility_eq!(context, "B::<B>#foo()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "B::<B>#foo()"), 1);
+    }
+
+    #[test]
+    fn inherited_retroactive_module_function_copy_clears_when_visibility_call_is_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module A
+              def foo(x); end
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+              module_function :foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "B#foo()");
+        assert_declaration_exists!(context, "B::<B>#foo()");
+
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module B
+              include A
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "B#foo()");
+        assert_declaration_does_not_exist!(context, "B::<B>#foo()");
+    }
+
+    #[test]
+    fn retroactive_module_function_before_method_definition_is_invalid() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module_function :bar
+              def bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["undefined-method-visibility-target: undefined method `Foo#bar()` for visibility change (2:20-2:23)"]
+        );
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn retroactive_module_function_attr_writer_requires_setter_name() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              attr_writer :bar
+              module_function :bar
+              module_function :bar=
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            &context,
+            vec!["undefined-method-visibility-target: undefined method `Foo#bar()` for visibility change (3:20-3:23)"]
+        );
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+        assert_declaration_exists!(context, "Foo#bar=()");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar=()");
+        assert_visibility_eq!(context, "Foo#bar=()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar=()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar=()"), 1);
+        assert_eq!(
+            method_required_parameter_names(&context, "Foo::<Foo>#bar=()"),
+            vec!["__rubydex_arg0".to_string()]
+        );
+    }
+
+    #[test]
+    fn retroactive_module_function_attr_accessor_can_copy_reader_and_setter() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              attr_accessor :bar
+              module_function :bar
+              module_function :bar=
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+        assert_declaration_exists!(context, "Foo::<Foo>#bar=()");
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#bar=()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar=()", Visibility::Public);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar()"), 0);
+        assert_eq!(method_required_parameter_count(&context, "Foo::<Foo>#bar=()"), 1);
+        assert_eq!(
+            method_required_parameter_names(&context, "Foo::<Foo>#bar=()"),
+            vec!["__rubydex_arg0".to_string()]
+        );
+    }
+
+    #[test]
+    fn retroactive_module_function_copy_clears_when_call_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar; end
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "Foo::<Foo>#bar()");
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+    }
+
+    #[test]
     fn retroactive_visibility_on_attr_methods() {
         let mut context = GraphTest::new();
         context.index_uri(
@@ -4982,10 +6267,11 @@ mod visibility_resolution_tests {
               private :reader_method
 
               attr_writer :writer_method
-              protected :writer_method
+              protected :writer_method=
 
               attr_accessor :accessor_method
               private :accessor_method
+              private :accessor_method=
             end
             ",
         );
@@ -4993,8 +6279,9 @@ mod visibility_resolution_tests {
 
         assert_no_diagnostics!(&context);
         assert_visibility_eq!(context, "Foo#reader_method()", Visibility::Private);
-        assert_visibility_eq!(context, "Foo#writer_method()", Visibility::Protected);
+        assert_visibility_eq!(context, "Foo#writer_method=()", Visibility::Protected);
         assert_visibility_eq!(context, "Foo#accessor_method()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#accessor_method=()", Visibility::Private);
     }
 
     #[test]
@@ -5088,6 +6375,30 @@ mod visibility_resolution_tests {
                 "undefined-method-visibility-target: undefined method `Foo#nonexistent()` for visibility change (2:12-2:23)"
             ]
         );
+    }
+
+    #[test]
+    fn retroactive_visibility_undefined_target_diagnostic_clears_when_visibility_file_deleted() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///bad.rb",
+            r"
+            private :missing
+            ",
+        );
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &[
+                "undefined-method-visibility-target: undefined method `Object#missing()` for visibility change (1:10-1:17)"
+            ]
+        );
+
+        context.delete_uri("file:///bad.rb");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
     }
 
     #[test]

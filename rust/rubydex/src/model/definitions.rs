@@ -41,6 +41,7 @@ bitflags! {
         const DEPRECATED = 0b0001;
         const PROMOTABLE = 0b0010;
         const SINGLETON_METHOD_VISIBILITY = 0b0100;
+        const GENERATED = 0b1000;
     }
 }
 
@@ -58,6 +59,11 @@ impl DefinitionFlags {
     #[must_use]
     pub fn is_singleton_method_visibility(&self) -> bool {
         self.contains(Self::SINGLETON_METHOD_VISIBILITY)
+    }
+
+    #[must_use]
+    pub fn is_generated(&self) -> bool {
+        self.contains(Self::GENERATED)
     }
 }
 
@@ -963,6 +969,34 @@ impl MethodDefinition {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new_generated(
+        str_id: StringId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Box<[Comment]>,
+        mut flags: DefinitionFlags,
+        lexical_nesting_id: Option<DefinitionId>,
+        signatures: Signatures,
+        visibility: Visibility,
+        receiver: Option<Receiver>,
+    ) -> Self {
+        flags |= DefinitionFlags::GENERATED;
+
+        Self {
+            str_id,
+            uri_id,
+            offset,
+            flags,
+            comments,
+            lexical_nesting_id,
+            signatures,
+            visibility,
+            receiver,
+        }
+    }
+
     #[must_use]
     pub fn id(&self) -> DefinitionId {
         let mut formatted_id = format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id);
@@ -974,6 +1008,13 @@ impl MethodDefinition {
                     formatted_id.push_str(&name_id.to_string());
                 }
             }
+        }
+
+        if self.flags.is_generated()
+            && let Some(lexical_nesting_id) = self.lexical_nesting_id
+        {
+            formatted_id.push('g');
+            formatted_id.push_str(&lexical_nesting_id.to_string());
         }
 
         DefinitionId::from(&formatted_id)

@@ -88,6 +88,8 @@ pub struct RubyIndexer<'a> {
     comments: Vec<CommentGroup>,
     nesting_stack: Vec<Nesting>,
     visibility_stack: Vec<VisibilityModifier>,
+    runtime_block_depth: usize,
+    static_block_depth: usize,
     pending_decorator_offset: Option<Offset>,
 }
 
@@ -104,6 +106,8 @@ impl<'a> RubyIndexer<'a> {
             comments: Vec::new(),
             nesting_stack: Vec::new(),
             visibility_stack: vec![VisibilityModifier::new(Visibility::Private, false, Offset::new(0, 0))],
+            runtime_block_depth: 0,
+            static_block_depth: 0,
             pending_decorator_offset: None,
         }
     }
@@ -725,7 +729,7 @@ impl<'a> RubyIndexer<'a> {
                 self.nesting_stack.push(nesting_type(definition_id));
                 self.visibility_stack
                     .push(VisibilityModifier::new(Visibility::Public, false, offset));
-                self.visit(&body);
+                self.visit_static_body(&body);
                 self.visibility_stack.pop();
                 self.nesting_stack.pop();
             }
@@ -785,11 +789,25 @@ impl<'a> RubyIndexer<'a> {
                 self.nesting_stack.push(nesting_type(definition_id));
                 self.visibility_stack
                     .push(VisibilityModifier::new(Visibility::Public, false, offset));
-                self.visit(&body);
+                self.visit_static_body(&body);
                 self.visibility_stack.pop();
                 self.nesting_stack.pop();
             }
         }
+    }
+
+    fn visit_static_body(&mut self, body: &ruby_prism::Node) {
+        if let Some(block) = body.as_block_node() {
+            self.visit_static_block(&block);
+        } else {
+            self.visit(body);
+        }
+    }
+
+    fn visit_static_block(&mut self, block: &ruby_prism::BlockNode) {
+        self.static_block_depth += 1;
+        self.visit_block_node(block);
+        self.static_block_depth -= 1;
     }
 
     /// Handle dynamic class or module definitions, like `Module.new`, `Class.new`, `Data.define` and so on
@@ -835,13 +853,33 @@ impl<'a> RubyIndexer<'a> {
         })
     }
 
-    fn current_nesting_is_module(&self) -> bool {
-        self.current_nesting_definition_id().is_some_and(|id| {
+    fn current_nesting_is_module_body(&self) -> bool {
+        self.nesting_stack.last().is_some_and(|nesting| {
+            let (Nesting::LexicalScope(id) | Nesting::Owner(id)) = nesting else {
+                return false;
+            };
+
             self.local_graph
                 .definitions()
-                .get(&id)
+                .get(id)
                 .is_some_and(|def| matches!(def, Definition::Module(_)))
         })
+    }
+
+    fn current_nesting_is_runtime_body(&self) -> bool {
+        matches!(self.nesting_stack.last(), Some(Nesting::Method(_))) || self.runtime_block_depth > 0
+    }
+
+    fn visit_runtime_call_node(&mut self, node: &ruby_prism::CallNode) {
+        if let Some(arguments) = node.arguments() {
+            self.visit_arguments_node(&arguments);
+        }
+
+        if let Some(block) = node.block() {
+            self.visit(&block);
+        }
+
+        self.index_method_reference_for_call(node);
     }
 
     /// Indexes the final constant target from a value node, unwrapping chained assignments.
@@ -1595,6 +1633,21 @@ impl Visit<'_> for RubyIndexer<'_> {
         );
     }
 
+    fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'_>) {
+        if self.static_block_depth > 0 {
+            // Only the block passed to Module.new/Class.new is static. Its nested ordinary blocks still run later,
+            // so they must see static depth back at zero and be indexed as runtime bodies.
+            self.static_block_depth -= 1;
+            ruby_prism::visit_block_node(self, node);
+            self.static_block_depth += 1;
+            return;
+        }
+
+        self.runtime_block_depth += 1;
+        ruby_prism::visit_block_node(self, node);
+        self.runtime_block_depth -= 1;
+    }
+
     fn visit_singleton_class_node(&mut self, node: &ruby_prism::SingletonClassNode) {
         let expression = node.expression();
 
@@ -1856,6 +1909,12 @@ impl Visit<'_> for RubyIndexer<'_> {
         };
 
         let definition_id = if receiver.is_none() && visibility == Visibility::ModuleFunction {
+            // The singleton copy shares interned strings with the private instance method.
+            self.local_graph.track_string(str_id);
+            for parameter in &parameters {
+                self.local_graph.track_string(*parameter.inner().str());
+            }
+
             // module_function creates two method definitions:
             // 1. Public singleton method (class/module method)
             let method = Definition::Method(Box::new(MethodDefinition::new(
@@ -1944,7 +2003,8 @@ impl Visit<'_> for RubyIndexer<'_> {
                 .unwrap_or_else(|| offset_for_comments.start());
 
             Self::each_string_or_symbol_arg(call, |name, location| {
-                let str_id = self.local_graph.intern_string(format!("{name}()"));
+                let reader_str_id = self.local_graph.intern_string(format!("{name}()"));
+                let writer_str_id = self.local_graph.intern_string(format!("{name}=()"));
                 let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
 
@@ -1956,38 +2016,59 @@ impl Visit<'_> for RubyIndexer<'_> {
                     v => v,
                 };
 
-                let definition = match kind {
-                    AttrKind::Accessor => Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        flags,
-                        parent_nesting_id,
-                        visibility,
-                    ))),
-                    AttrKind::Reader => Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        flags,
-                        parent_nesting_id,
-                        visibility,
-                    ))),
-                    AttrKind::Writer => Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                        str_id,
-                        self.uri_id,
-                        offset,
-                        comments,
-                        flags,
-                        parent_nesting_id,
-                        visibility,
-                    ))),
-                };
+                match kind {
+                    AttrKind::Accessor => {
+                        let reader = Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
+                            reader_str_id,
+                            self.uri_id,
+                            offset.clone(),
+                            comments.clone(),
+                            flags.clone(),
+                            parent_nesting_id,
+                            visibility,
+                        )));
+                        let reader_id = self.local_graph.add_definition(reader);
+                        self.add_member_to_current_owner(reader_id);
 
-                let definition_id = self.local_graph.add_definition(definition);
-                self.add_member_to_current_owner(definition_id);
+                        let writer = Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                            writer_str_id,
+                            self.uri_id,
+                            offset,
+                            comments,
+                            flags,
+                            parent_nesting_id,
+                            visibility,
+                        )));
+                        let writer_id = self.local_graph.add_definition(writer);
+                        self.add_member_to_current_owner(writer_id);
+                    }
+                    AttrKind::Reader => {
+                        let definition = Definition::AttrReader(Box::new(AttrReaderDefinition::new(
+                            reader_str_id,
+                            self.uri_id,
+                            offset,
+                            comments,
+                            flags,
+                            parent_nesting_id,
+                            visibility,
+                        )));
+                        let definition_id = self.local_graph.add_definition(definition);
+                        self.add_member_to_current_owner(definition_id);
+                    }
+                    AttrKind::Writer => {
+                        let definition = Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
+                            writer_str_id,
+                            self.uri_id,
+                            offset,
+                            comments,
+                            flags,
+                            parent_nesting_id,
+                            visibility,
+                        )));
+                        let definition_id = self.local_graph.add_definition(definition);
+                        self.add_member_to_current_owner(definition_id);
+                    }
+                }
             });
         };
 
@@ -2116,6 +2197,13 @@ impl Visit<'_> for RubyIndexer<'_> {
                 }
             }
             "private" | "protected" | "public" | "module_function" => {
+                let visibility = Visibility::from_string(message.as_str());
+
+                if visibility == Visibility::ModuleFunction && self.current_nesting_is_runtime_body() {
+                    self.visit_runtime_call_node(node);
+                    return;
+                }
+
                 if node.receiver().is_some() {
                     let offset = Offset::from_prism_location(&node.location());
                     self.local_graph.add_diagnostic(
@@ -2127,20 +2215,22 @@ impl Visit<'_> for RubyIndexer<'_> {
                     return;
                 }
 
-                let visibility = Visibility::from_string(message.as_str());
                 let offset = Offset::from_prism_location(&node.location());
 
-                if let Some(arguments) = node.arguments() {
-                    if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
-                        self.local_graph.add_diagnostic(
-                            Rule::InvalidMethodVisibility,
-                            offset,
-                            "`module_function` can only be used in modules".to_string(),
-                        );
+                if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module_body() {
+                    self.local_graph.add_diagnostic(
+                        Rule::InvalidMethodVisibility,
+                        offset,
+                        "`module_function` can only be used in modules".to_string(),
+                    );
+                    if let Some(arguments) = node.arguments() {
                         self.visit_arguments_node(&arguments);
-                    } else {
-                        self.handle_visibility_arguments(&arguments, visibility, &offset, message.as_str());
                     }
+                    return;
+                }
+
+                if let Some(arguments) = node.arguments() {
+                    self.handle_visibility_arguments(&arguments, visibility, &offset, message.as_str());
                 } else {
                     // Flag mode: `private` with no arguments
                     //

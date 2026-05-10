@@ -6,17 +6,22 @@ use std::{
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::{
     built_in::{BASIC_OBJECT_ID, CLASS_ID, KERNEL_ID, MODULE_ID, OBJECT_ID},
+    comment::Comment,
     declaration::{
         Ancestor, Ancestors, ClassDeclaration, ClassVariableDeclaration, ConstantAliasDeclaration, ConstantDeclaration,
         Declaration, GlobalVariableDeclaration, InstanceVariableDeclaration, MethodDeclaration, ModuleDeclaration,
         Namespace, SingletonClassDeclaration, TodoDeclaration,
     },
-    definitions::{Definition, Mixin, Receiver},
+    definitions::{
+        Definition, DefinitionFlags, MethodDefinition, Mixin, Parameter, ParameterStruct, Receiver, Signatures,
+    },
     graph::{Graph, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
-    ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
+    ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId, UriId},
     name::{Name, NameRef, ParentScope},
+    visibility::Visibility,
 };
+use crate::offset::Offset;
 
 enum Outcome {
     /// The constant was successfully resolved to the given declaration ID. The second optional tuple element is a
@@ -31,6 +36,49 @@ enum Outcome {
     /// this back in the queue to retry once we have progressed further. The optional declaration ID is an ancestor that
     /// needs to be linearized before we can retry.
     Retry(Option<DeclarationId>),
+}
+
+enum MethodVisibilityResolution {
+    ApplyExisting,
+    ApplyModuleFunctionCopy(ModuleFunctionCopySource),
+    RetryPartial,
+    Missing,
+    Skip,
+}
+
+struct ModuleFunctionCopySource {
+    definition_id: DefinitionId,
+    target_visibility: Visibility,
+    source_kind: ModuleFunctionSourceKind,
+    alias_definition_ids: Vec<DefinitionId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModuleFunctionSourceKind {
+    DirectMethod,
+    DirectAlias,
+    InheritedMethod,
+    InheritedAlias,
+}
+
+impl ModuleFunctionSourceKind {
+    fn new(target_is_direct: bool, uses_alias: bool) -> Self {
+        match (target_is_direct, uses_alias) {
+            (true, false) => Self::DirectMethod,
+            (true, true) => Self::DirectAlias,
+            (false, false) => Self::InheritedMethod,
+            (false, true) => Self::InheritedAlias,
+        }
+    }
+}
+
+struct ModuleFunctionCopyRequest {
+    str_id: StringId,
+    visibility_id: DefinitionId,
+    source_definition_id: DefinitionId,
+    owner_id: DeclarationId,
+    copy_declaration_id: DeclarationId,
+    fully_qualified_name: String,
 }
 
 impl Outcome {
@@ -623,12 +671,31 @@ impl<'a> Resolver<'a> {
     /// Resolves retroactive method visibility changes (`private :foo`, `protected :foo`, `public :foo`,
     /// `private_class_method :foo`, `public_class_method :foo`).
     ///
-    /// Runs as a second pass after all methods/attrs are declared, so `private :bar` works
-    /// regardless of whether `def bar` appeared before or after it in source.
-    fn resolve_method_visibilities(&mut self, visibility_ids: Vec<DefinitionId>) {
+    /// Runs as a second pass after all methods/attrs are declared. Ordinary visibility changes attach to the resolved
+    /// method declaration, while `module_function :bar` is stricter and copies the method snapshot that precedes the
+    /// visibility call.
+    fn resolve_method_visibilities(&mut self, mut visibility_ids: Vec<DefinitionId>) {
         let mut pending_work = Vec::new();
+        let ordered_visibility_ids = {
+            let mut ordered_visibility_ids = visibility_ids
+                .drain(..)
+                .filter_map(|id| {
+                    let (uri, offset) = self.graph.definition_program_order_key(id)?;
+                    Some((id, uri, offset))
+                })
+                .collect::<Vec<_>>();
 
-        for id in visibility_ids {
+            ordered_visibility_ids.sort_unstable_by(|(_, left_uri, left_offset), (_, right_uri, right_offset)| {
+                left_uri.cmp(right_uri).then_with(|| left_offset.cmp(right_offset))
+            });
+
+            ordered_visibility_ids
+                .into_iter()
+                .map(|(id, _, _)| id)
+                .collect::<Vec<_>>()
+        };
+
+        for id in ordered_visibility_ids {
             let Definition::MethodVisibility(method_visibility) = self.graph.definitions().get(&id).unwrap() else {
                 unreachable!()
             };
@@ -638,6 +705,7 @@ impl<'a> Resolver<'a> {
             let offset = method_visibility.offset().clone();
             let lexical_nesting_id = *method_visibility.lexical_nesting_id();
             let is_singleton = method_visibility.flags().is_singleton_method_visibility();
+            let visibility = *method_visibility.visibility();
 
             let Some(lexical_owner_id) = self.resolve_lexical_owner(lexical_nesting_id, id) else {
                 continue;
@@ -652,73 +720,740 @@ impl<'a> Resolver<'a> {
                 lexical_owner_id
             };
 
-            let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&owner_id) else {
-                continue;
-            };
-
-            let mut visibility_applied = false;
-            let mut has_partial = false;
-
-            for ancestor in namespace.ancestors() {
-                match ancestor {
-                    Ancestor::Complete(ancestor_id) => {
-                        let has_member = self
-                            .graph
-                            .declarations()
-                            .get(ancestor_id)
-                            .and_then(|decl| decl.as_namespace())
-                            .and_then(|ns| ns.member(&str_id))
-                            .is_some();
-
-                        if has_member {
-                            // Direct member: `create_declaration`'s fully qualified name dedup attaches
-                            // this visibility definition to the existing method declaration.
-                            // Inherited: a new child-owned declaration is created.
-                            self.create_declaration(str_id, id, owner_id, |name| {
-                                Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                            });
-                            visibility_applied = true;
-                            break;
-                        }
+            let resolution = self.method_visibility_resolution(owner_id, str_id, visibility, id);
+            match resolution {
+                MethodVisibilityResolution::ApplyExisting => {
+                    self.graph.mark_method_visibility_resolved(id);
+                    self.create_method_visibility_declaration_for_owner(str_id, id, owner_id);
+                    continue;
+                }
+                MethodVisibilityResolution::ApplyModuleFunctionCopy(source) => {
+                    if self.apply_module_function(str_id, id, owner_id, source) {
+                        self.graph.mark_method_visibility_resolved(id);
+                        continue;
                     }
-                    Ancestor::Partial(_) => has_partial = true,
                 }
+                MethodVisibilityResolution::RetryPartial => {
+                    // Method might exist on an unresolved ancestor — requeue for retry.
+                    pending_work.push(Unit::Definition(id));
+                    continue;
+                }
+                MethodVisibilityResolution::Missing => {}
+                MethodVisibilityResolution::Skip => continue,
             }
 
-            if visibility_applied {
-                continue;
+            // Ancestors are fully resolved — method definitively doesn't exist.
+            if !is_singleton {
+                self.graph.track_unresolved_method_visibility(owner_id, id);
             }
 
-            if has_partial {
-                // Method might exist on an unresolved ancestor — requeue for retry.
-                pending_work.push(Unit::Definition(id));
+            let method_name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
+            let owner_name = self.graph.declarations().get(&owner_id).unwrap().name().to_string();
+            let diagnostic = Diagnostic::new(
+                Rule::UndefinedMethodVisibilityTarget,
+                uri_id,
+                offset,
+                format!("undefined method `{owner_name}#{method_name}` for visibility change"),
+            );
+            if is_singleton {
+                // Document-scoped: the singleton class may be synthetic (created by this
+                // visibility resolution) and won't be cleaned up on file delete, so attaching
+                // the diagnostic to the declaration would leave it orphaned.
+                self.graph.add_document_diagnostic(uri_id, diagnostic);
             } else {
-                // Ancestors are fully resolved — method definitively doesn't exist.
-                let method_name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
-                let owner_name = self.graph.declarations().get(&owner_id).unwrap().name().to_string();
-                let diagnostic = Diagnostic::new(
-                    Rule::UndefinedMethodVisibilityTarget,
-                    uri_id,
-                    offset,
-                    format!("undefined method `{owner_name}#{method_name}` for visibility change"),
-                );
-                if is_singleton {
-                    // Document-scoped: the singleton class may be synthetic (created by this
-                    // visibility resolution) and won't be cleaned up on file delete, so attaching
-                    // the diagnostic to the declaration would leave it orphaned.
-                    self.graph.add_document_diagnostic(uri_id, diagnostic);
-                } else {
-                    self.graph
-                        .declarations_mut()
-                        .get_mut(&owner_id)
-                        .unwrap()
-                        .add_diagnostic(diagnostic);
-                }
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&owner_id)
+                    .unwrap()
+                    .add_diagnostic(diagnostic);
             }
         }
 
         // Must extend work here so incremental resolution can resolve previously unresolved visibility operations
         self.graph.extend_work(pending_work);
+    }
+
+    fn create_method_visibility_declaration_for_owner(
+        &mut self,
+        str_id: StringId,
+        visibility_id: DefinitionId,
+        owner_id: DeclarationId,
+    ) {
+        // Direct member: `create_declaration`'s fully qualified name dedup attaches
+        // this visibility definition to the existing method declaration.
+        // Inherited: a new child-owned declaration is created.
+        self.create_method_visibility_declaration(str_id, visibility_id, owner_id, |name| {
+            Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+        });
+    }
+
+    fn method_visibility_resolution(
+        &self,
+        owner_id: DeclarationId,
+        str_id: StringId,
+        visibility: Visibility,
+        visibility_id: DefinitionId,
+    ) -> MethodVisibilityResolution {
+        let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&owner_id) else {
+            return MethodVisibilityResolution::Skip;
+        };
+
+        let mut has_partial = false;
+
+        for ancestor in namespace.ancestors() {
+            match ancestor {
+                Ancestor::Complete(ancestor_id) => {
+                    let member_id = self
+                        .graph
+                        .declarations()
+                        .get(ancestor_id)
+                        .and_then(|decl| decl.as_namespace())
+                        .and_then(|ns| ns.member(&str_id))
+                        .copied();
+
+                    if let Some(member_id) = member_id {
+                        if visibility == Visibility::ModuleFunction {
+                            let Some(target_visibility) =
+                                self.method_visibility_before_visibility_definition(member_id, visibility_id)
+                            else {
+                                continue;
+                            };
+                            let Some(source) =
+                                self.module_function_copy_source(member_id, visibility_id, owner_id, target_visibility)
+                            else {
+                                continue;
+                            };
+
+                            return MethodVisibilityResolution::ApplyModuleFunctionCopy(source);
+                        }
+
+                        return MethodVisibilityResolution::ApplyExisting;
+                    }
+                }
+                Ancestor::Partial(_) => has_partial = true,
+            }
+        }
+
+        if has_partial {
+            MethodVisibilityResolution::RetryPartial
+        } else {
+            MethodVisibilityResolution::Missing
+        }
+    }
+
+    fn apply_module_function(
+        &mut self,
+        str_id: StringId,
+        visibility_id: DefinitionId,
+        owner_id: DeclarationId,
+        source: ModuleFunctionCopySource,
+    ) -> bool {
+        let Some(owner_definition_id) = self
+            .graph
+            .definitions()
+            .get(&visibility_id)
+            .and_then(|definition| *definition.lexical_nesting_id())
+        else {
+            return false;
+        };
+
+        let source_definition_id = source.definition_id;
+        let source_declared_on_owner = self.source_definition_declared_on_owner(owner_id, source_definition_id);
+        let should_create_instance_copy = match source.source_kind {
+            ModuleFunctionSourceKind::DirectMethod => false,
+            ModuleFunctionSourceKind::DirectAlias => true,
+            ModuleFunctionSourceKind::InheritedMethod | ModuleFunctionSourceKind::InheritedAlias => {
+                source.target_visibility != Visibility::Private
+            }
+        };
+        // Ruby only installs a direct instance method copy for inherited module_function
+        // sources when the inherited method was public/protected at the call site. Direct
+        // methods are handled by the MethodVisibilityDefinition, and direct aliases need
+        // their own private copy because the alias body can come from another declaration.
+        // Inherited private sources keep using the ancestor method while still getting a
+        // singleton copy.
+        if should_create_instance_copy
+            && !self.create_module_function_instance_copy(
+                str_id,
+                visibility_id,
+                owner_id,
+                source_definition_id,
+                owner_definition_id,
+            )
+        {
+            return false;
+        }
+
+        if !self.create_module_function_singleton_copy(
+            str_id,
+            visibility_id,
+            owner_id,
+            source_definition_id,
+            owner_definition_id,
+        ) {
+            return false;
+        }
+
+        if source.source_kind == ModuleFunctionSourceKind::DirectMethod {
+            self.create_method_visibility_declaration_for_owner(str_id, visibility_id, owner_id);
+        } else if !source_declared_on_owner {
+            self.graph
+                .track_module_function_ancestor_dependency(owner_id, visibility_id);
+        }
+
+        for alias_id in source.alias_definition_ids {
+            self.graph
+                .track_module_function_alias_dependency(alias_id, visibility_id);
+        }
+
+        true
+    }
+
+    fn source_definition_declared_on_owner(&self, owner_id: DeclarationId, source_definition_id: DefinitionId) -> bool {
+        self.graph
+            .definition_id_to_declaration_id(source_definition_id)
+            .and_then(|declaration_id| self.graph.declarations().get(declaration_id))
+            .is_some_and(|declaration| *declaration.owner_id() == owner_id)
+    }
+
+    fn create_module_function_instance_copy(
+        &mut self,
+        str_id: StringId,
+        visibility_id: DefinitionId,
+        owner_id: DeclarationId,
+        source_definition_id: DefinitionId,
+        owner_definition_id: DefinitionId,
+    ) -> bool {
+        let fully_qualified_name = self.member_fully_qualified_name(owner_id, str_id);
+        let copy_declaration_id = DeclarationId::from(&fully_qualified_name);
+        self.create_module_function_copy(
+            ModuleFunctionCopyRequest {
+                str_id,
+                visibility_id,
+                source_definition_id,
+                owner_id,
+                copy_declaration_id,
+                fully_qualified_name,
+            },
+            |resolver| {
+                resolver.build_module_function_copy_definition(
+                    str_id,
+                    source_definition_id,
+                    owner_definition_id,
+                    Visibility::Private,
+                    None,
+                    true,
+                )
+            },
+        )
+    }
+
+    fn create_module_function_singleton_copy(
+        &mut self,
+        str_id: StringId,
+        visibility_id: DefinitionId,
+        owner_id: DeclarationId,
+        source_definition_id: DefinitionId,
+        owner_definition_id: DefinitionId,
+    ) -> bool {
+        let Some(singleton_id) = self.get_or_create_singleton_class(owner_id, true) else {
+            return false;
+        };
+
+        let fully_qualified_name = self.member_fully_qualified_name(singleton_id, str_id);
+        let copy_declaration_id = DeclarationId::from(&fully_qualified_name);
+
+        self.create_module_function_copy(
+            ModuleFunctionCopyRequest {
+                str_id,
+                visibility_id,
+                source_definition_id,
+                owner_id: singleton_id,
+                copy_declaration_id,
+                fully_qualified_name,
+            },
+            |resolver| {
+                resolver.build_module_function_copy_definition(
+                    str_id,
+                    source_definition_id,
+                    owner_definition_id,
+                    Visibility::Public,
+                    Some(Receiver::SelfReceiver(owner_definition_id)),
+                    false,
+                )
+            },
+        )
+    }
+
+    fn create_module_function_copy<F>(&mut self, request: ModuleFunctionCopyRequest, build_copy_definition: F) -> bool
+    where
+        F: FnOnce(&mut Self) -> Option<Definition>,
+    {
+        let ModuleFunctionCopyRequest {
+            str_id,
+            visibility_id,
+            source_definition_id,
+            owner_id,
+            copy_declaration_id,
+            fully_qualified_name,
+        } = request;
+
+        let copy_definition_id = if let Some(copy_definition_id) = self
+            .graph
+            .find_module_function_copy(source_definition_id, copy_declaration_id)
+        {
+            self.graph
+                .attach_module_function_copy_visibility(copy_definition_id, visibility_id);
+            copy_definition_id
+        } else {
+            let Some(copy_definition) = build_copy_definition(self) else {
+                return false;
+            };
+
+            self.graph.add_module_function_copy(
+                source_definition_id,
+                visibility_id,
+                copy_declaration_id,
+                copy_definition,
+            )
+        };
+
+        if self
+            .graph
+            .declarations()
+            .get(&copy_declaration_id)
+            .is_some_and(|declaration| declaration.definitions().contains(&copy_definition_id))
+        {
+            self.graph.add_member(&owner_id, copy_declaration_id, str_id);
+            return true;
+        }
+
+        let copy_declaration_id = self.graph.add_module_function_copy_declaration(
+            copy_definition_id,
+            visibility_id,
+            fully_qualified_name,
+            |name| Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id))),
+        );
+        self.graph.add_member(&owner_id, copy_declaration_id, str_id);
+
+        true
+    }
+
+    fn module_function_copy_source(
+        &self,
+        source_method_id: DeclarationId,
+        visibility_id: DefinitionId,
+        owner_id: DeclarationId,
+        target_visibility: Visibility,
+    ) -> Option<ModuleFunctionCopySource> {
+        let visibility_definition = self.graph.definitions().get(&visibility_id)?;
+        let visibility_uri_id = *visibility_definition.uri_id();
+        let visibility_offset = visibility_definition.offset();
+
+        let mut seen_method_ids = IdentityHashSet::default();
+        let mut source = self.module_function_copy_source_before(
+            source_method_id,
+            visibility_uri_id,
+            visibility_offset,
+            target_visibility,
+            &mut seen_method_ids,
+        )?;
+        let target_is_direct = self.method_declaration_declared_on_owner(source_method_id, owner_id);
+        source.source_kind = ModuleFunctionSourceKind::new(target_is_direct, !source.alias_definition_ids.is_empty());
+        Some(source)
+    }
+
+    fn module_function_copy_source_before(
+        &self,
+        source_method_id: DeclarationId,
+        uri_id: UriId,
+        offset: &Offset,
+        target_visibility: Visibility,
+        seen_method_ids: &mut IdentityHashSet<DeclarationId>,
+    ) -> Option<ModuleFunctionCopySource> {
+        if !seen_method_ids.insert(source_method_id) {
+            return None;
+        }
+
+        self.definition_ids_before_visibility(source_method_id, uri_id, offset)?
+            .into_iter()
+            .rev()
+            .find_map(|definition_id| {
+                let definition = self.graph.definitions().get(&definition_id).unwrap();
+
+                if Self::is_module_function_copy_source(definition) {
+                    return Some(ModuleFunctionCopySource {
+                        definition_id,
+                        target_visibility,
+                        source_kind: ModuleFunctionSourceKind::InheritedMethod,
+                        alias_definition_ids: Vec::new(),
+                    });
+                }
+
+                let Definition::MethodAlias(alias) = definition else {
+                    return None;
+                };
+
+                let owner_id = self
+                    .graph
+                    .definition_id_to_declaration_id(definition_id)
+                    .and_then(|decl_id| self.graph.declarations().get(decl_id))
+                    .map(|declaration| *declaration.owner_id())?;
+                for target_id in self.method_member_ids_in_ancestors_before(
+                    owner_id,
+                    *alias.old_name_str_id(),
+                    *definition.uri_id(),
+                    definition.offset(),
+                ) {
+                    let Some(mut source) = self.module_function_copy_source_before(
+                        target_id,
+                        *definition.uri_id(),
+                        definition.offset(),
+                        target_visibility,
+                        seen_method_ids,
+                    ) else {
+                        continue;
+                    };
+                    source.alias_definition_ids.push(definition_id);
+                    return Some(source);
+                }
+
+                None
+            })
+    }
+
+    fn method_declaration_declared_on_owner(&self, method_id: DeclarationId, owner_id: DeclarationId) -> bool {
+        self.graph
+            .declarations()
+            .get(&method_id)
+            .is_some_and(|declaration| *declaration.owner_id() == owner_id)
+    }
+
+    fn method_visibility_before_visibility_definition(
+        &self,
+        method_id: DeclarationId,
+        visibility_id: DefinitionId,
+    ) -> Option<Visibility> {
+        let visibility_definition = self.graph.definitions().get(&visibility_id)?;
+        let mut seen_method_ids = IdentityHashSet::default();
+        self.method_visibility_before(
+            method_id,
+            *visibility_definition.uri_id(),
+            visibility_definition.offset(),
+            &mut seen_method_ids,
+        )
+    }
+
+    fn method_visibility_before(
+        &self,
+        method_id: DeclarationId,
+        uri_id: UriId,
+        offset: &Offset,
+        seen_method_ids: &mut IdentityHashSet<DeclarationId>,
+    ) -> Option<Visibility> {
+        if !seen_method_ids.insert(method_id) {
+            return None;
+        }
+
+        for definition_id in self
+            .definition_ids_before_visibility(method_id, uri_id, offset)?
+            .into_iter()
+            .rev()
+        {
+            let definition = self.graph.definitions().get(&definition_id).unwrap();
+
+            if let Some(visibility) = Self::visibility_from_definition(definition) {
+                return Some(visibility);
+            }
+
+            let Definition::MethodAlias(alias) = definition else {
+                continue;
+            };
+
+            let owner_id = self
+                .graph
+                .definition_id_to_declaration_id(definition_id)
+                .and_then(|decl_id| self.graph.declarations().get(decl_id))
+                .map(|declaration| *declaration.owner_id())?;
+            for target_id in self.method_member_ids_in_ancestors_before(
+                owner_id,
+                *alias.old_name_str_id(),
+                *definition.uri_id(),
+                definition.offset(),
+            ) {
+                let Some(visibility) = self.method_visibility_before(
+                    target_id,
+                    *definition.uri_id(),
+                    definition.offset(),
+                    seen_method_ids,
+                ) else {
+                    continue;
+                };
+                return Some(visibility);
+            }
+        }
+
+        Some(Visibility::Public)
+    }
+
+    fn method_member_ids_in_ancestors_before(
+        &self,
+        owner_id: DeclarationId,
+        str_id: StringId,
+        uri_id: UriId,
+        offset: &Offset,
+    ) -> Vec<DeclarationId> {
+        let Some(namespace) = self
+            .graph
+            .declarations()
+            .get(&owner_id)
+            .and_then(Declaration::as_namespace)
+        else {
+            return Vec::new();
+        };
+
+        namespace
+            .ancestors()
+            .iter()
+            .filter_map(|ancestor| {
+                let Ancestor::Complete(ancestor_id) = ancestor else {
+                    return None;
+                };
+                let member_id = self
+                    .graph
+                    .declarations()
+                    .get(ancestor_id)?
+                    .as_namespace()?
+                    .member(&str_id)
+                    .copied()?;
+
+                if !matches!(self.graph.declarations().get(&member_id), Some(Declaration::Method(_))) {
+                    return None;
+                }
+
+                self.definition_ids_before_visibility(member_id, uri_id, offset)
+                    .is_some_and(|definition_ids| !definition_ids.is_empty())
+                    .then_some(member_id)
+            })
+            .collect()
+    }
+
+    fn visibility_from_definition(definition: &Definition) -> Option<Visibility> {
+        match definition {
+            Definition::MethodVisibility(method_visibility) => Some(match method_visibility.visibility() {
+                // Attr definitions are already normalized by indexing; a method visibility definition remains as the
+                // original `module_function` instruction and becomes private for instance visibility snapshots.
+                Visibility::ModuleFunction => Visibility::Private,
+                visibility => *visibility,
+            }),
+            Definition::Method(method) => Some(*method.visibility()),
+            Definition::AttrAccessor(attr) => Some(*attr.visibility()),
+            Definition::AttrReader(attr) => Some(*attr.visibility()),
+            Definition::AttrWriter(attr) => Some(*attr.visibility()),
+            _ => None,
+        }
+    }
+
+    fn build_module_function_copy_definition(
+        &mut self,
+        copy_str_id: StringId,
+        source_definition_id: DefinitionId,
+        owner_definition_id: DefinitionId,
+        visibility: Visibility,
+        receiver: Option<Receiver>,
+        generated: bool,
+    ) -> Option<Definition> {
+        let source_definition = self.graph.definitions().get(&source_definition_id).unwrap();
+
+        match source_definition {
+            Definition::Method(method) => Some(Self::module_function_copy_from_method(
+                copy_str_id,
+                *method.uri_id(),
+                method.offset().clone(),
+                method.comments().to_vec().into_boxed_slice(),
+                method.flags().clone(),
+                owner_definition_id,
+                method.signatures().clone(),
+                visibility,
+                receiver,
+                generated,
+            )),
+            Definition::AttrAccessor(attr) => Some(Self::module_function_copy_from_attr(
+                copy_str_id,
+                *attr.uri_id(),
+                attr.offset().clone(),
+                attr.comments().to_vec().into_boxed_slice(),
+                attr.flags().clone(),
+                owner_definition_id,
+                visibility,
+                receiver,
+                generated,
+                None,
+            )),
+            Definition::AttrReader(attr) => Some(Self::module_function_copy_from_attr(
+                copy_str_id,
+                *attr.uri_id(),
+                attr.offset().clone(),
+                attr.comments().to_vec().into_boxed_slice(),
+                attr.flags().clone(),
+                owner_definition_id,
+                visibility,
+                receiver,
+                generated,
+                None,
+            )),
+            Definition::AttrWriter(attr) => {
+                let uri_id = *attr.uri_id();
+                let offset = attr.offset().clone();
+                let comments = attr.comments().to_vec().into_boxed_slice();
+                let flags = attr.flags().clone();
+                let arg_str_id = self.graph.prepare_generated_string("__rubydex_arg0".to_string());
+                Some(Self::module_function_copy_from_attr(
+                    copy_str_id,
+                    uri_id,
+                    offset,
+                    comments,
+                    flags,
+                    owner_definition_id,
+                    visibility,
+                    receiver,
+                    generated,
+                    Some(arg_str_id),
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn module_function_copy_from_method(
+        str_id: StringId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Box<[Comment]>,
+        mut flags: DefinitionFlags,
+        owner_definition_id: DefinitionId,
+        signatures: Signatures,
+        visibility: Visibility,
+        receiver: Option<Receiver>,
+        generated: bool,
+    ) -> Definition {
+        // A generated source copy may be copied again. Recompute GENERATED from
+        // this copy's role so singleton copies can still collide with inline
+        // `module_function def` definitions while instance copies stay distinct.
+        flags.remove(DefinitionFlags::GENERATED);
+
+        let method = if generated {
+            MethodDefinition::new_generated(
+                str_id,
+                uri_id,
+                offset,
+                comments,
+                flags,
+                Some(owner_definition_id),
+                signatures,
+                visibility,
+                receiver,
+            )
+        } else {
+            MethodDefinition::new(
+                str_id,
+                uri_id,
+                offset,
+                comments,
+                flags,
+                Some(owner_definition_id),
+                signatures,
+                visibility,
+                receiver,
+            )
+        };
+
+        Definition::Method(Box::new(method))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn module_function_copy_from_attr(
+        str_id: StringId,
+        uri_id: UriId,
+        offset: Offset,
+        comments: Box<[Comment]>,
+        flags: DefinitionFlags,
+        owner_definition_id: DefinitionId,
+        visibility: Visibility,
+        receiver: Option<Receiver>,
+        generated: bool,
+        writer_arg_str_id: Option<StringId>,
+    ) -> Definition {
+        let signature = if let Some(arg_str_id) = writer_arg_str_id {
+            Signatures::Simple(
+                vec![Parameter::RequiredPositional(ParameterStruct::new(
+                    offset.clone(),
+                    arg_str_id,
+                ))]
+                .into_boxed_slice(),
+            )
+        } else {
+            Signatures::Simple(Box::default())
+        };
+
+        Self::module_function_copy_from_method(
+            str_id,
+            uri_id,
+            offset,
+            comments,
+            flags,
+            owner_definition_id,
+            signature,
+            visibility,
+            receiver,
+            generated,
+        )
+    }
+
+    fn is_module_function_copy_source(definition: &Definition) -> bool {
+        matches!(
+            definition,
+            Definition::Method(_) | Definition::AttrAccessor(_) | Definition::AttrReader(_) | Definition::AttrWriter(_)
+        )
+    }
+
+    fn definition_ids_before_visibility(
+        &self,
+        method_id: DeclarationId,
+        visibility_uri_id: UriId,
+        visibility_offset: &Offset,
+    ) -> Option<Vec<DefinitionId>> {
+        let mut definitions = self
+            .graph
+            .declarations()
+            .get(&method_id)?
+            .definitions()
+            .iter()
+            .copied()
+            .filter_map(|definition_id| {
+                if !self
+                    .graph
+                    .definition_precedes_position(definition_id, visibility_uri_id, visibility_offset)?
+                {
+                    return None;
+                }
+
+                let (uri, offset) = self.graph.definition_program_order_key(definition_id)?;
+                Some((definition_id, uri, offset))
+            })
+            .collect::<Vec<_>>();
+
+        definitions.sort_unstable_by(|(_, left_uri, left_offset), (_, right_uri, right_offset)| {
+            left_uri.cmp(right_uri).then_with(|| left_offset.cmp(right_offset))
+        });
+
+        Some(
+            definitions
+                .into_iter()
+                .map(|(definition_id, _, _)| definition_id)
+                .collect(),
+        )
     }
 
     /// Resolves a constant receiver for `handle_remaining_definitions`.
@@ -743,16 +1478,35 @@ impl<'a> Resolver<'a> {
     ) where
         F: FnOnce(String) -> Declaration,
     {
-        let fully_qualified_name = {
-            let owner = self.graph.declarations().get(&owner_id).unwrap();
-            let name_str = self.graph.strings().get(&str_id).unwrap();
-            format!("{}#{}", owner.name(), name_str.as_str())
-        };
+        let fully_qualified_name = self.member_fully_qualified_name(owner_id, str_id);
 
         let declaration_id = self
             .graph
             .add_declaration(definition_id, fully_qualified_name, declaration_builder);
         self.graph.add_member(&owner_id, declaration_id, str_id);
+    }
+
+    fn create_method_visibility_declaration<F>(
+        &mut self,
+        str_id: StringId,
+        definition_id: DefinitionId,
+        owner_id: DeclarationId,
+        declaration_builder: F,
+    ) where
+        F: FnOnce(String) -> Declaration,
+    {
+        let fully_qualified_name = self.member_fully_qualified_name(owner_id, str_id);
+
+        let declaration_id =
+            self.graph
+                .add_method_visibility_declaration(definition_id, fully_qualified_name, declaration_builder);
+        self.graph.add_member(&owner_id, declaration_id, str_id);
+    }
+
+    fn member_fully_qualified_name(&self, owner_id: DeclarationId, str_id: StringId) -> String {
+        let owner = self.graph.declarations().get(&owner_id).unwrap();
+        let name_str = self.graph.strings().get(&str_id).unwrap();
+        format!("{}#{}", owner.name(), name_str.as_str())
     }
 
     /// Resolves owner for class variables, bypassing singleton classes. Returns `None` if the owner can't be

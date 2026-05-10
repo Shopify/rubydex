@@ -58,16 +58,17 @@ class DefinitionTest < Minitest::Test
       assert_instance_of(Rubydex::ClassDefinition, defs[0])
       assert_instance_of(Rubydex::ClassVariableDefinition, defs[1])
       assert_instance_of(Rubydex::AttrAccessorDefinition, defs[2])
-      assert_instance_of(Rubydex::AttrReaderDefinition, defs[3])
-      assert_instance_of(Rubydex::AttrWriterDefinition, defs[4])
-      assert_instance_of(Rubydex::ModuleDefinition, defs[5])
-      assert_instance_of(Rubydex::ConstantAliasDefinition, defs[6])
-      assert_instance_of(Rubydex::ConstantDefinition, defs[7])
-      assert_instance_of(Rubydex::MethodDefinition, defs[8])
-      assert_instance_of(Rubydex::GlobalVariableDefinition, defs[9])
-      assert_instance_of(Rubydex::InstanceVariableDefinition, defs[10])
-      assert_instance_of(Rubydex::MethodAliasDefinition, defs[11])
-      assert_instance_of(Rubydex::GlobalVariableAliasDefinition, defs[12])
+      assert_instance_of(Rubydex::AttrWriterDefinition, defs[3])
+      assert_instance_of(Rubydex::AttrReaderDefinition, defs[4])
+      assert_instance_of(Rubydex::AttrWriterDefinition, defs[5])
+      assert_instance_of(Rubydex::ModuleDefinition, defs[6])
+      assert_instance_of(Rubydex::ConstantAliasDefinition, defs[7])
+      assert_instance_of(Rubydex::ConstantDefinition, defs[8])
+      assert_instance_of(Rubydex::MethodDefinition, defs[9])
+      assert_instance_of(Rubydex::GlobalVariableDefinition, defs[10])
+      assert_instance_of(Rubydex::InstanceVariableDefinition, defs[11])
+      assert_instance_of(Rubydex::MethodAliasDefinition, defs[12])
+      assert_instance_of(Rubydex::GlobalVariableAliasDefinition, defs[13])
     end
   end
 
@@ -463,6 +464,58 @@ class DefinitionTest < Minitest::Test
         path = context.absolute_path_to("file1.rb")
         assert_equal("#{path}:2:16-2:19", param.location.to_display.to_s)
       end
+    end
+  end
+
+  def test_module_function_attr_writer_signature_uses_synthetic_parameter_name
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          attr_writer :bar
+          module_function :bar=
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      sig = graph["Foo::<Foo>#bar=()"].definitions.first.signatures[0]
+      assert_equal(1, sig.parameters.length)
+
+      sig.parameters[0].tap do |param|
+        assert_instance_of(Rubydex::Signature::PositionalParameter, param)
+        assert_equal(:__rubydex_arg0, param.name)
+      end
+    end
+  end
+
+  def test_inherited_module_function_instance_and_singleton_signatures
+    with_context do |context|
+      context.write!("a.rb", <<~RUBY)
+        module A
+          def foo(x); end
+        end
+      RUBY
+      context.write!("b.rb", <<~RUBY)
+        module B
+          include A
+          module_function :foo
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      instance_def = graph["B#foo()"].definitions.find { |definition| definition.is_a?(Rubydex::MethodDefinition) }
+      singleton_def = graph["B::<B>#foo()"].definitions.find { |definition| definition.is_a?(Rubydex::MethodDefinition) }
+
+      refute_nil(instance_def)
+      refute_nil(singleton_def)
+
+      assert_equal([:x], instance_def.signatures[0].parameters.map(&:name))
+      assert_equal([:x], singleton_def.signatures[0].parameters.map(&:name))
     end
   end
 

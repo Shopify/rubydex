@@ -18,6 +18,14 @@ impl StringRef {
         Self { value, ref_count: 1 }
     }
 
+    /// Creates a string entry that has been interned but is not yet owned by a tracked graph object.
+    ///
+    /// Callers must increment the ref count when the object that uses this string is inserted into the graph.
+    #[must_use]
+    pub fn new_pending(value: String) -> Self {
+        Self { value, ref_count: 0 }
+    }
+
     #[must_use]
     pub fn ref_count(&self) -> u32 {
         self.ref_count

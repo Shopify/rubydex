@@ -980,7 +980,7 @@ pub unsafe extern "C" fn rdx_keyword_get(name: *const c_char) -> *const CKeyword
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CVisibility {
     Public = 0,
     Protected = 1,
@@ -1005,9 +1005,7 @@ pub unsafe extern "C" fn rdx_graph_visibility(pointer: GraphPointer, declaration
             Visibility::Public => CVisibility::Public,
             Visibility::Protected => CVisibility::Protected,
             Visibility::Private => CVisibility::Private,
-            Visibility::ModuleFunction => {
-                unimplemented!("module_function visibility translation is not implemented yet")
-            }
+            Visibility::ModuleFunction => unreachable!("module_function visibility must be resolved before C API use"),
         };
 
         Box::into_raw(Box::new(c_visibility)).cast_const()
@@ -1120,5 +1118,35 @@ mod tests {
                 .unwrap()
                 .ref_count()
         );
+    }
+
+    #[test]
+    fn retroactive_module_function_exposes_private_instance_visibility() {
+        let mut indexer = RubyIndexer::new(
+            "file:///foo.rb".into(),
+            "
+            module Foo
+              def foo; end
+              module_function :foo
+            end
+            ",
+        );
+        indexer.index();
+
+        let mut graph = Graph::new();
+        graph.consume_document_changes(indexer.local_graph());
+        let mut resolver = Resolver::new(&mut graph);
+        resolver.resolve();
+
+        let graph_ptr = Box::into_raw(Box::new(graph)) as GraphPointer;
+        let visibility = unsafe { rdx_graph_visibility(graph_ptr, DeclarationId::from("Foo#foo()").get()) };
+
+        assert!(!visibility.is_null());
+        assert_eq!(unsafe { *visibility }, CVisibility::Private);
+
+        unsafe {
+            free_c_visibility(visibility);
+            let _ = Box::from_raw(graph_ptr.cast::<Graph>());
+        }
     }
 }

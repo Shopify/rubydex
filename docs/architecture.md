@@ -82,6 +82,12 @@ Resolution combines the discovered definitions to build a semantic understanding
 - Assign semantic membership (which methods/constants belong to which class)
 - Create implicit singleton classes from `def self.method` patterns
 
+Resolution may also create generated definitions for Ruby semantics that behave like copied methods at runtime. The main
+case is retroactive `module_function :name`, which creates a public singleton method copy and may create a direct private
+instance copy on the receiving module. These generated definitions preserve the source method's location/signature but
+are reverse-indexed by their source definition, visibility trigger, alias dependencies, and ancestor dependencies so
+incremental invalidation can remove or rebuild them.
+
 ## Graph Structure
 
 Rubydex represents the codebase as a graph, where entities are nodes and relationships are edges. The visualization below shows the conceptual structure (implemented as an adjacency list using IDs).
