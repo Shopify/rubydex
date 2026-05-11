@@ -15,7 +15,7 @@ use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::model::visibility::Visibility;
-use crate::stats;
+use crate::{query, stats};
 
 /// An entity whose validity depends on a particular `NameId`.
 /// Used as the value type in the `name_dependents` reverse index.
@@ -650,7 +650,7 @@ impl Graph {
         let definitions = declaration.definitions();
 
         match declaration {
-            Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_))
+            Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_) | Namespace::Todo(_))
             | Declaration::Constant(_)
             | Declaration::ConstantAlias(_) => {
                 for def_id in definitions.iter().rev() {
@@ -661,25 +661,42 @@ impl Graph {
                 Some(Visibility::Public)
             }
             Declaration::Method(_) => {
+                let mut latest_alias: Option<DefinitionId> = None;
+
                 for def_id in definitions.iter().rev() {
                     let Some(definition) = self.definitions.get(def_id) else {
                         continue;
                     };
+
                     let visibility = match definition {
                         Definition::MethodVisibility(vis) => Some(*vis.visibility()),
                         Definition::Method(method) => Some(*method.visibility()),
                         Definition::AttrAccessor(attr) => Some(*attr.visibility()),
                         Definition::AttrReader(attr) => Some(*attr.visibility()),
                         Definition::AttrWriter(attr) => Some(*attr.visibility()),
+                        Definition::MethodAlias(_) => {
+                            if latest_alias.is_none() {
+                                latest_alias = Some(*def_id);
+                            }
+                            None
+                        }
                         _ => None,
                     };
+
                     if visibility.is_some() {
                         return visibility;
                     }
                 }
-                None
+
+                if let Some(alias_def_id) = latest_alias
+                    && let Ok(target_id) = query::follow_method_alias(self, alias_def_id)
+                {
+                    return self.visibility(&target_id);
+                }
+
+                Some(Visibility::Public)
             }
-            Declaration::Namespace(Namespace::SingletonClass(_) | Namespace::Todo(_))
+            Declaration::Namespace(Namespace::SingletonClass(_))
             | Declaration::GlobalVariable(_)
             | Declaration::InstanceVariable(_)
             | Declaration::ClassVariable(_) => None,

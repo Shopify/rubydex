@@ -707,6 +707,58 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_method_alias_visibility_falls_back_to_public_when_target_unresolvable
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          alias new_to_s to_s
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_predicate(graph["Foo#new_to_s()"], :public?)
+    end
+  end
+
+  def test_method_alias_visibility_inherits_from_private_target
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def secret; end
+          private :secret
+          alias revealed secret
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_predicate(graph["Foo#revealed()"], :private?)
+    end
+  end
+
+  def test_method_alias_visibility_inherits_from_protected_target
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def guarded; end
+          protected :guarded
+          alias revealed guarded
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_predicate(graph["Foo#revealed()"], :protected?)
+    end
+  end
+
   def test_method_visibility_via_scope_flag
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
