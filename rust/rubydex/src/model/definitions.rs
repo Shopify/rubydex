@@ -837,7 +837,16 @@ impl MethodVisibilityDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        // Flags are part of the hash because `module_function :bar` emits two
+        // `MethodVisibility` defs at the same source location, differing only
+        // in their `SINGLETON_METHOD_VISIBILITY` flag.
+        DefinitionId::from(&format!(
+            "{}{}{}{}",
+            *self.uri_id,
+            self.offset.start(),
+            *self.str_id,
+            self.flags.bits()
+        ))
     }
 
     #[must_use]

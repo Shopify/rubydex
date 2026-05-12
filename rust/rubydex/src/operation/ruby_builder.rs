@@ -1106,6 +1106,18 @@ impl<'a> RubyOperationBuilder<'a> {
                 ruby_prism::Node::SymbolNode { .. } | ruby_prism::Node::StringNode { .. }
             ) {
                 self.create_method_visibility_operation(&arg, visibility, DefinitionFlags::empty());
+                if visibility == Visibility::ModuleFunction {
+                    // `module_function` also creates a public singleton method, so we emit a
+                    // second def for the singleton side. The two defs stay separate (rather than
+                    // shared) so reverse-lookup invalidation can detach `Foo#bar` and
+                    // `Foo::<Foo>#bar` independently. The `SINGLETON_METHOD_VISIBILITY` flag
+                    // routes this one to the singleton class.
+                    self.create_method_visibility_operation(
+                        &arg,
+                        visibility,
+                        DefinitionFlags::SINGLETON_METHOD_VISIBILITY,
+                    );
+                }
             } else {
                 let arg_offset = Offset::from_prism_location(&arg.location());
                 let message = if Self::is_attr_call(&arg) {

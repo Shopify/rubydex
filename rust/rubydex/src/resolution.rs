@@ -16,6 +16,7 @@ use crate::model::{
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
     ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId, UriId},
     name::{Name, NameRef, ParentScope},
+    visibility::Visibility,
 };
 
 enum Outcome {
@@ -635,7 +636,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolves retroactive method visibility changes (`private :foo`, `protected :foo`, `public :foo`,
-    /// `private_class_method :foo`, `public_class_method :foo`).
+    /// `private_class_method :foo`, `public_class_method :foo`, `module_function :foo`).
     ///
     /// Runs as a second pass after all methods/attrs are declared, so `private :bar` works
     /// regardless of whether `def bar` appeared before or after it in source.
@@ -652,12 +653,14 @@ impl<'a> Resolver<'a> {
             let offset = method_visibility.offset().clone();
             let lexical_nesting_id = *method_visibility.lexical_nesting_id();
             let is_singleton = method_visibility.flags().is_singleton_method_visibility();
+            let is_module_function = *method_visibility.visibility() == Visibility::ModuleFunction;
+            let is_module_function_singleton = is_singleton && is_module_function;
 
             let Some(lexical_owner_id) = self.resolve_lexical_owner(lexical_nesting_id, id) else {
                 continue;
             };
 
-            let owner_id = if is_singleton {
+            let namespace_id = if is_singleton && !is_module_function {
                 let Some(singleton_id) =
                     self.get_or_create_singleton_class(lexical_owner_id, SingletonAncestors::Eager)
                 else {
@@ -668,12 +671,12 @@ impl<'a> Resolver<'a> {
                 lexical_owner_id
             };
 
-            let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&owner_id) else {
+            let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&namespace_id) else {
                 continue;
             };
 
-            let mut visibility_applied = false;
-            let mut has_partial = false;
+            let mut visibility_definition_attached = false;
+            let mut ancestor_chain_is_incomplete = false;
 
             for ancestor in namespace.ancestors() {
                 match ancestor {
@@ -687,40 +690,51 @@ impl<'a> Resolver<'a> {
                             .is_some();
 
                         if has_member {
-                            // Direct member: `create_declaration`'s fully qualified name dedup attaches
-                            // this visibility definition to the existing method declaration.
-                            // Inherited: a new child-owned declaration is created.
-                            self.create_declaration(str_id, id, owner_id, |name| {
-                                Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                            });
-                            visibility_applied = true;
+                            if is_module_function_singleton {
+                                let Some(singleton_id) =
+                                    self.get_or_create_singleton_class(lexical_owner_id, SingletonAncestors::Eager)
+                                else {
+                                    break;
+                                };
+
+                                self.create_declaration(str_id, id, singleton_id, |name| {
+                                    Declaration::Method(Box::new(MethodDeclaration::new(name, singleton_id)))
+                                });
+                            } else {
+                                self.create_declaration(str_id, id, namespace_id, |name| {
+                                    Declaration::Method(Box::new(MethodDeclaration::new(name, namespace_id)))
+                                });
+                            }
+                            visibility_definition_attached = true;
                             break;
                         }
                     }
-                    Ancestor::Partial(_) => has_partial = true,
+                    Ancestor::Partial(_) => ancestor_chain_is_incomplete = true,
                 }
             }
 
-            if visibility_applied {
+            if visibility_definition_attached {
                 continue;
             }
 
-            if has_partial {
-                // Method might exist on an unresolved ancestor — requeue for retry.
+            if ancestor_chain_is_incomplete {
                 pending_work.push(Unit::Definition(id));
-            } else {
-                // Ancestors are fully resolved — method definitively doesn't exist.
-                let method_name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
-                let owner_name = self.graph.declarations().get(&owner_id).unwrap().name().to_string();
-                let diagnostic = Diagnostic::new(
-                    Rule::UndefinedMethodVisibilityTarget,
-                    uri_id,
-                    offset,
-                    format!("undefined method `{owner_name}#{method_name}` for visibility change"),
-                );
-
-                self.graph.add_document_diagnostic(uri_id, diagnostic);
+                continue;
             }
+
+            if is_module_function_singleton {
+                continue;
+            }
+
+            let method_name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
+            let owner_name = self.graph.declarations().get(&namespace_id).unwrap().name().to_string();
+            let diagnostic = Diagnostic::new(
+                Rule::UndefinedMethodVisibilityTarget,
+                uri_id,
+                offset,
+                format!("undefined method `{owner_name}#{method_name}` for visibility change"),
+            );
+            self.graph.add_document_diagnostic(uri_id, diagnostic);
         }
 
         // Must extend work here so incremental resolution can resolve previously unresolved visibility operations

@@ -5651,4 +5651,164 @@ mod visibility_resolution_tests {
         assert_visibility_eq!(context, "Foo::<Foo>#b()", Visibility::Private);
         assert_visibility_eq!(context, "Foo::<Foo>#c()", Visibility::Public);
     }
+
+    #[test]
+    fn inline_module_function() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module_function def bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+    }
+
+    #[test]
+    fn inline_module_function_singleton_companion_visibility_can_be_changed() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module_function def bar; end
+
+              class << self
+                private :bar
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Private);
+    }
+
+    #[test]
+    fn retroactive_module_function() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar; end
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+
+        // Instance: Method def + MethodVisibility def
+        assert_declaration_definitions_count_eq!(context, "Foo#bar()", 2);
+        // Singleton companion: only the MethodVisibility def is attached
+        assert_declaration_definitions_count_eq!(context, "Foo::<Foo>#bar()", 1);
+    }
+
+    #[test]
+    fn retroactive_module_function_undefined_target_emits_single_diagnostic() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              module_function :missing
+            end
+            ",
+        );
+        context.resolve();
+
+        // The singleton-side def stays silent; only the instance-side def emits.
+        assert_diagnostics_eq!(
+            context,
+            &["undefined-method-visibility-target: undefined method `Foo#missing()` for visibility change (2:20-2:27)"]
+        );
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#missing()");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+    }
+
+    #[test]
+    fn retroactive_module_function_singleton_companion_cleared_when_removed_multi_file() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module Foo
+              def bar; end
+              module_function :bar
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///b.rb",
+            r"
+            module Foo
+              def baz; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+
+        // Re-index a.rb without `module_function :bar`. Foo still has b.rb's Module def, so the
+        // namespace stays alive and no cascade through Foo's singleton class runs. The singleton
+        // companion must still be cleaned up via reverse-lookup invalidation of its own def.
+        context.index_uri(
+            "file:///a.rb",
+            r"
+            module Foo
+              def bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+    }
+
+    #[test]
+    fn retroactive_module_function_singleton_companion_cleared_when_removed() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar; end
+              module_function :bar
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_visibility_eq!(context, "Foo::<Foo>#bar()", Visibility::Public);
+
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            module Foo
+              def bar; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+    }
 }
