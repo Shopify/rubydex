@@ -565,14 +565,13 @@ Pagination: tools that may return a high number of results include `total` for p
 
 Use Grep instead for: literal string search, log messages, comments, non-Ruby files, or content search rather than structural queries."#;
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for RubydexServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(SERVER_INSTRUCTIONS.into()),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        let mut info = ServerInfo::default();
+        info.instructions = Some(SERVER_INSTRUCTIONS.into());
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info
     }
 }
 
