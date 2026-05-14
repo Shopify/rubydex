@@ -20,6 +20,20 @@ use rubydex::model::{
 };
 use url::Url;
 
+/// Directory names that are never worth descending into while indexing a workspace.
+/// Mirrors `Rubydex::Graph::IGNORED_DIRECTORIES` in the Ruby gem.
+const IGNORED_DIRECTORIES: &[&str] = &[
+    ".bundle",
+    ".claude",
+    ".git",
+    ".github",
+    ".ruby-lsp",
+    ".vscode",
+    "log",
+    "node_modules",
+    "tmp",
+];
+
 struct ServerState {
     graph: Option<Graph>,
     error: Option<String>,
@@ -46,9 +60,10 @@ impl RubydexServer {
     /// Spawns a background thread that indexes the codebase and marks the server as ready.
     pub fn spawn_indexer(&self, path: String) {
         let state = Arc::clone(&self.state);
+        let excluded = default_excluded_paths(&path);
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let (file_paths, errors) = rubydex::listing::collect_file_paths(vec![path], &HashSet::new());
+                let (file_paths, errors) = rubydex::listing::collect_file_paths(vec![path], &excluded);
                 for error in &errors {
                     eprintln!("Listing error: {error}");
                 }
@@ -93,6 +108,13 @@ impl RubydexServer {
         service.waiting().await?;
         Ok(())
     }
+}
+
+/// Builds the set of paths to skip during file discovery: each `IGNORED_DIRECTORIES`
+/// entry resolved against the workspace root.
+fn default_excluded_paths(root: &str) -> HashSet<PathBuf> {
+    let root = Path::new(root);
+    IGNORED_DIRECTORIES.iter().map(|dir| root.join(dir)).collect()
 }
 
 /// Returns a structured JSON error string with a machine-readable type, message, and suggestion.
@@ -1140,5 +1162,16 @@ mod tests {
             state.error = Some("something went wrong".into());
         }
         assert_error(&server.codebase_stats(), "indexing_failed");
+    }
+
+    #[test]
+    fn default_excluded_paths_resolves_ignored_dirs_against_root() {
+        let excluded = default_excluded_paths("/workspace");
+
+        assert_eq!(excluded.len(), IGNORED_DIRECTORIES.len());
+        assert!(excluded.contains(&PathBuf::from("/workspace/.claude")));
+        assert!(excluded.contains(&PathBuf::from("/workspace/node_modules")));
+        assert!(excluded.contains(&PathBuf::from("/workspace/tmp")));
+        assert!(!excluded.contains(&PathBuf::from("/workspace/lib")));
     }
 }
