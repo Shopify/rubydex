@@ -56,8 +56,10 @@ impl Graph {
     /// Falls back to `nesting` for enclosing scope context when there is no explicit parent scope.
     ///
     /// Note: this produces a concatenated name by piecing together name parts, not a properly
-    /// resolved qualified name.
-    pub(crate) fn build_concatenated_name_from_name(&self, name_id: NameId) -> String {
+    /// resolved qualified name. This is the best available rendering for names that never
+    /// resolve to a declaration -- e.g. an ancestor defined outside the indexed workspace.
+    #[must_use]
+    pub fn build_concatenated_name_from_name(&self, name_id: NameId) -> String {
         let Some(name_ref) = self.names().get(&name_id) else {
             return "<unknown>".to_string();
         };
