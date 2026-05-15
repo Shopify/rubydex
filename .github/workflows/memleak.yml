@@ -12,6 +12,9 @@ on:
       - "rust/**"
       - "ext/**"
 
+permissions:
+  contents: read
+
 jobs:
   memleak:
     runs-on: ubuntu-latest
