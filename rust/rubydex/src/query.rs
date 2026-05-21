@@ -799,23 +799,29 @@ pub fn follow_method_alias(graph: &Graph, alias_id: DefinitionId) -> Result<Decl
             return Err(AliasResolutionError::TargetNotMethod);
         };
 
-        // Stop at the first non-alias definition; otherwise track the smallest alias `DefinitionId` so the trace stays
-        // deterministic across runs. (If two aliases target different methods, we just pick one of them.)
-        let mut maybe_next_alias: Option<DefinitionId> = None;
+        // Stop at the first non-alias definition; otherwise track the latest alias `DefinitionId`
+        // by source position so the trace stays deterministic. We can't tie-break by raw
+        // `DefinitionId` value: those are obfuscated by a per-process random mask (see
+        // `model::id`) and so are not stable across runs. Source position (uri_id + offset) is
+        // stable across runs and matches the user-visible "last alias wins" intuition.
+        let mut maybe_next_alias: Option<(DefinitionId, (UriId, u32))> = None;
 
         for &def_id in target.definitions() {
-            if !matches!(
-                graph
-                    .definitions()
-                    .get(&def_id)
-                    .expect("declaration definition_id must exist in the graph"),
-                Definition::MethodAlias(_),
-            ) {
+            let Definition::MethodAlias(alias_def) = graph
+                .definitions()
+                .get(&def_id)
+                .expect("declaration definition_id must exist in the graph")
+            else {
                 return Ok(target_id);
-            }
+            };
 
-            maybe_next_alias = Some(maybe_next_alias.map_or(def_id, |m| m.min(def_id)));
+            let position = (*alias_def.uri_id(), alias_def.offset().start());
+            maybe_next_alias = Some(match maybe_next_alias {
+                Some((m, m_pos)) if m_pos >= position => (m, m_pos),
+                _ => (def_id, position),
+            });
         }
+        let maybe_next_alias = maybe_next_alias.map(|(id, _)| id);
 
         current = maybe_next_alias.ok_or(AliasResolutionError::TargetNotFound)?;
     }
@@ -840,25 +846,28 @@ mod tests {
             assert_results_eq!($context, $query, &MatchMode::default(), $expected);
         };
         ($context:expr, $query:expr, $match_mode:expr, $expected:expr) => {
-            let actual = declaration_search(&$context.graph(), $query, $match_mode);
-            assert_eq!(
-                actual,
-                $expected
-                    .into_iter()
-                    .map(|s| DeclarationId::from(s))
-                    .collect::<Vec<DeclarationId>>(),
-                "Unexpected search results: {:?}",
-                actual
-                    .iter()
-                    .map(|id| $context
+            // Compare as name-sorted sets. `declaration_search` walks declarations in HashMap
+            // iteration order, which is keyed off obfuscated `DeclarationId`s and therefore
+            // non-deterministic across runs (see `model::id`). The semantically meaningful check
+            // is "the same set of declarations matched", not the specific order they came out in.
+            let mut actual_names: Vec<String> = declaration_search(&$context.graph(), $query, $match_mode)
+                .iter()
+                .map(|id| {
+                    $context
                         .graph()
                         .declarations()
                         .get(id)
                         .unwrap()
                         .name()
-                        .to_string())
-                    .collect::<Vec<String>>()
-            );
+                        .to_string()
+                })
+                .collect();
+            actual_names.sort();
+
+            let mut expected_names: Vec<String> = $expected.into_iter().map(String::from).collect();
+            expected_names.sort();
+
+            assert_eq!(expected_names, actual_names, "Unexpected search results");
         };
     }
 
@@ -3302,9 +3311,11 @@ mod tests {
         );
     }
 
-    /// Returns the smallest `MethodAlias` `DefinitionId` for the declaration named `alias_decl_fqn`
-    /// (e.g., `"Foo#aliased()"`). Picking the smallest mirrors `follow_method_alias`'s own
-    /// determinism rule for tests where multiple aliases share a declaration (e.g. cross-file fixtures).
+    /// Returns the last-defined `MethodAlias` `DefinitionId` for the declaration named
+    /// `alias_decl_fqn` (e.g., `"Foo#aliased()"`), where "last" is by source position
+    /// (`uri_id`, `offset`). This mirrors `follow_method_alias`'s own determinism rule for tests
+    /// where multiple aliases share a declaration, and stays stable across runs even though raw
+    /// `DefinitionId` values are obfuscated (see `model::id`).
     fn alias_def_id(context: &GraphTest, alias_decl_fqn: &str) -> DefinitionId {
         let decl = context
             .graph()
@@ -3315,14 +3326,17 @@ mod tests {
         decl.definitions()
             .iter()
             .copied()
-            .filter(|def_id| {
-                matches!(
-                    context.graph().definitions().get(def_id),
-                    Some(Definition::MethodAlias(_)),
-                )
+            .filter_map(|def_id| match context.graph().definitions().get(&def_id) {
+                Some(Definition::MethodAlias(alias_def)) => {
+                    Some((def_id, (*alias_def.uri_id(), alias_def.offset().start())))
+                }
+                _ => None,
             })
-            .min()
-            .unwrap_or_else(|| panic!("declaration {alias_decl_fqn} has no MethodAlias definition"))
+            .max_by_key(|(_, position)| *position)
+            .map_or_else(
+                || panic!("declaration {alias_decl_fqn} has no MethodAlias definition"),
+                |(def_id, _)| def_id,
+            )
     }
 
     /// Asserts that the alias declared as `$alias_fqn` follows to the declaration `$target_fqn`.

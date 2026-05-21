@@ -1898,7 +1898,7 @@ impl<'a> Resolver<'a> {
                             singleton_methods.push(Unit::Definition(id));
                         }
                         _ => {
-                            others.push((id, (*definition.uri_id(), definition.offset())));
+                            others.push((id, (uri, definition.offset())));
                         }
                     }
                 }
@@ -1938,7 +1938,16 @@ impl<'a> Resolver<'a> {
             (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
         });
 
-        others.sort_unstable_by_key(|(_, key)| *key);
+        // Sort by URI string (not UriId) and offset so the order is stable across runs.
+        // UriIds are obfuscated by a per-process random mask (see `model::id`), so ordering by
+        // raw id would shuffle cross-file processing order between runs and break consumers that
+        // depend on "first-indexed wins" semantics (e.g. completion picks the first method def
+        // for keyword params).
+        // sort_unstable_by_key would require cloning the URI string for every comparison.
+        #[allow(clippy::unnecessary_sort_by)]
+        {
+            others.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+        }
 
         // Definitions first, then constant refs, then singleton methods, then ancestors
         self.unit_queue.extend(definitions.into_iter().map(|(id, _)| id));

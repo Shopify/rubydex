@@ -419,8 +419,22 @@ impl RubydexServer {
         let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(200); // default 50, max 200
         let offset = params.offset.unwrap_or(0);
 
+        // Sort references by source location (uri, then byte offset) so the output order is
+        // deterministic across runs. Reference IDs are obfuscated per-process, so iterating the
+        // underlying `IdentityHashSet` directly would yield a different order every run.
+        let mut sorted_refs: Vec<_> = decl.constant_references().into_iter().flatten().collect();
+        sorted_refs.sort_by_key(|ref_id| {
+            let cref = graph.constant_references().get(ref_id);
+            let uri = cref
+                .and_then(|r| graph.documents().get(&r.uri_id()))
+                .map(|d| d.uri().to_string())
+                .unwrap_or_default();
+            let start = cref.map_or(0, |r| r.offset().start());
+            (uri, start)
+        });
+
         let (references, total) = paginate!(
-            decl.constant_references().into_iter().flatten(),
+            sorted_refs.into_iter(),
             offset,
             limit,
             |ref_id| {

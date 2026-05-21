@@ -3158,11 +3158,19 @@ mod declaration_creation_tests {
             .collect::<Vec<_>>();
         assert_eq!(10, names.len());
 
-        names.sort_by_key(|(id, _)| depths.get(id).unwrap());
+        // Sort by (depth, name string) so the order is stable across runs. NameIds are obfuscated
+        // by a per-process random mask (see `model::id`), so we can't fall back to the underlying
+        // map's iteration order for tie-breaking between same-depth names.
+        names.sort_by_key(|(id, n)| {
+            (
+                *depths.get(id).unwrap(),
+                context.graph().strings().get(n.str()).unwrap().as_str().to_owned(),
+            )
+        });
 
         assert_eq!(
             [
-                "Top", "Foo", "Bar", "Qux", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
+                "Foo", "Top", "AfterTop", "Bar", "Qux", "Baz", "Zip", "Zap", "Zop", "Boop"
             ],
             names
                 .iter()

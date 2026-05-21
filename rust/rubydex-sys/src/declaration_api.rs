@@ -382,10 +382,20 @@ pub unsafe extern "C" fn rdx_declaration_descendants(pointer: GraphPointer, decl
             return Vec::new();
         };
 
-        declaration
+        // `descendants()` is an `IdentityHashSet<DeclarationId>`, so iteration order depends on
+        // the underlying `DeclarationId` values. Those are obfuscated with a per-process random
+        // mask (see `rubydex::model::id`), so iterating directly would yield a different order
+        // on every process. Sort by the declaration's name so the API surface stays stable
+        // across runs.
+        let mut entries: Vec<_> = declaration
             .descendants()
             .iter()
-            .map(|id| CDeclaration::from_declaration(*id, graph.declarations().get(id).unwrap()))
+            .map(|id| (*id, graph.declarations().get(id).unwrap()))
+            .collect();
+        entries.sort_by(|(_, a), (_, b)| a.name().cmp(b.name()));
+        entries
+            .into_iter()
+            .map(|(id, decl)| CDeclaration::from_declaration(id, decl))
             .collect::<Vec<_>>()
     });
 

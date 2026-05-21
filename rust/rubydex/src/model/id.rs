@@ -1,5 +1,26 @@
-use std::{marker::PhantomData, num::NonZeroU64, ops::Deref};
+use std::{
+    collections::hash_map::RandomState, hash::BuildHasher, marker::PhantomData, num::NonZeroU64, ops::Deref,
+    sync::LazyLock,
+};
 use xxhash_rust::xxh3;
+
+/// Process-wide random mask XOR-ed into every ID produced from a string hash.
+///
+/// IDs are an internal implementation detail; the indexer happens to derive them from a stable
+/// XXH3 hash of a canonical string, but C and Rust callers must not rely on that. Picking a fresh
+/// random mask each time the process starts makes IDs non-deterministic across runs (an example of
+/// applying [Hyrum's law](https://www.hyrumslaw.com/) defensively), while keeping them stable
+/// within a single run so equality, hashing, and lookups still work.
+///
+/// We use [`RandomState`], which is OS-seeded, to obtain entropy without taking on an extra crate
+/// dependency. Hashing a fixed input under a freshly-constructed `RandomState` yields a value
+/// that's effectively random for the lifetime of the process.
+static ID_OBFUSCATION_MASK: LazyLock<u64> = LazyLock::new(|| RandomState::new().hash_one(0_u64));
+
+#[inline]
+fn obfuscate(hash: u64) -> u64 {
+    hash ^ *ID_OBFUSCATION_MASK
+}
 
 /// Maps a u64 hash to a `NonZeroU64` by replacing 0 with `u64::MAX`.
 /// The probability of a 64-bit hash being exactly 0 is 2^-64 (~5.4e-20),
@@ -59,14 +80,14 @@ impl<T> std::fmt::Display for Id<T> {
 impl<T> From<&str> for Id<T> {
     fn from(value: &str) -> Self {
         let hash = xxh3::xxh3_64(value.as_bytes());
-        Self::new(hash)
+        Self::new(obfuscate(hash))
     }
 }
 
 impl<T> From<&String> for Id<T> {
     fn from(value: &String) -> Self {
         let hash = xxh3::xxh3_64(value.as_bytes());
-        Self::new(hash)
+        Self::new(obfuscate(hash))
     }
 }
 
@@ -106,5 +127,22 @@ mod tests {
     fn zero_hash_maps_to_nonzero() {
         let id = TestId::new(0);
         assert_eq!(id.get(), u64::MAX);
+    }
+
+    #[test]
+    fn from_str_is_obfuscated() {
+        // The mask is randomly initialized per process, so the ID we get back from `From<&str>`
+        // should almost never equal the raw XXH3 hash. (Equality would require the random mask to
+        // be exactly 0, which happens with probability 2^-64.)
+        let raw = xxh3::xxh3_64(b"obfuscation_check");
+        let id = TestId::from("obfuscation_check");
+        assert_ne!(id.get(), raw, "IDs should be obfuscated by the per-process mask");
+    }
+
+    #[test]
+    fn mask_is_nonzero() {
+        // A zero mask would defeat obfuscation. The probability of `RandomState` producing a 0
+        // here is 2^-64, so this is effectively a sanity assertion.
+        assert_ne!(*ID_OBFUSCATION_MASK, 0, "ID mask should be a random non-zero value");
     }
 }

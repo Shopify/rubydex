@@ -245,9 +245,12 @@ class DeclarationTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
+      # `descendants` is now returned sorted by declaration name, since the underlying
+      # set is keyed by obfuscated `DeclarationId`s and iterating it directly would
+      # produce a different order in every process. See `rdx_declaration_descendants`.
       assert_equal(["Child", "Parent"], graph["Parent"].descendants.map(&:name))
       assert_equal(["Child", "Foo"], graph["Foo"].descendants.map(&:name))
-      assert_equal(["Child", "Bar"], graph["Bar"].descendants.map(&:name))
+      assert_equal(["Bar", "Child"], graph["Bar"].descendants.map(&:name))
     end
   end
 
