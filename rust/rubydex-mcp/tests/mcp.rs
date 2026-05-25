@@ -300,3 +300,94 @@ fn mcp_server_e2e() {
         let _ = child.wait().unwrap();
     });
 }
+
+#[test]
+fn mcp_server_indexes_multiple_roots() {
+    with_context(|context| {
+        context.write("workspace/app.rb", "class WorkspaceThing; end");
+        context.write("dependency/lib/dependency_thing.rb", "class DependencyThing; end");
+
+        let mut child = Command::cargo_bin("rubydex_mcp")
+            .unwrap()
+            .args([
+                context.absolute_path_to("workspace").to_str().unwrap(),
+                context.absolute_path_to("dependency/lib").to_str().unwrap(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut reader = BufReader::new(stdout);
+
+        initialize_session(&mut stdin, &mut reader);
+
+        let mut request_id = 3;
+        wait_for_indexing_to_complete(&mut stdin, &mut reader, &mut request_id);
+
+        let search_response = call_next_tool(
+            &mut stdin,
+            &mut reader,
+            &mut request_id,
+            "search_declarations",
+            &json!({ "query": "DependencyThing" }),
+        );
+        let results = search_response["results"].as_array().unwrap();
+        let result_names = names_from_entries(results);
+        assert_has_name(&result_names, "DependencyThing", "search results");
+
+        drop(stdin);
+        let _ = child.wait().unwrap();
+    });
+}
+
+#[test]
+fn mcp_server_dedups_overlapping_roots() {
+    with_context(|context| {
+        // `lib/thing.rb` lives under the workspace root. Passing both the root and the nested
+        // `lib` directory makes the file discoverable through two roots, mirroring how a
+        // dependency's require_path (or the workspace's own gemspec) can nest under the root.
+        context.write("lib/thing.rb", "class OverlappingThing; end");
+
+        let mut child = Command::cargo_bin("rubydex_mcp")
+            .unwrap()
+            .args([
+                context.absolute_path().to_str().unwrap(),
+                context.absolute_path_to("lib").to_str().unwrap(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut reader = BufReader::new(stdout);
+
+        initialize_session(&mut stdin, &mut reader);
+
+        let mut request_id = 3;
+        wait_for_indexing_to_complete(&mut stdin, &mut reader, &mut request_id);
+
+        let decl = call_next_tool(
+            &mut stdin,
+            &mut reader,
+            &mut request_id,
+            "get_declaration",
+            &json!({ "name": "OverlappingThing" }),
+        );
+        let definitions = decl["definitions"].as_array().unwrap();
+        assert_eq!(
+            definitions.len(),
+            1,
+            "Expected the doubly-discovered file to yield exactly one definition, got: {decl}"
+        );
+
+        drop(stdin);
+        let _ = child.wait().unwrap();
+    });
+}

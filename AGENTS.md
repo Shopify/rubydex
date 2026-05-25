@@ -33,6 +33,26 @@ the Ruby VM to the Rust crate logic.
 - `lib`: The rest of the Ruby code
 - `test`: Ruby test files
 
+### MCP launcher
+
+`exe/rubydex_mcp` is a thin Ruby wrapper that boots a Bundler context before `exec`ing the precompiled
+`rubydex_mcp` Rust binary. Its only job is to discover index roots that require Ruby/Bundler context — the
+Rust server still performs the actual indexing pass.
+
+`lib/rubydex/mcp_server_bridge.rb` (`Rubydex::MCPServerBridge`) holds the launcher logic:
+
+- It is launcher-only. **Do not require it from `lib/rubydex.rb`** — the main Ruby API owns graph construction
+  through `Rubydex::Graph`.
+- `setup_bundler_context` activates the workspace's Bundler environment. It mutates `ENV["BUNDLE_GEMFILE"]`
+  (only if unset), which is acceptable in the launcher since it execs immediately, but long-lived callers
+  (e.g. tests) must save and restore that variable.
+- `compute_index_paths` returns the workspace path(s) plus every Bundler dependency `require_path`, so the
+  Rust server indexes both the project and its gem dependencies. Only the first argv entry drives the Bundler
+  context, but all argv entries become index roots.
+- Index roots may overlap (a dependency nested under the workspace, or the workspace's own gemspec resolving
+  back to the root). This is harmless: the graph keys documents by `UriId` and overwrites on re-index, so a
+  doubly-discovered file costs only wasted indexing work, never duplicate declarations.
+
 ### Naming Conventions
 
 The C extension uses prefixed function names to distinguish between abstraction layers:
