@@ -28,6 +28,11 @@ module Rubydex
     include Visibility
   end
 
+  class SingletonClass < Namespace
+    #: () -> Declaration
+    alias_method :attached_class, :owner
+  end
+
   class Constant < Declaration
     include Visibility
   end

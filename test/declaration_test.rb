@@ -154,6 +154,28 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_singleton_class_attached_class_aliases_owner
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo; end
+
+        class Bar
+          extend Foo
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      singleton_class = graph["Foo"].descendants.find { |decl| decl.is_a?(Rubydex::SingletonClass) }
+      assert_respond_to(singleton_class, :attached_class)
+      assert_equal("Bar::<Bar>", singleton_class.name)
+      assert_equal("Bar", singleton_class.owner.name)
+      assert_equal(singleton_class.owner.name, singleton_class.attached_class.name)
+    end
+  end
+
   def test_declaration_kinds_return_specialized_classes
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

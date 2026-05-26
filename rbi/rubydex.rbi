@@ -122,7 +122,11 @@ end
 
 class Rubydex::Class < Rubydex::Namespace; end
 class Rubydex::Module < Rubydex::Namespace; end
-class Rubydex::SingletonClass < Rubydex::Namespace; end
+
+class Rubydex::SingletonClass < Rubydex::Namespace
+  sig { returns(Rubydex::Declaration) }
+  def attached_class; end
+end
 
 class Rubydex::Definition
   abstract!
