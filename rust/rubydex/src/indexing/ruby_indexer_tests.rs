@@ -4,7 +4,7 @@ use crate::{
     assert_method_has_receiver, assert_name_path_eq, assert_no_local_diagnostics, assert_string_eq,
     model::{
         definitions::{Definition, Parameter, Receiver, Signatures},
-        ids::{StringId, UriId},
+        ids::{DefinitionId, StringId, UriId},
         visibility::Visibility,
     },
     test_utils::LocalGraphTest,
@@ -2049,6 +2049,184 @@ mod visibility_tests {
     }
 
     #[test]
+    fn index_no_arg_module_function_in_class_is_invalid() {
+        let context = index_source(
+            "
+            class Foo
+              module_function
+              def foo; end
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `module_function` can only be used in modules (2:3-2:18)"]
+        );
+
+        assert_definition_at!(&context, "3:3-3:15", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function in class"
+            );
+        }
+    }
+
+    #[test]
+    fn index_no_arg_module_function_at_top_level_is_invalid() {
+        let context = index_source(
+            "
+            module_function
+            def foo; end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `module_function` can only be used in modules (1:1-1:16)"]
+        );
+
+        assert_definition_at!(&context, "2:1-2:13", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Private);
+        });
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function at top level"
+            );
+        }
+    }
+
+    #[test]
+    fn index_no_arg_module_function_in_singleton_class_is_invalid() {
+        let context = index_source(
+            "
+            module Foo
+              class << self
+                module_function
+                def foo; end
+              end
+            end
+            ",
+        );
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec!["invalid-method-visibility: `module_function` can only be used in modules (3:5-3:20)"]
+        );
+
+        assert_definition_at!(&context, "4:5-4:17", Method, |def| {
+            assert_def_str_eq!(&context, def, "foo()");
+            assert_eq!(def.visibility(), &Visibility::Public);
+        });
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function in singleton class"
+            );
+        }
+    }
+
+    #[test]
+    fn index_module_function_inside_method_body_is_a_runtime_call() {
+        let context = index_source(
+            "
+            module Foo
+              def setup
+                module_function :bar
+              end
+
+              def bar; end
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function in a method body until runtime"
+            );
+        }
+    }
+
+    #[test]
+    fn index_module_function_inside_singleton_method_body_is_a_runtime_call() {
+        let context = index_source(
+            "
+            module Foo
+              def self.setup
+                module_function :bar
+              end
+
+              def bar; end
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function in a singleton method body until runtime"
+            );
+        }
+    }
+
+    #[test]
+    fn index_module_function_inside_block_body_is_a_runtime_call() {
+        let context = index_source(
+            "
+            module Foo
+              proc do
+                module_function :bar
+              end
+
+              def bar; end
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        for def in context.graph().definitions().values() {
+            assert!(
+                !matches!(def, Definition::MethodVisibility(_)),
+                "should not create MethodVisibility for module_function in an ordinary block until runtime"
+            );
+        }
+    }
+
+    #[test]
+    fn index_module_function_inside_module_new_block_is_static_module_body() {
+        let context = index_source(
+            "
+            Foo = Module.new do
+              def bar; end
+              module_function :bar
+            end
+            ",
+        );
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "3:20-3:23", MethodVisibility, |def| {
+            assert_def_str_eq!(&context, def, "bar()");
+            assert_eq!(def.visibility(), &Visibility::ModuleFunction);
+        });
+    }
+
+    #[test]
     fn index_inline_visibility_mixed_with_retroactive() {
         let context = index_source(
             "
@@ -2469,6 +2647,42 @@ mod visibility_tests {
 mod attr_accessor_tests {
     use super::*;
 
+    fn assert_attr_accessor_pair(
+        context: &LocalGraphTest,
+        location: &str,
+        reader_name: &str,
+        writer_name: &str,
+        visibility: Visibility,
+    ) -> (DefinitionId, DefinitionId) {
+        let definitions = context.all_definitions_at(location);
+        assert_eq!(
+            definitions.len(),
+            2,
+            "expected reader and writer definitions at {location}"
+        );
+
+        let mut reader_id = None;
+        let mut writer_id = None;
+
+        for definition in definitions {
+            match definition {
+                Definition::AttrAccessor(def) => {
+                    assert_def_str_eq!(context, def, reader_name);
+                    assert_eq!(def.visibility(), &visibility);
+                    reader_id = Some(def.id());
+                }
+                Definition::AttrWriter(def) => {
+                    assert_def_str_eq!(context, def, writer_name);
+                    assert_eq!(def.visibility(), &visibility);
+                    writer_id = Some(def.id());
+                }
+                other => panic!("expected attr accessor pair, got {:?}", other.kind()),
+            }
+        }
+
+        (reader_id.unwrap(), writer_id.unwrap())
+    }
+
     #[test]
     fn index_attr_accessor_definition() {
         let context = index_source({
@@ -2484,29 +2698,18 @@ mod attr_accessor_tests {
         });
 
         assert_no_local_diagnostics!(&context);
-        assert_eq!(context.graph().definitions().len(), 4);
+        assert_eq!(context.graph().definitions().len(), 7);
 
-        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-            assert_def_str_eq!(&context, def, "foo()");
-            assert!(def.lexical_nesting_id().is_none());
-        });
+        assert_attr_accessor_pair(&context, "1:16-1:19", "foo()", "foo=()", Visibility::Private);
 
-        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-            assert_def_str_eq!(&context, def, "bar()");
+        let first_pair = assert_attr_accessor_pair(&context, "4:18-4:21", "bar()", "bar=()", Visibility::Public);
+        let second_pair = assert_attr_accessor_pair(&context, "4:24-4:27", "baz()", "baz=()", Visibility::Public);
 
-            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[0], def.id());
-            });
-        });
-
-        assert_definition_at!(&context, "4:24-4:27", AttrAccessor, |def| {
-            assert_def_str_eq!(&context, def, "baz()");
-
-            assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[1], def.id());
-            });
+        assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
+            assert_eq!(
+                parent_nesting.members(),
+                &[first_pair.0, first_pair.1, second_pair.0, second_pair.1]
+            );
         });
     }
 
@@ -2565,12 +2768,12 @@ mod attr_accessor_tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "foo()");
+            assert_def_str_eq!(&context, def, "foo=()");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "bar()");
+            assert_def_str_eq!(&context, def, "bar=()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2579,7 +2782,7 @@ mod attr_accessor_tests {
         });
 
         assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "baz()");
+            assert_def_str_eq!(&context, def, "baz=()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2603,7 +2806,7 @@ mod attr_accessor_tests {
         });
 
         assert_no_local_diagnostics!(&context);
-        assert_eq!(context.graph().definitions().len(), 6);
+        assert_eq!(context.graph().definitions().len(), 7);
 
         assert_definition_at!(&context, "1:6-1:10", AttrReader, |def| {
             assert_def_str_eq!(&context, def, "a1()");
@@ -2615,21 +2818,15 @@ mod attr_accessor_tests {
             assert!(def.lexical_nesting_id().is_none());
         });
 
-        assert_definition_at!(&context, "4:8-4:12", AttrAccessor, |def| {
-            assert_def_str_eq!(&context, def, "a3()");
-
-            assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
-                assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[0], def.id());
-            });
-        });
+        let (a3_reader_id, a3_writer_id) =
+            assert_attr_accessor_pair(&context, "4:8-4:12", "a3()", "a3=()", Visibility::Public);
 
         assert_definition_at!(&context, "5:9-5:11", AttrReader, |def| {
             assert_def_str_eq!(&context, def, "a4()");
 
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[1], def.id());
+                assert_eq!(parent_nesting.members()[2], def.id());
             });
         });
 
@@ -2637,8 +2834,13 @@ mod attr_accessor_tests {
             assert_def_str_eq!(&context, def, "a5()");
             assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
-                assert_eq!(parent_nesting.members()[2], def.id());
+                assert_eq!(parent_nesting.members()[3], def.id());
             });
+        });
+
+        assert_definition_at!(&context, "3:1-7:4", Class, |parent_nesting| {
+            assert_eq!(parent_nesting.members()[0], a3_reader_id);
+            assert_eq!(parent_nesting.members()[1], a3_writer_id);
         });
     }
 
@@ -2658,10 +2860,7 @@ mod attr_accessor_tests {
 
         assert_no_local_diagnostics!(&context);
 
-        assert_definition_at!(&context, "1:16-1:19", AttrAccessor, |def| {
-            assert_def_str_eq!(&context, def, "foo()");
-            assert_eq!(def.visibility(), &Visibility::Private);
-        });
+        assert_attr_accessor_pair(&context, "1:16-1:19", "foo()", "foo=()", Visibility::Private);
 
         assert_definition_at!(&context, "3:24-3:27", AttrReader, |def| {
             assert_def_str_eq!(&context, def, "bar()");
@@ -2669,7 +2868,7 @@ mod attr_accessor_tests {
         });
 
         assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "baz()");
+            assert_def_str_eq!(&context, def, "baz=()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
@@ -2702,15 +2901,8 @@ mod attr_accessor_tests {
 
         assert_no_local_diagnostics!(&context);
 
-        assert_definition_at!(&context, "4:18-4:21", AttrAccessor, |def| {
-            assert_def_str_eq!(&context, def, "foo()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
-
-        assert_definition_at!(&context, "9:20-9:23", AttrAccessor, |def| {
-            assert_def_str_eq!(&context, def, "bar()");
-            assert_eq!(def.visibility(), &Visibility::Public);
-        });
+        assert_attr_accessor_pair(&context, "4:18-4:21", "foo()", "foo=()", Visibility::Public);
+        assert_attr_accessor_pair(&context, "9:20-9:23", "bar()", "bar=()", Visibility::Public);
 
         assert_definition_at!(&context, "13:18-13:21", AttrReader, |def| {
             assert_def_str_eq!(&context, def, "baz()");
@@ -2718,7 +2910,7 @@ mod attr_accessor_tests {
         });
 
         assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "qux()");
+            assert_def_str_eq!(&context, def, "qux=()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
     }
@@ -4348,17 +4540,31 @@ mod comment_tests {
             assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
         });
 
-        assert_definition_at!(&context, "13:18-13:21", AttrAccessor, |def| {
-            assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
-        });
+        for location in ["13:18-13:21", "13:24-13:27"] {
+            let definitions = context.all_definitions_at(location);
+            assert_eq!(definitions.len(), 2);
+            for definition in definitions {
+                match definition {
+                    Definition::AttrAccessor(def) => {
+                        assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
+                    }
+                    Definition::AttrWriter(def) => {
+                        assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
+                    }
+                    other => panic!("expected attr accessor pair, got {:?}", other.kind()),
+                }
+            }
+        }
 
-        assert_definition_at!(&context, "13:24-13:27", AttrAccessor, |def| {
-            assert_def_comments_eq!(&context, def, ["# Comment 1", "# Comment 2", "# Comment 3"]);
-        });
-
-        assert_definition_at!(&context, "16:9-16:13", AttrAccessor, |def| {
-            assert_def_comments_eq!(&context, def, ["# Comment"]);
-        });
+        let definitions = context.all_definitions_at("16:9-16:13");
+        assert_eq!(definitions.len(), 2);
+        for definition in definitions {
+            match definition {
+                Definition::AttrAccessor(def) => assert_def_comments_eq!(&context, def, ["# Comment"]),
+                Definition::AttrWriter(def) => assert_def_comments_eq!(&context, def, ["# Comment"]),
+                other => panic!("expected attr accessor pair, got {:?}", other.kind()),
+            }
+        }
     }
 
     #[test]

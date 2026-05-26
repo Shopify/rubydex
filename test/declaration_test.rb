@@ -1059,6 +1059,24 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_retroactive_module_function_visibility
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Foo
+          def bar; end
+          module_function :bar
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(:private, graph["Foo#bar()"].visibility)
+      assert_equal(:public, graph["Foo::<Foo>#bar()"].visibility)
+    end
+  end
+
   def test_visibility_predicates
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

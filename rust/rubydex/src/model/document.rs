@@ -82,6 +82,13 @@ impl Document {
         self.diagnostics.push(diagnostic);
     }
 
+    pub fn retain_diagnostics<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&Diagnostic) -> bool,
+    {
+        self.diagnostics.retain(|diagnostic| f(diagnostic));
+    }
+
     /// Computes the require path for this document given load paths.
     ///
     /// Returns `None` if:

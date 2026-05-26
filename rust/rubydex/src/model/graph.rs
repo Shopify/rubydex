@@ -1,6 +1,9 @@
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
+
+mod visibility;
 
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
@@ -9,12 +12,14 @@ use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, MethodVisibilityDefinition, Receiver};
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
+use crate::model::graph_indexes::{AppliedMethodVisibilities, ModuleFunctionCopies, UnresolvedMethodVisibilities};
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
 use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::model::visibility::Visibility;
+use crate::offset::Offset;
 use crate::{query, stats};
 
 /// An entity whose validity depends on a particular `NameId`.
@@ -27,6 +32,35 @@ pub enum NameDependent {
     ChildName(NameId),
     /// This name's `nesting` is the key name — reference-only dependency.
     NestedName(NameId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DefinitionProgramOrderKey<'a> {
+    id: DefinitionId,
+    uri: &'a str,
+    offset: &'a Offset,
+}
+
+impl<'a> DefinitionProgramOrderKey<'a> {
+    #[must_use]
+    pub(crate) fn new(id: DefinitionId, uri: &'a str, offset: &'a Offset) -> Self {
+        Self { id, uri, offset }
+    }
+}
+
+impl Ord for DefinitionProgramOrderKey<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.uri
+            .cmp(other.uri)
+            .then_with(|| self.offset.cmp(other.offset))
+            .then_with(|| self.id.cmp(&other.id))
+    }
+}
+
+impl PartialOrd for DefinitionProgramOrderKey<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// Items processed by the unified invalidation worklist.
@@ -81,6 +115,10 @@ pub struct Graph {
     /// Drained by `take_pending_work()` before resolution.
     pending_work: Vec<Unit>,
 
+    module_function_copies: ModuleFunctionCopies,
+    unresolved_method_visibilities: UnresolvedMethodVisibilities,
+    applied_method_visibilities: AppliedMethodVisibilities,
+
     /// Paths to exclude from file discovery during indexing.
     excluded_paths: HashSet<PathBuf>,
 }
@@ -99,6 +137,9 @@ impl Graph {
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
+            module_function_copies: ModuleFunctionCopies::default(),
+            unresolved_method_visibilities: UnresolvedMethodVisibilities::default(),
+            applied_method_visibilities: AppliedMethodVisibilities::default(),
             excluded_paths: HashSet::new(),
         };
 
@@ -186,6 +227,30 @@ impl Graph {
         declaration_id
     }
 
+    fn detach_definition_from_declaration(&mut self, declaration_id: DeclarationId, definition_id: DefinitionId) {
+        self.detach_applied_method_visibility(definition_id);
+
+        let Some((owner_id, unqualified_str_id)) = (|| {
+            let declaration = self.declarations.get_mut(&declaration_id)?;
+
+            if !declaration.remove_definition(&definition_id) || !declaration.has_no_definitions() {
+                return None;
+            }
+
+            Some((*declaration.owner_id(), StringId::from(&declaration.unqualified_name())))
+        })() else {
+            return;
+        };
+
+        self.declarations.remove(&declaration_id);
+
+        if let Some(owner) = self.declarations.get_mut(&owner_id)
+            && let Some(namespace) = owner.as_namespace_mut()
+        {
+            namespace.remove_member(&unqualified_str_id);
+        }
+    }
+
     /// Checks if all constant definitions for a declaration have the PROMOTABLE flag set.
     /// Used to determine whether a constant can be promoted to a namespace.
     #[must_use]
@@ -230,6 +295,109 @@ impl Graph {
     #[must_use]
     pub fn definitions(&self) -> &IdentityHashMap<DefinitionId, Definition> {
         &self.definitions
+    }
+
+    /// Returns the static program-order key used when Rubydex needs a deterministic tie-breaker.
+    ///
+    /// Ruby load order is not known from a set of indexed documents, so cross-file ordering uses URI lexical order only
+    /// for deterministic selection/presentation. Same-file ordering uses source offsets.
+    pub(crate) fn definition_program_order_key(&self, definition_id: DefinitionId) -> Option<(&str, &Offset)> {
+        let definition = self.definitions.get(&definition_id)?;
+        let document = self.documents.get(definition.uri_id())?;
+        Some((document.uri(), definition.offset()))
+    }
+
+    pub(crate) fn definition_effect_order_key(&self, definition_id: DefinitionId) -> Option<(&str, &Offset)> {
+        if let Some(copy) = self.module_function_copies.get(definition_id) {
+            return copy
+                .trigger_definition_ids
+                .iter()
+                .filter_map(|trigger_definition_id| {
+                    let (trigger_uri, trigger_offset) = self.definition_program_order_key(*trigger_definition_id)?;
+                    Some((*trigger_definition_id, trigger_uri, trigger_offset))
+                })
+                .min_by(
+                    |(left_id, left_uri, left_offset), (right_id, right_uri, right_offset)| {
+                        DefinitionProgramOrderKey::new(*left_id, left_uri, left_offset)
+                            .cmp(&DefinitionProgramOrderKey::new(*right_id, right_uri, right_offset))
+                    },
+                )
+                .map(|(_, trigger_uri, trigger_offset)| (trigger_uri, trigger_offset))
+                .or_else(|| self.definition_program_order_key(definition_id));
+        }
+
+        self.definition_program_order_key(definition_id)
+    }
+
+    fn min_program_order_key<'a>(
+        current: Option<(DefinitionId, &'a str, &'a Offset)>,
+        candidate: (DefinitionId, &'a str, &'a Offset),
+    ) -> (DefinitionId, &'a str, &'a Offset) {
+        match current {
+            Some(current)
+                if DefinitionProgramOrderKey::new(current.0, current.1, current.2)
+                    .cmp(&DefinitionProgramOrderKey::new(candidate.0, candidate.1, candidate.2))
+                    .is_le() =>
+            {
+                current
+            }
+            _ => candidate,
+        }
+    }
+
+    pub(crate) fn definition_order_key_before_position(
+        &self,
+        definition_id: DefinitionId,
+        uri_id: UriId,
+        offset: &Offset,
+    ) -> Option<(bool, &str, &Offset)> {
+        let position_uri = self.documents.get(&uri_id)?.uri();
+
+        if let Some(copy) = self.module_function_copies.get(definition_id) {
+            let mut same_file_key = None;
+            let mut cross_file_key = None;
+
+            for trigger_definition_id in &copy.trigger_definition_ids {
+                let Some((trigger_uri, trigger_offset)) = self.definition_program_order_key(*trigger_definition_id)
+                else {
+                    continue;
+                };
+
+                if trigger_uri == position_uri {
+                    if trigger_offset.start() < offset.start() {
+                        same_file_key = Some(Self::min_program_order_key(
+                            same_file_key,
+                            (*trigger_definition_id, trigger_uri, trigger_offset),
+                        ));
+                    }
+                } else {
+                    cross_file_key = Some(Self::min_program_order_key(
+                        cross_file_key,
+                        (*trigger_definition_id, trigger_uri, trigger_offset),
+                    ));
+                }
+            }
+
+            if let Some((_, uri, offset)) = same_file_key {
+                return Some((true, uri, offset));
+            }
+            if let Some((_, uri, offset)) = cross_file_key {
+                return Some((false, uri, offset));
+            }
+
+            return None;
+        }
+
+        let (definition_uri, definition_offset) = self.definition_program_order_key(definition_id)?;
+        if definition_uri == position_uri {
+            if definition_offset.start() < offset.start() {
+                return Some((true, definition_uri, definition_offset));
+            }
+
+            return None;
+        }
+
+        Some((false, definition_uri, definition_offset))
     }
 
     /// Returns the ID of the unqualified name of a definition
@@ -504,6 +672,14 @@ impl Graph {
         string_id
     }
 
+    pub(crate) fn prepare_generated_string(&mut self, string: String) -> StringId {
+        let string_id = StringId::from(&string);
+        self.strings
+            .entry(string_id)
+            .or_insert_with(|| StringRef::new_pending(string));
+        string_id
+    }
+
     /// Registers a name in the graph unless already registered. In regular indexing, this only happens in the local
     /// graph. This method is only used to back the `Graph#resolve_constant` Ruby API because every name must be
     /// registered in the graph to properly resolve
@@ -661,40 +837,42 @@ impl Graph {
                 Some(Visibility::Public)
             }
             Declaration::Method(_) => {
-                let mut latest_alias: Option<DefinitionId> = None;
-
-                for def_id in definitions.iter().rev() {
-                    let Some(definition) = self.definitions.get(def_id) else {
-                        continue;
-                    };
-
-                    let visibility = match definition {
-                        Definition::MethodVisibility(vis) => Some(*vis.visibility()),
-                        Definition::Method(method) => Some(*method.visibility()),
-                        Definition::AttrAccessor(attr) => Some(*attr.visibility()),
-                        Definition::AttrReader(attr) => Some(*attr.visibility()),
-                        Definition::AttrWriter(attr) => Some(*attr.visibility()),
-                        Definition::MethodAlias(_) => {
-                            if latest_alias.is_none() {
-                                latest_alias = Some(*def_id);
-                            }
-                            None
-                        }
-                        _ => None,
-                    };
-
-                    if visibility.is_some() {
-                        return visibility;
-                    }
-                }
-
-                if let Some(alias_def_id) = latest_alias
-                    && let Ok(target_id) = query::follow_method_alias(self, alias_def_id)
+                if !definitions
+                    .iter()
+                    .any(|definition_id| self.module_function_copies.get(*definition_id).is_some())
                 {
-                    return self.visibility(&target_id);
+                    return self.method_visibility_from_definitions(definitions.iter().rev().copied());
                 }
 
-                Some(Visibility::Public)
+                let mut ordered_definitions = definitions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, definition_id)| self.definitions.contains_key(definition_id))
+                    .map(|(index, definition_id)| (index, *definition_id))
+                    .collect::<Vec<_>>();
+
+                ordered_definitions.sort_unstable_by(|(left_index, left_id), (right_index, right_id)| {
+                    let left_generated = self.module_function_copies.get(*left_id).is_some();
+                    let right_generated = self.module_function_copies.get(*right_id).is_some();
+
+                    // Keep declaration order across different files here. URI order is only a deterministic resolver
+                    // approximation, not Ruby load order; using it for current visibility would let a cross-file
+                    // generated copy override already-known declaration order. Same-file generated copies still use
+                    // their trigger/effect offset so visibility calls before vs. after `module_function` behave correctly.
+                    if (left_generated || right_generated)
+                        && let (Some((left_uri, left_offset)), Some((right_uri, right_offset))) = (
+                            self.definition_effect_order_key(*left_id),
+                            self.definition_effect_order_key(*right_id),
+                        )
+                        && left_uri == right_uri
+                    {
+                        return left_offset.cmp(right_offset).then_with(|| left_index.cmp(right_index));
+                    }
+
+                    left_index.cmp(right_index)
+                });
+
+                self.method_visibility_from_definitions(ordered_definitions.into_iter().rev().map(|(_, def_id)| def_id))
             }
             Declaration::Namespace(Namespace::SingletonClass(_))
             | Declaration::GlobalVariable(_)
@@ -703,9 +881,46 @@ impl Graph {
         }
     }
 
+    fn method_visibility_from_definitions(
+        &self,
+        definition_ids: impl IntoIterator<Item = DefinitionId>,
+    ) -> Option<Visibility> {
+        let mut latest_alias: Option<DefinitionId> = None;
+
+        for def_id in definition_ids {
+            let Some(definition) = self.definitions.get(&def_id) else {
+                continue;
+            };
+
+            if let Some(visibility) = definition.method_effective_visibility() {
+                return Some(visibility);
+            }
+
+            if matches!(definition, Definition::MethodAlias(_)) && latest_alias.is_none() {
+                latest_alias = Some(def_id);
+            }
+        }
+
+        if let Some(alias_def_id) = latest_alias
+            && let Ok(target_id) = query::follow_method_alias(self, alias_def_id)
+        {
+            return self.visibility(&target_id);
+        }
+
+        Some(Visibility::Public)
+    }
+
     /// Drains the accumulated work items, returning them for use by the resolver.
     pub fn take_pending_work(&mut self) -> Vec<Unit> {
         std::mem::take(&mut self.pending_work)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn assert_method_visibility_indexes_consistent(&self) {
+        self.applied_method_visibilities
+            .assert_visibility_definitions_exist(&self.definitions);
+        self.unresolved_method_visibilities
+            .assert_visibility_definitions_exist(&self.definitions);
     }
 
     pub(crate) fn push_work(&mut self, unit: Unit) {
@@ -799,7 +1014,7 @@ impl Graph {
         }
     }
 
-    fn untrack_definition_strings(&mut self, definition: &Definition) {
+    fn for_each_definition_string(definition: &Definition, mut f: impl FnMut(StringId)) {
         match definition {
             Definition::Class(_)
             | Definition::SingletonClass(_)
@@ -807,23 +1022,50 @@ impl Graph {
             | Definition::Constant(_)
             | Definition::ConstantAlias(_)
             | Definition::ConstantVisibility(_) => {}
-            Definition::MethodVisibility(d) => self.untrack_string(*d.str_id()),
-            Definition::Method(d) => self.untrack_string(*d.str_id()),
-            Definition::AttrAccessor(d) => self.untrack_string(*d.str_id()),
-            Definition::AttrReader(d) => self.untrack_string(*d.str_id()),
-            Definition::AttrWriter(d) => self.untrack_string(*d.str_id()),
-            Definition::GlobalVariable(d) => self.untrack_string(*d.str_id()),
-            Definition::InstanceVariable(d) => self.untrack_string(*d.str_id()),
-            Definition::ClassVariable(d) => self.untrack_string(*d.str_id()),
+            Definition::MethodVisibility(d) => f(*d.str_id()),
+            Definition::Method(d) => {
+                f(*d.str_id());
+                for signature in d.signatures().as_slice() {
+                    for parameter in signature {
+                        f(*parameter.inner().str());
+                    }
+                }
+            }
+            Definition::AttrAccessor(d) => f(*d.str_id()),
+            Definition::AttrReader(d) => f(*d.str_id()),
+            Definition::AttrWriter(d) => f(*d.str_id()),
+            Definition::GlobalVariable(d) => f(*d.str_id()),
+            Definition::InstanceVariable(d) => f(*d.str_id()),
+            Definition::ClassVariable(d) => f(*d.str_id()),
             Definition::MethodAlias(d) => {
-                self.untrack_string(*d.new_name_str_id());
-                self.untrack_string(*d.old_name_str_id());
+                f(*d.new_name_str_id());
+                f(*d.old_name_str_id());
             }
             Definition::GlobalVariableAlias(d) => {
-                self.untrack_string(*d.new_name_str_id());
-                self.untrack_string(*d.old_name_str_id());
+                f(*d.new_name_str_id());
+                f(*d.old_name_str_id());
             }
         }
+    }
+
+    fn untrack_definition_strings(&mut self, definition: &Definition) {
+        Self::for_each_definition_string(definition, |string_id| self.untrack_string(string_id));
+    }
+
+    fn track_definition_strings(&mut self, definition: &Definition) {
+        // Local-graph definitions arrive with their strings already tracked by the
+        // indexer. Generated definitions are inserted directly into the graph, so
+        // their strings must have been interned or prepared before this point.
+        Self::for_each_definition_string(definition, |string_id| self.track_string(string_id));
+    }
+
+    fn track_string(&mut self, string_id: StringId) {
+        let Some(string_ref) = self.strings.get_mut(&string_id) else {
+            debug_assert!(false, "Cannot track a string that has not been interned or prepared");
+            return;
+        };
+
+        string_ref.increment_ref_count(1);
     }
 
     /// Decrements the ref count for a name and removes it if the count reaches zero.
@@ -1038,11 +1280,24 @@ impl Graph {
 
         // Identify declarations affected by removed definitions
         if let Some(document) = old_document {
+            let mut module_function_visibility_ids = Vec::new();
             for def_id in document.definitions() {
+                module_function_visibility_ids.extend(self.remove_module_function_copies_for_source(*def_id));
+                module_function_visibility_ids.extend(self.remove_module_function_copies_for_alias(*def_id));
+                module_function_visibility_ids.extend(self.remove_method_visibility_side_effects(*def_id));
+
                 if let Some(declaration_id) = self.definition_id_to_declaration_id(*def_id).copied() {
                     pending_detachments.entry(declaration_id).or_default().push(*def_id);
                 }
             }
+
+            for visibility_id in module_function_visibility_ids {
+                if let Some(declaration_id) = self.definition_id_to_declaration_id(visibility_id).copied() {
+                    self.detach_definition_from_declaration(declaration_id, visibility_id);
+                }
+                self.push_work(Unit::Definition(visibility_id));
+            }
+
             for decl_id in pending_detachments.keys() {
                 items.push(InvalidationItem::Declaration(*decl_id));
             }
@@ -1119,6 +1374,10 @@ impl Graph {
             .collect();
 
         if !missed_def_ids.is_empty() {
+            for def_id in &missed_def_ids {
+                self.detach_applied_method_visibility(*def_id);
+            }
+
             for declaration in self.declarations.values_mut() {
                 for def_id in &missed_def_ids {
                     declaration.remove_definition(def_id);
@@ -1192,6 +1451,7 @@ impl Graph {
     ) {
         // Collect names before detaching — after detachment, definitions() may be empty
         let seed_names = self.names_for_declaration(decl_id);
+        let method_member_changes = self.method_member_changes_for_detach(decl_id, detach_def_ids);
 
         // Detach pending definitions before deciding the mode
         if let Some(decl) = self.declarations.get_mut(&decl_id) {
@@ -1200,6 +1460,16 @@ impl Graph {
             }
             if !detach_def_ids.is_empty() {
                 decl.clear_diagnostics();
+            }
+        }
+
+        if !detach_def_ids.is_empty() && method_member_changes.is_empty() {
+            self.requeue_method_visibility_definitions_for_declaration(decl_id);
+        }
+
+        if !detach_def_ids.is_empty() {
+            for (owner_id, member_str_id) in method_member_changes {
+                self.requeue_method_visibility_dependents_for_member_change(owner_id, member_str_id);
             }
         }
 
@@ -1293,11 +1563,47 @@ impl Graph {
             namespace.clear_descendants();
 
             self.push_work(Unit::Ancestors(decl_id));
+            self.requeue_unresolved_method_visibilities_for_owner(decl_id);
+            self.requeue_method_visibility_definitions_for_owner(decl_id);
+            self.requeue_module_function_copies_for_owner(decl_id);
 
             for seed_name_id in seed_names {
                 self.queue_ancestor_triggered_invalidation(seed_name_id, queue);
             }
         }
+    }
+
+    fn method_member_changes_for_detach(
+        &self,
+        declaration_id: DeclarationId,
+        detach_def_ids: &[DefinitionId],
+    ) -> Vec<(DeclarationId, StringId)> {
+        let Some(declaration) = self.declarations.get(&declaration_id) else {
+            return Vec::new();
+        };
+        if !matches!(declaration, Declaration::Method(_)) {
+            return Vec::new();
+        }
+
+        let owner_id = *declaration.owner_id();
+        let mut member_changes = Vec::new();
+        let mut seen_str_ids = IdentityHashSet::default();
+
+        for definition_id in detach_def_ids {
+            let Some(definition) = self.definitions.get(definition_id) else {
+                continue;
+            };
+            if !definition.establishes_method_member() {
+                continue;
+            }
+
+            let str_id = self.definition_string_id(definition);
+            if seen_str_ids.insert(str_id) {
+                member_changes.push((owner_id, str_id));
+            }
+        }
+
+        member_changes
     }
 
     /// The name's structural dependency is broken (its nesting or parent scope was removed).
@@ -1317,6 +1623,7 @@ impl Graph {
                     }
                     NameDependent::Definition(def_id) => {
                         self.push_work(Unit::Definition(*def_id));
+                        self.detach_applied_method_visibility(*def_id);
 
                         if let Some(decl) = self.declarations.get_mut(&old_decl_id) {
                             decl.remove_definition(def_id);
@@ -1819,8 +2126,11 @@ mod tests {
         let strings = context.graph().strings();
         assert_eq!(strings.get(&StringId::from("method_name()")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("accessor_name()")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("accessor_name=()")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("reader_name()")).unwrap().ref_count(), 1);
-        assert_eq!(strings.get(&StringId::from("writer_name()")).unwrap().ref_count(), 1);
+        assert!(strings.get(&StringId::from("reader_name=()")).is_none());
+        assert_eq!(strings.get(&StringId::from("writer_name=()")).unwrap().ref_count(), 1);
+        assert!(strings.get(&StringId::from("writer_name()")).is_none());
         assert_eq!(strings.get(&StringId::from("$global_var")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("@@class_var")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("@instance_var")).unwrap().ref_count(), 1);
@@ -2332,19 +2642,19 @@ mod tests {
         ";
 
         context.index_uri("file:///foo.rb", source);
-        assert_eq!(49, context.graph().definitions.len());
+        assert_eq!(51, context.graph().definitions.len());
         assert_eq!(13, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
         assert_eq!(2, context.graph().documents.len());
         assert_eq!(20, context.graph().names.len());
-        assert_eq!(47, context.graph().strings.len());
+        assert_eq!(49, context.graph().strings.len());
         context.index_uri("file:///foo.rb", source);
-        assert_eq!(49, context.graph().definitions.len());
+        assert_eq!(51, context.graph().definitions.len());
         assert_eq!(13, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
         assert_eq!(2, context.graph().documents.len());
         assert_eq!(20, context.graph().names.len());
-        assert_eq!(47, context.graph().strings.len());
+        assert_eq!(49, context.graph().strings.len());
     }
 
     #[test]

@@ -356,6 +356,10 @@ end
 
 Creates: `bar`, `bar=`, `baz`, `baz=`
 
+Rubydex indexes `attr_accessor` as two method declarations: a reader using `AttrAccessorDefinition` with the
+reader name (`foo`) and a writer using `AttrWriterDefinition` with the setter name (`foo=`). This mirrors Ruby's
+two-method behavior and lets visibility changes target the reader and writer independently.
+
 ### Receiver Context
 
 Attribute methods only work when called on `self` (implicit or explicit):
@@ -964,6 +968,14 @@ class Foo; private :foo; end  # works — retroactive across reopen
 Foo.private_instance_methods(false)  # => [:foo]
 ```
 
+The method must already exist when the visibility call runs. Within one file, `private :foo` before `def foo` matches
+Ruby's `NameError` behavior. Across files, Rubydex cannot know runtime load order, so it treats cross-file definitions
+as potentially available. A definitely-prior same-file definition is preferred for the visibility snapshot; URI lexical
+order is used only as a deterministic tie-breaker when multiple cross-file definitions could apply.
+
+Rubydex treats visibility calls inside method bodies or ordinary blocks as runtime calls. It does not apply those
+visibility effects statically because Ruby only executes them if the containing method or block is called.
+
 **`private :inherited_method` creates an implicit copy:**
 
 ```ruby
@@ -1018,7 +1030,8 @@ Singleton.create  # => #<Singleton:0x...>
 
 ### Retroactive `module_function :method_name`
 
-`module_function` can be called with a method name to retroactively apply the module_function behavior, but only inside module bodies (or via `send` on a module). It is not available at the top level or inside class bodies:
+`module_function` can be called with a method name, or with no arguments to affect later method definitions, but only
+inside module bodies. It is not available at the top level, inside class bodies, or inside singleton class bodies:
 
 ```ruby
 module Foo
@@ -1031,6 +1044,12 @@ Foo.private_instance_methods(false)   # => [:foo] (instance becomes private)
 Foo.singleton_methods(false)          # => [:foo]
 ```
 
+Ruby can invoke `module_function` indirectly with `send` on a module object. Rubydex indexes the direct call forms above;
+dynamic `send` calls are treated as ordinary method calls rather than visibility operations.
+
+Like other visibility operations, Rubydex treats `module_function` calls inside method bodies or ordinary blocks as
+runtime calls rather than static visibility operations.
+
 **Creates a copy, not a reference:**
 
 ```ruby
@@ -1040,6 +1059,66 @@ module Foo
   def foo; "v2"; end   # redefines instance method
 end
 Foo.foo  # => "v1" (singleton is an independent copy of v1)
+```
+
+The copied method may come from an ancestor. Ruby installs both a direct private instance method entry and a direct
+singleton method entry on the receiving module, while preserving the source method's location and signature:
+
+```ruby
+module A
+  def foo(x); "v1"; end
+end
+
+module B
+  include A
+  module_function :foo
+end
+
+B.method(:foo).source_location       # => ["a.rb", 2] when A was loaded from a.rb
+B.method(:foo).parameters            # => [[:req, :x]]
+B.private_instance_methods(false)    # => [:foo]
+B.singleton_methods(false)           # => [:foo]
+```
+
+Later changes to `A#foo` do not mutate the already copied runtime method on `B`. A static indexer still needs to
+invalidate and rebuild generated copies when the source file changes, because a fresh load of the current files would
+copy the current source method at the `module_function :foo` call.
+
+When the source method and `module_function :foo` call are in different files, static indexing does not know runtime
+load order. Rubydex treats cross-file source methods as potentially available and uses URI lexical order only as a
+deterministic tie-breaker when multiple cross-file definitions could be copied. A definitely-prior same-file source
+method is preferred over cross-file candidates. Within one file, the source method must
+appear before the `module_function :foo` call, matching Ruby's `NameError` behavior for calls that appear before the
+method definition.
+
+Method aliases are eligible targets. `module_function :bar` after `alias bar foo` copies the current `foo` method body
+under the singleton name `bar`, while also making `bar` a private instance method on the module:
+
+```ruby
+module Foo
+  def foo(x); x; end
+  alias bar foo
+  module_function :bar
+end
+
+Foo.bar(1)                         # => 1
+Foo.private_instance_methods(false) # => [:bar]
+Foo.singleton_methods(false)        # => [:bar]
+```
+
+Attribute writers use the setter method name. `attr_writer :foo` defines `foo=`, not `foo`, so
+`module_function :foo` fails while `module_function :foo=` creates a public singleton writer copy:
+
+```ruby
+module Foo
+  attr_writer :foo
+  module_function :foo=  # copies Foo#foo= to Foo.foo=
+end
+
+module Foo
+  attr_writer :bar
+  module_function :bar   # raises NameError
+end
 ```
 
 ### Constant Visibility
@@ -1064,6 +1143,9 @@ Foo.constants  # => [] (private constants hidden from .constants)
 - `Foo.constants` excludes private constants
 - `Foo.const_defined?(:PRIV)` returns **true** even for private constants — visibility doesn't affect `const_defined?`
 - `Foo.const_get(:PRIV)` **bypasses** private constant visibility and returns the value — only the `::` operator enforces `private_constant`
+
+Rubydex treats `private_constant`/`public_constant` calls inside method bodies or ordinary blocks as runtime calls rather
+than static visibility operations.
 
 #### `public_constant`
 

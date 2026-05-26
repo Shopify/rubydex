@@ -112,6 +112,15 @@ impl LocalGraph {
         string_id
     }
 
+    pub(crate) fn track_string(&mut self, string_id: StringId) {
+        let Some(string_ref) = self.strings.get_mut(&string_id) else {
+            debug_assert!(false, "Cannot track a string that has not been interned");
+            return;
+        };
+
+        string_ref.increment_ref_count(1);
+    }
+
     // Names
 
     #[must_use]

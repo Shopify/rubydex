@@ -5,6 +5,7 @@ pub mod definitions;
 pub mod document;
 pub mod encoding;
 pub mod graph;
+pub(crate) mod graph_indexes;
 pub mod id;
 pub mod identity_maps;
 pub mod ids;
