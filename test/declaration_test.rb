@@ -305,6 +305,49 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_has_ancestor
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        module Mixins
+          module Foo; end
+          module Bar; end
+        end
+
+        module Namespace
+          class Parent
+            extend Mixins::Bar
+          end
+
+          class Child < Parent
+            include Mixins::Foo
+            prepend Mixins::Bar
+            extend Mixins::Foo
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      child = graph["Namespace::Child"]
+      assert(child.has_ancestor?("Namespace::Child"))
+      assert(child.has_ancestor?("Namespace::Parent"))
+      assert(child.has_ancestor?("Mixins::Foo"))
+      assert(child.has_ancestor?("Mixins::Bar"))
+      refute(child.has_ancestor?("Child"))
+      refute(child.has_ancestor?("Foo"))
+      refute(child.has_ancestor?("Unknown"))
+
+      singleton_class = child.singleton_class
+      assert(singleton_class.has_ancestor?("Namespace::Child::<Child>"))
+      assert(singleton_class.has_ancestor?("Mixins::Foo"))
+      assert(singleton_class.has_ancestor?("Namespace::Parent::<Parent>"))
+      assert(singleton_class.has_ancestor?("Mixins::Bar"))
+      refute(singleton_class.has_ancestor?("Parent::<Parent>"))
+    end
+  end
+
   def test_cyclic_ancestors
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

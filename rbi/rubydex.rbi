@@ -104,6 +104,9 @@ class Rubydex::Namespace < Rubydex::Declaration
   sig { returns(T::Enumerable[Rubydex::Namespace]) }
   def ancestors; end
 
+  sig { params(ancestor_name: String).returns(T::Boolean) }
+  def has_ancestor?(ancestor_name); end
+
   sig { returns(T::Enumerable[Rubydex::Namespace]) }
   def descendants; end
 

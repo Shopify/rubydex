@@ -20,6 +20,13 @@ module Rubydex
     end
   end
 
+  class Namespace < Declaration
+    #: (String ancestor_name) -> bool
+    def has_ancestor?(ancestor_name)
+      ancestors.any? { |ancestor| ancestor.name == ancestor_name }
+    end
+  end
+
   class Class < Namespace
     include Visibility
   end
