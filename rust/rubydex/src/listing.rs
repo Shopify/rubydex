@@ -38,9 +38,14 @@ impl FileDiscoveryJob {
     }
 }
 
+fn is_indexable_file(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext == "rb" || ext == "rake" || ext == "rbs" || ext == "ru")
+}
+
 impl FileDiscoveryJob {
     fn handle_file(&self, path: &Path) {
-        if path.extension().is_some_and(|ext| ext == "rb" || ext == "rbs") {
+        if is_indexable_file(path) {
             self.paths_tx
                 .send(path.to_path_buf())
                 .expect("file receiver dropped before run completion");
@@ -266,22 +271,28 @@ mod tests {
     }
 
     #[test]
-    fn collect_rbs_files() {
+    fn collect_indexable_files() {
         let context = Context::new();
         let ruby_file = PathBuf::from("lib").join("foo.rb");
+        let rake_file = PathBuf::from("lib").join("task.rake");
         let rbs_file = PathBuf::from("sig").join("foo.rbs");
+        let rack_file = PathBuf::from("config.ru");
         let txt_file = PathBuf::from("lib").join("notes.txt");
         context.touch(&ruby_file);
+        context.touch(&rake_file);
         context.touch(&rbs_file);
+        context.touch(&rack_file);
         context.touch(&txt_file);
 
-        let (files, errors) = collect_document_paths(&context, &["lib", "sig"]);
+        let (files, errors) = collect_document_paths(&context, &["lib", "sig", "config.ru"]);
 
         assert!(errors.is_empty());
 
         assert_eq!(
             [
+                rack_file.to_str().unwrap().to_string(),
                 ruby_file.to_str().unwrap().to_string(),
+                rake_file.to_str().unwrap().to_string(),
                 rbs_file.to_str().unwrap().to_string(),
             ],
             files.as_slice()

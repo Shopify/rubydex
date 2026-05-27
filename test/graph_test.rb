@@ -23,6 +23,24 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_indexing_ruby_file_extensions
+    with_context do |context|
+      context.write!("foo.rb", "class Foo; end")
+      context.write!("task.rake", "class Task; end")
+      context.write!("config.ru", "class Config; end")
+      context.write!("notes.txt", "class Notes; end")
+
+      graph = Rubydex::Graph.new
+      assert_empty(graph.index_all([context.absolute_path]))
+      graph.resolve
+
+      refute_nil(graph["Foo"])
+      refute_nil(graph["Task"])
+      refute_nil(graph["Config"])
+      assert_nil(graph["Notes"])
+    end
+  end
+
   def test_indexing_invalid_file_paths
     graph = Rubydex::Graph.new
 
@@ -601,6 +619,9 @@ class GraphTest < Minitest::Test
       context.write!(".git/config", "")
       context.write!("node_modules/pkg/index.js", "")
       context.write!("top_level.rb", "class TopLevel; end")
+      context.write!("top_level.rake", "class TopLevelRake; end")
+      context.write!("top_level.rbs", "class TopLevelRbs; end")
+      context.write!("config.ru", "class ConfigRu; end")
 
       graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
       paths = graph.workspace_paths
@@ -615,6 +636,9 @@ class GraphTest < Minitest::Test
 
       # Includes the top level files
       assert_includes(paths, context.absolute_path_to("top_level.rb"))
+      assert_includes(paths, context.absolute_path_to("top_level.rake"))
+      assert_includes(paths, context.absolute_path_to("top_level.rbs"))
+      assert_includes(paths, context.absolute_path_to("config.ru"))
 
       # Includes gem dependency paths from Bundler
       gem_require_paths = Bundler.locked_gems.specs.flat_map do |lazy_spec|

@@ -17,6 +17,8 @@ module Rubydex
       "tmp",
     ].freeze
 
+    INDEXABLE_EXTENSIONS = [".rb", ".rake", ".rbs", ".ru"].freeze
+
     #: String
     attr_accessor :workspace_path
 
@@ -45,7 +47,7 @@ module Rubydex
 
         if File.directory?(full_path)
           paths << full_path unless IGNORED_DIRECTORIES.include?(entry)
-        elsif File.extname(entry) == ".rb"
+        elsif INDEXABLE_EXTENSIONS.include?(File.extname(entry))
           paths << full_path
         end
       end
