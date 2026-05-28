@@ -357,15 +357,18 @@ class DeclarationTest < Minitest::Test
       assert(child.has_ancestor?("Namespace::Parent"))
       assert(child.has_ancestor?("Mixins::Foo"))
       assert(child.has_ancestor?("Mixins::Bar"))
+      assert(child.has_ancestor?("Unknown", "Mixins::Foo"))
       refute(child.has_ancestor?("Child"))
       refute(child.has_ancestor?("Foo"))
       refute(child.has_ancestor?("Unknown"))
+      refute(child.has_ancestor?("Unknown", "Other"))
+      refute(child.has_ancestor?)
 
       singleton_class = child.singleton_class
       assert(singleton_class.has_ancestor?("Namespace::Child::<Child>"))
       assert(singleton_class.has_ancestor?("Mixins::Foo"))
       assert(singleton_class.has_ancestor?("Namespace::Parent::<Parent>"))
-      assert(singleton_class.has_ancestor?("Mixins::Bar"))
+      assert(singleton_class.has_ancestor?("Missing", "Mixins::Bar"))
       refute(singleton_class.has_ancestor?("Parent::<Parent>"))
     end
   end

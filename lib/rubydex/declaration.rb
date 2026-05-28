@@ -21,9 +21,9 @@ module Rubydex
   end
 
   class Namespace < Declaration
-    #: (String ancestor_name) -> bool
-    def has_ancestor?(ancestor_name)
-      ancestors.any? { |ancestor| ancestor.name == ancestor_name }
+    #: (*String ancestor_names) -> bool
+    def has_ancestor?(*ancestor_names)
+      ancestors.any? { |ancestor| ancestor_names.include?(ancestor.name) }
     end
   end
 
