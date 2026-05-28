@@ -276,6 +276,30 @@ pub unsafe extern "C" fn rdx_definition_declaration(pointer: GraphPointer, defin
     })
 }
 
+/// Returns the lexical nesting definition id for the given definition, or NULL if there is no lexical nesting.
+/// Caller must free the returned pointer with `free_u64`.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `definition_id` must be a valid definition id.
+///
+/// # Panics
+/// This function will panic if the definition cannot be found.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_definition_lexical_nesting_id(pointer: GraphPointer, definition_id: u64) -> *const u64 {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let Some(defn) = graph.definitions().get(&def_id) else {
+            panic!("Definition not found: {definition_id:?}");
+        };
+
+        match defn.lexical_nesting_id() {
+            Some(lexical_nesting_id) => Box::into_raw(Box::new(**lexical_nesting_id)).cast_const(),
+            None => ptr::null(),
+        }
+    })
+}
+
 /// Creates a new iterator over definition IDs for a given declaration by snapshotting the current set of IDs.
 ///
 /// # Panics

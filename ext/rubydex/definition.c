@@ -195,6 +195,60 @@ static VALUE rdxr_definition_declaration(VALUE self) {
     return rb_class_new_instance(2, argv, decl_class);
 }
 
+static VALUE rdxi_build_definition(VALUE graph_obj, void *graph, uint64_t definition_id) {
+    DefinitionKind kind = rdx_definition_kind(graph, definition_id);
+    VALUE defn_class = rdxi_definition_class_for_kind(kind);
+    VALUE argv[] = {graph_obj, ULL2NUM(definition_id)};
+
+    return rb_class_new_instance(2, argv, defn_class);
+}
+
+// Definition#lexical_owner -> Rubydex::Definition?
+// Returns the lexically enclosing definition, if any.
+static VALUE rdxr_definition_lexical_owner(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const uint64_t *owner_id = rdx_definition_lexical_nesting_id(graph, data->id);
+    if (owner_id == NULL) {
+        return Qnil;
+    }
+
+    VALUE owner = rdxi_build_definition(data->graph_obj, graph, *owner_id);
+    free_u64(owner_id);
+
+    return owner;
+}
+
+// Definition#lexical_nesting -> Array<Rubydex::Definition>
+// Returns the lexical nesting from the direct owner up to the root.
+static VALUE rdxr_definition_lexical_nesting(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    VALUE nesting = rb_ary_new();
+    uint64_t definition_id = data->id;
+
+    while (true) {
+        const uint64_t *owner_id = rdx_definition_lexical_nesting_id(graph, definition_id);
+        if (owner_id == NULL) {
+            break;
+        }
+
+        rb_ary_push(nesting, rdxi_build_definition(data->graph_obj, graph, *owner_id));
+        definition_id = *owner_id;
+        free_u64(owner_id);
+    }
+
+    return nesting;
+}
+
 static VALUE rdxi_build_constant_reference(VALUE graph_obj, const CConstantReference *cref) {
     VALUE ref_class = (cref->declaration_id == 0)
         ? cUnresolvedConstantReference
@@ -306,6 +360,8 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cDefinition, "deprecated?", rdxr_definition_deprecated, 0);
     rb_define_method(cDefinition, "name_location", rdxr_definition_name_location, 0);
     rb_define_method(cDefinition, "declaration", rdxr_definition_declaration, 0);
+    rb_define_method(cDefinition, "lexical_owner", rdxr_definition_lexical_owner, 0);
+    rb_define_method(cDefinition, "lexical_nesting", rdxr_definition_lexical_nesting, 0);
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
     rb_define_method(cClassDefinition, "superclass", rdxr_class_definition_superclass, 0);

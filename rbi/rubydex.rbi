@@ -152,6 +152,12 @@ class Rubydex::Definition
   sig { returns(T.nilable(Rubydex::Declaration)) }
   def declaration; end
 
+  sig { returns(T.nilable(Rubydex::Definition)) }
+  def lexical_owner; end
+
+  sig { returns(T::Array[Rubydex::Definition]) }
+  def lexical_nesting; end
+
   class << self
     private
 

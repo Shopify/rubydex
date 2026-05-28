@@ -668,6 +668,78 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_definition_lexical_owner_and_lexical_nesting
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          class Bar
+            class Baz; end
+          end
+        end
+
+        class Foo::Qux
+          module Quux
+            def hello; end
+          end
+        end
+
+        class Foo
+          Class.new do
+            def world; end
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      definitions = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions
+
+      foo_def = definitions.find { |d| d.name == "Foo" }
+      assert_nil(foo_def.lexical_owner)
+      assert_lexical_nesting_equal([], foo_def)
+
+      bar_def = definitions.find { |d| d.name == "Bar" }
+      assert_same_definition(foo_def, bar_def.lexical_owner)
+      assert_lexical_nesting_equal(["Foo"], bar_def)
+
+      baz_def = definitions.find { |d| d.name == "Baz" }
+      assert_same_definition(bar_def, baz_def.lexical_owner)
+      assert_lexical_nesting_equal(["Foo::Bar", "Foo"], baz_def)
+
+      hello_def = definitions.find { |d| d.name == "hello()" }
+      assert_lexical_nesting_equal(["Foo::Qux::Quux", "Foo::Qux"], hello_def)
+      assert_instance_of(Rubydex::ModuleDefinition, hello_def.lexical_owner)
+
+      world_def = definitions.find { |d| d.name == "world()" }
+      assert_lexical_nesting_equal([/<anonymous>\z/, "Foo"], world_def)
+    end
+  end
+
+  def test_definition_lexical_owner_for_absolute_constant_path
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          class ::Bar; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      definitions = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions
+
+      foo_def = definitions.find { |d| d.name == "Foo" }
+      bar_def = definitions.find { |d| d.name == "Bar" }
+
+      assert_equal("Bar", bar_def.declaration.name)
+      assert_same_definition(foo_def, bar_def.lexical_owner)
+      assert_lexical_nesting_equal(["Foo"], bar_def)
+    end
+  end
+
   def test_definition_declaration
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
@@ -716,6 +788,24 @@ class DefinitionTest < Minitest::Test
   end
 
   private
+
+  def assert_same_definition(expected, actual)
+    assert_equal(expected.name, actual.name)
+    assert_equal(expected.location.to_display, actual.location.to_display)
+  end
+
+  def assert_lexical_nesting_equal(expected, definition)
+    actual = definition.lexical_nesting.map { |nesting| nesting.declaration.name }
+
+    assert_equal(expected.size, actual.size)
+    expected.zip(actual).each do |expected_name, actual_name|
+      if expected_name.is_a?(Regexp)
+        assert_match(expected_name, actual_name)
+      else
+        assert_equal(expected_name, actual_name)
+      end
+    end
+  end
 
   # Comment locations on Windows include the carriage return. This means that the end column is off by one when compared
   # to Unix locations. This method creates a fake adjusted location for Windows so that we can assert locations once
