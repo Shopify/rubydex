@@ -1,8 +1,10 @@
 use crate::{
+    diagnostic::Rule,
     errors::Errors,
     indexing::{local_graph::LocalGraph, rbs_indexer::RBSIndexer, ruby_indexer::RubyIndexer},
     job_queue::{Job, JobQueue},
-    model::graph::Graph,
+    model::{document::Document, graph::Graph, ids::UriId},
+    offset::Offset,
     operation::ruby_builder::RubyOperationBuilder,
 };
 use crossbeam_channel::{Sender, unbounded};
@@ -26,11 +28,18 @@ pub enum IndexerBackend {
 pub enum LanguageId {
     Ruby,
     Rbs,
+    Erb,
 }
 
 impl From<&OsStr> for LanguageId {
     fn from(ext: &OsStr) -> Self {
-        if ext == "rbs" { Self::Rbs } else { Self::Ruby }
+        if ext == "rbs" {
+            Self::Rbs
+        } else if ext == "erb" {
+            Self::Erb
+        } else {
+            Self::Ruby
+        }
     }
 }
 
@@ -44,6 +53,7 @@ impl LanguageId {
         match language_id {
             "ruby" => Ok(Self::Ruby),
             "rbs" => Ok(Self::Rbs),
+            "erb" => Ok(Self::Erb),
             _ => Err(Errors::FileError(format!("Unsupported language_id `{language_id}`"))),
         }
     }
@@ -172,6 +182,29 @@ pub fn build_local_graph(uri: String, source: &str, language: &LanguageId, backe
             indexer.index();
             indexer.local_graph()
         }
+        LanguageId::Erb => build_erb_local_graph(uri, source),
+    }
+}
+
+fn build_erb_local_graph(uri: String, source: &str) -> LocalGraph {
+    let options = herb::ExtractRubyOptions {
+        semicolons: true,
+        comments: false,
+        preserve_positions: true,
+    };
+
+    match herb::extract_ruby_with_options(source, &options) {
+        Ok(ruby_source) => {
+            let mut indexer = RubyIndexer::new_with_document_source(uri, &ruby_source, source);
+            indexer.index();
+            indexer.local_graph()
+        }
+        Err(error) => {
+            let uri_id = UriId::from(&uri);
+            let mut local_graph = LocalGraph::new(uri_id, Document::new(uri, source));
+            local_graph.add_diagnostic(Rule::ParseError, Offset::new(0, 0), error);
+            local_graph
+        }
     }
 }
 
@@ -211,6 +244,32 @@ mod tests {
     fn from_language_id_unknown() {
         let result = LanguageId::from_language_id("python");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn index_erb_source() {
+        let mut graph = Graph::new();
+        index_source(
+            &mut graph,
+            "file:///show.html.erb",
+            "<% page_title \"Foo\" %>\n<%= link_to Foo::Bar %>",
+            &LanguageId::Erb,
+        );
+
+        assert!(graph.method_references().values().any(|method_ref| {
+            graph
+                .strings()
+                .get(method_ref.str())
+                .is_some_and(|name| name.as_str() == "page_title")
+        }));
+
+        assert!(graph.constant_references().values().any(|constant_ref| {
+            graph
+                .names()
+                .get(constant_ref.name_id())
+                .and_then(|name_ref| graph.strings().get(name_ref.str()))
+                .is_some_and(|name| name.as_str() == "Bar")
+        }));
     }
 
     #[test]

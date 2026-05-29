@@ -94,8 +94,13 @@ pub struct RubyIndexer<'a> {
 impl<'a> RubyIndexer<'a> {
     #[must_use]
     pub fn new(uri: String, source: &'a str) -> Self {
+        Self::new_with_document_source(uri, source, source)
+    }
+
+    #[must_use]
+    pub fn new_with_document_source(uri: String, source: &'a str, document_source: &str) -> Self {
         let uri_id = UriId::from(&uri);
-        let local_graph = LocalGraph::new(uri_id, Document::new(uri, source));
+        let local_graph = LocalGraph::new(uri_id, Document::new(uri, document_source));
 
         Self {
             uri_id,

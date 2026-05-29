@@ -17,7 +17,7 @@ module Rubydex
       "tmp",
     ].freeze
 
-    INDEXABLE_EXTENSIONS = [".rb", ".rake", ".rbs", ".ru"].freeze
+    INDEXABLE_EXTENSIONS = [".erb", ".rb", ".rake", ".rbs", ".ru"].freeze
 
     #: String
     attr_accessor :workspace_path

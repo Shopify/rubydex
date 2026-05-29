@@ -25,6 +25,7 @@ class GraphTest < Minitest::Test
 
   def test_indexing_ruby_file_extensions
     with_context do |context|
+      context.write!("show.html.erb", "<% class Template; end %>")
       context.write!("foo.rb", "class Foo; end")
       context.write!("task.rake", "class Task; end")
       context.write!("config.ru", "class Config; end")
@@ -34,6 +35,7 @@ class GraphTest < Minitest::Test
       assert_empty(graph.index_all([context.absolute_path]))
       graph.resolve
 
+      refute_nil(graph["Template"])
       refute_nil(graph["Foo"])
       refute_nil(graph["Task"])
       refute_nil(graph["Config"])
@@ -618,6 +620,7 @@ class GraphTest < Minitest::Test
       context.write!("app/bar.rb", "class Bar; end")
       context.write!(".git/config", "")
       context.write!("node_modules/pkg/index.js", "")
+      context.write!("top_level.html.erb", "<% class TopLevelErb; end %>")
       context.write!("top_level.rb", "class TopLevel; end")
       context.write!("top_level.rake", "class TopLevelRake; end")
       context.write!("top_level.rbs", "class TopLevelRbs; end")
@@ -635,6 +638,7 @@ class GraphTest < Minitest::Test
       refute_includes(paths, context.absolute_path_to("node_modules"))
 
       # Includes the top level files
+      assert_includes(paths, context.absolute_path_to("top_level.html.erb"))
       assert_includes(paths, context.absolute_path_to("top_level.rb"))
       assert_includes(paths, context.absolute_path_to("top_level.rake"))
       assert_includes(paths, context.absolute_path_to("top_level.rbs"))

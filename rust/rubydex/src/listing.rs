@@ -40,7 +40,7 @@ impl FileDiscoveryJob {
 
 fn is_indexable_file(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|ext| ext == "rb" || ext == "rake" || ext == "rbs" || ext == "ru")
+        .is_some_and(|ext| ext == "erb" || ext == "rb" || ext == "rake" || ext == "rbs" || ext == "ru")
 }
 
 impl FileDiscoveryJob {
@@ -273,23 +273,26 @@ mod tests {
     #[test]
     fn collect_indexable_files() {
         let context = Context::new();
+        let erb_file = PathBuf::from("app").join("show.html.erb");
         let ruby_file = PathBuf::from("lib").join("foo.rb");
         let rake_file = PathBuf::from("lib").join("task.rake");
         let rbs_file = PathBuf::from("sig").join("foo.rbs");
         let rack_file = PathBuf::from("config.ru");
         let txt_file = PathBuf::from("lib").join("notes.txt");
+        context.touch(&erb_file);
         context.touch(&ruby_file);
         context.touch(&rake_file);
         context.touch(&rbs_file);
         context.touch(&rack_file);
         context.touch(&txt_file);
 
-        let (files, errors) = collect_document_paths(&context, &["lib", "sig", "config.ru"]);
+        let (files, errors) = collect_document_paths(&context, &["app", "lib", "sig", "config.ru"]);
 
         assert!(errors.is_empty());
 
         assert_eq!(
             [
+                erb_file.to_str().unwrap().to_string(),
                 rack_file.to_str().unwrap().to_string(),
                 ruby_file.to_str().unwrap().to_string(),
                 rake_file.to_str().unwrap().to_string(),
