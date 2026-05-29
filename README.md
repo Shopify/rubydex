@@ -84,30 +84,31 @@ like Claude to semantically query your Ruby codebase.
 
 ### Setup
 
-1. Install the binary:
+1. Add Rubydex to the Ruby project you want to index:
+   ```ruby
+   gem "rubydex"
+   ```
+
+2. Install the bundle:
    ```bash
-   cargo install --path rust/rubydex-mcp
+   bundle install
    ```
 
-2. Add rubydex to the Ruby project you want to index:
+3. Configure your MCP client to run `bundle exec rubydex_mcp`.
+
+   Using Claude Code as an example:
    ```bash
-   claude mcp add --scope project rubydex "\${HOME}/.cargo/bin/rubydex_mcp"
+   claude mcp add --scope project rubydex -- bundle exec rubydex_mcp
    ```
 
-   Or manually create a `.mcp.json` in the project root:
-   ```json
-   {
-     "mcpServers": {
-       "rubydex": {
-         "command": "${HOME}/.cargo/bin/rubydex_mcp"
-       }
-     }
-   }
+   Using Codex as an example:
+   ```bash
+   codex mcp add rubydex -- bundle exec rubydex_mcp
    ```
 
-3. Start Claude Code from that project directory. The MCP server indexes
-   the project at startup and provides semantic code intelligence tools.
-   Verify with `/mcp` in the session.
+   Start your MCP client from that project directory. The MCP server indexes
+   the project at startup and provides semantic code intelligence tools through
+   the tools below.
 
 ### Available MCP Tools
 
