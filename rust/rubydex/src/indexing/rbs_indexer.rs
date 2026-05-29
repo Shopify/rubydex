@@ -125,7 +125,7 @@ impl<'a> RBSIndexer<'a> {
         }
     }
 
-    fn index_mixin(&mut self, type_name: &TypeNameNode, mixin_fn: fn(ConstantReferenceId) -> Mixin) {
+    fn index_mixin(&mut self, type_name: &TypeNameNode, mixin_fn: fn(ConstantReferenceId, Offset) -> Mixin) {
         let Some(lexical_nesting_id) = self.parent_lexical_scope_id() else {
             return;
         };
@@ -136,9 +136,9 @@ impl<'a> RBSIndexer<'a> {
 
         let constant_ref_id =
             self.local_graph
-                .add_constant_reference(ConstantReference::new(name_id, self.uri_id, offset));
+                .add_constant_reference(ConstantReference::new(name_id, self.uri_id, offset.clone()));
 
-        self.add_mixin_to_current_lexical_scope(lexical_nesting_id, mixin_fn(constant_ref_id));
+        self.add_mixin_to_current_lexical_scope(lexical_nesting_id, mixin_fn(constant_ref_id, offset));
     }
 
     fn add_member_to_current_lexical_scope(&mut self, owner_id: DefinitionId, member_id: DefinitionId) {
@@ -511,20 +511,20 @@ impl Visit for RBSIndexer<'_> {
     }
 
     fn visit_include_node(&mut self, include_node: &IncludeNode) {
-        self.index_mixin(&include_node.name(), |ref_id| {
-            Mixin::Include(IncludeDefinition::new(ref_id))
+        self.index_mixin(&include_node.name(), |ref_id, offset| {
+            Mixin::Include(IncludeDefinition::new(ref_id, offset))
         });
     }
 
     fn visit_prepend_node(&mut self, prepend_node: &PrependNode) {
-        self.index_mixin(&prepend_node.name(), |ref_id| {
-            Mixin::Prepend(PrependDefinition::new(ref_id))
+        self.index_mixin(&prepend_node.name(), |ref_id, offset| {
+            Mixin::Prepend(PrependDefinition::new(ref_id, offset))
         });
     }
 
     fn visit_extend_node(&mut self, extend_node: &ExtendNode) {
-        self.index_mixin(&extend_node.name(), |ref_id| {
-            Mixin::Extend(ExtendDefinition::new(ref_id))
+        self.index_mixin(&extend_node.name(), |ref_id, offset| {
+            Mixin::Extend(ExtendDefinition::new(ref_id, offset))
         });
     }
 

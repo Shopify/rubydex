@@ -333,9 +333,9 @@ impl OperationApplier {
         };
 
         let mixin = match op.kind {
-            MixinKind::Include => Mixin::Include(IncludeDefinition::new(constant_reference_id)),
-            MixinKind::Prepend => Mixin::Prepend(PrependDefinition::new(constant_reference_id)),
-            MixinKind::Extend => Mixin::Extend(ExtendDefinition::new(constant_reference_id)),
+            MixinKind::Include => Mixin::Include(IncludeDefinition::new(constant_reference_id, op.offset.clone())),
+            MixinKind::Prepend => Mixin::Prepend(PrependDefinition::new(constant_reference_id, op.offset.clone())),
+            MixinKind::Extend => Mixin::Extend(ExtendDefinition::new(constant_reference_id, op.offset.clone())),
         };
 
         if let Some(owner) = self.local_graph.get_definition_mut(owner_id) {

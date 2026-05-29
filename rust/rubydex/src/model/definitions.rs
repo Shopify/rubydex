@@ -209,6 +209,15 @@ impl Mixin {
             Mixin::Extend(def) => def.constant_reference_id(),
         }
     }
+
+    #[must_use]
+    pub fn offset(&self) -> &Offset {
+        match self {
+            Mixin::Include(def) => def.offset(),
+            Mixin::Prepend(def) => def.offset(),
+            Mixin::Extend(def) => def.offset(),
+        }
+    }
 }
 
 macro_rules! mixin_definition {
@@ -216,19 +225,26 @@ macro_rules! mixin_definition {
         #[derive(Debug, Clone)]
         pub struct $name {
             constant_reference_id: ConstantReferenceId,
+            offset: Offset,
         }
 
         impl $name {
             #[must_use]
-            pub const fn new(constant_reference_id: ConstantReferenceId) -> Self {
+            pub const fn new(constant_reference_id: ConstantReferenceId, offset: Offset) -> Self {
                 Self {
                     constant_reference_id,
+                    offset,
                 }
             }
 
             #[must_use]
             pub fn constant_reference_id(&self) -> &ConstantReferenceId {
                 &self.constant_reference_id
+            }
+
+            #[must_use]
+            pub fn offset(&self) -> &Offset {
+                &self.offset
             }
         }
     };
