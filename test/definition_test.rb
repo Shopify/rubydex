@@ -103,6 +103,14 @@ class DefinitionTest < Minitest::Test
       assert_equal(3, location.start_column)
       assert_equal(2, location.end_line)
       assert_equal(15, location.end_column)
+
+      name_location = def_foo.name_location.to_display
+      refute_nil(name_location)
+      assert_equal(context.uri_to("file1.rb"), name_location.uri)
+      assert_equal(2, name_location.start_line)
+      assert_equal(7, name_location.start_column)
+      assert_equal(2, name_location.end_line)
+      assert_equal(10, name_location.end_column)
     end
   end
 
