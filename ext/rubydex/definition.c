@@ -308,8 +308,12 @@ static VALUE rdxr_definition_mixins(VALUE self) {
     CMixin entry;
     while (rdx_mixins_iter_next(iter, &entry)) {
         VALUE constant_ref = rdxi_build_constant_reference(data->graph_obj, &entry.constant_reference);
+        VALUE location = rdxi_build_location_value(entry.location);
+        rdx_location_free(entry.location);
+
         VALUE mixin_class = rdxi_mixin_class_for_kind(entry.kind);
-        VALUE mixin = rb_class_new_instance(1, &constant_ref, mixin_class);
+        VALUE argv[] = {constant_ref, location};
+        VALUE mixin = rb_class_new_instance(2, argv, mixin_class);
         rb_ary_push(ary, mixin);
     }
 

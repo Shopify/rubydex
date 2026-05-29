@@ -417,6 +417,7 @@ pub enum MixinKind {
 pub struct CMixin {
     pub kind: MixinKind,
     pub constant_reference: CConstantReference,
+    pub location: *mut Location,
 }
 
 #[derive(Debug)]
@@ -482,9 +483,21 @@ pub unsafe extern "C" fn rdx_definition_mixins(pointer: GraphPointer, definition
 
         let entries: Vec<CMixin> = mixins
             .iter()
-            .map(|mixin| CMixin {
-                kind: map_mixin_kind(mixin),
-                constant_reference: CConstantReference::from_id(graph, *mixin.constant_reference_id()),
+            .map(|mixin| {
+                let constant_reference = graph
+                    .constant_references()
+                    .get(mixin.constant_reference_id())
+                    .expect("Constant reference not found");
+                let document = graph
+                    .documents()
+                    .get(&constant_reference.uri_id())
+                    .expect("document should exist");
+
+                CMixin {
+                    kind: map_mixin_kind(mixin),
+                    constant_reference: CConstantReference::from_id(graph, *mixin.constant_reference_id()),
+                    location: create_location_for_uri_and_offset(graph, document, mixin.offset()),
+                }
             })
             .collect();
 
