@@ -219,6 +219,7 @@ impl OperationApplier {
             op.str_id,
             op.uri_id,
             op.offset,
+            op.name_offset,
             op.comments,
             op.flags,
             lexical_nesting_id,

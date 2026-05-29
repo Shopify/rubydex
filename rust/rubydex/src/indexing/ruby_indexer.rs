@@ -1811,6 +1811,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let name = Self::location_to_string(&node.name_loc());
         let str_id = self.local_graph.intern_string(format!("{name}()"));
         let offset = Offset::from_prism_location(&node.location());
+        let name_offset = Offset::from_prism_location(&node.name_loc());
         let parent_nesting_id = self.current_nesting_definition_id();
         let parameters = self.collect_parameters(node);
         let is_singleton = node.receiver().is_some();
@@ -1862,6 +1863,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 str_id,
                 self.uri_id,
                 offset.clone(),
+                name_offset.clone(),
                 comments.clone(),
                 flags.clone(),
                 parent_nesting_id,
@@ -1878,6 +1880,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 str_id,
                 self.uri_id,
                 offset,
+                name_offset,
                 comments,
                 flags,
                 parent_nesting_id,
@@ -1895,6 +1898,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 str_id,
                 self.uri_id,
                 offset,
+                name_offset,
                 comments,
                 flags,
                 parent_nesting_id,

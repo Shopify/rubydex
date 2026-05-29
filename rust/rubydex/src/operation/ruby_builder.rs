@@ -1524,6 +1524,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         let name = Self::location_to_string(&node.name_loc());
         let str_id = self.intern_string(format!("{name}()"));
         let offset = Offset::from_prism_location(&node.location());
+        let name_offset = Offset::from_prism_location(&node.name_loc());
         let parameters = self.collect_parameters(node);
         let is_singleton = node.receiver().is_some();
 
@@ -1586,6 +1587,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 str_id,
                 uri_id: self.uri_id,
                 offset: offset.clone(),
+                name_offset: name_offset.clone(),
                 comments: comments.clone(),
                 flags: flags.clone(),
                 signatures: Signatures::Simple(parameters.clone().into_boxed_slice()),
@@ -1604,6 +1606,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 str_id,
                 uri_id: self.uri_id,
                 offset: offset.clone(),
+                name_offset: name_offset.clone(),
                 comments,
                 flags,
                 signatures: Signatures::Simple(parameters.into_boxed_slice()),
@@ -1638,6 +1641,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 str_id,
                 uri_id: self.uri_id,
                 offset: offset.clone(),
+                name_offset,
                 comments,
                 flags,
                 signatures: Signatures::Simple(parameters.into_boxed_slice()),

@@ -152,6 +152,7 @@ pub struct EnterMethod {
     pub str_id: StringId,
     pub uri_id: UriId,
     pub offset: Offset,
+    pub name_offset: Offset,
     pub comments: Box<[Comment]>,
     pub flags: DefinitionFlags,
     pub signatures: Signatures,

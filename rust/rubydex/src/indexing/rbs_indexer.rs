@@ -338,6 +338,7 @@ impl<'a> RBSIndexer<'a> {
         &mut self,
         str_id: StringId,
         offset: Offset,
+        name_offset: Offset,
         comments: Box<[Comment]>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
@@ -347,6 +348,7 @@ impl<'a> RBSIndexer<'a> {
             str_id,
             self.uri_id,
             offset.clone(),
+            name_offset.clone(),
             comments.clone(),
             flags.clone(),
             lexical_nesting_id,
@@ -360,6 +362,7 @@ impl<'a> RBSIndexer<'a> {
             str_id,
             self.uri_id,
             offset,
+            name_offset,
             comments,
             flags,
             lexical_nesting_id,
@@ -562,13 +565,22 @@ impl Visit for RBSIndexer<'_> {
     fn visit_method_definition_node(&mut self, def_node: &node::MethodDefinitionNode) {
         let str_id = self.local_graph.intern_string(format!("{}()", def_node.name()));
         let offset = Offset::from_rbs_location(&def_node.location());
+        let name_offset = offset.clone();
         let comments = self.collect_comments(def_node.comment());
         let flags = Self::flags(&def_node.annotations());
         let lexical_nesting_id = self.parent_lexical_scope_id();
         let signatures = self.collect_overload_signatures(def_node);
 
         if def_node.kind() == node::MethodDefinitionKind::SingletonInstance {
-            self.register_singleton_instance_method(str_id, offset, comments, flags, lexical_nesting_id, signatures);
+            self.register_singleton_instance_method(
+                str_id,
+                offset,
+                name_offset,
+                comments,
+                flags,
+                lexical_nesting_id,
+                signatures,
+            );
             return;
         }
 
@@ -602,6 +614,7 @@ impl Visit for RBSIndexer<'_> {
             str_id,
             self.uri_id,
             offset,
+            name_offset,
             comments,
             flags,
             lexical_nesting_id,
