@@ -181,6 +181,7 @@ impl Definition {
             Definition::Class(d) => Some(d.name_offset()),
             Definition::Module(d) => Some(d.name_offset()),
             Definition::SingletonClass(d) => Some(d.name_offset()),
+            Definition::Method(d) => Some(d.name_offset()),
             _ => None,
         }
     }
@@ -915,6 +916,7 @@ pub struct MethodDefinition {
     str_id: StringId,
     uri_id: UriId,
     offset: Offset,
+    name_offset: Offset,
     flags: DefinitionFlags,
     comments: Box<[Comment]>,
     lexical_nesting_id: Option<DefinitionId>,
@@ -923,7 +925,7 @@ pub struct MethodDefinition {
     receiver: Option<Receiver>,
 }
 
-assert_mem_size!(MethodDefinition, 96);
+assert_mem_size!(MethodDefinition, 104);
 
 /// The receiver of a singleton method definition.
 #[derive(Debug, Clone)]
@@ -943,6 +945,7 @@ impl MethodDefinition {
         str_id: StringId,
         uri_id: UriId,
         offset: Offset,
+        name_offset: Offset,
         comments: Box<[Comment]>,
         flags: DefinitionFlags,
         lexical_nesting_id: Option<DefinitionId>,
@@ -954,6 +957,7 @@ impl MethodDefinition {
             str_id,
             uri_id,
             offset,
+            name_offset,
             flags,
             comments,
             lexical_nesting_id,
@@ -981,6 +985,11 @@ impl MethodDefinition {
     #[must_use]
     pub fn offset(&self) -> &Offset {
         &self.offset
+    }
+
+    #[must_use]
+    pub fn name_offset(&self) -> &Offset {
+        &self.name_offset
     }
 
     #[must_use]
