@@ -154,8 +154,8 @@ static VALUE rdxr_definition_deprecated(VALUE self) {
 }
 
 // Definition#name_location -> Rubydex::Location or nil
-// For class, module, and singleton class definitions, returns the location of just the name
-// (e.g., "Bar" in "class Foo::Bar"). For other definition types, returns nil.
+// For class, module, singleton class, and method definitions, returns the location of just the name
+// (e.g., "Bar" in "class Foo::Bar", or "foo" in "def foo"). For other definition types, returns nil.
 static VALUE rdxr_definition_name_location(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);

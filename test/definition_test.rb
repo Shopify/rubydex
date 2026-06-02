@@ -490,6 +490,7 @@ class DefinitionTest < Minitest::Test
 
       method_def = graph["Foo#baz()"].definitions.first
 
+      assert_equal("#{path}:2:7-2:10", method_def.name_location.to_display.to_s)
       assert_equal(1, method_def.signatures.length)
 
       sig = method_def.signatures[0]

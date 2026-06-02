@@ -346,8 +346,8 @@ pub unsafe extern "C" fn rdx_definition_is_deprecated(pointer: GraphPointer, def
 }
 
 /// Returns a newly allocated `Location` for the name portion of a definition id.
-/// For class, module, and singleton class definitions, this returns the location of just
-/// the name (e.g., "Bar" in `class Foo::Bar`).
+/// For class, module, singleton class, and method definitions, this returns the location of just
+/// the name (e.g., "Bar" in `class Foo::Bar`, or "foo" in `def foo`).
 /// For other definition types, returns NULL.
 /// Caller must free the returned pointer with `rdx_location_free`.
 ///

@@ -565,7 +565,7 @@ impl Visit for RBSIndexer<'_> {
     fn visit_method_definition_node(&mut self, def_node: &node::MethodDefinitionNode) {
         let str_id = self.local_graph.intern_string(format!("{}()", def_node.name()));
         let offset = Offset::from_rbs_location(&def_node.location());
-        let name_offset = offset.clone();
+        let name_offset = Offset::from_rbs_location(&def_node.name_location());
         let comments = self.collect_comments(def_node.comment());
         let flags = Self::flags(&def_node.annotations());
         let lexical_nesting_id = self.parent_lexical_scope_id();
@@ -1210,6 +1210,7 @@ mod tests {
 
             assert_definition_at!(&context, "2:3-2:22", Method, |def| {
                 assert_def_str_eq!(&context, def, "foo()");
+                assert_def_name_offset_eq!(&context, def, "2:7-2:10");
                 assert!(def.receiver().is_none());
                 assert_eq!(def.visibility(), &Visibility::Public);
                 assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
@@ -1218,6 +1219,7 @@ mod tests {
 
             assert_definition_at!(&context, "4:3-4:23", Method, |def| {
                 assert_def_str_eq!(&context, def, "bar()");
+                assert_def_name_offset_eq!(&context, def, "4:7-4:10");
                 assert!(def.receiver().is_none());
                 assert_eq!(def.visibility(), &Visibility::Public);
                 assert_eq!(class_def.id(), def.lexical_nesting_id().unwrap());
@@ -1411,6 +1413,7 @@ mod tests {
             panic!()
         };
         assert_def_str_eq!(&context, instance_method, "foo()");
+        assert_def_name_offset_eq!(&context, instance_method, "2:13-2:16");
         assert_eq!(instance_method.visibility(), &Visibility::Private);
 
         let singleton_method = definitions
@@ -1421,6 +1424,7 @@ mod tests {
             panic!()
         };
         assert_def_str_eq!(&context, singleton_method, "foo()");
+        assert_def_name_offset_eq!(&context, singleton_method, "2:13-2:16");
         assert_eq!(singleton_method.visibility(), &Visibility::Public);
     }
 
@@ -1438,6 +1442,7 @@ mod tests {
 
         assert_definition_at!(&context, "2:3-2:27", Method, |def| {
             assert_def_str_eq!(&context, def, "foo()");
+            assert_def_name_offset_eq!(&context, def, "2:12-2:15");
             let sigs = def.signatures().as_slice();
             assert_eq!(sigs.len(), 1);
             assert_eq!(sigs[0].len(), 0);
