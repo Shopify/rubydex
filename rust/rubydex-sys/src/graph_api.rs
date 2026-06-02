@@ -562,13 +562,15 @@ pub enum IndexSourceResult {
     UnsupportedLanguageId = 4,
 }
 
-/// Indexes source code from memory using the specified language.  Returns `IndexSourceResult::Success` on success
-/// or a specific error variant if string conversion or language lookup fails.
+/// Indexes source code from memory using the specified language. If `language_id` is null, infers the language from
+/// the URI using the same default as file indexing. Returns `IndexSourceResult::Success` on success or a specific error
+/// variant if string conversion or language lookup fails.
 ///
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - `uri` and `language_id` must be valid, null-terminated UTF-8 strings.
+/// - `uri` must be a valid, null-terminated UTF-8 string.
+/// - `language_id` must be either null or a valid, null-terminated UTF-8 string.
 /// - `source` must point to a valid UTF-8 byte buffer of at least `source_len` bytes.
 ///   It may contain null bytes.
 #[unsafe(no_mangle)]
@@ -588,12 +590,18 @@ pub unsafe extern "C" fn rdx_index_source(
         return IndexSourceResult::InvalidSource;
     };
 
-    let Ok(language_id_str) = (unsafe { utils::convert_char_ptr_to_string(language_id) }) else {
-        return IndexSourceResult::InvalidLanguageId;
-    };
+    let language = if language_id.is_null() {
+        LanguageId::from_path(uri_str.as_str())
+    } else {
+        let Ok(language_id_str) = (unsafe { utils::convert_char_ptr_to_string(language_id) }) else {
+            return IndexSourceResult::InvalidLanguageId;
+        };
 
-    let Ok(language) = LanguageId::from_language_id(&language_id_str) else {
-        return IndexSourceResult::UnsupportedLanguageId;
+        let Ok(language) = LanguageId::from_language_id(&language_id_str) else {
+            return IndexSourceResult::UnsupportedLanguageId;
+        };
+
+        language
     };
 
     with_mut_graph(pointer, |graph| {

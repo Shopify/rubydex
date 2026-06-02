@@ -85,19 +85,27 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     return array;
 }
 
-// Indexes a single source string in memory, dispatching to the appropriate indexer based on language_id
+// Indexes a single source string in memory, dispatching to the appropriate indexer based on language_id.
 //
-// Graph#index_source: (String uri, String source, String language_id) -> void
-static VALUE rdxr_graph_index_source(VALUE self, VALUE uri, VALUE source, VALUE language_id) {
+// Graph#index_source: (String uri, String source, ?String language_id) -> void
+// Registered with arity -1 so Ruby can call it with either 2 or 3 arguments.
+static VALUE rdxr_graph_index_source(int argc, VALUE *argv, VALUE self) {
+    VALUE uri, source, language_id;
+    rb_scan_args(argc, argv, "21", &uri, &source, &language_id);
+
     Check_Type(uri, T_STRING);
     Check_Type(source, T_STRING);
-    Check_Type(language_id, T_STRING);
 
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
     const char *uri_str = StringValueCStr(uri);
-    const char *language_id_str = StringValueCStr(language_id);
+    const char *language_id_str = NULL;
+    if (!NIL_P(language_id)) {
+        Check_Type(language_id, T_STRING);
+        language_id_str = StringValueCStr(language_id);
+    }
+
     const char *source_str = RSTRING_PTR(source);
     size_t source_len = RSTRING_LEN(source);
 
@@ -746,7 +754,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
 
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
-    rb_define_method(cGraph, "index_source", rdxr_graph_index_source, 3);
+    rb_define_method(cGraph, "index_source", rdxr_graph_index_source, -1);
     rb_define_method(cGraph, "document", rdxr_graph_document, 1);
     rb_define_method(cGraph, "delete_document", rdxr_graph_delete_document, 1);
     rb_define_method(cGraph, "resolve", rdxr_graph_resolve, 0);

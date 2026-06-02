@@ -298,8 +298,8 @@ class Rubydex::Graph
   sig { params(file_paths: T::Array[String]).returns(T::Array[String]) }
   def index_all(file_paths); end
 
-  sig { params(uri: String, source: String, language_id: String).void }
-  def index_source(uri, source, language_id); end
+  sig { params(uri: String, source: String, language_id: T.nilable(String)).void }
+  def index_source(uri, source, language_id = nil); end
 
   # Index all files and dependencies of the workspace that exists in `@workspace_path`
   sig { returns(T::Array[String]) }

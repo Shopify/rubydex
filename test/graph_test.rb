@@ -529,18 +529,80 @@ class GraphTest < Minitest::Test
 
   def test_index_source_with_ruby
     graph = Rubydex::Graph.new
-    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def bar; end
+      end
+    RUBY
     graph.resolve
 
-    assert_equal(2, graph.documents.count)
-    refute_nil(graph["Foo"])
+    assert_empty(graph.diagnostics)
+    assert_equal("Foo#bar()", graph["Foo#bar()"].name)
+  end
+
+  def test_index_source_infers_ruby_language_id_when_omitted
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rake", <<~RUBY)
+      class Foo
+        def bar; end
+      end
+    RUBY
+    graph.resolve
+
+    assert_empty(graph.diagnostics)
+    assert_equal("Foo#bar()", graph["Foo#bar()"].name)
+  end
+
+  def test_index_source_infers_ruby_language_id_when_nil
+    graph = Rubydex::Graph.new
+    graph.index_source("untitled:Untitled-1", <<~RUBY, nil)
+      class Foo
+        def bar; end
+      end
+    RUBY
+    graph.resolve
+
+    assert_empty(graph.diagnostics)
+    assert_equal("Foo#bar()", graph["Foo#bar()"].name)
   end
 
   def test_index_source_with_rbs
     graph = Rubydex::Graph.new
-    graph.index_source("file:///foo.rbs", "class Foo\nend", "rbs")
+    graph.index_source("file:///foo.rbs", <<~RBS, "rbs")
+      class Foo
+        def bar: () -> void
+      end
+    RBS
+    graph.resolve
 
-    assert_equal(2, graph.documents.count)
+    assert_empty(graph.diagnostics)
+    assert_equal("Foo#bar()", graph["Foo#bar()"].name)
+  end
+
+  def test_index_source_keeps_explicit_rbs_language_id_override
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RBS, "rbs")
+      class Foo
+        def bar: () -> void
+      end
+    RBS
+    graph.resolve
+
+    assert_empty(graph.diagnostics)
+    assert_equal("Foo#bar()", graph["Foo#bar()"].name)
+  end
+
+  def test_index_source_infers_rbs_language_id_when_omitted
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rbs", <<~RBS)
+      class Foo
+        def bar: () -> void
+      end
+    RBS
+    graph.resolve
+
+    assert_empty(graph.diagnostics)
+    assert_equal("Foo#bar()", graph["Foo#bar()"].name)
   end
 
   def test_index_source_with_unknown_language_id
