@@ -184,7 +184,7 @@ impl<'a> DotBuilder<'a> {
         for (_, definition) in definitions {
             let def_id = definition.id();
             if let Some(decl_id) = self.graph.definition_to_declaration_id(definition) {
-                let decl_node = Self::decl_node_id(decl_id);
+                let decl_node = Self::decl_node_id(*decl_id);
                 let _ = writeln!(
                     self.output,
                     "  \"def_{def_id}\" -> {decl_node} [label=\"declares\" color=\"{DECL_COLOR}\" fontcolor=\"{DECL_COLOR}\"]"
@@ -237,8 +237,8 @@ impl<'a> DotBuilder<'a> {
                 continue;
             };
 
-            let child_node = Self::decl_node_id(child_decl_id);
-            let parent_node = Self::decl_node_id(&decl_id);
+            let child_node = Self::decl_node_id(*child_decl_id);
+            let parent_node = Self::decl_node_id(decl_id);
             let _ = writeln!(
                 self.output,
                 "  {child_node} -> {parent_node} [label=\"inherits\" color=\"{SUPERCLASS_COLOR}\" fontcolor=\"{SUPERCLASS_COLOR}\"]"
@@ -261,7 +261,7 @@ impl<'a> DotBuilder<'a> {
             let Some(decl_id) = self.graph.definition_to_declaration_id(definition) else {
                 continue;
             };
-            let src_node = Self::decl_node_id(decl_id);
+            let src_node = Self::decl_node_id(*decl_id);
             for mixin in mixins {
                 self.write_mixin_edge(mixin, &src_node, decl_ids);
             }
@@ -281,7 +281,7 @@ impl<'a> DotBuilder<'a> {
         if !decl_ids.contains(&target_decl_id) {
             return;
         }
-        let target_node = Self::decl_node_id(&target_decl_id);
+        let target_node = Self::decl_node_id(target_decl_id);
         let _ = writeln!(
             self.output,
             "  {src_node} -> {target_node} [label=\"{mixin_label}\" color=\"{MIXIN_COLOR}\" fontcolor=\"{MIXIN_COLOR}\"]"
@@ -295,7 +295,7 @@ impl<'a> DotBuilder<'a> {
     ) {
         for (declaration_id, declaration) in declarations {
             if let Some(namespace) = declaration.as_namespace() {
-                let owner_node = Self::decl_node_id(declaration_id);
+                let owner_node = Self::decl_node_id(**declaration_id);
                 let mut members: Vec<_> = namespace
                     .members()
                     .values()
@@ -303,7 +303,7 @@ impl<'a> DotBuilder<'a> {
                     .collect();
                 members.sort();
                 for member_id in members {
-                    let member_node = Self::decl_node_id(member_id);
+                    let member_node = Self::decl_node_id(*member_id);
                     let _ = writeln!(
                         self.output,
                         "  {owner_node} -> {member_node} [label=\"owns\" style=dashed arrowhead=onormal color=\"{MEMBER_COLOR}\" fontcolor=\"{MEMBER_COLOR}\"]"
@@ -347,7 +347,7 @@ impl<'a> DotBuilder<'a> {
         format!("\"doc_{}\"", UriId::from(uri))
     }
 
-    fn decl_node_id(id: &DeclarationId) -> String {
+    fn decl_node_id(id: DeclarationId) -> String {
         format!("\"decl_{id}\"")
     }
 }
@@ -392,7 +392,7 @@ impl ToDot for Declaration {
     fn to_dot(&self, builder: &mut DotBuilder) {
         let type_label = format!("{}Decl", self.kind());
         let declaration_id = DeclarationId::from(self.name());
-        let node_id = DotBuilder::decl_node_id(&declaration_id);
+        let node_id = DotBuilder::decl_node_id(declaration_id);
         let html_label = DotBuilder::label(&type_label, self.name(), DECL_COLOR);
         let _ = writeln!(
             builder.output,
