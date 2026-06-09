@@ -1,7 +1,7 @@
 #ifndef RUBYDEX_HANDLE_H
 #define RUBYDEX_HANDLE_H
 
-#include "ruby.h"
+#include "ruby_compat.h"
 
 typedef struct {
     VALUE graph_obj; // Ruby Graph object to keep it alive

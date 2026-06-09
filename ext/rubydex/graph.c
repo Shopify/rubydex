@@ -5,6 +5,7 @@
 #include "location.h"
 #include "reference.h"
 #include "ruby/internal/globals.h"
+#include "ruby_compat.h"
 #include "rustbindings.h"
 #include "utils.h"
 
