@@ -35,14 +35,15 @@ static const rb_data_type_t handle_type = {
 };
 
 static VALUE rdxr_handle_alloc(VALUE klass) {
-    HandleData *data = ALLOC(HandleData);
+    HandleData *data;
+    VALUE handle_obj = TypedData_Make_Struct(klass, HandleData, &handle_type, data);
 
     *data = (HandleData) {
         .graph_obj = Qnil,
         .id = 0,
     };
 
-    return TypedData_Wrap_Struct(klass, &handle_type, data);
+    return handle_obj;
 }
 
 static VALUE rdxr_handle_initialize(VALUE self, VALUE graph_obj, VALUE id_val) {

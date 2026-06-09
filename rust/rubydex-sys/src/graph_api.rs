@@ -23,17 +23,38 @@ use std::{mem, ptr};
 
 pub type GraphPointer = *mut c_void;
 
-/// Creates a new graph within a mutex. This is meant to be used when creating new Graph objects in Ruby
+/// Returns the number of bytes needed to store a Graph in externally allocated memory.
 #[unsafe(no_mangle)]
-pub extern "C" fn rdx_graph_new() -> GraphPointer {
-    Box::into_raw(Box::new(Graph::new())) as GraphPointer
+pub static RDX_GRAPH_SIZE: usize = mem::size_of::<Graph>();
+
+/// Initializes a Graph in-place at the given `pointer`.
+///
+/// # Safety
+///
+/// `pointer` must point to valid, properly aligned memory of at least `RDX_GRAPH_SIZE` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_init(pointer: GraphPointer) {
+    // Ruby's allocator only guarantees 16 byte alignment on the 64-bit platforms we support.
+    // Let's make sure we don't have higher alignment requirements (e.g. if we add a u128 in the future).
+    const _: () = assert!(
+        mem::align_of::<Graph>() <= 16,
+        "Graph alignment exceeds the 16-byte alignment guaranteed by Ruby's allocator"
+    );
+
+    unsafe {
+        pointer.cast::<Graph>().write(Graph::new());
+    }
 }
 
-/// Frees a Graph through its pointer
+/// Drops a Graph initialized by `rdx_graph_init` without freeing the underlying memory.
+///
+/// # Safety
+///
+/// `pointer` must point to a valid initialized Graph.
 #[unsafe(no_mangle)]
-pub extern "C" fn rdx_graph_free(pointer: GraphPointer) {
+pub unsafe extern "C" fn rdx_graph_drop(pointer: GraphPointer) {
     unsafe {
-        let _ = Box::from_raw(pointer.cast::<Graph>());
+        ptr::drop_in_place(pointer.cast::<Graph>());
     }
 }
 
@@ -41,20 +62,16 @@ pub fn with_graph<F, T>(pointer: GraphPointer, action: F) -> T
 where
     F: FnOnce(&Graph) -> T,
 {
-    let mut graph = unsafe { Box::from_raw(pointer.cast::<Graph>()) };
-    let result = action(&mut graph);
-    mem::forget(graph);
-    result
+    let graph = unsafe { &*pointer.cast::<Graph>() };
+    action(graph)
 }
 
 fn with_mut_graph<F, T>(pointer: GraphPointer, action: F) -> T
 where
     F: FnOnce(&mut Graph) -> T,
 {
-    let mut graph = unsafe { Box::from_raw(pointer.cast::<Graph>()) };
-    let result = action(&mut graph);
-    mem::forget(graph);
-    result
+    let graph = unsafe { &mut *pointer.cast::<Graph>() };
+    action(graph)
 }
 
 /// Searches the graph using exact substring matching
