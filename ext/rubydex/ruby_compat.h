@@ -3,4 +3,15 @@
 
 #include "ruby.h"
 
+#ifdef RUBY_TYPED_EMBEDDABLE
+#  define HAVE_RUBY_TYPED_EMBEDDABLE 1
+#else
+#  ifdef HAVE_CONST_RUBY_TYPED_EMBEDDABLE
+#    define RUBY_TYPED_EMBEDDABLE RUBY_TYPED_EMBEDDABLE
+#    define HAVE_RUBY_TYPED_EMBEDDABLE 1
+#  else
+#    define RUBY_TYPED_EMBEDDABLE 0
+#  endif
+#endif
+
 #endif // RUBYDEX_RUBY_COMPAT_H

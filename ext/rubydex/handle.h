@@ -17,7 +17,12 @@ static void handle_mark(void *ptr) {
 
 static void handle_free(void *ptr) {
     if (ptr) {
+#ifdef HAVE_RUBY_TYPED_EMBEDDABLE
+// The storage is embedded in the TypedData Ruby object itself.
+// Don't free `ptr`, because the GC will do that for us.
+#else
         xfree(ptr);
+#endif
     }
 }
 
@@ -31,7 +36,7 @@ static const rb_data_type_t handle_type = {
     },
     .parent = NULL,
     .data = NULL,
-    .flags = RUBY_TYPED_FREE_IMMEDIATELY,
+    .flags = RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_EMBEDDABLE,
 };
 
 static VALUE rdxr_handle_alloc(VALUE klass) {

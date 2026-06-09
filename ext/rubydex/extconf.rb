@@ -39,6 +39,12 @@ end
 append_cflags("-Werror=unused-but-set-variable")
 append_cflags("-Werror=implicit-function-declaration")
 
+# Compiles a minimal program to test if the `RUBY_TYPED_EMBEDDABLE` C constant exists ( Ruby 3.3 or newer).
+#   * If it exists, the generated makefile will set a preprocessor macro: `#define HAVE_CONST_RUBY_TYPED_EMBEDDABLE 1`
+#   * else: `#define HAVE_CONST_RUBY_TYPED_EMBEDDABLE 0`
+# See https://ruby-doc.org/3.3.4/stdlibs/mkmf/MakeMakefile.html#method-i-have_const
+have_const("RUBY_TYPED_EMBEDDABLE", "ruby.h")
+
 # There's an error on Windows with function pointer types not matching. This has been fixed and backported in Ruby, but
 # it seems that RubyInstaller sometimes picks an older patch version on CI and it breaks compilation. This isn't
 # actually a problem, so we're ignoring it temporarily only on Windows
