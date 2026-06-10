@@ -15,22 +15,23 @@ static void handle_mark(void *ptr) {
     }
 }
 
+#ifndef HAVE_RUBY_TYPED_EMBEDDABLE
 static void handle_free(void *ptr) {
     if (ptr) {
-#ifdef HAVE_RUBY_TYPED_EMBEDDABLE
-// The storage is embedded in the TypedData Ruby object itself.
-// Don't free `ptr`, because the GC will do that for us.
-#else
         xfree(ptr);
-#endif
     }
 }
+#endif
 
 static const rb_data_type_t handle_type = {
     .wrap_struct_name = "RubydexHandle",
     .function = {
         .dmark = handle_mark,
+#ifdef HAVE_RUBY_TYPED_EMBEDDABLE
+        .dfree = RUBY_DEFAULT_FREE,
+#else
         .dfree = handle_free,
+#endif
         .dsize = NULL,
         .dcompact = NULL,
     },
