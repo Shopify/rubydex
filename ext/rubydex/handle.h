@@ -22,12 +22,25 @@ static void handle_free(void *ptr) {
 }
 
 static const rb_data_type_t handle_type = {
-    "RubydexHandle", {handle_mark, handle_free, 0}, 0, 0, RUBY_TYPED_FREE_IMMEDIATELY};
+    .wrap_struct_name = "RubydexHandle",
+    .function = {
+        .dmark = handle_mark,
+        .dfree = handle_free,
+        .dsize = NULL,
+        .dcompact = NULL,
+    },
+    .parent = NULL,
+    .data = NULL,
+    .flags = RUBY_TYPED_FREE_IMMEDIATELY,
+};
 
 static VALUE rdxr_handle_alloc(VALUE klass) {
     HandleData *data = ALLOC(HandleData);
-    data->graph_obj = Qnil;
-    data->id = 0;
+
+    *data = (HandleData) {
+        .graph_obj = Qnil,
+        .id = 0,
+    };
 
     return TypedData_Wrap_Struct(klass, &handle_type, data);
 }
@@ -35,8 +48,11 @@ static VALUE rdxr_handle_alloc(VALUE klass) {
 static VALUE rdxr_handle_initialize(VALUE self, VALUE graph_obj, VALUE id_val) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
-    data->graph_obj = graph_obj;
-    data->id = NUM2ULL(id_val);
+
+    *data = (HandleData) {
+        .graph_obj = graph_obj,
+        .id = NUM2ULL(id_val),
+    };
 
     return self;
 }
