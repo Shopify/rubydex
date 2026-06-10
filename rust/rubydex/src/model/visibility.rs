@@ -1,6 +1,8 @@
 use core::fmt;
 use std::fmt::Display;
 
+use crate::assert_mem_size;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
     Public,
@@ -8,6 +10,7 @@ pub enum Visibility {
     Private,
     ModuleFunction,
 }
+assert_mem_size!(Visibility, 1);
 
 impl Visibility {
     /// Parse a visibility from a string.

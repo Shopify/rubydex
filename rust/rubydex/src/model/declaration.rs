@@ -16,6 +16,7 @@ pub enum Ancestor {
     /// A partial ancestor that is missing linearization
     Partial(NameId),
 }
+assert_mem_size!(Ancestor, 16);
 
 /// The ancestor chain and its current state
 #[derive(Debug, Clone)]

@@ -141,6 +141,7 @@ pub struct ResolvedName {
     name: Name,
     declaration_id: DeclarationId,
 }
+assert_mem_size!(ResolvedName, 48);
 
 impl ResolvedName {
     #[must_use]
@@ -173,6 +174,7 @@ pub enum NameRef {
     /// This name has been resolved to an existing declaration
     Resolved(Box<ResolvedName>),
 }
+assert_mem_size!(NameRef, 16);
 
 impl NameRef {
     #[must_use]

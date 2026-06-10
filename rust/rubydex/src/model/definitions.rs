@@ -43,6 +43,7 @@ bitflags! {
         const SINGLETON_METHOD_VISIBILITY = 0b0100;
     }
 }
+assert_mem_size!(DefinitionFlags, 1);
 
 impl DefinitionFlags {
     #[must_use]
@@ -200,6 +201,7 @@ pub enum Mixin {
     Prepend(PrependDefinition),
     Extend(ExtendDefinition),
 }
+assert_mem_size!(Mixin, 16);
 
 impl Mixin {
     #[must_use]
@@ -892,6 +894,7 @@ pub enum Signatures {
     /// Used for RBS definitions with more than one overload.
     Overloaded(Box<[Signature]>),
 }
+assert_mem_size!(Signatures, 24);
 
 impl Signatures {
     /// Returns all signatures as a slice, regardless of variant.

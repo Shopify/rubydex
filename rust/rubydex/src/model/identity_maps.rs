@@ -6,10 +6,13 @@ use std::{
     hash::{BuildHasher, Hasher},
 };
 
+use crate::assert_mem_size;
+
 #[derive(Default)]
 pub struct IdentityHasher {
     hash: u64,
 }
+assert_mem_size!(IdentityHasher, 8);
 
 impl Hasher for IdentityHasher {
     fn write(&mut self, _bytes: &[u8]) {

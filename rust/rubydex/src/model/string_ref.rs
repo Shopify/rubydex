@@ -1,3 +1,4 @@
+use crate::assert_mem_size;
 use std::ops::Deref;
 
 /// A reference-counted string used in the graph.
@@ -11,6 +12,7 @@ pub struct StringRef {
     value: String,
     ref_count: u32,
 }
+assert_mem_size!(StringRef, 32);
 
 impl StringRef {
     #[must_use]

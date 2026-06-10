@@ -1,3 +1,5 @@
+use crate::assert_mem_size;
+
 /// A Ruby keyword with its documentation.
 #[derive(Debug)]
 pub struct Keyword {
@@ -6,6 +8,7 @@ pub struct Keyword {
     /// Documentation string for hover display
     documentation: &'static str,
 }
+assert_mem_size!(Keyword, 32);
 
 impl Keyword {
     #[must_use]

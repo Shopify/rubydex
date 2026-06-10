@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 
+use crate::assert_mem_size;
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::built_in::{OBJECT_ID, add_built_in_data};
@@ -28,6 +29,7 @@ pub enum NameDependent {
     /// This name's `nesting` is the key name — reference-only dependency.
     NestedName(NameId),
 }
+assert_mem_size!(NameDependent, 16);
 
 /// Items processed by the unified invalidation worklist.
 enum InvalidationItem {
@@ -38,6 +40,7 @@ enum InvalidationItem {
     /// Ancestor context changed — unresolve references under this name but keep the name resolved.
     References(NameId),
 }
+assert_mem_size!(InvalidationItem, 16);
 
 /// A work item produced by graph mutations (update/delete) that needs resolution.
 #[derive(Debug)]
@@ -49,6 +52,7 @@ pub enum Unit {
     /// A declaration whose ancestors need re-linearization
     Ancestors(DeclarationId),
 }
+assert_mem_size!(Unit, 16);
 
 // The `Graph` is the global representation of the entire Ruby codebase. It contains all declarations and their
 // relationships
@@ -84,6 +88,7 @@ pub struct Graph {
     /// Paths to exclude from file discovery during indexing.
     excluded_paths: HashSet<PathBuf>,
 }
+assert_mem_size!(Graph, 336);
 
 impl Graph {
     #[must_use]

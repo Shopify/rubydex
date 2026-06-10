@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use line_index::LineIndex;
 use url::Url;
 
+use crate::assert_mem_size;
 use crate::diagnostic::Diagnostic;
 use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId};
 
@@ -17,6 +18,7 @@ pub struct Document {
     constant_reference_ids: Vec<ConstantReferenceId>,
     diagnostics: Vec<Diagnostic>,
 }
+assert_mem_size!(Document, 176);
 
 impl Document {
     #[must_use]

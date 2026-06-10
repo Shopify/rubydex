@@ -1,3 +1,4 @@
+use crate::assert_mem_size;
 use crate::offset::Offset;
 
 #[derive(Debug, Clone)]
@@ -5,6 +6,7 @@ pub struct Comment {
     offset: Offset,
     string: String,
 }
+assert_mem_size!(Comment, 32);
 
 impl Comment {
     #[must_use]

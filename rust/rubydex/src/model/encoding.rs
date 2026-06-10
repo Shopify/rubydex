@@ -1,3 +1,4 @@
+use crate::assert_mem_size;
 use line_index::WideEncoding;
 
 #[derive(Default, Debug)]
@@ -7,6 +8,7 @@ pub enum Encoding {
     Utf16,
     Utf32,
 }
+assert_mem_size!(Encoding, 1);
 
 impl Encoding {
     /// Transform the LSP selected encoding into the expected `WideEncoding` for converting code units with the
