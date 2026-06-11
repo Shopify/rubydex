@@ -752,7 +752,7 @@ class GraphTest < Minitest::Test
     graph.index_source("file:///foo.rb", "class Foo\n  CONST = 1\n  def bar; end\nend", "ruby")
     graph.resolve
 
-    candidates = graph.complete_expression(["Foo"])
+    candidates = graph.complete_expression(["Foo"], self_receiver: "Foo")
 
     # Declaration candidates
     constants = candidates.select { |c| c.is_a?(Rubydex::Constant) }
@@ -774,7 +774,7 @@ class GraphTest < Minitest::Test
     refute_empty(if_keyword.documentation)
   end
 
-  def test_complete_expression_inside_singleton_class_block
+  def test_complete_expression_inside_singleton_method_body
     graph = Rubydex::Graph.new
     graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
       $global_var = 1
@@ -790,7 +790,7 @@ class GraphTest < Minitest::Test
     RUBY
     graph.resolve
 
-    candidates = graph.complete_expression(["Foo", "<Foo>"])
+    candidates = graph.complete_expression(["Foo", "<Foo>"], self_receiver: "Foo::<Foo>")
 
     # Singleton methods defined in the singleton class block
     methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
@@ -983,18 +983,28 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_complete_expression_with_nil_self_receiver_matches_no_kwarg
+  def test_complete_expression_raises_when_self_receiver_kwarg_missing
+    graph = Rubydex::Graph.new
+    assert_raises(ArgumentError) { graph.complete_expression(["Foo"]) }
+  end
+
+  def test_complete_expression_with_nil_self_receiver_skips_self_members
     graph = Rubydex::Graph.new
     graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
       class Foo
+        CONST = 1
+        @ivar = 2
         def instance_m; end
       end
     RUBY
     graph.resolve
 
-    without_kwarg = graph.complete_expression(["Foo"]).map(&:name)
-    with_nil = graph.complete_expression(["Foo"], self_receiver: nil).map(&:name)
-    assert_equal(without_kwarg.sort, with_nil.sort)
+    candidates = graph.complete_expression(["Foo"], self_receiver: nil)
+    names = candidates.map(&:name)
+
+    assert_includes(names, "Foo::CONST")
+    refute_includes(names, "Foo#instance_m()")
+    refute_includes(names, "Foo::<Foo>\#@ivar")
   end
 
   def test_complete_expression_raises_on_nonexistent_self_receiver
@@ -1041,7 +1051,7 @@ class GraphTest < Minitest::Test
     graph.index_source("file:///foo.rb", "class Object; end\nclass Foo; end", "ruby")
     graph.resolve
 
-    candidates = graph.complete_expression([])
+    candidates = graph.complete_expression([], self_receiver: "Object")
 
     # Top-level constants should be reachable (Object context)
     constants = candidates.select { |c| c.is_a?(Rubydex::Declaration) }
@@ -1063,7 +1073,7 @@ class GraphTest < Minitest::Test
     graph.resolve
 
     assert_raises(ArgumentError) do
-      graph.complete_expression(["Foo#bar()"])
+      graph.complete_expression(["Foo#bar()"], self_receiver: nil)
     end
   end
 
@@ -1080,7 +1090,7 @@ class GraphTest < Minitest::Test
     RUBY
     graph.resolve
 
-    candidates = graph.complete_namespace_access("Foo")
+    candidates = graph.complete_namespace_access("Foo", self_receiver: nil)
 
     # All candidates should be Declaration subclasses (no keywords)
     candidates.each { |c| assert_kind_of(Rubydex::Declaration, c) }
@@ -1100,7 +1110,7 @@ class GraphTest < Minitest::Test
     graph.resolve
 
     assert_raises(ArgumentError) do
-      graph.complete_namespace_access("Foo#bar()")
+      graph.complete_namespace_access("Foo#bar()", self_receiver: nil)
     end
   end
 
@@ -1109,7 +1119,7 @@ class GraphTest < Minitest::Test
     graph.index_source("file:///foo.rb", "class Foo\n  def bar; end\n  def baz; end\nend", "ruby")
     graph.resolve
 
-    candidates = graph.complete_method_call("Foo")
+    candidates = graph.complete_method_call("Foo", self_receiver: nil)
 
     # All candidates should be Method instances
     candidates.each { |c| assert_kind_of(Rubydex::Method, c) }
@@ -1130,7 +1140,7 @@ class GraphTest < Minitest::Test
     graph.resolve
 
     assert_raises(ArgumentError) do
-      graph.complete_method_call("Foo#bar()")
+      graph.complete_method_call("Foo#bar()", self_receiver: nil)
     end
   end
 
@@ -1147,7 +1157,7 @@ class GraphTest < Minitest::Test
     RUBY
     graph.resolve
 
-    external = graph.complete_method_call("Foo").map(&:name)
+    external = graph.complete_method_call("Foo", self_receiver: nil).map(&:name)
     assert_includes(external, "Foo#public_one()")
     refute_includes(external, "Foo#secret()")
 
@@ -1186,7 +1196,7 @@ class GraphTest < Minitest::Test
     refute_includes(unrelated, "Foo#shielded()")
 
     # External context: protected access denied.
-    external = graph.complete_method_call("Foo").map(&:name)
+    external = graph.complete_method_call("Foo", self_receiver: nil).map(&:name)
     refute_includes(external, "Foo#shielded()")
   end
 
@@ -1201,7 +1211,7 @@ class GraphTest < Minitest::Test
     RUBY
     graph.resolve
 
-    candidates = graph.complete_namespace_access("Foo").map(&:name)
+    candidates = graph.complete_namespace_access("Foo", self_receiver: nil).map(&:name)
     assert_includes(candidates, "Foo::PUBLIC_CONST")
     refute_includes(candidates, "Foo::SECRET")
   end
@@ -1211,7 +1221,7 @@ class GraphTest < Minitest::Test
     graph.index_source("file:///foo.rb", "class Foo\n  def bar(name:); end\nend", "ruby")
     graph.resolve
 
-    candidates = graph.complete_method_argument("Foo#bar()", ["Foo"])
+    candidates = graph.complete_method_argument("Foo#bar()", ["Foo"], self_receiver: "Foo")
 
     # Method candidates
     methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
@@ -1237,14 +1247,99 @@ class GraphTest < Minitest::Test
     graph.resolve
 
     assert_raises(ArgumentError) do
-      graph.complete_method_argument("Foo#bar()", ["Foo#bar()"])
+      graph.complete_method_argument("Foo#bar()", ["Foo#bar()"], self_receiver: nil)
     end
+  end
+
+  def test_complete_expression_inside_class_body
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Bar
+        def self.baz; end
+      end
+
+      class Foo < Bar
+        @class_level_ivar = 1
+        @@class_var = 2
+
+        def instance_method
+          @instance_level_ivar = 3
+        end
+      end
+    RUBY
+    graph.resolve
+
+    # Lexical scope is Foo, but the self type is Foo::<Foo> because it's within the body
+    candidates = graph.complete_expression(["Foo"], self_receiver: "Foo::<Foo>").map(&:name)
+
+    assert_includes(candidates, "Foo::<Foo>\#@class_level_ivar")
+    assert_includes(candidates, "Foo\#@@class_var")
+    assert_includes(candidates, "Bar::<Bar>#baz()")
+    refute_includes(candidates, "Foo\#@instance_level_ivar")
+  end
+
+  def test_complete_expression_inside_singleton_class_block
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        @class_level_ivar = 1
+
+        class << self
+          @singleton_level_ivar = 2
+        end
+      end
+    RUBY
+    graph.resolve
+
+    candidates = graph.complete_expression(["Foo", "<Foo>"], self_receiver: "Foo::<Foo>::<<Foo>>").map(&:name)
+
+    assert_includes(candidates, "Foo::<Foo>::<<Foo>>\#@singleton_level_ivar")
+    refute_includes(candidates, "Foo::<Foo>\#@class_level_ivar")
+  end
+
+  def test_complete_method_call_for_singleton_method_from_class_body
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        def self.helper
+        end
+      end
+    RUBY
+    graph.resolve
+
+    # Calling `Foo.helper` from anywhere — we're querying methods on the singleton class <Foo>.
+    candidates = graph.complete_method_call("Foo::<Foo>", self_receiver: nil)
+
+    methods = candidates.select { |c| c.is_a?(Rubydex::Method) }
+    assert(methods.any? { |c| c.name == "Foo::<Foo>#helper()" })
+  end
+
+  def test_complete_method_argument_inside_class_body
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        @class_level_ivar = 1
+
+        def self.helper(name:)
+        end
+
+        helper()
+      end
+    RUBY
+    graph.resolve
+
+    candidates = graph.complete_method_argument("Foo::<Foo>#helper()", ["Foo"], self_receiver: "Foo::<Foo>").map(&:name)
+
+    assert_includes(candidates, "Foo::<Foo>\#@class_level_ivar")
+    assert_includes(candidates, "Foo::<Foo>#helper()")
+    assert_includes(candidates, "name")
+    assert_includes(candidates, "if")
   end
 
   def test_complete_expression_raises_with_wrong_types
     graph = Rubydex::Graph.new
-    assert_raises(TypeError) { graph.complete_expression("not an array") }
-    assert_raises(TypeError) { graph.complete_expression([123]) }
+    assert_raises(TypeError) { graph.complete_expression("not an array", self_receiver: nil) }
+    assert_raises(TypeError) { graph.complete_expression([123], self_receiver: nil) }
   end
 
   def test_complete_namespace_access_raises_with_wrong_types
@@ -1259,17 +1354,17 @@ class GraphTest < Minitest::Test
 
   def test_complete_method_argument_raises_with_wrong_types
     graph = Rubydex::Graph.new
-    assert_raises(TypeError) { graph.complete_method_argument(123, []) }
-    assert_raises(TypeError) { graph.complete_method_argument("Foo#bar()", "not an array") }
-    assert_raises(TypeError) { graph.complete_method_argument("Foo#bar()", [123]) }
+    assert_raises(TypeError) { graph.complete_method_argument(123, [], self_receiver: nil) }
+    assert_raises(TypeError) { graph.complete_method_argument("Foo#bar()", "not an array", self_receiver: nil) }
+    assert_raises(TypeError) { graph.complete_method_argument("Foo#bar()", [123], self_receiver: nil) }
   end
 
   def test_completion_returns_empty_for_non_existent_declarations
     graph = Rubydex::Graph.new
     graph.resolve
 
-    assert_equal([], graph.complete_namespace_access("DoesNotExist"))
-    assert_equal([], graph.complete_method_call("DoesNotExist"))
+    assert_equal([], graph.complete_namespace_access("DoesNotExist", self_receiver: nil))
+    assert_equal([], graph.complete_method_call("DoesNotExist", self_receiver: nil))
   end
 
   def test_complete_expression_for_non_existent_nesting
@@ -1277,7 +1372,7 @@ class GraphTest < Minitest::Test
     graph.resolve
 
     assert_raises(ArgumentError) do
-      graph.complete_expression(["NonExistent"])
+      graph.complete_expression(["NonExistent"], self_receiver: nil)
     end
   end
 
@@ -1287,7 +1382,7 @@ class GraphTest < Minitest::Test
 
     # Nesting with a name that exists but hasn't been resolved
     assert_raises(ArgumentError) do
-      graph.complete_expression(["Foo"])
+      graph.complete_expression(["Foo"], self_receiver: nil)
     end
   end
 

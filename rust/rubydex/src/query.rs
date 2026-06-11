@@ -454,20 +454,7 @@ fn expression_completion<'a>(
     let NameRef::Resolved(name_ref) = name_ref else {
         return Err(format!("Expected name {nesting_name_id} to be resolved").into());
     };
-    // When no explicit self is given, self is the innermost lexical scope (the nesting's own declaration).
-    // When explicit, follow constant aliases so callers can pass whatever the expression that set self
-    // resolves to without having to unwrap aliases themselves. Missing or non-namespace decls are graph
-    // inconsistencies and surfaced as errors.
-    let resolved_self_decl_id = match self_decl_id {
-        Some(id) => resolve_self_namespace(graph, id)?,
-        None => *name_ref.declaration_id(),
-    };
-    let self_decl = graph
-        .declarations()
-        .get(&resolved_self_decl_id)
-        .unwrap()
-        .as_namespace()
-        .ok_or("Expected associated declaration to be a namespace")?;
+
     let innermost_lexical_decl = graph
         .declarations()
         .get(name_ref.declaration_id())
@@ -496,7 +483,16 @@ fn expression_completion<'a>(
 
     // Collect methods and instance variables, which are based on the inheritance chain of the `self` type (which may
     // not match the immediate lexical scope)
-    collect_methods_and_ivars_from_self(graph, self_decl, &mut context, &mut candidates);
+    if let Some(self_decl_id) = self_decl_id.map(|id| resolve_self_namespace(graph, id)).transpose()? {
+        let self_decl = graph
+            .declarations()
+            .get(&self_decl_id)
+            .unwrap()
+            .as_namespace()
+            .ok_or("Expected associated declaration to be a namespace")?;
+
+        collect_methods_and_ivars_from_self(graph, self_decl, &mut context, &mut candidates);
+    }
 
     // Keywords are always available in expression contexts
     candidates.extend(keywords::KEYWORDS.iter().map(CompletionCandidate::Keyword));
@@ -1120,7 +1116,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Child")),
                 nesting_name_id: name_id,
             },
             [
@@ -1169,7 +1165,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Child")),
                 nesting_name_id: name_id,
             },
             [
@@ -1218,7 +1214,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo")),
                 nesting_name_id: name_id,
             },
             [
@@ -1268,7 +1264,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo::<Foo>")),
                 nesting_name_id: name_id,
             },
             [
@@ -1288,7 +1284,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Bar")),
                 nesting_name_id: name_id,
             },
             [
@@ -1301,6 +1297,48 @@ mod tests {
                 "Bar",
                 "Bar#baz()",
                 "Foo#@@foo_var"
+            ]
+        );
+    }
+
+    #[test]
+    fn completion_candidates_for_instance_variables_inside_singleton_class_body() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              @class_level_ivar = 1
+
+              def initialize
+                @instance_level_ivar = 1
+              end
+
+              class << self
+                @singleton_level_ivar = 1
+              end
+            end
+            ",
+        );
+        context.resolve();
+
+        let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), Some(foo_id)).id();
+
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::Expression {
+                self_decl_id: Some(DeclarationId::from("Foo::<Foo>::<<Foo>>")),
+                nesting_name_id: name_id,
+            },
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Foo::<Foo>::<<Foo>>#@singleton_level_ivar"
             ]
         );
     }
@@ -1337,10 +1375,11 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
+
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Bar")),
                 nesting_name_id: name_id,
             },
             [
@@ -1361,7 +1400,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Bar")),
                 nesting_name_id: name_id,
             },
             [
@@ -1405,7 +1444,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo::Bar")),
                 nesting_name_id: name_id,
             },
             [
@@ -1452,7 +1491,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo::Bar")),
                 nesting_name_id: name_id,
             },
             ["Foo::Bar", "$var2", "$var", "Foo::Bar#bar_m()"]
@@ -1982,7 +2021,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo")),
                 nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#greet()"),
             },
@@ -1996,6 +2035,48 @@ mod tests {
                 "Foo#greet()",
                 "name:",
                 "greeting:"
+            ]
+        );
+    }
+
+    #[test]
+    fn method_argument_in_body_completion_uses_singleton_self() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+              @class_level_ivar = 1
+
+              def instance_method; end
+
+              def self.configure(name:, label: 'default'); end
+
+              # `configure(...)` is invoked at class body level — cursor inside the args.
+            end
+            ",
+        );
+        context.resolve();
+
+        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        assert_declaration_completion_eq!(
+            context,
+            CompletionReceiver::MethodArgument {
+                self_decl_id: Some(DeclarationId::from("Foo::<Foo>")),
+                nesting_name_id: name_id,
+                method_decl_id: DeclarationId::from("Foo::<Foo>#configure()"),
+            },
+            [
+                "Module",
+                "Class",
+                "Object",
+                "BasicObject",
+                "Kernel",
+                "Foo",
+                "Foo::<Foo>#configure()",
+                "Foo::<Foo>#@class_level_ivar",
+                "name:",
+                "label:"
             ]
         );
     }
@@ -2018,7 +2099,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo")),
                 nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
@@ -2044,7 +2125,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo")),
                 nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#search()"),
             },
@@ -2088,7 +2169,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo")),
                 nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
@@ -2181,7 +2262,7 @@ mod tests {
         assert_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo")),
                 nesting_name_id: name_id,
                 method_decl_id: DeclarationId::from("Foo#bar()"),
             },
@@ -2612,7 +2693,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Object")),
                 nesting_name_id: name_id,
             },
             [
@@ -2950,7 +3031,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo")),
                 nesting_name_id: foo_name_id,
             },
             [
@@ -2970,7 +3051,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Bar")),
                 nesting_name_id: bar_name_id,
             },
             [
@@ -3286,7 +3367,7 @@ mod tests {
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
-                self_decl_id: None,
+                self_decl_id: Some(DeclarationId::from("Foo")),
                 nesting_name_id: foo_name_id,
             },
             [

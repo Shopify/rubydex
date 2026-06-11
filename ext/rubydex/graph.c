@@ -16,17 +16,20 @@ static VALUE cKeywordParameter;
 // Interned once in `rdxi_initialize_graph` to avoid repeated symbol-table lookups on hot completion paths.
 static ID id_self_receiver;
 
-// Extracts the optional `self_receiver:` kwarg from `opts`. Returns NULL when the kwarg is
-// absent or nil; raises ArgumentError when the value is the wrong type or empty.
+// Extracts the required `self_receiver:` kwarg from `opts`. Returns NULL when the value is `nil`,
+// which means "no self-type to walk" (e.g., empty class body where the singleton class hasn't
+// been created). Raises ArgumentError if the kwarg is absent, of the wrong type, or an empty
+// string. The kwarg is required so that callers commit to a self type — there is no implicit
+// default.
 static const char *extract_self_receiver(VALUE opts) {
     if (NIL_P(opts)) {
-        return NULL;
+        rb_raise(rb_eArgError, "missing keyword: self_receiver");
     }
 
     VALUE kwarg_val;
-    rb_get_kwargs(opts, &id_self_receiver, 0, 1, &kwarg_val);
+    rb_get_kwargs(opts, &id_self_receiver, 1, 0, &kwarg_val);
 
-    if (kwarg_val == Qundef || NIL_P(kwarg_val)) {
+    if (NIL_P(kwarg_val)) {
         return NULL;
     }
 
@@ -608,11 +611,10 @@ static VALUE completion_result_to_ruby_array(struct CompletionResult result, VAL
     return ruby_array;
 }
 
-// Graph#complete_expression: (Array[String] nesting, self_receiver: nil) -> Array[Declaration | Keyword]
+// Graph#complete_expression: (Array[String] nesting, self_receiver:) -> Array[Declaration | Keyword]
 // Returns completion candidates for an expression context.
-// The nesting array represents the lexical scope stack. The optional self_receiver keyword argument
-// overrides the self-type (e.g., "Foo::<Foo>" for `def Foo.bar`); when nil, self is derived from
-// the innermost nesting element.
+// The nesting array represents the lexical scope stack. The required self_receiver keyword argument overrides the
+// self-type (e.g., "Foo::<Foo>" for `def Foo.bar`); when nil, self is derived from the innermost nesting element.
 static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
     VALUE nesting, opts;
     rb_scan_args(argc, argv, "1:", &nesting, &opts);
@@ -633,10 +635,11 @@ static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_namespace_access: (String name, self_receiver: nil) -> Array[Declaration]
+// Graph#complete_namespace_access: (String name, self_receiver:) -> Array[Declaration]
 // Returns completion candidates after a namespace access operator (e.g., `Foo::`).
-// The optional self_receiver kwarg is the caller's runtime self type, used to filter
-// visibility-restricted singleton methods (e.g., `private_class_method`).
+// The required self_receiver kwarg is the caller's runtime self type, used to filter
+// visibility-restricted singleton methods (e.g., `private_class_method`). Pass `nil` when there
+// is no caller context.
 static VALUE rdxr_graph_complete_namespace_access(int argc, VALUE *argv, VALUE self) {
     VALUE name, opts;
     rb_scan_args(argc, argv, "1:", &name, &opts);
@@ -652,10 +655,10 @@ static VALUE rdxr_graph_complete_namespace_access(int argc, VALUE *argv, VALUE s
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_method_call: (String name, self_receiver: nil) -> Array[Declaration]
+// Graph#complete_method_call: (String name, self_receiver:) -> Array[Declaration]
 // Returns completion candidates after a method call operator (e.g., `foo.`).
-// The optional self_receiver kwarg is the caller's runtime self type, used for MRI-style
-// visibility checks (private/protected).
+// The required self_receiver kwarg is the caller's runtime self type, used for visibility checks (private/protected).
+// Pass `nil` when there is no caller context.
 static VALUE rdxr_graph_complete_method_call(int argc, VALUE *argv, VALUE self) {
     VALUE name, opts;
     rb_scan_args(argc, argv, "1:", &name, &opts);
@@ -671,9 +674,9 @@ static VALUE rdxr_graph_complete_method_call(int argc, VALUE *argv, VALUE self) 
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_method_argument: (String name, Array[String] nesting, self_receiver: nil) -> Array[Declaration | Keyword | KeywordParameter]
+// Graph#complete_method_argument: (String name, Array[String] nesting, self_receiver:) -> Array[Declaration | Keyword | KeywordParameter]
 // Returns completion candidates inside a method call's argument list (e.g., `foo.bar(|)`).
-// See complete_expression for semantics of self_receiver.
+// See complete_expression for semantics of self_receiver (required, may be nil).
 static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE self) {
     VALUE name, nesting, opts;
     rb_scan_args(argc, argv, "2:", &name, &nesting, &opts);

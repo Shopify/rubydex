@@ -344,48 +344,48 @@ class Rubydex::Graph
   # Returns completion candidates for an expression context. This includes all keywords, constants, methods, instance
   # variables, class variables and global variables reachable from the current lexical scope and self type.
   #
-  # The nesting array represents the lexical scope stack. The optional `self_receiver` keyword argument overrides the
+  # The nesting array represents the lexical scope stack. The required `self_receiver` keyword argument overrides the
   # self type independently of the lexical scope (e.g., `"Foo::<Foo>"` for `def Foo.bar`). This distinction is important
   # because constants and class variables are always attached to the lexical scope. Meanwhile, methods and instance
-  # variables are attached to the type of `self` and those don't always match.
+  # variables are attached to the type of `self` and those don't always match. Pass `nil` when the self type is unknown
   sig do
     params(
       nesting: T::Array[String],
       self_receiver: T.nilable(String),
     ).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword)])
   end
-  def complete_expression(nesting, self_receiver: nil); end
+  def complete_expression(nesting, self_receiver:); end
 
   # Returns completion candidates after a namespace access operator (e.g., `Foo::`). This includes all constants and
   # singleton methods for the namespace and its ancestors.
   #
-  # The optional `self_receiver` kwarg is the caller's runtime self type. It's used to filter visibility-restricted
-  # singleton methods (e.g., `private_class_method`). Pass `nil` (the default) for top-level/script scope.
+  # The required `self_receiver` kwarg is the caller's runtime self type. It's used to filter visibility-restricted
+  # singleton methods (e.g., `private_class_method`). Pass `nil` for top-level/script scope.
   sig do
     params(
       name: String,
       self_receiver: T.nilable(String),
     ).returns(T::Array[Rubydex::Declaration])
   end
-  def complete_namespace_access(name, self_receiver: nil); end
+  def complete_namespace_access(name, self_receiver:); end
 
   # Returns completion candidates after a method call operator (e.g., `foo.`). This includes all methods that exist on
   # the type of the receiver and its ancestors.
   #
-  # The optional `self_receiver` kwarg is the caller's runtime self type. It's used for visibility checks for `private`
-  # and `protected` methods. Pass `nil` (the default) for top-level/script scope.
+  # The required `self_receiver` kwarg is the caller's runtime self type. It's used for visibility checks for `private`
+  # and `protected` methods. Pass `nil` for top-level/script scope.
   sig do
     params(
       name: String,
       self_receiver: T.nilable(String),
     ).returns(T::Array[Rubydex::Method])
   end
-  def complete_method_call(name, self_receiver: nil); end
+  def complete_method_call(name, self_receiver:); end
 
   # Returns completion candidates inside a method call's argument list (e.g., `foo.bar(|)`). This includes everything
   # that expression completion provides plus keyword argument names of the method being called.
   #
-  # See `complete_expression` for the semantics of `nesting` and `self_receiver`.
+  # See `complete_expression` for the semantics of `nesting` and `self_receiver` (required, may be `nil`).
   sig do
     params(
       name: String,
@@ -393,7 +393,7 @@ class Rubydex::Graph
       self_receiver: T.nilable(String),
     ).returns(T::Array[T.any(Rubydex::Declaration, Rubydex::Keyword, Rubydex::KeywordParameter)])
   end
-  def complete_method_argument(name, nesting, self_receiver: nil); end
+  def complete_method_argument(name, nesting, self_receiver:); end
 
   private
 

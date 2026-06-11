@@ -801,9 +801,7 @@ fn run_and_finalize_completion(
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
-/// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. When non-null, it
-///   overrides the self-type (e.g., `"Foo::<Foo>"` for completion inside `def Foo.bar`), while
-///   the lexical nesting still comes from `nesting`.
+/// - `self_receiver` is the fully qualified name of the **type of `self`**
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_complete_expression(
     pointer: GraphPointer,
