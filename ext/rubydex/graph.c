@@ -5,6 +5,7 @@
 #include "location.h"
 #include "reference.h"
 #include "ruby/internal/globals.h"
+#include "ruby_compat.h"
 #include "rustbindings.h"
 #include "utils.h"
 
@@ -44,8 +45,13 @@ static void graph_free(void *ptr) {
         // let the Rust side drop the Graph struct internally.
         rdx_graph_drop(ptr);
 
+#ifdef HAVE_RUBY_TYPED_EMBEDDABLE
+        // The storage is embedded in the TypedData Ruby object itself.
+        // Don't free `ptr`, because the GC will do that for us.
+#else
         // Free the TypeData Ruby object itself
         xfree(ptr);
+#endif
     }
 }
 
@@ -59,7 +65,7 @@ const rb_data_type_t graph_type = {
     },
     .parent = NULL,
     .data = NULL,
-    .flags = RUBY_TYPED_FREE_IMMEDIATELY,
+    .flags = RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_EMBEDDABLE,
 };
 
 // Custom allocator for the Graph class.

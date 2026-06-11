@@ -1,7 +1,7 @@
 #ifndef RUBYDEX_HANDLE_H
 #define RUBYDEX_HANDLE_H
 
-#include "ruby.h"
+#include "ruby_compat.h"
 
 typedef struct {
     VALUE graph_obj; // Ruby Graph object to keep it alive
@@ -15,23 +15,29 @@ static void handle_mark(void *ptr) {
     }
 }
 
+#ifndef HAVE_RUBY_TYPED_EMBEDDABLE
 static void handle_free(void *ptr) {
     if (ptr) {
         xfree(ptr);
     }
 }
+#endif
 
 static const rb_data_type_t handle_type = {
     .wrap_struct_name = "RubydexHandle",
     .function = {
         .dmark = handle_mark,
+#ifdef HAVE_RUBY_TYPED_EMBEDDABLE
+        .dfree = RUBY_DEFAULT_FREE,
+#else
         .dfree = handle_free,
+#endif
         .dsize = NULL,
         .dcompact = NULL,
     },
     .parent = NULL,
     .data = NULL,
-    .flags = RUBY_TYPED_FREE_IMMEDIATELY,
+    .flags = RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_EMBEDDABLE,
 };
 
 static VALUE rdxr_handle_alloc(VALUE klass) {
