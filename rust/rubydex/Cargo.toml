@@ -1,15 +1,9 @@
 [package]
 name = "rubydex"
-version = "0.2.5"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.89.0"
 license = "MIT"
-description = "High-performance Ruby code indexing and static analysis library."
-homepage = "https://github.com/Shopify/rubydex"
-repository = "https://github.com/Shopify/rubydex"
-readme = "README.md"
-keywords = ["ruby", "indexing", "static-analysis"]
-categories = ["development-tools"]
 
 [[bin]]
 name = "rubydex_cli"

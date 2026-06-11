@@ -1,21 +1,14 @@
 [package]
 name = "rubydex-sys"
-version = "0.2.5"
+version = "0.1.0"
 edition = "2024"
-rust-version = "1.89.0"
 license = "MIT"
-description = "C FFI bindings for the Rubydex Ruby code indexing engine."
-homepage = "https://github.com/Shopify/rubydex"
-repository = "https://github.com/Shopify/rubydex"
-readme = "README.md"
-keywords = ["ruby", "ffi", "static-analysis"]
-categories = ["development-tools", "external-ffi-bindings"]
 
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-rubydex = { version = "0.2.5", path = "../rubydex" }
+rubydex = { path = "../rubydex" }
 libc = "0.2.174"
 url = "2.5.4"
 line-index = "0.1.2"

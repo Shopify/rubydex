@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "rubydex"
-version = "0.2.5"
+version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "bitflags",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "rubydex-mcp"
-version = "0.2.5"
+version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "rubydex-sys"
-version = "0.2.5"
+version = "0.1.0"
 dependencies = [
  "cbindgen",
  "libc",
