@@ -69,7 +69,7 @@ pub unsafe extern "C" fn rdx_document_uri(pointer: GraphPointer, uri_id: u64) ->
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - The returned pointer must be freed with `rdx_document_definitions_iter_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_document_definitions_iter_new(pointer: GraphPointer, uri_id: u64) -> *mut DefinitionsIter {

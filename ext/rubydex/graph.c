@@ -62,8 +62,10 @@ const rb_data_type_t graph_type = {
     .flags = RUBY_TYPED_FREE_IMMEDIATELY,
 };
 
-// Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
-// as a void pointer
+// Custom allocator for the Graph class.
+// Requests enough memory from the Ruby GC to fit a `Graph` Rust struct, then initializes it in-place.
+// Only the `Graph` Rust struct itself is in the Ruby heap. Everything else it points to (e.g. all its hash maps' storage)
+// are still normal Rust allocations from the Rust allocator, unknown to the Ruby GC.
 static VALUE rdxr_graph_alloc(VALUE klass) {
     void *graph;
     // Can't use `TypedData_Make_Struct`, because the Graph is a Rust type that isn't exposed directly to C.

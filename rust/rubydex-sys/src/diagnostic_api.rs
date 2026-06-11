@@ -33,7 +33,7 @@ impl DiagnosticArray {
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - The pointed graph must remain alive for the duration of the call.
 ///
 /// # Panics

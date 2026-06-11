@@ -182,7 +182,7 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `paths` must be an array of `count` valid, null-terminated UTF-8 strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_exclude_paths(pointer: GraphPointer, paths: *const *const c_char, count: usize) {
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn rdx_graph_exclude_paths(pointer: GraphPointer, paths: *
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `out_count` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_excluded_paths(
@@ -335,7 +335,7 @@ pub extern "C" fn rdx_graph_resolve(pointer: GraphPointer) {
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `out_error_count` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_check_integrity(
@@ -395,7 +395,7 @@ pub unsafe extern "C" fn rdx_graph_set_encoding(pointer: GraphPointer, encoding_
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - The returned pointer must be freed with `rdx_graph_declarations_iter_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) -> *mut DeclarationsIter {
@@ -416,7 +416,7 @@ pub unsafe extern "C" fn rdx_graph_declarations_iter_new(pointer: GraphPointer) 
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - The returned pointer must be freed with `rdx_graph_documents_iter_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_documents_iter_new(pointer: GraphPointer) -> *mut DocumentsIter {
@@ -458,7 +458,7 @@ pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: 
 /// Creates a new iterator over constant references by snapshotting the current set of IDs.
 ///
 /// # Safety
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPointer) -> *mut ConstantReferencesIter {
     with_graph(pointer, |graph| {
@@ -489,7 +489,7 @@ pub unsafe extern "C" fn rdx_graph_constant_references_iter_new(pointer: GraphPo
 /// Creates a new iterator over method references by snapshotting the current set of IDs.
 ///
 /// # Safety
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPointer) -> *mut MethodReferencesIter {
     with_graph(pointer, |graph| {
@@ -508,7 +508,7 @@ pub unsafe extern "C" fn rdx_graph_method_references_iter_new(pointer: GraphPoin
 /// Caller must free with the returned pointer.
 ///
 /// # Safety
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `require_path` must be a valid, null-terminated UTF-8 string.
 /// - `load_paths` must be an array of `load_paths_count` valid, null-terminated UTF-8 strings.
 #[unsafe(no_mangle)]
@@ -538,7 +538,7 @@ pub unsafe extern "C" fn rdx_resolve_require_path(
 /// Caller must free with `free_c_string_array`.
 ///
 /// # Safety
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `load_path` must be an array of `load_path_count` valid, null-terminated UTF-8 strings.
 /// - `out_count` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
@@ -585,7 +585,7 @@ pub enum IndexSourceResult {
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `uri` must be a valid, null-terminated UTF-8 string.
 /// - `language_id` must be either null or a valid, null-terminated UTF-8 string.
 /// - `source` must point to a valid UTF-8 byte buffer of at least `source_len` bytes.
@@ -816,7 +816,7 @@ fn run_and_finalize_completion(
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
 /// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. When non-null, it
 ///   overrides the self-type (e.g., `"Foo::<Foo>"` for completion inside `def Foo.bar`), while
@@ -853,7 +853,7 @@ pub unsafe extern "C" fn rdx_graph_complete_expression(
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `name` must be a valid, null-terminated UTF-8 string (FQN of the namespace).
 /// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. When non-null, it
 ///   is the caller's runtime self type (e.g., for filtering `private_class_method` visibility).
@@ -887,7 +887,7 @@ pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `name` must be a valid, null-terminated UTF-8 string (FQN of the receiver).
 /// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. When non-null, it
 ///   is the caller's runtime self type, used for MRI-style visibility checks.
@@ -921,7 +921,7 @@ pub unsafe extern "C" fn rdx_graph_complete_method_call(
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `name` must be a valid, null-terminated UTF-8 string (FQN of the method).
 /// - `nesting` must point to `nesting_count` valid, null-terminated UTF-8 strings.
 /// - `self_receiver` must be null or a valid, null-terminated UTF-8 string. See
@@ -1018,7 +1018,7 @@ pub enum CVisibility {
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_visibility(pointer: GraphPointer, declaration_id: u64) -> *const CVisibility {
     with_graph(pointer, |graph| {

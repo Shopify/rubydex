@@ -159,7 +159,7 @@ pub struct CommentArray {
 /// Caller must free the returned pointer with `rdx_definition_comments_free` and each inner string with `free_c_string` if needed.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
@@ -232,7 +232,7 @@ pub unsafe extern "C" fn rdx_definition_comments_free(ptr: *mut CommentArray) {
 /// Caller must free the returned pointer with `rdx_location_free`.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
@@ -256,7 +256,7 @@ pub unsafe extern "C" fn rdx_definition_location(pointer: GraphPointer, definiti
 /// with `free_c_declaration`.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
@@ -280,7 +280,7 @@ pub unsafe extern "C" fn rdx_definition_declaration(pointer: GraphPointer, defin
 /// Caller must free the returned pointer with `free_u64`.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
@@ -331,7 +331,7 @@ where
 /// Returns true if the definition is deprecated.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
@@ -352,7 +352,7 @@ pub unsafe extern "C" fn rdx_definition_is_deprecated(pointer: GraphPointer, def
 /// Caller must free the returned pointer with `rdx_location_free`.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
@@ -376,7 +376,7 @@ pub unsafe extern "C" fn rdx_definition_name_location(pointer: GraphPointer, def
 /// must free with `free_c_constant_reference`.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id for a class definition.
 ///
 /// # Panics
@@ -462,7 +462,7 @@ fn map_mixin_kind(mixin: &Mixin) -> MixinKind {
 /// Returns NULL for definition types that do not support mixins.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
