@@ -175,7 +175,7 @@ pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, refere
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `reference_id` must be a valid reference id.
 ///
 /// # Panics
@@ -268,7 +268,7 @@ pub unsafe extern "C" fn rdx_method_reference_receiver_declaration(
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `reference_id` must be a valid reference id.
 ///
 /// # Panics

@@ -65,7 +65,7 @@ pub struct SignatureArray {
 /// Caller must free the returned pointer with `rdx_definition_signatures_free`.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
@@ -132,7 +132,7 @@ fn collect_method_signatures(graph: &Graph, method_def: &MethodDefinition) -> Ve
 /// are silently ignored.
 ///
 /// # Safety
-/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics

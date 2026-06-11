@@ -243,7 +243,7 @@ pub unsafe extern "C" fn rdx_declaration_unqualified_name(pointer: GraphPointer,
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - The returned pointer must be freed with `rdx_declaration_definitions_iter_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_definitions_iter_new(
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn rdx_constant_alias_target(pointer: GraphPointer, decl_i
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - The returned pointer must be freed with `rdx_constant_references_iter_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_constant_references_iter_new(
@@ -485,7 +485,7 @@ pub unsafe extern "C" fn rdx_declaration_constant_references_iter_new(
 ///
 /// # Safety
 ///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `pointer` must be a valid pointer previously initialized by `rdx_graph_init`.
 /// - The returned pointer must be freed with `rdx_method_references_iter_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_method_references_iter_new(

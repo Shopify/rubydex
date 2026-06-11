@@ -38,10 +38,14 @@ static const char *extract_self_receiver(VALUE opts) {
     return StringValueCStr(kwarg_val);
 }
 
-// Free function for the custom Graph allocator. We always have to call into Rust to free data allocated by it
+// Free function for the custom Graph allocator.
 static void graph_free(void *ptr) {
     if (ptr) {
-        rdx_graph_free(ptr);
+        // let the Rust side drop the Graph struct internally.
+        rdx_graph_drop(ptr);
+
+        // Free the TypeData Ruby object itself
+        xfree(ptr);
     }
 }
 
@@ -58,11 +62,18 @@ const rb_data_type_t graph_type = {
     .flags = RUBY_TYPED_FREE_IMMEDIATELY,
 };
 
-// Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
-// as a void pointer
+// Custom allocator for the Graph class.
+// Requests enough memory from the Ruby GC to fit a `Graph` Rust struct, then initializes it in-place.
+// Only the `Graph` Rust struct itself is in the Ruby heap. Everything else it points to (e.g. all its hash maps' storage)
+// are still normal Rust allocations from the Rust allocator, unknown to the Ruby GC.
 static VALUE rdxr_graph_alloc(VALUE klass) {
-    void *graph = rdx_graph_new();
-    return TypedData_Wrap_Struct(klass, &graph_type, graph);
+    void *graph;
+    // Can't use `TypedData_Make_Struct`, because the Graph is a Rust type that isn't exposed directly to C.
+    VALUE graph_obj = rb_data_typed_object_make(klass, &graph_type, &graph, RDX_GRAPH_SIZE);
+
+    rdx_graph_init(graph);
+
+    return graph_obj;
 }
 
 // Graph#index_all: (Array[String] file_paths) -> Array[String]
