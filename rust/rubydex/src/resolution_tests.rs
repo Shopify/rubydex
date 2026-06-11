@@ -4736,6 +4736,76 @@ mod promotability_tests {
         assert_declaration_kind_eq!(context, "Undefined::Inner::<Inner>#run()", "Method");
         assert_declaration_kind_eq!(context, "Undefined::Inner::<Inner>#@ivar", "InstanceVariable");
     }
+
+    #[test]
+    fn self_method_alias_defined_inside_of_undefined_alias_namespace() {
+        let mut context = graph_test();
+        context.index_uri("file:///alias.rb", {
+            r"
+            Aliased = Undefined
+            "
+        });
+        // RBS singleton method alias (`alias self.x self.y`) nested under the undefined-alias namespace.
+        context.index_rbs_uri(
+            "file:///alias.rbs",
+            r"
+            class Aliased::Inner
+              def self.run: () -> void
+              alias self.execute self.run
+            end
+            ",
+        );
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        // Since we have no idea what `Aliased` is, none of the nested declarations (including the
+        // singleton method alias) can be created.
+        assert_declaration_does_not_exist!(context, "Aliased::Inner");
+        assert_declaration_does_not_exist!(context, "Aliased::Inner::<Inner>#run()");
+        assert_declaration_does_not_exist!(context, "Aliased::Inner::<Inner>#execute()");
+    }
+
+    #[test]
+    fn self_method_alias_inside_undefined_alias_namespace_recovers_when_target_is_defined() {
+        let mut context = graph_test();
+        context.index_uri("file:///alias.rb", {
+            r"
+            Aliased = Undefined
+            "
+        });
+        context.index_rbs_uri(
+            "file:///alias.rbs",
+            r"
+            class Aliased::Inner
+              def self.run: () -> void
+              alias self.execute self.run
+            end
+            ",
+        );
+        context.resolve();
+
+        // Nothing can be placed yet: `Aliased` aliases a constant that does not exist.
+        assert_declaration_does_not_exist!(context, "Aliased::Inner");
+
+        // A later edit defines the alias target. The singleton method alias must not have been
+        // dropped permanently: it should be remembered and placed once its owner exists.
+        context.index_uri("file:///target.rb", {
+            r"
+            module Undefined
+            end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        // `Aliased` now resolves to `Undefined`, so the nested declarations materialize under it,
+        // including the previously-deferred singleton method alias.
+        assert_declaration_kind_eq!(context, "Undefined::Inner", "Class");
+        assert_declaration_kind_eq!(context, "Undefined::Inner::<Inner>", "SingletonClass");
+        assert_declaration_kind_eq!(context, "Undefined::Inner::<Inner>#run()", "Method");
+        assert_declaration_kind_eq!(context, "Undefined::Inner::<Inner>#execute()", "Method");
+    }
 }
 
 mod rbs_tests {

@@ -519,13 +519,15 @@ impl<'a> Resolver<'a> {
                     let new_name_str_id = *alias.new_name_str_id();
                     let owner_id = match alias.receiver() {
                         Some(Receiver::SelfReceiver(def_id)) => {
-                            let decl_id = *self
-                                .graph
-                                .definition_id_to_declaration_id(*def_id)
-                                .expect("SelfReceiver definition should have a declaration");
+                            let Some(&decl_id) = self.graph.definition_id_to_declaration_id(*def_id) else {
+                                self.graph.push_work(Unit::Definition(id));
+                                continue;
+                            };
+
                             let Some(owner_id) = self.get_or_create_singleton_class(decl_id, true) else {
                                 continue;
                             };
+
                             owner_id
                         }
                         Some(Receiver::ConstantReceiver(name_id)) => {
