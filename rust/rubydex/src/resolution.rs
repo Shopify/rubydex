@@ -375,10 +375,16 @@ impl<'a> Resolver<'a> {
                         Definition::Method(method) => {
                             if let Some(receiver) = method.receiver() {
                                 let receiver_decl_id = match receiver {
-                                    Receiver::SelfReceiver(def_id) => *self
-                                        .graph
-                                        .definition_id_to_declaration_id(*def_id)
-                                        .expect("SelfReceiver definition should have a declaration"),
+                                    Receiver::SelfReceiver(def_id) => {
+                                        let Some(&receiver_decl_id) =
+                                            self.graph.definition_id_to_declaration_id(*def_id)
+                                        else {
+                                            self.graph.push_work(Unit::Definition(id));
+                                            continue;
+                                        };
+
+                                        receiver_decl_id
+                                    }
                                     Receiver::ConstantReceiver(name_id) => {
                                         let Some(receiver_decl_id) = self.resolve_constant_receiver(*name_id, id)
                                         else {
