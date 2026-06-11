@@ -6,12 +6,7 @@ use crate::{
     operation::ruby_builder::RubyOperationBuilder,
 };
 use crossbeam_channel::{Sender, unbounded};
-use std::{
-    ffi::OsStr,
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{ffi::OsStr, fs, path::PathBuf, sync::Arc};
 use url::Url;
 
 pub mod local_graph;
@@ -40,10 +35,6 @@ impl From<&OsStr> for LanguageId {
 }
 
 impl LanguageId {
-    pub fn from_path(path: impl AsRef<Path>) -> Self {
-        path.as_ref().extension().map_or(Self::Ruby, Self::from)
-    }
-
     /// Determines the language from an LSP language ID string.
     ///
     /// # Errors
@@ -109,7 +100,7 @@ impl Job for IndexingJob {
             return;
         };
 
-        let language = LanguageId::from_path(&self.path);
+        let language = self.path.extension().map_or(LanguageId::Ruby, LanguageId::from);
         let local_graph = build_local_graph(url.to_string(), &source, &language, self.backend);
 
         self.local_graph_tx
