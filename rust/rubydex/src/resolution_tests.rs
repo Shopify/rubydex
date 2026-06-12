@@ -983,6 +983,22 @@ mod superclass_tests {
     use super::*;
 
     #[test]
+    fn missing_superclass_implies_object() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
     fn linearizing_super_classes() {
         let mut context = graph_test();
         context.index_uri("file:///foo.rb", {
