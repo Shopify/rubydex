@@ -998,6 +998,60 @@ mod superclass_tests {
         assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
     }
 
+    /// The same class can be reopened in multiple different files. Ruby will determine the superclass from
+    /// whichever definition it loads first, so there's an inherent load-order race.
+    ///
+    /// We don't want to be dependent on the load order, so we will pick whichever superclass we see among all of the
+    /// definitions.
+    /// If at least one definition sets the superclass, the rest can skip it (but that does *not* imply `< Object`!)
+    #[test]
+    fn superclass_is_load_order_independent() {
+        // The real definition that we will use to determine the superclass
+        let real_definition = r"
+            class Foo < Bar
+            end
+        ";
+
+        // A reopening of the class which doesn't specify the superclass. We will *not* infer `< Object` from this.
+        let use_as_namespace = r#"
+            class Foo
+                VERSION = "1.2.3"
+            end
+        "#;
+
+        // First ordering: real definition won the race
+        let c1 = {
+            let mut context = graph_test();
+
+            // Ruby would set the superclass to `Bar`, because it loaded the definition with `< Bar` first.
+            context.index_uri("file:///foo.rb", real_definition);
+            context.index_uri("file:///foo/version.rb", use_as_namespace);
+
+            context.resolve();
+            assert_no_diagnostics!(&context);
+
+            context
+        };
+
+        // Second ordering: real definition lost the race
+        let c2 = {
+            let mut context = graph_test();
+
+            // Ruby would set the superclass to the `Object`, but because we don't want to be load-order dependent,
+            // we will pick the superclass from the real definition and ignore that the other def was loaded first.
+            context.index_uri("file:///foo/version.rb", use_as_namespace);
+            context.index_uri("file:///foo.rb", real_definition);
+
+            context.resolve();
+            assert_no_diagnostics!(&context);
+
+            context
+        };
+
+        assert_ancestors_eq!(c1, "Foo", ["Foo", "Partial(Bar)", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(c2, "Foo", ["Foo", "Partial(Bar)", "Object", "Kernel", "BasicObject"]);
+    }
+
     #[test]
     fn linearizing_super_classes() {
         let mut context = graph_test();
