@@ -1053,6 +1053,69 @@ mod superclass_tests {
     }
 
     #[test]
+    #[ignore = "Not implemented yet https://github.com/Shopify/rubydex/issues/857"]
+    fn diagnose_contradictory_superclasses() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo < Bar; end
+
+            class Foo < NotBar; end
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &[
+                "contradictory-superclasses: Attempted to define `Foo` with contradictory superclasses (`Bar` in file:///foo.rb:1:13-1:16 and `NotBar` in file:///foo.rb:3:1-3:19)."
+            ]
+        );
+    }
+
+    /// Unlike the `superclass_is_load_order_independent()` test which covers contradictions across files,
+    /// contradictions within the same file are deterministically an issue.
+    #[test]
+    #[ignore = "Not implemented yet https://github.com/Shopify/rubydex/issues/858"]
+    fn diagnose_contradictory_superclasses_with_unspecified_superclass() {
+        // Problem case: unspecific superclass definition is first
+        {
+            let mut context = graph_test();
+            context.index_uri("file:///foo.rb", {
+                r#"
+                class Foo; end
+
+                class Foo < Bar; end # ❌ TypeError: superclass mismatch for `class Foo`
+                "#
+            });
+            context.resolve();
+
+            assert_diagnostics_eq!(
+                context,
+                &[
+                    "contradictory-superclasses: Attempted to define `Foo` with contradictory superclasses (`Object` in file:///foo.rb:1:1-1:10 and `Bar` in file:///foo.rb:3:1-3:16)."
+                ]
+            );
+        }
+
+        // Contrast with this case, which Ruby allows::
+        {
+            let mut context = graph_test();
+            context.index_uri("file:///foo.rb", {
+                r#"
+                class Foo < Bar; end
+
+                class Foo; end # No `< Bar`, but that's ok
+                "#
+            });
+
+            context.resolve();
+
+            assert_no_diagnostics!(&context);
+        }
+    }
+
+    #[test]
     fn linearizing_super_classes() {
         let mut context = graph_test();
         context.index_uri("file:///foo.rb", {
