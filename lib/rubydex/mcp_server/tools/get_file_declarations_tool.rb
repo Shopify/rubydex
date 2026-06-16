@@ -1,0 +1,53 @@
+# frozen_string_literal: true
+
+module Rubydex
+  module MCPServer
+    class GetFileDeclarationsTool < MCP::Tool
+      tool_name "get_file_declarations"
+      description "List all Ruby classes, modules, methods, and constants defined in a specific file. Returns a structural overview with names, kinds, and line numbers. Use this to understand a file's structure before reading it, or to see what a file contributes to the codebase. Accepts relative or absolute paths."
+      input_schema(
+        properties: {
+          file_path: { type: "string", description: "File path (relative or absolute) to list declarations for" },
+        },
+        required: ["file_path"],
+      )
+
+      class << self
+        #: (file_path: String, server_context: MCP::ServerContext) -> MCP::Tool::Response
+        def call(file_path:, server_context:)
+          graph = server_context.graph_or_error
+
+          case graph
+          when Error
+            MCPServer.response(graph)
+          else
+            root_path = server_context.root_path
+            document = MCPServer.document_for_path(graph, root_path, file_path)
+            unless document
+              return MCPServer.response(
+                Error.new(
+                  "not_found",
+                  "File '#{file_path}' not found in the index",
+                  "Use a relative path like 'app/models/user.rb' or an absolute path matching the indexed project",
+                ),
+              )
+            end
+
+            declarations = document.definitions.filter_map do |definition|
+              declaration = definition.declaration
+              next unless declaration
+
+              {
+                name: declaration.name,
+                kind: MCPServer.declaration_kind(declaration),
+                line: definition.location.to_display.start_line,
+              }
+            end
+
+            MCPServer.response(file: MCPServer.format_path(document.uri, root_path), declarations: declarations)
+          end
+        end
+      end
+    end
+  end
+end
