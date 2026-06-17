@@ -82,6 +82,8 @@ pub enum Operation {
     ReferenceConstant(ReferenceConstant),
     /// Record a reference to a method (for tracking usages).
     ReferenceMethod(ReferenceMethod),
+    /// Record a reference to an instance variable (`@foo` read or operator-write).
+    ReferenceInstanceVariable(ReferenceInstanceVariable),
 }
 
 /// A resolved target as it appears in source code.
@@ -282,4 +284,11 @@ pub struct ReferenceMethod {
     pub uri_id: UriId,
     pub offset: Offset,
     pub receiver: Option<Target>,
+}
+
+#[derive(Debug)]
+pub struct ReferenceInstanceVariable {
+    pub str_id: StringId,
+    pub uri_id: UriId,
+    pub offset: Offset,
 }

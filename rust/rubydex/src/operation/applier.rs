@@ -18,13 +18,14 @@ use crate::model::definitions::{
     Receiver, SingletonClassDefinition,
 };
 use crate::model::ids::{ConstantReferenceId, DefinitionId, NameId};
-use crate::model::references::{ConstantReference, MethodRef};
+use crate::model::references::{ConstantReference, InstanceVariableRef, MethodRef};
 use crate::model::visibility::Visibility;
 use crate::operation::ruby_builder::OperationBuilderResult;
 use crate::operation::{
     AliasConstant, AliasGlobalVariable, AliasMethod, AttrKind, DefineAttribute, DefineClassVariable, DefineConstant,
     DefineGlobalVariable, DefineInstanceVariable, EnterClass, EnterMethod, EnterModule, EnterSingletonClass, MixinKind,
-    Operation, ReferenceConstant, ReferenceMethod, SetConstantVisibility, SetMethodVisibility, Target,
+    Operation, ReferenceConstant, ReferenceInstanceVariable, ReferenceMethod, SetConstantVisibility,
+    SetMethodVisibility, Target,
 };
 
 enum ApplierScope {
@@ -146,6 +147,7 @@ impl OperationApplier {
             Operation::AliasGlobalVariable(op) => self.apply_alias_global_variable(op),
             Operation::ReferenceConstant(op) => self.apply_reference_constant(op),
             Operation::ReferenceMethod(op) => self.apply_reference_method(op),
+            Operation::ReferenceInstanceVariable(op) => self.apply_reference_instance_variable(op),
         }
     }
 
@@ -473,6 +475,20 @@ impl OperationApplier {
         };
         self.local_graph
             .add_method_reference(MethodRef::new(op.str_id, op.uri_id, op.offset, receiver));
+    }
+
+    fn apply_reference_instance_variable(&mut self, op: ReferenceInstanceVariable) {
+        // The lexical nesting at the point of the read mirrors the owner used for instance
+        // variable definitions, so resolution can locate the declaration the read targets.
+        let lexical_nesting_id = self.current_scope_id();
+
+        self.local_graph
+            .add_instance_variable_reference(InstanceVariableRef::new(
+                op.str_id,
+                op.uri_id,
+                op.offset,
+                lexical_nesting_id,
+            ));
     }
 }
 

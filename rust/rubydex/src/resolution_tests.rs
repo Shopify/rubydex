@@ -6,8 +6,9 @@ use crate::{
     assert_alias_targets_contain, assert_ancestors_eq, assert_constant_alias_target_eq, assert_constant_reference_to,
     assert_constant_reference_unresolved, assert_declaration_definitions_count_eq, assert_declaration_does_not_exist,
     assert_declaration_exists, assert_declaration_kind_eq, assert_declaration_references_count_eq, assert_descendants,
-    assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target,
-    assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
+    assert_diagnostics_eq, assert_instance_variables_eq, assert_ivar_reference_unresolved, assert_members_eq,
+    assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members, assert_owner_eq,
+    assert_singleton_class_eq,
     diagnostic::Rule,
     model::{declaration::Ancestors, ids::DeclarationId, name::NameRef},
     resolution::Resolver,
@@ -3698,6 +3699,229 @@ mod fqn_and_naming_tests {
         assert_no_members!(context, "Foo");
         assert_members_eq!(context, "Bar::Foo", ["FOO"]);
     }
+}
+
+#[test]
+fn ivar_read_resolves_to_declaration() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+        class Foo
+          def initialize
+            @bar = 1
+          end
+
+          def baz
+            @bar
+          end
+        end
+        ",
+    );
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_declaration_references_count_eq!(context, "Foo#@bar", 1);
+}
+
+#[test]
+fn ivar_class_instance_variable_read_resolves() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+        class Foo
+          @bar = 1
+
+          def self.baz
+            @bar
+          end
+        end
+        ",
+    );
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_declaration_references_count_eq!(context, "Foo::<Foo>#@bar", 1);
+}
+
+#[test]
+fn ivar_incremental_delete_removes_references() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///a.rb",
+        r"
+        class Foo
+          def initialize
+            @bar = 1
+          end
+        end
+        ",
+    );
+    context.index_uri(
+        "file:///b.rb",
+        r"
+        class Foo
+          def baz
+            @bar
+          end
+        end
+        ",
+    );
+
+    context.resolve();
+    assert_declaration_references_count_eq!(context, "Foo#@bar", 1);
+
+    // Delete the file containing the read
+    context.delete_uri("file:///b.rb");
+    context.resolve();
+
+    assert_declaration_references_count_eq!(context, "Foo#@bar", 0);
+}
+
+#[test]
+fn ivar_read_resolves_through_included_module() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+        module Describable
+          def initialize
+            @name = ''
+          end
+        end
+
+        class Foo
+          include Describable
+
+          def display
+            @name
+          end
+        end
+        ",
+    );
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_declaration_references_count_eq!(context, "Describable#@name", 1);
+}
+
+#[test]
+fn ivar_read_resolves_through_superclass() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+        class Parent
+          def initialize
+            @bar = 1
+          end
+        end
+
+        class Child < Parent
+          def baz
+            @bar
+          end
+        end
+        ",
+    );
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_declaration_references_count_eq!(context, "Parent#@bar", 1);
+}
+
+#[test]
+fn ivar_reference_carries_resolved_declaration_id() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+        class Foo
+          def initialize
+            @bar = 1
+          end
+
+          def baz
+            @bar
+          end
+        end
+        ",
+    );
+    context.resolve();
+
+    assert_declaration_references_count_eq!(context, "Foo#@bar", 1);
+}
+
+#[test]
+fn ivar_reference_inside_method_with_receiver() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+        class Foo
+          @var = 1
+        end
+
+        class Bar
+          def Foo.baz
+            @var
+          end
+        end
+        ",
+    );
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_declaration_references_count_eq!(context, "Foo::<Foo>#@var", 1);
+}
+
+#[test]
+fn ivar_reference_in_singleton_class_body() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+        class Foo
+          class << self
+            @bar = 1
+            @bar
+
+            def self.bar
+              @bar
+            end
+          end
+        end
+        ",
+    );
+    context.resolve();
+
+    assert_no_diagnostics!(&context, &[Rule::ParseWarning]);
+    assert_declaration_references_count_eq!(context, "Foo::<Foo>::<<Foo>>#@bar", 2);
+}
+
+#[test]
+fn ivar_reference_unresolved_when_not_defined_in_ancestor() {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///foo.rb",
+        r"
+        class Foo
+        end
+
+        class Bar < Foo
+          def bar
+            @bar
+          end
+        end
+        ",
+    );
+    context.resolve();
+
+    assert_no_diagnostics!(&context);
+    assert_declaration_does_not_exist!(context, "Foo#@bar");
+    assert_declaration_does_not_exist!(context, "Bar#@bar");
+    assert_ivar_reference_unresolved!(context, "@bar");
 }
 
 mod todo_tests {

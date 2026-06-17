@@ -10,8 +10,8 @@ use crate::model::{
 use crate::operation::{
     AliasConstant, AliasGlobalVariable, AliasMethod, AttrKind, DefineAttribute, DefineClassVariable, DefineConstant,
     DefineGlobalVariable, DefineInstanceVariable, EnterClass, EnterMethod, EnterModule, EnterSingletonClass, Mixin,
-    MixinKind, Operation, ReferenceConstant, ReferenceMethod, SetConstantVisibility, SetDefaultVisibility,
-    SetMethodVisibility, Target,
+    MixinKind, Operation, ReferenceConstant, ReferenceInstanceVariable, ReferenceMethod, SetConstantVisibility,
+    SetDefaultVisibility, SetMethodVisibility, Target,
 };
 
 struct OperationPrinter<'a> {
@@ -91,6 +91,7 @@ impl OperationPrinter<'_> {
             Operation::AliasGlobalVariable(op) => self.print_alias_global_variable(op),
             Operation::ReferenceConstant(op) => self.print_reference_constant(op),
             Operation::ReferenceMethod(op) => self.print_reference_method(op),
+            Operation::ReferenceInstanceVariable(op) => self.print_reference_instance_variable(op),
         }
     }
 
@@ -232,6 +233,14 @@ impl OperationPrinter<'_> {
             let indent = self.indent();
             let name = self.string_value(op.str_id);
             writeln!(self.out, "{indent}ReferenceMethod({name})").unwrap();
+        }
+    }
+
+    fn print_reference_instance_variable(&mut self, op: &ReferenceInstanceVariable) {
+        if self.include_references {
+            let indent = self.indent();
+            let name = self.string_value(op.str_id);
+            writeln!(self.out, "{indent}ReferenceInstanceVariable({name})").unwrap();
         }
     }
 }

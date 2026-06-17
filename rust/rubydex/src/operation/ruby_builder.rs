@@ -1357,6 +1357,19 @@ impl<'a> RubyOperationBuilder<'a> {
             }));
     }
 
+    fn add_instance_variable_reference(&mut self, location: &ruby_prism::Location) {
+        let name = Self::location_to_string(location);
+        let str_id = self.intern_string(name);
+        let offset = Offset::from_prism_location(location);
+
+        self.operations
+            .push(Operation::ReferenceInstanceVariable(op::ReferenceInstanceVariable {
+                str_id,
+                uri_id: self.uri_id,
+                offset,
+            }));
+    }
+
     fn add_class_variable_definition(&mut self, location: &ruby_prism::Location) {
         let name = Self::location_to_string(location);
         let str_id = self.intern_string(name);
@@ -2122,7 +2135,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     }
 
     fn visit_instance_variable_operator_write_node(&mut self, node: &ruby_prism::InstanceVariableOperatorWriteNode) {
-        self.add_instance_variable_definition(&node.name_loc());
+        self.add_instance_variable_reference(&node.name_loc());
         self.visit(&node.value());
     }
 
@@ -2134,6 +2147,10 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
     fn visit_instance_variable_write_node(&mut self, node: &ruby_prism::InstanceVariableWriteNode) {
         self.add_instance_variable_definition(&node.name_loc());
         self.visit(&node.value());
+    }
+
+    fn visit_instance_variable_read_node(&mut self, node: &ruby_prism::InstanceVariableReadNode) {
+        self.add_instance_variable_reference(&node.location());
     }
 
     fn visit_class_variable_and_write_node(&mut self, node: &ruby_prism::ClassVariableAndWriteNode) {
