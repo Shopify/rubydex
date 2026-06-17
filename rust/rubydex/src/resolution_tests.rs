@@ -4674,6 +4674,68 @@ mod promotability_tests {
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
     }
+
+    #[test]
+    fn ivar_defined_inside_of_undefined_alias_namespace() {
+        let mut context = graph_test();
+        context.index_uri("file:///alias.rb", {
+            r"
+            Aliased = Undefined
+
+            class Aliased::Inner
+              def self.run
+                @ivar = 1
+              end
+            end
+            "
+        });
+
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        // Since we have no idea what `Aliased` is, then we cannot create `Inner`, `run()` or `@ivar` declarations
+        assert_declaration_does_not_exist!(context, "Aliased::Inner");
+        assert_declaration_does_not_exist!(context, "Aliased::Inner::<Inner>#run()");
+        assert_declaration_does_not_exist!(context, "Aliased::Inner::<Inner>#@ivar");
+    }
+
+    #[test]
+    fn ivar_inside_undefined_alias_namespace_recovers_when_target_is_defined() {
+        let mut context = graph_test();
+        context.index_uri("file:///alias.rb", {
+            r"
+            Aliased = Undefined
+
+            class Aliased::Inner
+              def self.run
+                @ivar = 1
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Nothing can be placed yet: `Aliased` aliases a constant that does not exist.
+        assert_declaration_does_not_exist!(context, "Aliased::Inner");
+
+        // A later edit defines the alias target. The instance variable must not have been
+        // dropped permanently: it should be remembered and placed once its owner exists.
+        context.index_uri("file:///target.rb", {
+            r"
+            module Undefined
+            end
+            "
+        });
+        context.resolve();
+        assert_no_diagnostics!(&context);
+
+        // `Aliased` now resolves to `Undefined`, so the nested declarations materialize under it,
+        // including the previously-deferred instance variable.
+        assert_declaration_kind_eq!(context, "Undefined::Inner", "Class");
+        assert_declaration_kind_eq!(context, "Undefined::Inner::<Inner>", "SingletonClass");
+        assert_declaration_kind_eq!(context, "Undefined::Inner::<Inner>#run()", "Method");
+        assert_declaration_kind_eq!(context, "Undefined::Inner::<Inner>#@ivar", "InstanceVariable");
+    }
 }
 
 mod rbs_tests {
