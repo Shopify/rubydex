@@ -6,6 +6,7 @@ use rubydex::{
     indexing::{self, IndexerBackend},
     integrity, listing,
     model::graph::Graph,
+    query::cypher::{self, OutputFormat},
     resolution::Resolver,
     stats::{
         memory::MemoryStats,
@@ -52,6 +53,38 @@ struct Args {
         help = "Write orphan definitions report to specified file"
     )]
     report_orphans: Option<String>,
+
+    #[arg(long = "query", value_name = "CYPHER", help = "Run a Cypher query against the graph")]
+    query: Option<String>,
+
+    #[arg(
+        long = "schema",
+        help = "Describe the queryable Cypher schema (labels, relationships, properties) and exit"
+    )]
+    schema: bool,
+
+    #[arg(
+        long = "format",
+        value_enum,
+        default_value = "table",
+        help = "Output format for --query and --schema results"
+    )]
+    format: Format,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Format {
+    Table,
+    Json,
+}
+
+impl From<Format> for OutputFormat {
+    fn from(format: Format) -> Self {
+        match format {
+            Format::Table => OutputFormat::Table,
+            Format::Json => OutputFormat::Json,
+        }
+    }
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -87,6 +120,12 @@ fn exit(print_stats: bool) {
 
 fn main() {
     let args = Args::parse();
+
+    // The Cypher schema is static, so describe it without indexing the workspace.
+    if args.schema {
+        print!("{}", cypher::schema(args.format.into()));
+        std::process::exit(0);
+    }
 
     if args.stats {
         Timer::set_global_timer(Timer::new());
@@ -171,6 +210,25 @@ fn main() {
             }
             Err(e) => eprintln!("Failed to create orphan report file: {e}"),
         }
+    }
+
+    // Cypher query
+    if let Some(query) = &args.query {
+        match time_it!(querying, { cypher::run_query(&graph, query, args.format.into()) }) {
+            Ok(output) => print!("{output}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+
+        if args.stats {
+            Timer::print_breakdown();
+            MemoryStats::print_memory_usage();
+        }
+
+        mem::forget(graph);
+        return;
     }
 
     // Generate visualization or print statistics
