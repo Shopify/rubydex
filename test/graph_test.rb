@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "helpers/context"
+require "json"
 
 class GraphTest < Minitest::Test
   include Test::Helpers::WithContext
@@ -1438,6 +1439,112 @@ class GraphTest < Minitest::Test
     document = graph.document("file:///bar.rb")
     assert_instance_of(Rubydex::Document, document)
     assert_equal("file:///bar.rb", document.uri)
+  end
+
+  def test_cypher_schema_table
+    output = Rubydex::Graph.cypher_schema
+
+    assert_match(/Node labels/, output)
+    assert_match(/Relationship types/, output)
+    assert_match(/Properties/, output)
+    assert_match(/INHERITS/, output)
+    assert_match(/unqualified_name/, output)
+  end
+
+  def test_cypher_schema_json
+    output = Rubydex::Graph.cypher_schema(:json)
+
+    parsed = JSON.parse(output)
+    assert_equal(["node_labels", "relationships", "properties"], parsed.keys)
+    assert(parsed["relationships"].any? { |r| r["type"] == "DEFINES" })
+  end
+
+  def test_query_returns_table_output
+    with_context do |context|
+      context.write!("zoo.rb", <<~RUBY)
+        class Animal; end
+        class Dog < Animal; end
+        class Cat < Animal; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      output = graph.query("MATCH (c:Class)-[:INHERITS]->(p:Class) WHERE p.name = 'Animal' RETURN c.name ORDER BY c.name")
+
+      assert_match(/c\.name/, output)
+      assert_match(/Cat/, output)
+      assert_match(/Dog/, output)
+      assert_match(/2 rows/, output)
+    end
+  end
+
+  def test_query_label_disjunction
+    with_context do |context|
+      context.write!("zoo.rb", <<~RUBY)
+        class Animal; end
+        module Walkable; end
+        class Dog < Animal; end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      output = graph.query(
+        "MATCH (n:Class|Module) WHERE n.name = 'Animal' OR n.name = 'Walkable' RETURN n.name ORDER BY n.name",
+        :json,
+      )
+
+      assert_equal("[{\"n.name\":\"Animal\"},{\"n.name\":\"Walkable\"}]", output)
+    end
+  end
+
+  def test_query_returns_json_output
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(
+        "[{\"c.name\":\"Dog\"}]",
+        graph.query("MATCH (c:Class {name: 'Dog'}) RETURN c.name", :json),
+      )
+    end
+  end
+
+  def test_query_accepts_string_format
+    with_context do |context|
+      context.write!("zoo.rb", "class Dog; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal(
+        "[{\"c.name\":\"Dog\"}]",
+        graph.query("MATCH (c:Class {name: 'Dog'}) RETURN c.name", "json"),
+      )
+    end
+  end
+
+  def test_query_raises_on_syntax_error
+    graph = Rubydex::Graph.new
+    graph.resolve
+
+    error = assert_raises(ArgumentError) { graph.query("MATCH (c RETURN c") }
+    assert_match(/Cypher syntax error/, error.message)
+  end
+
+  def test_query_raises_on_invalid_format
+    graph = Rubydex::Graph.new
+    graph.resolve
+
+    error = assert_raises(ArgumentError) { graph.query("MATCH (c:Class) RETURN c", :yaml) }
+    assert_match(/unknown query format/, error.message)
   end
 
   private

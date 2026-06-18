@@ -14,6 +14,7 @@ use rubydex::model::ids::{DeclarationId, NameId, UriId};
 use rubydex::model::keywords;
 use rubydex::model::name::NameRef;
 use rubydex::model::visibility::Visibility;
+use rubydex::query::cypher::{self, OutputFormat};
 use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
 use rubydex::resolution::Resolver;
 use rubydex::{indexing, integrity, listing, query};
@@ -975,6 +976,91 @@ pub unsafe extern "C" fn rdx_keyword_get(name: *const c_char) -> *const CKeyword
         }
         None => ptr::null(),
     }
+}
+
+/// The result of running a Cypher query, carrying either the formatted output or an error message.
+#[repr(C)]
+pub struct CQueryResult {
+    /// Non-null on success; null on error. Caller must free with `free_c_string`.
+    pub output: *const c_char,
+    /// Non-null on error; null on success. Caller must free with `free_c_string`.
+    pub error: *const c_char,
+}
+
+impl CQueryResult {
+    fn success(output: &str) -> Self {
+        match CString::new(output) {
+            Ok(c_string) => Self {
+                output: c_string.into_raw().cast_const(),
+                error: ptr::null(),
+            },
+            Err(_) => Self::error("query output contained an interior NUL byte"),
+        }
+    }
+
+    fn error(message: &str) -> Self {
+        Self {
+            output: ptr::null(),
+            error: CString::new(message).map_or(ptr::null(), |s| s.into_raw().cast_const()),
+        }
+    }
+}
+
+/// Returns a description of the queryable Cypher schema (node labels, relationship types, and
+/// properties) in the given format (`"table"` or `"json"`). The schema is static and requires no
+/// graph. Caller must free the returned pointer with `free_c_string`.
+///
+/// # Safety
+///
+/// - `format` must be a valid, null-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_cypher_schema(format: *const c_char) -> *const c_char {
+    let format_str = unsafe { utils::convert_char_ptr_to_string(format) }.unwrap_or_else(|_| "table".to_string());
+    let output_format = if format_str == "json" {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Table
+    };
+
+    CString::new(cypher::schema(output_format)).map_or(ptr::null(), |s| s.into_raw().cast_const())
+}
+
+/// Runs a Cypher query against the graph and returns the formatted output or an error message.
+///
+/// `format` must be `"table"` or `"json"`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `query` and `format` must be valid, null-terminated UTF-8 strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_query(
+    pointer: GraphPointer,
+    query: *const c_char,
+    format: *const c_char,
+) -> CQueryResult {
+    let Ok(query_str) = (unsafe { utils::convert_char_ptr_to_string(query) }) else {
+        return CQueryResult::error("query is not valid UTF-8");
+    };
+
+    let Ok(format_str) = (unsafe { utils::convert_char_ptr_to_string(format) }) else {
+        return CQueryResult::error("format is not valid UTF-8");
+    };
+
+    let output_format = match format_str.as_str() {
+        "table" => OutputFormat::Table,
+        "json" => OutputFormat::Json,
+        other => {
+            return CQueryResult::error(&format!("unknown query format `{other}` (expected `table` or `json`)"));
+        }
+    };
+
+    with_graph(pointer, |graph| {
+        match cypher::run_query(graph, &query_str, output_format) {
+            Ok(output) => CQueryResult::success(&output),
+            Err(error) => CQueryResult::error(&error.to_string()),
+        }
+    })
 }
 
 #[repr(u8)]

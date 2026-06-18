@@ -750,6 +750,68 @@ static VALUE rdxr_graph_keyword(VALUE self, VALUE name) {
     return rb_class_new_instance(2, argv, cKeyword);
 }
 
+// Graph#query: (String query, ?(String | Symbol) format) -> String
+// Runs a Cypher query against the graph and returns the formatted output.
+// `format` may be "table" (default) or "json". Raises ArgumentError on a parse, execution, or
+// format error.
+static VALUE rdxr_graph_query(int argc, VALUE *argv, VALUE self) {
+    VALUE query, format;
+    rb_scan_args(argc, argv, "11", &query, &format);
+    Check_Type(query, T_STRING);
+
+    const char *format_str = "table";
+    if (!NIL_P(format)) {
+        if (RB_TYPE_P(format, T_SYMBOL)) {
+            format = rb_sym2str(format);
+        }
+        Check_Type(format, T_STRING);
+        format_str = StringValueCStr(format);
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    struct CQueryResult result = rdx_graph_query(graph, StringValueCStr(query), format_str);
+
+    if (result.error != NULL) {
+        VALUE message = rb_utf8_str_new_cstr(result.error);
+        free_c_string(result.error);
+        rb_raise(rb_eArgError, "%s", StringValueCStr(message));
+    }
+
+    VALUE output = result.output == NULL ? rb_utf8_str_new_cstr("") : rb_utf8_str_new_cstr(result.output);
+    if (result.output != NULL) {
+        free_c_string(result.output);
+    }
+
+    return output;
+}
+
+// Rubydex::Graph.cypher_schema(format = :table) -> String
+// Returns a description of the queryable Cypher schema. `format` may be "table" (default) or "json".
+// The schema is static, so this is a class method and does not require a graph instance.
+static VALUE rdxr_cypher_schema(int argc, VALUE *argv, VALUE self) {
+    VALUE format;
+    rb_scan_args(argc, argv, "01", &format);
+
+    const char *format_str = "table";
+    if (!NIL_P(format)) {
+        if (RB_TYPE_P(format, T_SYMBOL)) {
+            format = rb_sym2str(format);
+        }
+        Check_Type(format, T_STRING);
+        format_str = StringValueCStr(format);
+    }
+
+    const char *output = rdx_cypher_schema(format_str);
+    VALUE result = output == NULL ? rb_utf8_str_new_cstr("") : rb_utf8_str_new_cstr(output);
+    if (output != NULL) {
+        free_c_string(output);
+    }
+
+    return result;
+}
+
 void rdxi_initialize_graph(VALUE moduleRubydex) {
     mRubydex = moduleRubydex;
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
@@ -784,4 +846,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
     rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);
     rb_define_method(cGraph, "keyword", rdxr_graph_keyword, 1);
+    rb_define_method(cGraph, "query", rdxr_graph_query, -1);
+
+    rb_define_singleton_method(cGraph, "cypher_schema", rdxr_cypher_schema, -1);
 }
