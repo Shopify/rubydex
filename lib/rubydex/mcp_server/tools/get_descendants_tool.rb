@@ -2,7 +2,7 @@
 
 module Rubydex
   module MCPServer
-    class GetDescendantsTool < MCP::Tool
+    class GetDescendantsTool < Tool
       tool_name "get_descendants"
       description "Returns all known descendants for the given namespace including itself and all transitive descendants. Can be used to understand how a module/class is used across the codebase. Results are paginated: the response includes `total`. If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
       input_schema(
@@ -15,9 +15,9 @@ module Rubydex
       )
 
       class << self
-        #: (name: String, ?limit: Integer, ?offset: Integer, server_context: MCP::ServerContext) -> MCP::Tool::Response
-        def call(name:, limit: nil, offset: nil, server_context:)
-          graph = server_context.graph_or_error
+        #: (name: String, ?limit: Integer, ?offset: Integer, server_state: State) -> Tool::Response
+        def call(name:, limit: nil, offset: nil, server_state:)
+          graph = server_state.graph_or_error
 
           case graph
           when Error

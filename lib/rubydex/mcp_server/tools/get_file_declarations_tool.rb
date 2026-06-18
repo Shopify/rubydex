@@ -2,7 +2,7 @@
 
 module Rubydex
   module MCPServer
-    class GetFileDeclarationsTool < MCP::Tool
+    class GetFileDeclarationsTool < Tool
       tool_name "get_file_declarations"
       description "List all Ruby classes, modules, methods, and constants defined in a specific file. Returns a structural overview with names, kinds, and line numbers. Use this to understand a file's structure before reading it, or to see what a file contributes to the codebase. Accepts relative or absolute paths."
       input_schema(
@@ -13,15 +13,15 @@ module Rubydex
       )
 
       class << self
-        #: (file_path: String, server_context: MCP::ServerContext) -> MCP::Tool::Response
-        def call(file_path:, server_context:)
-          graph = server_context.graph_or_error
+        #: (file_path: String, server_state: State) -> Tool::Response
+        def call(file_path:, server_state:)
+          graph = server_state.graph_or_error
 
           case graph
           when Error
             MCPServer.response(graph)
           else
-            root_path = server_context.root_path
+            root_path = server_state.root_path
             document = MCPServer.document_for_path(graph, root_path, file_path)
             unless document
               return MCPServer.response(

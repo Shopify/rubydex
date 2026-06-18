@@ -2,15 +2,15 @@
 
 module Rubydex
   module MCPServer
-    class CodebaseStatsTool < MCP::Tool
+    class CodebaseStatsTool < Tool
       tool_name "codebase_stats"
       description "Get an overview of the indexed Ruby codebase: total file count, declaration counts, and breakdown by kind (classes, modules, methods, constants). Use this to understand codebase size and composition, or to verify that indexing completed successfully."
       input_schema(properties: {})
 
       class << self
-        #: (server_context: MCP::ServerContext) -> MCP::Tool::Response
-        def call(server_context:)
-          graph = server_context.graph_or_error
+        #: (server_state: State) -> Tool::Response
+        def call(server_state:)
+          graph = server_state.graph_or_error
 
           case graph
           when Error

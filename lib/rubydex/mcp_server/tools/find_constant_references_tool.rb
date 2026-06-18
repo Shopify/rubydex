@@ -2,7 +2,7 @@
 
 module Rubydex
   module MCPServer
-    class FindConstantReferencesTool < MCP::Tool
+    class FindConstantReferencesTool < Tool
       tool_name "find_constant_references"
       description "Find all resolved references to a Ruby class, module, or constant across the codebase. Returns file paths, line numbers, and columns for each usage. Results are paginated: the response includes `total`. If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
       input_schema(
@@ -15,9 +15,9 @@ module Rubydex
       )
 
       class << self
-        #: (name: String, ?limit: Integer, ?offset: Integer, server_context: MCP::ServerContext) -> MCP::Tool::Response
-        def call(name:, limit: nil, offset: nil, server_context:)
-          graph = server_context.graph_or_error
+        #: (name: String, ?limit: Integer, ?offset: Integer, server_state: State) -> Tool::Response
+        def call(name:, limit: nil, offset: nil, server_state:)
+          graph = server_state.graph_or_error
 
           case graph
           when Error
@@ -36,7 +36,7 @@ module Rubydex
                 []
               end
               page, total = MCPServer.paginate(references, offset, limit, 200)
-              root_path = server_context.root_path
+              root_path = server_state.root_path
               payload = page.map do |reference|
                 display = reference.location.to_display
                 {

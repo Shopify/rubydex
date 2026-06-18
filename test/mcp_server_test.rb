@@ -40,7 +40,7 @@ class MCPServerTest < Minitest::Test
 
   def test_codebase_stats_reports_indexing_until_graph_is_ready
     state = Rubydex::MCPServer::State.new(Dir.pwd)
-    server = Rubydex::MCPServer::Server.new(server_context: state)
+    server = Rubydex::MCPServer::Server.new(server_state: state)
 
     send_request = {
       jsonrpc: "2.0",
@@ -53,11 +53,85 @@ class MCPServerTest < Minitest::Test
     }
 
     response = server.handle(send_request)
-    payload = JSON.parse(response.fetch(:result).fetch(:content)[0].fetch(:text))
+    result = response.fetch(:result)
+    payload = JSON.parse(result.fetch(:content)[0].fetch(:text))
 
+    assert_equal(false, result.fetch(:isError))
     assert_equal("indexing", payload.fetch("error"))
     assert_match(/still indexing/, payload.fetch("message"))
     assert_match(/retry/, payload.fetch("suggestion"))
+  end
+
+  def test_ping_returns_empty_result
+    state = Rubydex::MCPServer::State.new(Dir.pwd)
+    server = Rubydex::MCPServer::Server.new(server_state: state)
+
+    response = server.handle(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "ping",
+      },
+    )
+
+    assert_equal({}, response.fetch(:result))
+  end
+
+  def test_unknown_method_returns_json_rpc_method_error
+    state = Rubydex::MCPServer::State.new(Dir.pwd)
+    server = Rubydex::MCPServer::Server.new(server_state: state)
+
+    response = server.handle(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "missing/method",
+      },
+    )
+
+    error = response.fetch(:error)
+    assert_equal(-32_601, error.fetch(:code))
+    assert_equal("Method not found", error.fetch(:message))
+    assert_equal("missing/method", error.fetch(:data))
+  end
+
+  def test_invalid_json_rpc_request_returns_invalid_request
+    state = Rubydex::MCPServer::State.new(Dir.pwd)
+    server = Rubydex::MCPServer::Server.new(server_state: state)
+
+    response = server.handle(
+      {
+        jsonrpc: "1.0",
+        id: 1,
+        method: "ping",
+      },
+    )
+
+    error = response.fetch(:error)
+    assert_equal(-32_600, error.fetch(:code))
+    assert_equal("Invalid Request", error.fetch(:message))
+    assert_equal("JSON-RPC version must be 2.0", error.fetch(:data))
+  end
+
+  def test_missing_required_tool_argument_returns_tool_error
+    state = Rubydex::MCPServer::State.new(Dir.pwd)
+    server = Rubydex::MCPServer::Server.new(server_state: state)
+
+    response = server.handle(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "search_declarations",
+          arguments: {},
+        },
+      },
+    )
+
+    result = response.fetch(:result)
+    assert_equal(true, result.fetch(:isError))
+    assert_equal("Missing required arguments: query", result.fetch(:content)[0].fetch(:text))
   end
 end
 

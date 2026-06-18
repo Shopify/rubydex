@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
 require "json"
-require "mcp"
 require "pathname"
 require "uri"
 
+require "rubydex/mcp_server/protocol"
 require "rubydex/mcp_server/tools/codebase_stats_tool"
 require "rubydex/mcp_server/tools/find_constant_references_tool"
 require "rubydex/mcp_server/tools/get_declaration_tool"
@@ -116,20 +116,6 @@ module Rubydex
       end
     end
 
-    class Server < MCP::Server
-      #: (server_context: State) -> void
-      def initialize(server_context:)
-        super(
-          name: "rubydex_mcp",
-          version: Rubydex::VERSION,
-          instructions: SERVER_INSTRUCTIONS,
-          tools: TOOLS,
-          server_context: server_context,
-          capabilities: { tools: {} },
-        )
-      end
-    end
-
     class << self
       #: (?String) -> void
       def run(path = ".")
@@ -137,14 +123,14 @@ module Rubydex
         state = State.new(root)
         state.spawn_indexer
 
-        server = Server.new(server_context: state)
+        server = Server.new(server_state: state)
 
-        MCP::Server::Transports::StdioTransport.new(server).open
+        StdioTransport.new(server).open
       end
 
-      #: (Hash | Error) -> MCP::Tool::Response
+      #: (Hash | Error) -> Tool::Response
       def response(payload)
-        MCP::Tool::Response.new([{ type: "text", text: JSON.generate(payload) }])
+        Tool::Response.new([{ type: "text", text: JSON.generate(payload) }])
       end
 
       #: (Declaration) -> String

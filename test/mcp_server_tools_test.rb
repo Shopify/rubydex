@@ -131,10 +131,10 @@ class MCPServerToolsTest < Minitest::Test
 
       assert_empty(errors)
 
-      server_context = Object.new
-      server_context.define_singleton_method(:root_path) { context.absolute_path }
-      server_context.define_singleton_method(:graph_or_error) { graph }
-      server = Rubydex::MCPServer::Server.new(server_context: server_context)
+      server_state = Object.new
+      server_state.define_singleton_method(:root_path) { context.absolute_path }
+      server_state.define_singleton_method(:graph_or_error) { graph }
+      server = Rubydex::MCPServer::Server.new(server_state: server_state)
 
       yield server
     end

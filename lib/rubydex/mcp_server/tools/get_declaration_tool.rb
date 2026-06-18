@@ -2,7 +2,7 @@
 
 module Rubydex
   module MCPServer
-    class GetDeclarationTool < MCP::Tool
+    class GetDeclarationTool < Tool
       tool_name "get_declaration"
       description 'Get complete information about a Ruby class, module, method, or constant by its exact fully qualified name. Returns file locations, documentation comments, ancestor chain, and members with locations. FQN format: "Foo::Bar" for classes/modules/constants, "Foo::Bar#method_name" for instance methods.'
       input_schema(
@@ -13,9 +13,9 @@ module Rubydex
       )
 
       class << self
-        #: (name: String, server_context: MCP::ServerContext) -> MCP::Tool::Response
-        def call(name:, server_context:)
-          graph = server_context.graph_or_error
+        #: (name: String, server_state: State) -> Tool::Response
+        def call(name:, server_state:)
+          graph = server_state.graph_or_error
 
           case graph
           when Error
@@ -27,7 +27,7 @@ module Rubydex
             when Error
               MCPServer.response(declaration)
             else
-              root_path = server_context.root_path
+              root_path = server_state.root_path
               definitions = declaration.definitions.map do |definition|
                 MCPServer.display_location(definition.location, root_path).merge(
                   comments: definition.comments.map do |comment|

@@ -2,7 +2,7 @@
 
 module Rubydex
   module MCPServer
-    class SearchDeclarationsTool < MCP::Tool
+    class SearchDeclarationsTool < Tool
       tool_name "search_declarations"
       description 'Search for Ruby classes, modules, methods, or constants by name. Use this INSTEAD OF Grep when you know part of a Ruby identifier name and want to find its definition. Returns fully qualified names, kinds, and file locations. Use the `kind` filter ("Class", "Module", "Method", "Constant") to narrow results. Set `match_mode` to "exact" for precise substring matching or "fuzzy" for LSP-style workspace symbol search (default). Results are paginated: the response includes `total` (the full count of matches). If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages.'
       input_schema(
@@ -17,9 +17,9 @@ module Rubydex
       )
 
       class << self
-        #: (query: String, ?kind: String, ?match_mode: String, ?limit: Integer, ?offset: Integer, server_context: MCP::ServerContext) -> MCP::Tool::Response
-        def call(query:, kind: nil, match_mode: nil, limit: nil, offset: nil, server_context:)
-          graph = server_context.graph_or_error
+        #: (query: String, ?kind: String, ?match_mode: String, ?limit: Integer, ?offset: Integer, server_state: State) -> Tool::Response
+        def call(query:, kind: nil, match_mode: nil, limit: nil, offset: nil, server_state:)
+          graph = server_state.graph_or_error
 
           case graph
           when Error
@@ -45,7 +45,7 @@ module Rubydex
             end
 
             page, total = MCPServer.paginate(declarations, offset, limit, 100)
-            root_path = server_context.root_path
+            root_path = server_state.root_path
             results = page.map do |declaration|
               {
                 name: declaration.name,
