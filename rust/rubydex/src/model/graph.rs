@@ -311,9 +311,6 @@ impl Graph {
         self.definition_to_declaration_id(self.definitions.get(&definition_id).unwrap())
     }
 
-    /// # Panics
-    ///
-    /// Panics if the definition is not found
     #[must_use]
     pub fn definition_to_declaration_id(&self, definition: &Definition) -> Option<&DeclarationId> {
         let (nesting_name_id, member_str_id) = match definition {
