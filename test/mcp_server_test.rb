@@ -3,6 +3,7 @@
 require "test_helper"
 require "helpers/context"
 require "json"
+require "mocha/minitest"
 require "rubydex/mcp_server"
 require "open3"
 require "rbconfig"
@@ -17,7 +18,9 @@ class MCPServerTest < Minitest::Test
       context.write!("app.rb", "class LocalWorkspaceClass; end")
 
       state = Rubydex::MCPServer::State.new(context.absolute_path)
-      state.spawn_indexer.join
+      capture_io do
+        state.spawn_indexer.join
+      end
       graph = state.graph_or_error
 
       assert_kind_of(Rubydex::Graph, graph)
@@ -113,6 +116,46 @@ class MCPServerTest < Minitest::Test
     assert_equal("JSON-RPC version must be 2.0", error.fetch(:data))
   end
 
+  def test_explicit_null_id_returns_invalid_request
+    state = Rubydex::MCPServer::State.new(Dir.pwd)
+    server = Rubydex::MCPServer::Server.new(server_state: state)
+
+    response = server.handle(
+      {
+        jsonrpc: "2.0",
+        id: nil,
+        method: "ping",
+      },
+    )
+
+    error = response.fetch(:error)
+    assert_equal(-32_600, error.fetch(:code))
+    assert_equal("Invalid Request", error.fetch(:message))
+    assert_equal("Request ID must be a string or integer", error.fetch(:data))
+    assert_nil(response.fetch(:id))
+  end
+
+  def test_batch_request_always_returns_array
+    state = Rubydex::MCPServer::State.new(Dir.pwd)
+    server = Rubydex::MCPServer::Server.new(server_state: state)
+
+    response = server.handle(
+      [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "ping",
+        },
+        {
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        },
+      ],
+    )
+
+    assert_equal([{ jsonrpc: "2.0", id: 1, result: {} }], response)
+  end
+
   def test_missing_required_tool_argument_returns_tool_error
     state = Rubydex::MCPServer::State.new(Dir.pwd)
     server = Rubydex::MCPServer::Server.new(server_state: state)
@@ -132,6 +175,18 @@ class MCPServerTest < Minitest::Test
     result = response.fetch(:result)
     assert_equal(true, result.fetch(:isError))
     assert_equal("Missing required arguments: query", result.fetch(:content)[0].fetch(:text))
+  end
+
+  def test_path_for_uri_removes_windows_file_uri_leading_slash
+    Gem.stubs(:win_platform?).returns(true)
+
+    assert_equal("D:/a/_temp/app.rb", Rubydex::MCPServer.path_for_uri("file:///D:/a/_temp/app.rb"))
+  end
+
+  def test_path_for_uri_decodes_file_uri_paths
+    Gem.stubs(:win_platform?).returns(false)
+
+    assert_equal("/tmp/my app.rb", Rubydex::MCPServer.path_for_uri("file:///tmp/my%20app.rb"))
   end
 end
 
@@ -175,6 +230,35 @@ class MCPServerIntegrationTest < Minitest::Test
     assert_empty(stdout)
     assert_includes(stderr, "error: invalid option: --unknown")
     assert_includes(stderr, "Usage: rubydex_mcp [PATH]")
+  end
+
+  def test_mcp_server_can_be_required_directly
+    stdout, stderr, status = Open3.capture3(
+      RbConfig.ruby,
+      "-rbundler/setup",
+      "-Ilib",
+      "-e",
+      <<~RUBY,
+        require "rubydex/mcp_server"
+
+        puts Rubydex::VERSION
+        puts Rubydex::Graph.name
+
+        state = Object.new
+        state.define_singleton_method(:root_path) { Dir.pwd }
+        state.define_singleton_method(:graph_or_error) { Rubydex::MCPServer::Error.new("indexing") }
+
+        response = Rubydex::MCPServer::Server.new(server_state: state).handle(
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+        )
+        puts response.fetch(:result).fetch(:serverInfo).fetch(:version)
+      RUBY
+    )
+
+    assert_predicate(status, :success?, stderr)
+    assert_equal("#{Rubydex::VERSION}\nRubydex::Graph\n#{Rubydex::VERSION}\n", stdout)
   end
 
   def test_mcp_server_e2e

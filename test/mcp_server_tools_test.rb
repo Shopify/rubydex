@@ -105,6 +105,37 @@ class MCPServerToolsTest < Minitest::Test
     end
   end
 
+  def test_get_file_declarations_decodes_file_uri_paths
+    with_context do |context|
+      context.write!("my app.rb", "class SpacedFile; end")
+      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      errors = graph.index_all([context.absolute_path])
+      graph.resolve
+
+      assert_empty(errors)
+
+      server_state = Object.new
+      server_state.define_singleton_method(:root_path) { context.absolute_path }
+      server_state.define_singleton_method(:graph_or_error) { graph }
+      server = Rubydex::MCPServer::Server.new(server_state: server_state)
+
+      file = call_tool(server, "get_file_declarations", file_path: "my app.rb")
+
+      assert_equal("my app.rb", file.fetch("file"))
+      assert_has_value(file.fetch("declarations"), "SpacedFile", "my app.rb declarations")
+    end
+  end
+
+  def test_todo_declaration_uses_graph_kind_string
+    with_mcp_server do |server|
+      declaration = call_tool(server, "get_declaration", name: "MissingParent")
+      stats = call_tool(server, "codebase_stats")
+
+      assert_equal("<TODO>", declaration.fetch("kind"))
+      assert_operator(stats.fetch("breakdown_by_kind").fetch("<TODO>"), :>=, 1)
+    end
+  end
+
   def test_codebase_stats_tool
     with_mcp_server do |server|
       stats = call_tool(server, "codebase_stats")
@@ -167,6 +198,9 @@ class MCPServerToolsTest < Minitest::Test
         def build
           Animal.new
         end
+      end
+
+      class MissingParent::Child
       end
     RUBY
   end

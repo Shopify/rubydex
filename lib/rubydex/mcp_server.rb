@@ -4,6 +4,7 @@ require "json"
 require "pathname"
 require "uri"
 
+require "rubydex"
 require "rubydex/mcp_server/protocol"
 require "rubydex/mcp_server/tools/codebase_stats_tool"
 require "rubydex/mcp_server/tools/find_constant_references_tool"
@@ -135,6 +136,8 @@ module Rubydex
 
       #: (Declaration) -> String
       def declaration_kind(declaration)
+        return "<TODO>" if declaration.is_a?(Rubydex::Todo)
+
         declaration.class.name.delete_prefix("Rubydex::")
       end
 
@@ -157,10 +160,14 @@ module Rubydex
       #: (String) -> String
       def path_for_uri(uri)
         parsed = URI.parse(uri)
-        return parsed.path if parsed.scheme == "file"
+        if parsed.scheme == "file"
+          path = URI.decode_uri_component(parsed.path)
+          path.delete_prefix!("/") if Gem.win_platform?
+          return path
+        end
 
         uri
-      rescue URI::InvalidURIError
+      rescue URI::InvalidURIError, ArgumentError
         uri
       end
 

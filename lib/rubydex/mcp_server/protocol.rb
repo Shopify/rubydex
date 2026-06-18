@@ -81,8 +81,6 @@ module Rubydex
           return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "Request is an empty array") if request.empty?
 
           responses = request.filter_map { |entry| handle(entry) }
-          return responses.first if responses.one?
-
           return responses if responses.any?
 
           return
@@ -92,7 +90,8 @@ module Rubydex
           return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "Request must be a hash")
         end
 
-        id = request[:id] || request["id"]
+        has_id = request.key?(:id) || request.key?("id")
+        id = request.key?(:id) ? request[:id] : request["id"]
         method = request[:method] || request["method"]
         params = request.key?(:params) ? request[:params] : request["params"]
 
@@ -100,8 +99,8 @@ module Rubydex
           return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "JSON-RPC version must be 2.0")
         end
 
-        unless id.nil? || id.is_a?(Integer) || (id.is_a?(String) && id.match?(/\A[a-zA-Z0-9_-]+\z/))
-          return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "Request ID must be a string, integer, or null")
+        unless !has_id || id.is_a?(Integer) || (id.is_a?(String) && id.match?(/\A[a-zA-Z0-9_-]+\z/))
+          return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "Request ID must be a string or integer")
         end
 
         unless method.is_a?(String) && !method.start_with?("rpc.")
@@ -132,14 +131,14 @@ module Rubydex
         when "notifications/initialized"
           return
         else
-          return id ? error_response(id, METHOD_NOT_FOUND, "Method not found", data: method) : nil
+          return has_id ? error_response(id, METHOD_NOT_FOUND, "Method not found", data: method) : nil
         end
 
-        id ? { jsonrpc: "2.0", id: id, result: result } : nil
+        has_id ? { jsonrpc: "2.0", id: id, result: result } : nil
       rescue KeyError => e
-        id ? error_response(id, INVALID_PARAMS, "Invalid params", data: e.message) : nil
+        has_id ? error_response(id, INVALID_PARAMS, "Invalid params", data: e.message) : nil
       rescue StandardError => e
-        id ? error_response(id, INTERNAL_ERROR, "Internal error", data: e.message) : nil
+        has_id ? error_response(id, INTERNAL_ERROR, "Internal error", data: e.message) : nil
       end
 
       private
