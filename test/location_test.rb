@@ -3,6 +3,33 @@
 require "test_helper"
 
 class LocationTest < Minitest::Test
+  PrismLocation = Struct.new(:start_line, :start_column, :end_line, :end_column, keyword_init: true)
+
+  def test_location_from_prism
+    prism_location = PrismLocation.new(start_line: 2, start_column: 12, end_line: 3, end_column: 19)
+
+    location = Rubydex::Location.from_prism(prism_location, uri: "file:///foo.rb")
+
+    assert_equal(
+      Rubydex::Location.new(uri: "file:///foo.rb", start_line: 1, end_line: 2, start_column: 12, end_column: 19),
+      location,
+    )
+  end
+
+  def test_display_location_from_prism_raises_with_conversion_path
+    prism_location = PrismLocation.new(start_line: 2, start_column: 12, end_line: 3, end_column: 19)
+
+    error = assert_raises(NotImplementedError) do
+      Rubydex::DisplayLocation.from_prism(prism_location, uri: "file:///foo.rb")
+    end
+
+    assert_equal(<<~MESSAGE, error.message)
+      Cannot convert Prism::Location directly to a Rubydex::DisplayLocation.
+      Start with `Rubydex::Location.from_prism(...)` and then convert the resulting
+      location with `to_display`
+    MESSAGE
+  end
+
   def test_location_equality
     a = Rubydex::Location.new(uri: "file:///foo.rb", start_line: 0, end_line: 0, start_column: 0, end_column: 5)
     b = Rubydex::Location.new(uri: "file:///foo.rb", start_line: 0, end_line: 0, start_column: 0, end_column: 5)

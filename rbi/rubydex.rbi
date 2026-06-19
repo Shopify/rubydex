@@ -415,6 +415,11 @@ class Rubydex::Graph
 end
 
 class Rubydex::DisplayLocation < Rubydex::Location
+  class << self
+    sig { params(prism_location: Prism::Location, uri: String).returns(T.noreturn) }
+    def from_prism(prism_location, uri:); end
+  end
+
   sig { returns([String, Integer, Integer, Integer, Integer]) }
   def comparable_values; end
 
@@ -427,6 +432,11 @@ end
 
 class Rubydex::Location
   include ::Comparable
+
+  class << self
+    sig { params(prism_location: Prism::Location, uri: String).returns(Rubydex::Location) }
+    def from_prism(prism_location, uri:); end
+  end
 
   sig do
     params(

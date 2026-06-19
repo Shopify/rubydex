@@ -14,6 +14,19 @@ module Rubydex
     #: Integer
     attr_reader :start_line, :end_line, :start_column, :end_column
 
+    class << self
+      #: (Prism::Location prism_location, uri: String) -> Location
+      def from_prism(prism_location, uri:)
+        Location.new(
+          uri: uri,
+          start_line: prism_location.start_line - 1,
+          start_column: prism_location.start_column,
+          end_line: prism_location.end_line - 1,
+          end_column: prism_location.end_column,
+        )
+      end
+    end
+
     #: (?uri: String, ?start_line: Integer, ?end_line: Integer, ?start_column: Integer, ?end_column: Integer) -> void
     def initialize(uri:, start_line:, end_line:, start_column:, end_column:)
       @uri = uri
@@ -68,6 +81,17 @@ module Rubydex
   # A one based location intended for display purposes. This is what should be used when displaying a location to users,
   # like in CLIs
   class DisplayLocation < Location
+    class << self
+      #: (Prism::Location prism_location, uri: String) -> Location
+      def from_prism(prism_location, uri:)
+        raise NotImplementedError, <<~MESSAGE
+          Cannot convert Prism::Location directly to a Rubydex::DisplayLocation.
+          Start with `Rubydex::Location.from_prism(...)` and then convert the resulting
+          location with `to_display`
+        MESSAGE
+      end
+    end
+
     # Returns itself
     #
     #: () -> DisplayLocation
