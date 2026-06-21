@@ -131,7 +131,11 @@ fn assert_tools_are_registered(stdin: &mut impl Write, reader: &mut BufReader<im
         "Missing get_file_declarations tool"
     );
     assert!(tool_names.contains(&"codebase_stats"), "Missing codebase_stats tool");
-    assert_eq!(tool_names.len(), 6, "Expected exactly 6 tools");
+    assert!(
+        tool_names.contains(&"detect_dead_constants"),
+        "Missing detect_dead_constants tool"
+    );
+    assert_eq!(tool_names.len(), 7, "Expected exactly 7 tools");
 }
 
 fn wait_for_indexing_to_complete(

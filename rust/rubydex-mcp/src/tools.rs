@@ -43,6 +43,22 @@ pub struct FindConstantReferencesParams {
 }
 
 #[derive(Debug, serde::Deserialize, JsonSchema)]
+pub struct DetectDeadConstantsParams {
+    #[schemars(
+        description = "Filter by declaration kind: \"Class\", \"Module\", \"Constant\", \"ConstantAlias\" (case-insensitive). Omit to include all."
+    )]
+    pub kind: Option<String>,
+    #[schemars(
+        description = "Relative or absolute file path prefix to limit results (e.g. \"app/models\" matches all files under that directory)"
+    )]
+    pub file_path: Option<String>,
+    #[schemars(description = "Maximum number of results to return (default 50, max 200)")]
+    pub limit: Option<usize>,
+    #[schemars(description = "Number of results to skip for pagination (default 0)")]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize, JsonSchema)]
 pub struct GetFileDeclarationsParams {
     #[schemars(description = "File path (relative or absolute) to list declarations for")]
     pub file_path: String,
