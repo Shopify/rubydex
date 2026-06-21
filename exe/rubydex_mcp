@@ -1,17 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "rbconfig"
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
-host_os = RbConfig::CONFIG.fetch("host_os")
-executable = host_os.match?(/mswin|mingw|cygwin/) ? "rubydex_mcp.exe" : "rubydex_mcp"
-binary = File.expand_path("../lib/rubydex/bin/#{executable}", __dir__)
+require "rubydex/mcp_server_launcher"
 
-unless File.executable?(binary)
-  abort(<<~MESSAGE.chomp)
-    rubydex_mcp is not available at #{binary}.
-    Install a precompiled rubydex gem, or reinstall rubydex with Cargo available so the MCP executable can be built locally.
-  MESSAGE
-end
-
-exec(binary, *ARGV)
+Rubydex::MCPServerLauncher.exec_server(ARGV)
