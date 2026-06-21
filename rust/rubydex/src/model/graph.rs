@@ -647,6 +647,9 @@ impl Graph {
     ///
     /// For methods, the latest definition wins. For constants, the latest
     /// `private_constant`/`public_constant` wins, otherwise `Public`.
+    ///
+    /// Methods declared via `module_function :bar` return `Private` on the instance
+    /// side (`Foo#bar`) and `Public` on the singleton side (`Foo::<Foo>#bar`).
     #[must_use]
     pub fn visibility(&self, declaration_id: &DeclarationId) -> Option<Visibility> {
         let declaration = self.declarations.get(declaration_id)?;
@@ -672,7 +675,13 @@ impl Graph {
                     };
 
                     let visibility = match definition {
-                        Definition::MethodVisibility(vis) => Some(*vis.visibility()),
+                        Definition::MethodVisibility(vis) => match *vis.visibility() {
+                            Visibility::ModuleFunction if vis.flags().is_singleton_method_visibility() => {
+                                Some(Visibility::Public)
+                            }
+                            Visibility::ModuleFunction => Some(Visibility::Private),
+                            other => Some(other),
+                        },
                         Definition::Method(method) => Some(*method.visibility()),
                         Definition::AttrAccessor(attr) => Some(*attr.visibility()),
                         Definition::AttrReader(attr) => Some(*attr.visibility()),

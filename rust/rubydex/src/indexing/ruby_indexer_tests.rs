@@ -2021,10 +2021,29 @@ mod visibility_tests {
 
         assert_no_local_diagnostics!(&context);
 
-        assert_definition_at!(&context, "4:20-4:23", MethodVisibility, |def| {
-            assert_def_str_eq!(&context, def, "foo()");
-            assert_eq!(def.visibility(), &Visibility::ModuleFunction);
-        });
+        let defs = context.all_definitions_at("4:20-4:23");
+        assert_eq!(defs.len(), 2, "expected two MethodVisibility defs");
+
+        let mut instance_side = None;
+        let mut singleton_side = None;
+        for def in defs {
+            let Definition::MethodVisibility(method_vis) = def else {
+                panic!("expected MethodVisibility, got {:?}", def.kind());
+            };
+            if method_vis.flags().is_singleton_method_visibility() {
+                singleton_side = Some(method_vis.as_ref());
+            } else {
+                instance_side = Some(method_vis.as_ref());
+            }
+        }
+
+        let instance_side = instance_side.expect("missing instance-side def");
+        assert_def_str_eq!(&context, instance_side, "foo()");
+        assert_eq!(instance_side.visibility(), &Visibility::ModuleFunction);
+
+        let singleton_side = singleton_side.expect("missing singleton-side def");
+        assert_def_str_eq!(&context, singleton_side, "foo()");
+        assert_eq!(singleton_side.visibility(), &Visibility::ModuleFunction);
     }
 
     #[test]

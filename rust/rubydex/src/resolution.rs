@@ -16,6 +16,7 @@ use crate::model::{
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
     ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
     name::{Name, NameRef, ParentScope},
+    visibility::Visibility,
 };
 
 enum Outcome {
@@ -629,7 +630,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolves retroactive method visibility changes (`private :foo`, `protected :foo`, `public :foo`,
-    /// `private_class_method :foo`, `public_class_method :foo`).
+    /// `private_class_method :foo`, `public_class_method :foo`, `module_function :foo`).
     ///
     /// Runs as a second pass after all methods/attrs are declared, so `private :bar` works
     /// regardless of whether `def bar` appeared before or after it in source.
@@ -646,12 +647,24 @@ impl<'a> Resolver<'a> {
             let offset = method_visibility.offset().clone();
             let lexical_nesting_id = *method_visibility.lexical_nesting_id();
             let is_singleton = method_visibility.flags().is_singleton_method_visibility();
+            let is_module_function = *method_visibility.visibility() == Visibility::ModuleFunction;
 
             let Some(lexical_owner_id) = self.resolve_lexical_owner(lexical_nesting_id, id) else {
                 continue;
             };
 
-            let owner_id = if is_singleton {
+            // Two owners drive each resolution: `target_owner_id` (the namespace whose
+            // members we search for the target method) and `declaration_owner_id` (the
+            // namespace the resulting declaration belongs to). Three shapes:
+            //
+            // - `private`/`protected`/`public` (and `module_function :bar`'s instance-side):
+            //   both owners are the lexical owner.
+            // - `private_class_method`: both owners are the singleton class. Create it upfront.
+            // - `module_function :bar` singleton-side: target owner is the lexical (instance)
+            //   owner; declaration owner is the singleton class. Defer creating the singleton
+            //   class until the target is found, so a missing target doesn't leave an empty
+            //   `Foo::<Foo>`.
+            let target_owner_id = if is_singleton && !is_module_function {
                 let Some(singleton_id) = self.get_or_create_singleton_class(lexical_owner_id, true) else {
                     continue;
                 };
@@ -660,11 +673,11 @@ impl<'a> Resolver<'a> {
                 lexical_owner_id
             };
 
-            let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&owner_id) else {
+            let Some(Declaration::Namespace(namespace)) = self.graph.declarations().get(&target_owner_id) else {
                 continue;
             };
 
-            let mut visibility_applied = false;
+            let mut target_found = false;
             let mut has_partial = false;
 
             for ancestor in namespace.ancestors() {
@@ -679,13 +692,7 @@ impl<'a> Resolver<'a> {
                             .is_some();
 
                         if has_member {
-                            // Direct member: `create_declaration`'s fully qualified name dedup attaches
-                            // this visibility definition to the existing method declaration.
-                            // Inherited: a new child-owned declaration is created.
-                            self.create_declaration(str_id, id, owner_id, |name| {
-                                Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
-                            });
-                            visibility_applied = true;
+                            target_found = true;
                             break;
                         }
                     }
@@ -693,35 +700,63 @@ impl<'a> Resolver<'a> {
                 }
             }
 
-            if visibility_applied {
+            if target_found {
+                // `declaration_owner_id` only differs from `target_owner_id` for the
+                // module_function singleton-side def, where we deferred creating the singleton.
+                let declaration_owner_id = if is_singleton && is_module_function {
+                    let Some(singleton_id) = self.get_or_create_singleton_class(lexical_owner_id, true) else {
+                        continue;
+                    };
+                    singleton_id
+                } else {
+                    target_owner_id
+                };
+
+                // `create_declaration` deduplicates by fully qualified name: if a declaration
+                // with this name already exists, the visibility def attaches to it; otherwise
+                // a new declaration is created.
+                self.create_declaration(str_id, id, declaration_owner_id, |name| {
+                    Declaration::Method(Box::new(MethodDeclaration::new(name, declaration_owner_id)))
+                });
                 continue;
             }
 
             if has_partial {
                 // Method might exist on an unresolved ancestor — requeue for retry.
                 pending_work.push(Unit::Definition(id));
+                continue;
+            }
+
+            if is_module_function && is_singleton {
+                // The instance-side def for the same call owns the diagnostic; stay silent here.
+                continue;
+            }
+
+            let method_name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
+            let owner_name = self
+                .graph
+                .declarations()
+                .get(&target_owner_id)
+                .unwrap()
+                .name()
+                .to_string();
+            let diagnostic = Diagnostic::new(
+                Rule::UndefinedMethodVisibilityTarget,
+                uri_id,
+                offset,
+                format!("undefined method `{owner_name}#{method_name}` for visibility change"),
+            );
+            if is_singleton {
+                // Document-scoped: the singleton class may be synthetic (created by this
+                // visibility resolution) and won't be cleaned up on file delete, so attaching
+                // the diagnostic to the declaration would leave it orphaned.
+                self.graph.add_document_diagnostic(uri_id, diagnostic);
             } else {
-                // Ancestors are fully resolved — method definitively doesn't exist.
-                let method_name = self.graph.strings().get(&str_id).unwrap().as_str().to_string();
-                let owner_name = self.graph.declarations().get(&owner_id).unwrap().name().to_string();
-                let diagnostic = Diagnostic::new(
-                    Rule::UndefinedMethodVisibilityTarget,
-                    uri_id,
-                    offset,
-                    format!("undefined method `{owner_name}#{method_name}` for visibility change"),
-                );
-                if is_singleton {
-                    // Document-scoped: the singleton class may be synthetic (created by this
-                    // visibility resolution) and won't be cleaned up on file delete, so attaching
-                    // the diagnostic to the declaration would leave it orphaned.
-                    self.graph.add_document_diagnostic(uri_id, diagnostic);
-                } else {
-                    self.graph
-                        .declarations_mut()
-                        .get_mut(&owner_id)
-                        .unwrap()
-                        .add_diagnostic(diagnostic);
-                }
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&target_owner_id)
+                    .unwrap()
+                    .add_diagnostic(diagnostic);
             }
         }
 
