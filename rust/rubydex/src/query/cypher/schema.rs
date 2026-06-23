@@ -36,6 +36,22 @@ pub enum NodeRef {
     Document(UriId),
 }
 
+impl NodeRef {
+    /// Decodes the opaque id produced by [`GraphProvider::node_id`] back into a `NodeRef`. Returns
+    /// `None` if the string is not a recognized `tag:id` form.
+    #[must_use]
+    pub fn decode(encoded: &str) -> Option<NodeRef> {
+        let (tag, rest) = encoded.split_once(':')?;
+        let value: u64 = rest.parse().ok()?;
+        match tag {
+            "decl" => Some(NodeRef::Declaration(DeclarationId::new(value))),
+            "def" => Some(NodeRef::Definition(DefinitionId::new(value))),
+            "doc" => Some(NodeRef::Document(UriId::new(value))),
+            _ => None,
+        }
+    }
+}
+
 /// A relationship type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelType {
@@ -144,6 +160,17 @@ impl GraphProvider for Graph {
 
     fn name(&self, node: NodeRef) -> String {
         node_name(self, node)
+    }
+
+    fn node_id(&self, node: NodeRef) -> String {
+        // Encode the node category plus the underlying hashed id so a consumer can decode it back to
+        // the right handle. The category tag is required because labels alone are ambiguous
+        // (a class declaration and a class definition both have the label "Class").
+        match node {
+            NodeRef::Declaration(id) => format!("decl:{}", *id),
+            NodeRef::Definition(id) => format!("def:{}", *id),
+            NodeRef::Document(id) => format!("doc:{}", *id),
+        }
     }
 }
 

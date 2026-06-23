@@ -281,6 +281,9 @@ class Rubydex::Query
     def schema(format = :table); end
   end
 
+  sig { params(graph: Rubydex::Graph).returns(T::Array[T::Hash[String, T.untyped]]) }
+  def run(graph); end
+
   sig { params(graph: Rubydex::Graph, format: T.any(String, Symbol)).returns(String) }
   def render(graph, format = :table); end
 end

@@ -1,5 +1,6 @@
 #include "graph.h"
 #include "declaration.h"
+#include "definition.h"
 #include "diagnostic.h"
 #include "document.h"
 #include "location.h"
@@ -847,6 +848,84 @@ static VALUE rdxr_query_render(int argc, VALUE *argv, VALUE self) {
     return output;
 }
 
+// Converts a structured result cell into a Ruby value. Node cells become real graph handles
+// (Declaration / Definition / Document) built against `graph_obj`; lists recurse.
+static VALUE cypher_cell_to_value(VALUE graph_obj, const struct CCell *cell) {
+    switch (cell->tag) {
+    case CCellTag_Null:
+        return Qnil;
+    case CCellTag_Bool:
+        return cell->payload.bool_val ? Qtrue : Qfalse;
+    case CCellTag_Int:
+        return LL2NUM(cell->payload.int_val);
+    case CCellTag_Str:
+        return cell->payload.str_val == NULL ? Qnil : rb_utf8_str_new_cstr(cell->payload.str_val);
+    case CCellTag_List: {
+        VALUE array = rb_ary_new_capa((long)cell->payload.list.len);
+        for (size_t i = 0; i < cell->payload.list.len; i++) {
+            rb_ary_push(array, cypher_cell_to_value(graph_obj, &cell->payload.list.items[i]));
+        }
+        return array;
+    }
+    case CCellTag_Node: {
+        VALUE argv[] = {graph_obj, ULL2NUM(cell->payload.node.id)};
+        VALUE klass;
+        switch (cell->payload.node.category) {
+        case CNodeCategory_Declaration:
+            klass = rdxi_declaration_class_for_kind((CDeclarationKind)cell->payload.node.kind);
+            break;
+        case CNodeCategory_Definition:
+            klass = rdxi_definition_class_for_kind((DefinitionKind)cell->payload.node.kind);
+            break;
+        case CNodeCategory_Document:
+        default:
+            klass = cDocument;
+            break;
+        }
+        return rb_class_new_instance(2, argv, klass);
+    }
+    default:
+        return Qnil;
+    }
+}
+
+// Rubydex::Query#run(graph) -> Array[Hash[String, Object]]
+// Runs this parsed query against the given graph and returns the rows as Ruby objects: each row is a
+// Hash keyed by RETURN column name. Scalar cells become String/Integer/true/false/nil, lists become
+// Arrays, and node cells become Declaration / Definition / Document handles. Raises ArgumentError on
+// an execution error.
+static VALUE rdxr_query_run(VALUE self, VALUE graph_obj) {
+    void *query;
+    TypedData_Get_Struct(self, void *, &query_type, query);
+
+    void *graph;
+    TypedData_Get_Struct(graph_obj, void *, &graph_type, graph);
+
+    struct CRunRows run = rdx_query_run_rows(query, graph);
+
+    if (run.error != NULL) {
+        VALUE message = rb_utf8_str_new_cstr(run.error);
+        free_c_string(run.error);
+        rb_raise(rb_eArgError, "%s", StringValueCStr(message));
+    }
+
+    struct CResultSet *result = run.result;
+    VALUE rows = rb_ary_new_capa((long)result->row_count);
+
+    for (size_t r = 0; r < result->row_count; r++) {
+        struct CResultRow row = result->rows[r];
+        VALUE hash = rb_hash_new();
+        for (size_t c = 0; c < row.len && c < result->column_count; c++) {
+            VALUE key = rb_utf8_str_new_cstr(result->columns[c]);
+            rb_hash_aset(hash, key, cypher_cell_to_value(graph_obj, &row.cells[c]));
+        }
+        rb_ary_push(rows, hash);
+    }
+
+    rdx_result_set_free(result);
+    return rows;
+}
+
 void rdxi_initialize_graph(VALUE moduleRubydex) {
     mRubydex = moduleRubydex;
     cGraph = rb_define_class_under(mRubydex, "Graph", rb_cObject);
@@ -886,5 +965,6 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_undef_alloc_func(cQuery);
     rb_define_singleton_method(cQuery, "parse", rdxr_query_parse, 1);
     rb_define_singleton_method(cQuery, "schema", rdxr_cypher_schema, -1);
+    rb_define_method(cQuery, "run", rdxr_query_run, 1);
     rb_define_method(cQuery, "render", rdxr_query_render, -1);
 }
