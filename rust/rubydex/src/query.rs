@@ -49,6 +49,10 @@ pub fn declaration_search(graph: &Graph, query: &str, match_mode: &MatchMode) ->
                         .iter()
                         .filter(|id| {
                             let declaration = declarations.get(id).unwrap();
+                            if !is_searchable_declaration(declaration) {
+                                return false;
+                            }
+
                             let name = declaration.name();
                             match match_mode {
                                 MatchMode::Fuzzy => {
@@ -67,6 +71,10 @@ pub fn declaration_search(graph: &Graph, query: &str, match_mode: &MatchMode) ->
 
         handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
     })
+}
+
+fn is_searchable_declaration(declaration: &Declaration) -> bool {
+    !matches!(declaration, Declaration::Namespace(Namespace::SingletonClass(_)))
 }
 
 #[must_use]
@@ -947,9 +955,15 @@ mod tests {
         context.resolve();
         let exact_results = declaration_search(context.graph(), "", &MatchMode::Exact);
         let fuzzy_results = declaration_search(context.graph(), "", &MatchMode::Fuzzy);
+        let searchable_declarations = context
+            .graph()
+            .declarations()
+            .values()
+            .filter(|declaration| is_searchable_declaration(declaration))
+            .count();
 
         assert_eq!(exact_results.len(), fuzzy_results.len());
-        assert_eq!(context.graph().declarations().len(), exact_results.len());
+        assert_eq!(searchable_declarations, exact_results.len());
     }
 
     #[test]
