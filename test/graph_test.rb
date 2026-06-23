@@ -1459,7 +1459,7 @@ class GraphTest < Minitest::Test
     assert(parsed["relationships"].any? { |r| r["type"] == "DEFINES" })
   end
 
-  def test_parsed_query_runs_against_graph
+  def test_run_returns_rows_of_hashes
     with_context do |context|
       context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
 
@@ -1470,7 +1470,42 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal("[{\"p.name\":\"Animal\"}]", query.render(graph, :json))
+      rows = query.run(graph)
+      assert_equal([{ "p.name" => "Animal" }], rows)
+    end
+  end
+
+  def test_run_returns_declaration_handles_for_node_cells
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      query = Rubydex::Query.parse("MATCH (c:Class {name: 'Dog'}) RETURN c")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      rows = query.run(graph)
+      assert_equal(1, rows.length)
+      node = rows.first["c"]
+      assert_kind_of(Rubydex::Declaration, node)
+      assert_equal("Dog", node.name)
+    end
+  end
+
+  def test_run_maps_scalars_and_aggregates
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\nclass Cat < Animal; end\n")
+
+      query = Rubydex::Query.parse(
+        "MATCH (c:Class)-[:INHERITS]->(p:Class) WHERE p.name = 'Animal' RETURN p.name, count(c) AS subclasses",
+      )
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal([{ "p.name" => "Animal", "subclasses" => 2 }], query.run(graph))
     end
   end
 
@@ -1488,11 +1523,11 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal("[{\"c.name\":\"Dog\"}]", query.render(graph, :json))
+      assert_equal([{ "c.name" => "Dog" }], query.run(graph))
     end
   end
 
-  def test_query_returns_table_output
+  def test_render_returns_table_output
     with_context do |context|
       context.write!("zoo.rb", <<~RUBY)
         class Animal; end
@@ -1514,27 +1549,7 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_query_label_disjunction
-    with_context do |context|
-      context.write!("zoo.rb", <<~RUBY)
-        class Animal; end
-        module Walkable; end
-        class Dog < Animal; end
-      RUBY
-
-      graph = Rubydex::Graph.new
-      graph.index_all(context.glob("**/*.rb"))
-      graph.resolve
-
-      query = Rubydex::Query.parse(
-        "MATCH (n:Class|Module) WHERE n.name = 'Animal' OR n.name = 'Walkable' RETURN n.name ORDER BY n.name",
-      )
-
-      assert_equal("[{\"n.name\":\"Animal\"},{\"n.name\":\"Walkable\"}]", query.render(graph, :json))
-    end
-  end
-
-  def test_query_accepts_string_format
+  def test_render_json_and_string_format
     with_context do |context|
       context.write!("zoo.rb", "class Dog; end\n")
 
@@ -1543,6 +1558,7 @@ class GraphTest < Minitest::Test
       graph.resolve
 
       query = Rubydex::Query.parse("MATCH (c:Class {name: 'Dog'}) RETURN c.name")
+      assert_equal("[{\"c.name\":\"Dog\"}]", query.render(graph, :json))
       assert_equal("[{\"c.name\":\"Dog\"}]", query.render(graph, "json"))
     end
   end

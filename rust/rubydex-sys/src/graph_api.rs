@@ -3,6 +3,7 @@
 use crate::declaration_api::CDeclaration;
 use crate::declaration_api::DeclarationsIter;
 use crate::declaration_api::decl_id_from_char_ptr;
+use crate::definition_api::map_definition_to_kind;
 use crate::document_api::DocumentsIter;
 use crate::reference_api::{CConstantReference, CMethodReference, ConstantReferencesIter, MethodReferencesIter};
 use crate::{name_api, utils};
@@ -14,7 +15,8 @@ use rubydex::model::ids::{DeclarationId, NameId, UriId};
 use rubydex::model::keywords;
 use rubydex::model::name::NameRef;
 use rubydex::model::visibility::Visibility;
-use rubydex::query::cypher::{self, OutputFormat};
+use rubydex::query::cypher::schema::NodeRef;
+use rubydex::query::cypher::{self, CypherValue, OutputFormat};
 use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver};
 use rubydex::resolution::Resolver;
 use rubydex::{indexing, integrity, listing, query};
@@ -1096,6 +1098,308 @@ pub unsafe extern "C" fn rdx_query_run(
             Err(error) => CQueryResult::error(&error.to_string()),
         }
     })
+}
+
+/// Tag for a structured result cell.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CCellTag {
+    Null = 0,
+    Bool = 1,
+    Int = 2,
+    Str = 3,
+    Node = 4,
+    List = 5,
+}
+
+/// Which family of graph node a `Node` cell refers to (selects the Ruby handle class family).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CNodeCategory {
+    Declaration = 0,
+    Definition = 1,
+    Document = 2,
+}
+
+/// `Node` cell payload: which handle family to build, the kind value, and the entity id.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CNode {
+    /// Which handle family to build.
+    pub category: CNodeCategory,
+    /// The `CDeclarationKind`/`DefinitionKind` value (ignored for documents).
+    pub kind: u32,
+    /// The entity id to build the handle from.
+    pub id: u64,
+}
+
+/// `List` cell payload: a heap array of nested cells (freed by `rdx_result_set_free`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CList {
+    pub items: *mut CCell,
+    pub len: usize,
+}
+
+/// Payload of a `CCell`. The active field is selected by the cell's `tag`; reading any other field
+/// is undefined. `Null` carries no payload.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union CCellPayload {
+    /// `Bool`.
+    pub bool_val: bool,
+    /// `Int`.
+    pub int_val: i64,
+    /// `Str`: owned C string (freed by `rdx_result_set_free`).
+    pub str_val: *const c_char,
+    /// `Node`.
+    pub node: CNode,
+    /// `List`.
+    pub list: CList,
+}
+
+/// A single structured result value: a `tag` discriminant plus a `payload` union whose active
+/// field the tag selects.
+#[repr(C)]
+pub struct CCell {
+    pub tag: CCellTag,
+    pub payload: CCellPayload,
+}
+
+impl CCell {
+    fn new(tag: CCellTag, payload: CCellPayload) -> Self {
+        Self { tag, payload }
+    }
+
+    fn null() -> Self {
+        Self {
+            tag: CCellTag::Null,
+            payload: CCellPayload { int_val: 0 },
+        }
+    }
+}
+
+/// One row of structured cells.
+#[repr(C)]
+pub struct CResultRow {
+    pub cells: *mut CCell,
+    pub len: usize,
+}
+
+/// A structured query result: column names plus rows of typed cells.
+#[repr(C)]
+pub struct CResultSet {
+    pub columns: *const *const c_char,
+    pub column_count: usize,
+    pub rows: *mut CResultRow,
+    pub row_count: usize,
+}
+
+/// The result of running a query for structured rows: either a result set or an error message.
+#[repr(C)]
+pub struct CRunRows {
+    /// Non-null on success; free with `rdx_result_set_free`.
+    pub result: *mut CResultSet,
+    /// Non-null on error; free with `free_c_string`.
+    pub error: *const c_char,
+}
+
+fn cstring_raw(value: &str) -> *const c_char {
+    CString::new(value).map_or(ptr::null(), |s| s.into_raw().cast_const())
+}
+
+/// Converts a `CypherValue` into a `CCell`, resolving node identity to a handle-buildable category +
+/// kind + id. A node whose id cannot be decoded or found falls back to its display name as a string.
+fn build_cell(graph: &Graph, value: &CypherValue) -> CCell {
+    match value {
+        CypherValue::Null => CCell::null(),
+        CypherValue::Bool(b) => CCell::new(CCellTag::Bool, CCellPayload { bool_val: *b }),
+        CypherValue::Int(i) => CCell::new(CCellTag::Int, CCellPayload { int_val: *i }),
+        CypherValue::Str(s) => CCell::new(CCellTag::Str, CCellPayload { str_val: cstring_raw(s) }),
+        CypherValue::List(items) => {
+            let cells: Vec<CCell> = items.iter().map(|item| build_cell(graph, item)).collect();
+            let len = cells.len();
+            let items = if cells.is_empty() {
+                ptr::null_mut()
+            } else {
+                Box::into_raw(cells.into_boxed_slice()).cast::<CCell>()
+            };
+            CCell::new(CCellTag::List, CCellPayload { list: CList { items, len } })
+        }
+        CypherValue::Node { id, name, .. } => build_node_cell(graph, id)
+            .unwrap_or_else(|| CCell::new(CCellTag::Str, CCellPayload { str_val: cstring_raw(name) })),
+    }
+}
+
+/// Builds a `Node` cell by decoding the opaque node id and looking up its kind in the graph.
+fn build_node_cell(graph: &Graph, encoded_id: &str) -> Option<CCell> {
+    match NodeRef::decode(encoded_id)? {
+        NodeRef::Declaration(id) => {
+            let kind = CDeclaration::kind_from_declaration(graph.declarations().get(&id)?);
+            Some(CCell::new(
+                CCellTag::Node,
+                CCellPayload {
+                    node: CNode {
+                        category: CNodeCategory::Declaration,
+                        kind: kind as u32,
+                        id: *id,
+                    },
+                },
+            ))
+        }
+        NodeRef::Definition(id) => {
+            let kind = map_definition_to_kind(graph.definitions().get(&id)?);
+            Some(CCell::new(
+                CCellTag::Node,
+                CCellPayload {
+                    node: CNode {
+                        category: CNodeCategory::Definition,
+                        kind: kind as u32,
+                        id: *id,
+                    },
+                },
+            ))
+        }
+        NodeRef::Document(id) => graph.documents().contains_key(&id).then(|| {
+            CCell::new(
+                CCellTag::Node,
+                CCellPayload {
+                    node: CNode {
+                        category: CNodeCategory::Document,
+                        kind: 0,
+                        id: *id,
+                    },
+                },
+            )
+        }),
+    }
+}
+
+/// Runs a previously parsed query and returns the structured result set (column names + typed rows),
+/// so callers can build their own value/handle objects instead of a formatted string.
+///
+/// # Safety
+///
+/// - `query` must be a valid pointer returned by `rdx_cypher_parse`.
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_query_run_rows(query: *const c_void, pointer: GraphPointer) -> CRunRows {
+    if query.is_null() {
+        return CRunRows {
+            result: ptr::null_mut(),
+            error: cstring_raw("query is null"),
+        };
+    }
+
+    let parsed = unsafe { &*query.cast::<cypher::Query>() };
+
+    with_graph(pointer, |graph| {
+        let result_set = match cypher::execute(graph, parsed) {
+            Ok(result_set) => result_set,
+            Err(error) => {
+                return CRunRows {
+                    result: ptr::null_mut(),
+                    error: cstring_raw(&error.to_string()),
+                };
+            }
+        };
+
+        let columns: Vec<*const c_char> = result_set.columns.iter().map(|name| cstring_raw(name)).collect();
+        let column_count = columns.len();
+        let columns_ptr = Box::into_raw(columns.into_boxed_slice()).cast::<*const c_char>();
+
+        let rows: Vec<CResultRow> = result_set
+            .rows
+            .iter()
+            .map(|row| {
+                let cells: Vec<CCell> = row.iter().map(|cell| build_cell(graph, cell)).collect();
+                let len = cells.len();
+                let cells_ptr = if cells.is_empty() {
+                    ptr::null_mut()
+                } else {
+                    Box::into_raw(cells.into_boxed_slice()).cast::<CCell>()
+                };
+                CResultRow { cells: cells_ptr, len }
+            })
+            .collect();
+        let row_count = rows.len();
+        let rows_ptr = Box::into_raw(rows.into_boxed_slice()).cast::<CResultRow>();
+
+        CRunRows {
+            result: Box::into_raw(Box::new(CResultSet {
+                columns: columns_ptr.cast_const(),
+                column_count,
+                rows: rows_ptr,
+                row_count,
+            })),
+            error: ptr::null(),
+        }
+    })
+}
+
+/// Recursively frees a `CCell`'s owned allocations (its string, or its nested list cells).
+unsafe fn free_cell(cell: &CCell) {
+    match cell.tag {
+        // SAFETY: the tag selects the active union field.
+        CCellTag::Str => {
+            let str_val = unsafe { cell.payload.str_val };
+            if !str_val.is_null() {
+                let _ = unsafe { CString::from_raw(str_val.cast_mut()) };
+            }
+        }
+        // SAFETY: the tag selects the active union field.
+        CCellTag::List => {
+            let list = unsafe { cell.payload.list };
+            if !list.items.is_null() && list.len > 0 {
+                let slice = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(list.items, list.len)) };
+                for nested in &slice {
+                    unsafe { free_cell(nested) };
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Frees a `CResultSet` previously returned by `rdx_query_run_rows`, including all nested
+/// allocations.
+///
+/// # Safety
+///
+/// - `ptr` must be a pointer returned by `rdx_query_run_rows`, or null. It must not be used after.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_result_set_free(ptr: *mut CResultSet) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let result_set = unsafe { Box::from_raw(ptr) };
+
+    if !result_set.columns.is_null() && result_set.column_count > 0 {
+        let columns = unsafe {
+            Box::from_raw(ptr::slice_from_raw_parts_mut(
+                result_set.columns.cast_mut(),
+                result_set.column_count,
+            ))
+        };
+        for column in &columns {
+            if !column.is_null() {
+                let _ = unsafe { CString::from_raw((*column).cast_mut()) };
+            }
+        }
+    }
+
+    if !result_set.rows.is_null() && result_set.row_count > 0 {
+        let rows = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(result_set.rows, result_set.row_count)) };
+        for row in &rows {
+            if !row.cells.is_null() && row.len > 0 {
+                let cells = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(row.cells, row.len)) };
+                for cell in &cells {
+                    unsafe { free_cell(cell) };
+                }
+            }
+        }
+    }
 }
 
 /// Returns a description of the queryable Cypher schema (node labels, relationship types, and
