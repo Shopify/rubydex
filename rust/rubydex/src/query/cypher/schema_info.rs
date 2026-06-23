@@ -2,8 +2,8 @@
 //! relationship types, and node properties that queries can use. This mirrors the mapping
 //! implemented in [`super::schema`] and is exposed via `--schema` for discoverability.
 
-use super::format::OutputFormat;
-use super::value::write_json_string;
+use cypher_parser::OutputFormat;
+use cypher_parser::value::write_json_string;
 
 /// A node label and what graph entity it matches.
 struct LabelInfo {

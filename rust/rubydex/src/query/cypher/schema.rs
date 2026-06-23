@@ -26,7 +26,7 @@ use crate::model::definitions::{Definition, Mixin};
 use crate::model::graph::Graph;
 use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, UriId};
 
-use super::value::CypherValue;
+use cypher_parser::{CypherValue, GraphProvider};
 
 /// A handle to a node in the graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,6 +89,62 @@ impl RelType {
             RelType::References,
         ]
     }
+
+    /// The canonical uppercase name of this relationship type.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            RelType::Defines => "DEFINES",
+            RelType::Declares => "DECLARES",
+            RelType::Contains => "CONTAINS",
+            RelType::Inherits => "INHERITS",
+            RelType::Includes => "INCLUDES",
+            RelType::Prepends => "PREPENDS",
+            RelType::Extends => "EXTENDS",
+            RelType::Owns => "OWNS",
+            RelType::Ancestor => "ANCESTOR",
+            RelType::Descendant => "DESCENDANT",
+            RelType::References => "REFERENCES",
+        }
+    }
+}
+
+/// Exposes the rubydex [`Graph`] to the `cypher-parser` executor as a property graph. This is the
+/// rubydex-specific mapping; the executor itself is generic over this trait.
+impl GraphProvider for Graph {
+    type NodeId = NodeRef;
+
+    fn scan(&self, labels: &[String]) -> Vec<NodeRef> {
+        scan(self, labels)
+    }
+
+    fn matches_label(&self, node: NodeRef, label: &str) -> bool {
+        matches_label(self, node, label)
+    }
+
+    fn relationship_types(&self) -> Vec<String> {
+        RelType::all().iter().map(|rel| rel.name().to_string()).collect()
+    }
+
+    fn expand(&self, node: NodeRef, rel_type: &str) -> Vec<NodeRef> {
+        RelType::parse(rel_type).map_or_else(Vec::new, |rel| expand_out(self, node, rel))
+    }
+
+    fn rel_sources(&self, rel_type: &str) -> Vec<NodeRef> {
+        RelType::parse(rel_type).map_or_else(Vec::new, |rel| rel_source_nodes(self, rel))
+    }
+
+    fn property(&self, node: NodeRef, prop: &str) -> CypherValue {
+        property(self, node, prop)
+    }
+
+    fn label(&self, node: NodeRef) -> String {
+        node_label(self, node)
+    }
+
+    fn name(&self, node: NodeRef) -> String {
+        node_name(self, node)
+    }
 }
 
 /// Returns all nodes matching the given labels. An empty slice matches every node; otherwise a node
@@ -127,16 +183,6 @@ fn scan_label(graph: &Graph, label: &str) -> Vec<NodeRef> {
             .map(|(id, _)| NodeRef::Declaration(*id))
             .collect(),
     }
-}
-
-/// Returns whether a node matches the given labels. An empty slice matches any node; otherwise the
-/// node must match **at least one** of the labels.
-#[must_use]
-pub fn matches_labels(graph: &Graph, node: NodeRef, labels: &[String]) -> bool {
-    if labels.is_empty() {
-        return true;
-    }
-    labels.iter().any(|label| matches_label(graph, node, label))
 }
 
 /// Returns whether a node matches a single label.
