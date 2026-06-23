@@ -1442,7 +1442,7 @@ class GraphTest < Minitest::Test
   end
 
   def test_cypher_schema_table
-    output = Rubydex::Graph.cypher_schema
+    output = Rubydex::Query.schema
 
     assert_match(/Node labels/, output)
     assert_match(/Relationship types/, output)
@@ -1452,11 +1452,44 @@ class GraphTest < Minitest::Test
   end
 
   def test_cypher_schema_json
-    output = Rubydex::Graph.cypher_schema(:json)
+    output = Rubydex::Query.schema(:json)
 
     parsed = JSON.parse(output)
     assert_equal(["node_labels", "relationships", "properties"], parsed.keys)
     assert(parsed["relationships"].any? { |r| r["type"] == "DEFINES" })
+  end
+
+  def test_parsed_query_runs_against_graph
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      query = Rubydex::Query.parse("MATCH (c:Class)-[:INHERITS]->(p:Class) WHERE c.name = 'Dog' RETURN p.name")
+      assert_instance_of(Rubydex::Query, query)
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal("[{\"p.name\":\"Animal\"}]", query.render(graph, :json))
+    end
+  end
+
+  def test_parse_raises_on_syntax_error
+    error = assert_raises(ArgumentError) { Rubydex::Query.parse("MATCH (c RETURN c") }
+    assert_match(/Cypher syntax error/, error.message)
+  end
+
+  def test_parsed_query_reusable_across_graphs
+    query = Rubydex::Query.parse("MATCH (c:Class {name: 'Dog'}) RETURN c.name")
+
+    with_context do |context|
+      context.write!("zoo.rb", "class Dog; end\n")
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      assert_equal("[{\"c.name\":\"Dog\"}]", query.render(graph, :json))
+    end
   end
 
   def test_query_returns_table_output
@@ -1471,7 +1504,8 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      output = graph.query("MATCH (c:Class)-[:INHERITS]->(p:Class) WHERE p.name = 'Animal' RETURN c.name ORDER BY c.name")
+      query = Rubydex::Query.parse("MATCH (c:Class)-[:INHERITS]->(p:Class) WHERE p.name = 'Animal' RETURN c.name ORDER BY c.name")
+      output = query.render(graph)
 
       assert_match(/c\.name/, output)
       assert_match(/Cat/, output)
@@ -1492,27 +1526,11 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      output = graph.query(
+      query = Rubydex::Query.parse(
         "MATCH (n:Class|Module) WHERE n.name = 'Animal' OR n.name = 'Walkable' RETURN n.name ORDER BY n.name",
-        :json,
       )
 
-      assert_equal("[{\"n.name\":\"Animal\"},{\"n.name\":\"Walkable\"}]", output)
-    end
-  end
-
-  def test_query_returns_json_output
-    with_context do |context|
-      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
-
-      graph = Rubydex::Graph.new
-      graph.index_all(context.glob("**/*.rb"))
-      graph.resolve
-
-      assert_equal(
-        "[{\"c.name\":\"Dog\"}]",
-        graph.query("MATCH (c:Class {name: 'Dog'}) RETURN c.name", :json),
-      )
+      assert_equal("[{\"n.name\":\"Animal\"},{\"n.name\":\"Walkable\"}]", query.render(graph, :json))
     end
   end
 
@@ -1524,27 +1542,23 @@ class GraphTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal(
-        "[{\"c.name\":\"Dog\"}]",
-        graph.query("MATCH (c:Class {name: 'Dog'}) RETURN c.name", "json"),
-      )
+      query = Rubydex::Query.parse("MATCH (c:Class {name: 'Dog'}) RETURN c.name")
+      assert_equal("[{\"c.name\":\"Dog\"}]", query.render(graph, "json"))
     end
   end
 
-  def test_query_raises_on_syntax_error
-    graph = Rubydex::Graph.new
-    graph.resolve
+  def test_render_raises_on_invalid_format
+    with_context do |context|
+      context.write!("zoo.rb", "class Dog; end\n")
 
-    error = assert_raises(ArgumentError) { graph.query("MATCH (c RETURN c") }
-    assert_match(/Cypher syntax error/, error.message)
-  end
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
 
-  def test_query_raises_on_invalid_format
-    graph = Rubydex::Graph.new
-    graph.resolve
-
-    error = assert_raises(ArgumentError) { graph.query("MATCH (c:Class) RETURN c", :yaml) }
-    assert_match(/unknown query format/, error.message)
+      query = Rubydex::Query.parse("MATCH (c:Class) RETURN c.name")
+      error = assert_raises(ArgumentError) { query.render(graph, :yaml) }
+      assert_match(/unknown query format/, error.message)
+    end
   end
 
   private

@@ -9,12 +9,16 @@
 #include "utils.h"
 
 static VALUE cGraph;
+static VALUE cQuery;
 static VALUE mRubydex;
 static VALUE cKeyword;
 static VALUE cKeywordParameter;
 
 // Interned once in `rdxi_initialize_graph` to avoid repeated symbol-table lookups on hot completion paths.
 static ID id_self_receiver;
+
+// Coerces an optional format argument (String, Symbol, or nil) to a C string; defined below.
+static const char *cypher_format_cstr(VALUE format);
 
 // Extracts the required `self_receiver:` kwarg from `opts`. Returns NULL when the value is `nil`,
 // which means "no self-type to walk" (e.g., empty class body where the singleton class hasn't
@@ -750,28 +754,84 @@ static VALUE rdxr_graph_keyword(VALUE self, VALUE name) {
     return rb_class_new_instance(2, argv, cKeyword);
 }
 
-// Graph#query: (String query, ?(String | Symbol) format) -> String
-// Runs a Cypher query against the graph and returns the formatted output.
-// `format` may be "table" (default) or "json". Raises ArgumentError on a parse, execution, or
-// format error.
-static VALUE rdxr_graph_query(int argc, VALUE *argv, VALUE self) {
-    VALUE query, format;
-    rb_scan_args(argc, argv, "11", &query, &format);
-    Check_Type(query, T_STRING);
+// Rubydex::Query.schema(format = :table) -> String
+// Returns a description of the queryable Cypher schema. `format` may be "table" (default) or "json".
+// The schema is static, so this is a class method and does not require a graph.
+static VALUE rdxr_cypher_schema(int argc, VALUE *argv, VALUE self) {
+    VALUE format;
+    rb_scan_args(argc, argv, "01", &format);
 
-    const char *format_str = "table";
-    if (!NIL_P(format)) {
-        if (RB_TYPE_P(format, T_SYMBOL)) {
-            format = rb_sym2str(format);
-        }
-        Check_Type(format, T_STRING);
-        format_str = StringValueCStr(format);
+    const char *output = rdx_cypher_schema(cypher_format_cstr(format));
+    VALUE result = output == NULL ? rb_utf8_str_new_cstr("") : rb_utf8_str_new_cstr(output);
+    if (output != NULL) {
+        free_c_string(output);
     }
 
-    void *graph;
-    TypedData_Get_Struct(self, void *, &graph_type, graph);
+    return result;
+}
 
-    struct CQueryResult result = rdx_graph_query(graph, StringValueCStr(query), format_str);
+// Coerces an optional format argument (String, Symbol, or nil) to a C string, defaulting to "table".
+static const char *cypher_format_cstr(VALUE format) {
+    if (NIL_P(format)) {
+        return "table";
+    }
+    if (RB_TYPE_P(format, T_SYMBOL)) {
+        format = rb_sym2str(format);
+    }
+    Check_Type(format, T_STRING);
+    return StringValueCStr(format);
+}
+
+// Free function for Rubydex::Query: releases the parsed query allocated by Rust.
+static void query_free(void *ptr) {
+    if (ptr) {
+        rdx_cypher_query_free(ptr);
+    }
+}
+
+static const rb_data_type_t query_type = {
+    .wrap_struct_name = "Rubydex::Query",
+    .function = {
+        .dmark = NULL,
+        .dfree = query_free,
+        .dsize = NULL,
+        .dcompact = NULL,
+    },
+    .parent = NULL,
+    .data = NULL,
+    .flags = RUBY_TYPED_FREE_IMMEDIATELY,
+};
+
+// Rubydex::Query.parse(query) -> Rubydex::Query
+// Parses a Cypher query into an opaque, reusable object, without needing a graph. Raises
+// ArgumentError on a syntax error, so callers can validate a query before building a graph.
+static VALUE rdxr_query_parse(VALUE klass, VALUE query) {
+    Check_Type(query, T_STRING);
+
+    struct CParseResult result = rdx_cypher_parse(StringValueCStr(query));
+    if (result.error != NULL) {
+        VALUE message = rb_utf8_str_new_cstr(result.error);
+        free_c_string(result.error);
+        rb_raise(rb_eArgError, "%s", StringValueCStr(message));
+    }
+
+    return TypedData_Wrap_Struct(klass, &query_type, result.query);
+}
+
+// Rubydex::Query#render(graph, format = :table) -> String
+// Runs this parsed query against the given graph and returns the formatted output. `format` may be
+// "table" (default) or "json". Raises ArgumentError on an execution or format error.
+static VALUE rdxr_query_render(int argc, VALUE *argv, VALUE self) {
+    VALUE graph_obj, format;
+    rb_scan_args(argc, argv, "11", &graph_obj, &format);
+
+    void *query;
+    TypedData_Get_Struct(self, void *, &query_type, query);
+
+    void *graph;
+    TypedData_Get_Struct(graph_obj, void *, &graph_type, graph);
+
+    struct CQueryResult result = rdx_query_run(query, graph, cypher_format_cstr(format));
 
     if (result.error != NULL) {
         VALUE message = rb_utf8_str_new_cstr(result.error);
@@ -785,31 +845,6 @@ static VALUE rdxr_graph_query(int argc, VALUE *argv, VALUE self) {
     }
 
     return output;
-}
-
-// Rubydex::Graph.cypher_schema(format = :table) -> String
-// Returns a description of the queryable Cypher schema. `format` may be "table" (default) or "json".
-// The schema is static, so this is a class method and does not require a graph instance.
-static VALUE rdxr_cypher_schema(int argc, VALUE *argv, VALUE self) {
-    VALUE format;
-    rb_scan_args(argc, argv, "01", &format);
-
-    const char *format_str = "table";
-    if (!NIL_P(format)) {
-        if (RB_TYPE_P(format, T_SYMBOL)) {
-            format = rb_sym2str(format);
-        }
-        Check_Type(format, T_STRING);
-        format_str = StringValueCStr(format);
-    }
-
-    const char *output = rdx_cypher_schema(format_str);
-    VALUE result = output == NULL ? rb_utf8_str_new_cstr("") : rb_utf8_str_new_cstr(output);
-    if (output != NULL) {
-        free_c_string(output);
-    }
-
-    return result;
 }
 
 void rdxi_initialize_graph(VALUE moduleRubydex) {
@@ -846,7 +881,10 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
     rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);
     rb_define_method(cGraph, "keyword", rdxr_graph_keyword, 1);
-    rb_define_method(cGraph, "query", rdxr_graph_query, -1);
 
-    rb_define_singleton_method(cGraph, "cypher_schema", rdxr_cypher_schema, -1);
+    cQuery = rb_define_class_under(mRubydex, "Query", rb_cObject);
+    rb_undef_alloc_func(cQuery);
+    rb_define_singleton_method(cQuery, "parse", rdxr_query_parse, 1);
+    rb_define_singleton_method(cQuery, "schema", rdxr_cypher_schema, -1);
+    rb_define_method(cQuery, "render", rdxr_query_render, -1);
 }

@@ -127,6 +127,15 @@ fn main() {
         std::process::exit(0);
     }
 
+    // Parse the query up front, before any indexing, so a malformed query fails fast.
+    let parsed_query = args.query.as_ref().map(|query| match cypher::parse(query) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    });
+
     if args.stats {
         Timer::set_global_timer(Timer::new());
     }
@@ -212,9 +221,9 @@ fn main() {
         }
     }
 
-    // Cypher query
-    if let Some(query) = &args.query {
-        match time_it!(querying, { cypher::run_query(&graph, query, args.format.into()) }) {
+    // Cypher query: execute the query parsed earlier against the now-built graph.
+    if let Some(query) = &parsed_query {
+        match time_it!(querying, { cypher::run_parsed(&graph, query, args.format.into()) }) {
             Ok(output) => print!("{output}"),
             Err(error) => {
                 eprintln!("{error}");

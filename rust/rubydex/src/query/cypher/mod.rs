@@ -16,7 +16,10 @@
 // The whole Cypher engine — lexer, parser, AST, executor, values, and formatting — lives in the
 // graph-independent `cypher-parser` crate. rubydex only provides the `GraphProvider` mapping for its
 // `Graph` (in `schema`) and the static schema description (in `schema_info`).
-pub use cypher_parser::{CypherError, OutputFormat};
+//
+// `Query` is the opaque parsed-query object: callers can `parse` a query string once (failing fast
+// on syntax errors), then `run_parsed` it against a graph that was built afterwards.
+pub use cypher_parser::{CypherError, OutputFormat, Query, parse};
 
 pub mod schema;
 pub mod schema_info;
@@ -30,6 +33,17 @@ use crate::model::graph::Graph;
 /// Returns a [`CypherError`] if the query cannot be parsed or executed.
 pub fn run_query(graph: &Graph, query: &str, output_format: OutputFormat) -> Result<String, CypherError> {
     cypher_parser::run_query(graph, query, output_format)
+}
+
+/// Executes an already-parsed [`Query`] against the graph and formats the result. Pair with
+/// [`parse`] to validate a query before building the graph.
+///
+/// # Errors
+///
+/// Returns a [`CypherError`] if the query cannot be executed.
+pub fn run_parsed(graph: &Graph, query: &Query, output_format: OutputFormat) -> Result<String, CypherError> {
+    let result = cypher_parser::execute(graph, query)?;
+    Ok(cypher_parser::format::format(&result, output_format))
 }
 
 /// Returns a description of the queryable schema (node labels, relationship types, and properties)

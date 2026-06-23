@@ -74,10 +74,18 @@ when "query"
   abort_with_usage("`query` requires a Cypher query argument") if query.nil? || query.empty?
 
   require "rubydex"
+
+  # Parse the query first so a malformed query fails fast, before the expensive workspace indexing.
+  parsed = begin
+    Rubydex::Query.parse(query)
+  rescue ArgumentError => e
+    abort(e.message)
+  end
+
   # Progress goes to stderr so stdout carries only the query result (e.g. for piping JSON).
   graph = build_graph($stderr)
   begin
-    print(graph.query(query, format))
+    print(parsed.render(graph, format))
   rescue ArgumentError => e
     abort(e.message)
   end
@@ -86,7 +94,7 @@ when "schema"
 
   require "rubydex"
   # The schema is static, so describe it without indexing the workspace.
-  print(Rubydex::Graph.cypher_schema(format))
+  print(Rubydex::Query.schema(format))
 when "console"
   OptionParser.new do |parser|
     parser.banner = "Usage: rdx console"
