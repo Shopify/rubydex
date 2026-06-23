@@ -198,6 +198,17 @@ fn run_query_json_output() {
 }
 
 #[test]
+fn incoming_declares_and_defines_reach_the_document() {
+    // Exercises `expand_in`: walk the Document -> Definition -> Declaration spine backwards.
+    let graph = fixture_graph();
+    let result = run(
+        &graph,
+        "MATCH (decl:Class {name: 'Dog'})<-[:DECLARES]-(def:Definition)<-[:DEFINES]-(d:Document) RETURN DISTINCT d.name",
+    );
+    assert_eq!(column_strings(&result, 0), vec!["zoo.rb".to_string()]);
+}
+
+#[test]
 fn unknown_relationship_type_errors() {
     let graph = fixture_graph();
     let parsed = parse("MATCH (a)-[:BOGUS]->(b) RETURN a").unwrap();

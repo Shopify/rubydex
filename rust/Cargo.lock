@@ -262,9 +262,9 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "cypher-parser"
-version = "0.2.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fed0d1e561d51e651bdf70f8439da293fd0f1fe34d8431059061eadaefc7abb1"
+checksum = "6ada60f869dbe5818d0ee40b06ad988627cc0d692d1ed42d692353bf0af8ddb6"
 
 [[package]]
 name = "difflib"

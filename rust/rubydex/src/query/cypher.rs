@@ -19,7 +19,7 @@
 //
 // `Query` is the opaque parsed-query object: callers can `parse` a query string once (failing fast
 // on syntax errors), then `run_parsed` it against a graph that was built afterwards.
-pub use cypher_parser::{CypherError, OutputFormat, Query, parse};
+pub use cypher_parser::{CypherError, CypherValue, OutputFormat, Query, ResultSet, execute, parse};
 
 pub mod schema;
 pub mod schema_info;
