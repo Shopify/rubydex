@@ -1476,6 +1476,32 @@ Class.instance_method(:new).owner
 # => Class
 ```
 
+When singleton classes for classes are materialized, their ancestor chains mirror normal class inheritance. A subclass's
+singleton class inherits from the superclass's singleton class:
+
+```ruby
+class Foo; end
+class Bar < Foo; end
+
+Bar.singleton_class.ancestors
+# => [#<Class:Bar>, #<Class:Foo>, #<Class:Object>, #<Class:BasicObject>, Class, Module, Object, Kernel, BasicObject]
+```
+
+This is why singleton behavior added to a parent class object with `extend` is inherited by child class objects:
+
+```ruby
+module M; end
+
+class Foo
+  extend M
+end
+
+class Bar < Foo; end
+
+Bar.singleton_class.ancestors.include?(M)
+# => true
+```
+
 The singleton class is the receiver for `def self.*`, `class << self`, and it is where modules mixed in via `extend`
 actually insert their methods.
 

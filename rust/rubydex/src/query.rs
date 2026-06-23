@@ -3206,6 +3206,38 @@ mod tests {
     }
 
     #[test]
+    fn method_call_completion_includes_protected_singleton_method_inherited_from_extended_parent() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module Sharable
+              protected
+
+              def shared_secret; end
+            end
+
+            class Parent
+              extend Sharable
+            end
+
+            class Child < Parent
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_completion_eq!(
+            context,
+            CompletionReceiver::MethodCall {
+                self_decl_id: Some(DeclarationId::from("Child::<Child>")),
+                receiver_decl_id: DeclarationId::from("Child::<Child>"),
+            },
+            ["Sharable#shared_secret()"]
+        );
+    }
+
+    #[test]
     fn method_call_completion_excludes_protected_when_caller_class_is_not_descendant_of_defined_class() {
         let mut context = GraphTest::new();
         context.index_uri(
@@ -3760,6 +3792,34 @@ mod tests {
                 false,
             ),
             Ok(DeclarationId::from("Parent#inherited_method()")),
+        );
+    }
+
+    #[test]
+    fn find_member_in_ancestors_returns_inherited_singleton_member() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Parent
+              def self.inherited_class_method
+              end
+            end
+
+            class Child < Parent
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_eq!(
+            find_member_in_ancestors(
+                context.graph(),
+                DeclarationId::from("Child::<Child>"),
+                StringId::from("inherited_class_method()"),
+                false,
+            ),
+            Ok(DeclarationId::from("Parent::<Parent>#inherited_class_method()",)),
         );
     }
 

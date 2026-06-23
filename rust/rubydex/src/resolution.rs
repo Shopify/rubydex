@@ -986,6 +986,8 @@ impl<'a> Resolver<'a> {
         }
 
         let parent_ancestors = self.linearize_parent_ancestors(declaration_id, context);
+        self.materialize_singleton_class_for_namespace(declaration_id);
+
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
         let mut mixins = Vec::new();
 
@@ -1005,23 +1007,15 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        // Collect prepends and includes for the current declaration, noting if any extends exist
-        let mut has_extends = false;
-
         for definition_id in declaration.definitions() {
             if let Some(def_mixins) = self.mixins_of(*definition_id) {
                 for mixin in def_mixins {
                     match mixin {
                         Mixin::Prepend(_) | Mixin::Include(_) => mixins.push(mixin),
-                        Mixin::Extend(_) => has_extends = true,
+                        Mixin::Extend(_) => {}
                     }
                 }
             }
-        }
-
-        // Ensure that we create the singleton and enqueue it for linearization if we see an extend
-        if has_extends && !is_singleton_class {
-            self.get_or_create_singleton_class(declaration_id, false);
         }
 
         let (linearized_prepends, linearized_includes) =
@@ -1054,6 +1048,15 @@ impl<'a> Resolver<'a> {
 
         context.finalize(declaration_id);
         result
+    }
+
+    fn materialize_singleton_class_for_namespace(&mut self, declaration_id: DeclarationId) {
+        if matches!(
+            self.graph.declarations().get(&declaration_id),
+            Some(Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_)))
+        ) {
+            self.get_or_create_singleton_class(declaration_id, false);
+        }
     }
 
     fn linearize_parent_ancestors(

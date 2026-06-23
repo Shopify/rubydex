@@ -62,7 +62,7 @@ fn prints_index_metrics() {
             .success()
             .stderr(predicate::str::is_empty())
             .stdout(predicate::str::contains("Indexed 3 files"))
-            .stdout(predicate::str::contains("Found 7 names"))
+            .stdout(predicate::str::contains("Found 14 names"))
             .stdout(predicate::str::contains("Found 7 definitions"));
     });
 }

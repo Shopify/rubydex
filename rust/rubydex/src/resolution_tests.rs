@@ -2373,6 +2373,39 @@ mod singleton_ancestors_tests {
     }
 
     #[test]
+    fn class_definitions_create_singleton_classes() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Foo
+            end
+
+            class Bar < Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>",
+            [
+                "Bar::<Bar>",
+                "Foo::<Foo>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
     fn extend_creates_singleton_class() {
         let mut context = graph_test();
         context.index_uri(
@@ -2403,6 +2436,44 @@ mod singleton_ancestors_tests {
                 "BasicObject"
             ]
         );
+    }
+
+    #[test]
+    fn extended_class_materializes_descendant_singleton_classes() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module M; end
+
+            class Foo
+              extend M
+            end
+
+            class Bar < Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>");
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>",
+            [
+                "Bar::<Bar>",
+                "Foo::<Foo>",
+                "M",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+        assert_descendants!(context, "M", ["Foo::<Foo>", "Bar::<Bar>"]);
     }
 
     #[test]

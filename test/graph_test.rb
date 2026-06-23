@@ -110,10 +110,10 @@ class GraphTest < Minitest::Test
 
       enumerator = graph.declarations
 
-      # Object, Class, Module, BasicObject, Kernel + the indexed files
-      assert_equal(7, enumerator.size)
-      assert_equal(7, enumerator.count)
-      assert_equal(7, enumerator.to_a.size)
+      # Object, Class, Module, BasicObject, Kernel + their singleton classes + the indexed files
+      assert_equal(14, enumerator.size)
+      assert_equal(14, enumerator.count)
+      assert_equal(14, enumerator.to_a.size)
     end
   end
 
@@ -131,7 +131,7 @@ class GraphTest < Minitest::Test
         declarations << declaration
       end
 
-      assert_equal(7, declarations.size)
+      assert_equal(14, declarations.size)
     end
   end
 
@@ -300,6 +300,24 @@ class GraphTest < Minitest::Test
   def test_graph_resolve_non_existing_constant
     graph = Rubydex::Graph.new
     assert_nil(graph.resolve_constant("CONST", ["Foo", "Bar::Baz"]))
+  end
+
+  def test_superclass_extend_module_descendants_include_subclass_singleton_class
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      module Extension
+      end
+
+      class Parent
+        extend Extension
+      end
+
+      class Child < Parent
+      end
+    RUBY
+    graph.resolve
+
+    assert_includes(graph["Extension"].descendants.map(&:name), "Child::<Child>")
   end
 
   def test_graph_resolve_constant_with_empty_name

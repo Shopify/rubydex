@@ -124,7 +124,7 @@ class DeclarationTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_nil(graph["Foo"].singleton_class)
+      assert_equal("Foo::<Foo>", graph["Foo"].singleton_class.name)
 
       bar = graph["Foo::Bar"]
       assert_equal("Foo::Bar::<Bar>", bar.singleton_class.name)
@@ -581,6 +581,27 @@ class DeclarationTest < Minitest::Test
 
       decl = child.find_member("initialize()", only_inherited: true)
       assert_equal("Parent#initialize()", decl.name)
+    end
+  end
+
+  def test_find_member_returns_inherited_members_on_singleton_class
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Parent
+          def self.inherited_class_method
+          end
+        end
+
+        class Child < Parent
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      decl = graph["Child"].singleton_class.find_member("inherited_class_method()")
+      assert_equal("Parent::<Parent>#inherited_class_method()", decl.name)
     end
   end
 
