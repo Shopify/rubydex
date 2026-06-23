@@ -1119,7 +1119,7 @@ mod tests {
         let res = parse(&s.codebase_stats());
 
         assert_eq!(res["files"], 3);
-        assert_json_int!(res, "declarations", 7);
+        assert_json_int!(res, "declarations", 14);
         assert_json_int!(res, "definitions", 7);
 
         let breakdown = &res["breakdown_by_kind"];
