@@ -13,17 +13,16 @@
 //!
 //! See [`schema`] for the node labels and relationship types exposed to queries.
 
-pub mod ast;
-pub mod error;
+// The lexer, parser, AST, and error types live in the graph-independent `cypher-parser` crate.
+// They are re-exported here so the rest of the engine (and `super::` paths) keep working unchanged.
+pub use cypher_parser::{CypherError, ast, error, parser};
+
 pub mod executor;
 pub mod format;
-pub mod lexer;
-pub mod parser;
 pub mod schema;
 pub mod schema_info;
 pub mod value;
 
-pub use error::CypherError;
 pub use executor::ResultSet;
 pub use format::OutputFormat;
 

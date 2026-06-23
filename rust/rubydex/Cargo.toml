@@ -22,6 +22,7 @@ crate-type = ["rlib"]
 test_utils = ["dep:tempfile"]
 
 [dependencies]
+cypher-parser = "0.1"
 ruby-prism = "1.9.0"
 ruby-rbs = "0.3"
 url = "2.5.4"
