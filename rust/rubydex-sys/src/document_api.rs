@@ -6,6 +6,7 @@ use std::ptr;
 
 use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
+use crate::reference_api::{CMethodReference, MethodReferencesIter};
 use rubydex::model::ids::UriId;
 
 #[derive(Debug)]
@@ -80,6 +81,33 @@ pub unsafe extern "C" fn rdx_document_definitions_iter_new(pointer: GraphPointer
             rdx_definitions_iter_new_from_ids(graph, doc.definitions())
         } else {
             DefinitionsIter::new(Vec::<_>::new().into_boxed_slice())
+        }
+    })
+}
+
+/// Creates a new iterator over method reference IDs for a given document by snapshotting the current set of IDs.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - The returned pointer must be freed with `rdx_method_references_iter_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_document_method_references_iter_new(
+    pointer: GraphPointer,
+    uri_id: u64,
+) -> *mut MethodReferencesIter {
+    with_graph(pointer, |graph| {
+        let uri_id = UriId::new(uri_id);
+        if let Some(doc) = graph.documents().get(&uri_id) {
+            let entries: Vec<_> = doc
+                .method_references()
+                .iter()
+                .map(|ref_id| CMethodReference { id: **ref_id })
+                .collect();
+
+            MethodReferencesIter::new(entries.into_boxed_slice())
+        } else {
+            MethodReferencesIter::new(Vec::<_>::new().into_boxed_slice())
         }
     })
 }
