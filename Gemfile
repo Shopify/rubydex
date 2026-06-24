@@ -8,6 +8,7 @@ gemspec
 gem "rake", "~> 13.3"
 gem "rake-compiler"
 gem "minitest"
+gem "rdoc"
 gem "rubocop"
 gem "rubocop-shopify"
 gem "extconf_compile_commands_json"

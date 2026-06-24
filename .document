@@ -1,0 +1,14 @@
+README.md
+CONTRIBUTING.md
+docs/*.md
+docs/rdoc-extension-root.c
+lib
+ext/rubydex/rubydex.c
+ext/rubydex/graph.c
+ext/rubydex/declaration.c
+ext/rubydex/definition.c
+ext/rubydex/document.c
+ext/rubydex/reference.c
+ext/rubydex/signature.c
+ext/rubydex/location.c
+ext/rubydex/diagnostic.c

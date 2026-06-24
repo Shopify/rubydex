@@ -99,9 +99,12 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     return array;
 }
 
-// Indexes a single source string in memory, dispatching to the appropriate indexer based on language_id
-//
-// Graph#index_source: (String uri, String source, String language_id) -> void
+/*
+ * call-seq:
+ *   index_source(uri, source, language_id) -> nil
+ *
+ * Indexes a single source string in memory, dispatching to the appropriate indexer based on language_id.
+ */
 static VALUE rdxr_graph_index_source(VALUE self, VALUE uri, VALUE source, VALUE language_id) {
     Check_Type(uri, T_STRING);
     Check_Type(source, T_STRING);

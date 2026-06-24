@@ -1,0 +1,16 @@
+op_dir: _site
+title: Rubydex
+main_page: README.md
+
+exclude:
+- AGENTS.md
+- CLAUDE.md
+- tmp
+- rust
+
+footer_content:
+  DOCUMENTATION:
+    Home: index.html
+  RESOURCES:
+    GitHub Repository: https://github.com/Shopify/rubydex
+    Issue Tracker: https://github.com/Shopify/rubydex/issues
