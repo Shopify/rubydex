@@ -46,7 +46,12 @@ VALUE rdxi_declaration_class_for_kind(CDeclarationKind kind) {
     }
 }
 
-// Declaration#name -> String
+/*
+ * call-seq:
+ *   name -> String?
+ *
+ * Returns the fully qualified declaration name.
+ */
 static VALUE rdxr_declaration_name(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -65,7 +70,12 @@ static VALUE rdxr_declaration_name(VALUE self) {
     return str;
 }
 
-// Declaration#unqualified_name -> String
+/*
+ * call-seq:
+ *   unqualified_name -> String?
+ *
+ * Returns the declaration name without namespace qualification.
+ */
 static VALUE rdxr_declaration_unqualified_name(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -126,8 +136,12 @@ static VALUE declaration_definitions_size(VALUE self, VALUE _args, VALUE _eobj) 
     return SIZET2NUM(len);
 }
 
-// Declaration#definitions: () -> Enumerator[Definition]
-// Returns an enumerator that yields all definitions for this declaration lazily
+/*
+ * call-seq:
+ *   definitions -> Enumerator[Rubydex::Definition]
+ *
+ * Returns an enumerator that yields all definitions for this declaration lazily.
+ */
 static VALUE rdxr_declaration_definitions(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("definitions"), 0, NULL, declaration_definitions_size);
@@ -146,8 +160,12 @@ static VALUE rdxr_declaration_definitions(VALUE self) {
     return self;
 }
 
-// Declaration#member: (String member) -> Declaration
-// Returns a declaration handle for the given member
+/*
+ * call-seq:
+ *   member(name) -> Rubydex::Declaration?
+ *
+ * Returns a declaration handle for the named member, or nil if no member exists.
+ */
 static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -171,8 +189,12 @@ static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
     return rb_class_new_instance(2, argv, decl_class);
 }
 
-// Namespace#find_member: (String member, only_inherited: false) -> Declaration?
-// Searches for a member in the ancestor chain of the declaration
+/*
+ * call-seq:
+ *   find_member(name, only_inherited: false) -> Rubydex::Declaration?
+ *
+ * Searches for a member in the declaration's ancestor chain.
+ */
 static VALUE rdxr_declaration_find_member(int argc, VALUE *argv, VALUE self) {
     VALUE member, opts;
     rb_scan_args(argc, argv, "1:", &member, &opts);
@@ -207,7 +229,12 @@ static VALUE rdxr_declaration_find_member(int argc, VALUE *argv, VALUE self) {
     return rb_class_new_instance(2, result_argv, decl_class);
 }
 
-// Declaration#singleton_class -> SingletonClass
+/*
+ * call-seq:
+ *   singleton_class -> Rubydex::SingletonClass?
+ *
+ * Returns the singleton class declaration, or nil if none exists.
+ */
 static VALUE rdxr_declaration_singleton_class(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -227,7 +254,12 @@ static VALUE rdxr_declaration_singleton_class(VALUE self) {
     return rb_class_new_instance(2, argv, decl_class);
 }
 
-// Declaration#owner -> Declaration
+/*
+ * call-seq:
+ *   owner -> Rubydex::Declaration
+ *
+ * Returns the owner declaration.
+ */
 static VALUE rdxr_declaration_owner(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -247,7 +279,12 @@ static VALUE rdxr_declaration_owner(VALUE self) {
     return rb_class_new_instance(2, argv, decl_class);
 }
 
-// Declaration#ancestors: () -> Enumerator[Declaration]
+/*
+ * call-seq:
+ *   ancestors -> Enumerator[Rubydex::Namespace]
+ *
+ * Returns an enumerator that yields ancestor namespaces.
+ */
 static VALUE rdxr_declaration_ancestors(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize(self, rb_str_new2("ancestors"), 0, NULL);
@@ -270,7 +307,12 @@ static VALUE rdxr_declaration_ancestors(VALUE self) {
     return self;
 }
 
-// Declaration#descendants: () -> Enumerator[Declaration]
+/*
+ * call-seq:
+ *   descendants -> Enumerator[Rubydex::Namespace]
+ *
+ * Returns an enumerator that yields descendant namespaces.
+ */
 static VALUE rdxr_declaration_descendants(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize(self, rb_str_new2("descendants"), 0, NULL);
@@ -293,7 +335,12 @@ static VALUE rdxr_declaration_descendants(VALUE self) {
     return self;
 }
 
-// Namespace#members: () -> Enumerator[Declaration]
+/*
+ * call-seq:
+ *   members -> Enumerator[Rubydex::Declaration]
+ *
+ * Returns an enumerator that yields member declarations.
+ */
 static VALUE rdxr_declaration_members(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize(self, rb_str_new2("members"), 0, NULL);
@@ -334,8 +381,12 @@ static VALUE constant_declaration_references_size(VALUE self, VALUE _args, VALUE
     return SIZET2NUM(len);
 }
 
-// Namespace#references, Constant#references, ConstantAlias#references
-// Returns an enumerator that yields constant references to this declaration
+/*
+ * call-seq:
+ *   references -> Enumerator[Rubydex::ConstantReference]
+ *
+ * Returns an enumerator that yields constant references to this declaration.
+ */
 static VALUE rdxr_constant_declaration_references(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("references"), 0, NULL,
@@ -377,8 +428,12 @@ static VALUE method_declaration_references_size(VALUE self, VALUE _args, VALUE _
     return SIZET2NUM(len);
 }
 
-// Method#references
-// Returns an enumerator that yields method references to this declaration
+/*
+ * call-seq:
+ *   references -> Enumerator[Rubydex::MethodReference]
+ *
+ * Returns an enumerator that yields method references to this declaration.
+ */
 static VALUE rdxr_method_declaration_references(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("references"), 0, NULL,
@@ -402,7 +457,12 @@ static VALUE rdxr_method_declaration_references(VALUE self) {
     return self;
 }
 
-// Placeholder for variable declarations that don't yet support references
+/*
+ * call-seq:
+ *   references -> Array[untyped]
+ *
+ * Returns an empty array because variable declarations do not yet support reference lookup.
+ */
 static VALUE rdxr_variable_declaration_references(VALUE self) {
     return rb_ary_new();
 }
@@ -420,7 +480,12 @@ static VALUE rdxi_visibility_to_symbol(CVisibility visibility) {
     }
 }
 
-// Declaration#visibility -> Symbol
+/*
+ * call-seq:
+ *   visibility -> Symbol
+ *
+ * Returns the declaration visibility.
+ */
 static VALUE rdxr_declaration_visibility(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -439,9 +504,13 @@ static VALUE rdxr_declaration_visibility(VALUE self) {
     return symbol;
 }
 
-// ConstantAlias#target -> Declaration?
-// Returns the first resolved target declaration for this constant alias, or nil if none of its definitions resolved to
-// a target
+/*
+ * call-seq:
+ *   target -> Rubydex::Declaration?
+ *
+ * Returns the first resolved target declaration for this constant alias, or nil if none of its definitions resolved to
+ * a target.
+ */
 static VALUE rdxr_constant_alias_target(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);

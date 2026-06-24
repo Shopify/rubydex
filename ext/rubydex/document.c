@@ -7,7 +7,12 @@
 
 VALUE cDocument;
 
-// Document#uri -> String
+/*
+ * call-seq:
+ *   uri -> String?
+ *
+ * Returns the document URI.
+ */
 static VALUE rdxr_document_uri(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -67,8 +72,12 @@ static VALUE document_definitions_size(VALUE self, VALUE _args, VALUE _eobj) {
     return SIZET2NUM(len);
 }
 
-// Document#definitions: () -> Enumerator[Definition]
-// Returns an enumerator that yields all definitions for this document lazily
+/*
+ * call-seq:
+ *   definitions -> Enumerator[Rubydex::Definition]
+ *
+ * Returns an enumerator that yields all definitions for this document lazily.
+ */
 static VALUE rdxr_document_definitions(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("definitions"), 0, NULL, document_definitions_size);

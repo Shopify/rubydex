@@ -68,8 +68,12 @@ static VALUE rdxr_graph_alloc(VALUE klass) {
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
 }
 
-// Graph#index_all: (Array[String] file_paths) -> Array[String]
-// Returns an array of IO error messages encountered during indexing
+/*
+ * call-seq:
+ *   index_all(file_paths) -> Array[String]
+ *
+ * Returns an array of I/O error messages encountered during indexing.
+ */
 static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
     rdxi_check_array_of_strings(file_paths);
 
@@ -151,8 +155,12 @@ static VALUE graph_declarations_size(VALUE self, VALUE _args, VALUE _eobj) {
     return SIZET2NUM(len);
 }
 
-// Graph#declarations: () -> Enumerator[Declaration]
-// Returns an enumerator that yields all declarations lazily
+/*
+ * call-seq:
+ *   declarations -> Enumerator[Rubydex::Declaration]
+ *
+ * Returns an enumerator that yields all declarations lazily.
+ */
 static VALUE rdxr_graph_declarations(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("declarations"), 0, NULL, graph_declarations_size);
@@ -181,8 +189,12 @@ static VALUE rdxr_graph_yield_search_results(VALUE self, void *iter) {
     return self;
 }
 
-// Graph#search: (String query) -> Enumerator[Declaration]
-// Returns an enumerator that yields declarations matching the query exactly (substring match)
+/*
+ * call-seq:
+ *   search(query) -> Enumerator[Rubydex::Declaration]
+ *
+ * Returns an enumerator that yields declarations matching the query exactly by substring.
+ */
 static VALUE rdxr_graph_search(VALUE self, VALUE query) {
     Check_Type(query, T_STRING);
 
@@ -196,8 +208,12 @@ static VALUE rdxr_graph_search(VALUE self, VALUE query) {
     return rdxr_graph_yield_search_results(self, rdx_graph_declarations_search(graph, StringValueCStr(query)));
 }
 
-// Graph#fuzzy_search: (String query) -> Enumerator[Declaration]
-// Returns an enumerator that yields declarations matching the query fuzzily
+/*
+ * call-seq:
+ *   fuzzy_search(query) -> Enumerator[Rubydex::Declaration]
+ *
+ * Returns an enumerator that yields declarations matching the query fuzzily.
+ */
 static VALUE rdxr_graph_fuzzy_search(VALUE self, VALUE query) {
     Check_Type(query, T_STRING);
 
@@ -246,8 +262,12 @@ static VALUE graph_documents_size(VALUE self, VALUE _args, VALUE _eobj) {
     return SIZET2NUM(len);
 }
 
-// Graph#documents: () -> Enumerator[Document]
-// Returns an enumerator that yields all documents lazily
+/*
+ * call-seq:
+ *   documents -> Enumerator[Rubydex::Document]
+ *
+ * Returns an enumerator that yields all documents lazily.
+ */
 static VALUE rdxr_graph_documents(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("documents"), 0, NULL, graph_documents_size);
@@ -263,8 +283,12 @@ static VALUE rdxr_graph_documents(VALUE self) {
     return self;
 }
 
-// Graph#[]: (String fully_qualified_name) -> Declaration
-// Returns a declaration handle for the given ID
+/*
+ * call-seq:
+ *   graph[fully_qualified_name] -> Rubydex::Declaration?
+ *
+ * Returns the declaration for the fully qualified name, or nil when no declaration exists.
+ */
 static VALUE rdxr_graph_aref(VALUE self, VALUE key) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -297,8 +321,12 @@ static VALUE graph_constant_references_size(VALUE self, VALUE _args, VALUE _eobj
     return SIZET2NUM(len);
 }
 
-// Graph#constant_references: () -> Enumerator[ConstantReference]
-// Returns an enumerator that yields constant references lazily
+/*
+ * call-seq:
+ *   constant_references -> Enumerator[Rubydex::ConstantReference]
+ *
+ * Returns an enumerator that yields constant references lazily.
+ */
 static VALUE rdxr_graph_constant_references(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("constant_references"), 0, NULL,
@@ -327,8 +355,12 @@ static VALUE graph_method_references_size(VALUE self, VALUE _args, VALUE _eobj) 
     return SIZET2NUM(len);
 }
 
-// Graph#method_references: () -> Enumerator[MethodReference]
-// Returns an enumerator that yields method references lazily
+/*
+ * call-seq:
+ *   method_references -> Enumerator[Rubydex::MethodReference]
+ *
+ * Returns an enumerator that yields method references lazily.
+ */
 static VALUE rdxr_graph_method_references(VALUE self) {
     if (!rb_block_given_p()) {
         return rb_enumeratorize_with_size(self, rb_str_new2("method_references"), 0, NULL,
@@ -345,8 +377,12 @@ static VALUE rdxr_graph_method_references(VALUE self) {
     return self;
 }
 
-// Graph#document: (String uri) -> Document?
-// Returns the Document for the given URI, or nil if it doesn't exist.
+/*
+ * call-seq:
+ *   document(uri) -> Rubydex::Document?
+ *
+ * Returns the document for the URI, or nil if it does not exist.
+ */
 static VALUE rdxr_graph_document(VALUE self, VALUE uri) {
     Check_Type(uri, T_STRING);
 
@@ -363,9 +399,13 @@ static VALUE rdxr_graph_document(VALUE self, VALUE uri) {
     return rb_class_new_instance(2, argv, cDocument);
 }
 
-// Graph#delete_document: (String uri) -> Document?
-// Deletes a document and all of its definitions from the graph.
-// Returns the removed Document or nil if it doesn't exist.
+/*
+ * call-seq:
+ *   delete_document(uri) -> Rubydex::Document?
+ *
+ * Deletes a document and all of its definitions from the graph. Returns the removed document, or nil if it does not
+ * exist.
+ */
 static VALUE rdxr_graph_delete_document(VALUE self, VALUE uri) {
     Check_Type(uri, T_STRING);
 
@@ -382,8 +422,12 @@ static VALUE rdxr_graph_delete_document(VALUE self, VALUE uri) {
     return rb_class_new_instance(2, argv, cDocument);
 }
 
-// Graph#resolve: () -> self
-// Runs the resolver to compute declarations and ownership
+/*
+ * call-seq:
+ *   resolve -> self
+ *
+ * Runs the resolver to compute declarations and ownership.
+ */
 static VALUE rdxr_graph_resolve(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -391,8 +435,12 @@ static VALUE rdxr_graph_resolve(VALUE self) {
     return self;
 }
 
-// Graph#encoding=: (String) -> void
-// Sets the encoding used for transforming byte offsets into LSP code unit line/column positions
+/*
+ * call-seq:
+ *   encoding=(encoding) -> nil
+ *
+ * Sets the encoding used for transforming byte offsets into LSP code unit line and column positions.
+ */
 static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
     Check_Type(encoding, T_STRING);
 
@@ -407,8 +455,12 @@ static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
     return Qnil;
 }
 
-// Graph#resolve_constant: (String, Array[String]) -> Declaration?
-// Runs the resolver on a single constant reference to determine what it points to
+/*
+ * call-seq:
+ *   resolve_constant(name, nesting) -> Rubydex::Declaration?
+ *
+ * Runs the resolver on a single constant reference to determine what it points to.
+ */
 static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesting) {
     Check_Type(const_name, T_STRING);
     rdxi_check_array_of_strings(nesting);
@@ -436,8 +488,12 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
     return rb_class_new_instance(2, argv, decl_class);
 }
 
-// Graph#resolve_require_path: (String require_path, Array[String] load_paths) -> Document?
-// Resolves a require path to its Document.
+/*
+ * call-seq:
+ *   resolve_require_path(require_path, load_paths) -> Rubydex::Document?
+ *
+ * Resolves a require path to its document.
+ */
 static VALUE rdxr_graph_resolve_require_path(VALUE self, VALUE require_path, VALUE load_paths) {
     Check_Type(require_path, T_STRING);
     rdxi_check_array_of_strings(load_paths);
@@ -462,8 +518,12 @@ static VALUE rdxr_graph_resolve_require_path(VALUE self, VALUE require_path, VAL
     return rb_class_new_instance(2, argv, cDocument);
 }
 
-// Graph#require_paths: (Array[String] load_path) -> Array[String]
-// Returns all require paths for completion.
+/*
+ * call-seq:
+ *   require_paths(load_paths) -> Array[String]
+ *
+ * Returns all require paths for completion.
+ */
 static VALUE rdxr_graph_require_paths(VALUE self, VALUE load_path) {
     rdxi_check_array_of_strings(load_path);
 
@@ -491,8 +551,12 @@ static VALUE rdxr_graph_require_paths(VALUE self, VALUE load_path) {
     return array;
 }
 
-// Graph#check_integrity: () -> Array[Rubydex::IntegrityFailure]
-// Returns an array of IntegrityFailure objects, empty if no issues found
+/*
+ * call-seq:
+ *   check_integrity -> Array[Rubydex::IntegrityFailure]
+ *
+ * Returns an array of integrity failures, or an empty array if no issues were found.
+ */
 static VALUE rdxr_graph_check_integrity(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -517,7 +581,12 @@ static VALUE rdxr_graph_check_integrity(VALUE self) {
     return array;
 }
 
-// Graph#diagnostics -> Array[Rubydex::Diagnostic]
+/*
+ * call-seq:
+ *   diagnostics -> Array[Rubydex::Diagnostic]
+ *
+ * Returns diagnostics emitted while indexing or resolving the graph.
+ */
 static VALUE rdxr_graph_diagnostics(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
@@ -606,10 +675,13 @@ static VALUE completion_result_to_ruby_array(struct CompletionResult result, VAL
     return ruby_array;
 }
 
-// Graph#complete_expression: (Array[String] nesting, self_receiver:) -> Array[Declaration | Keyword]
-// Returns completion candidates for an expression context.
-// The nesting array represents the lexical scope stack. The required self_receiver keyword argument overrides the
-// self-type (e.g., "Foo::<Foo>" for `def Foo.bar`); when nil, self is derived from the innermost nesting element.
+/*
+ * call-seq:
+ *   complete_expression(nesting, self_receiver:) -> Array[Rubydex::Declaration | Rubydex::Keyword]
+ *
+ * Returns completion candidates for an expression context. The nesting array represents the lexical scope stack. The
+ * required self_receiver keyword argument overrides the self type; pass nil when the self type is unknown.
+ */
 static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
     VALUE nesting, opts;
     rb_scan_args(argc, argv, "1:", &nesting, &opts);
@@ -630,11 +702,13 @@ static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_namespace_access: (String name, self_receiver:) -> Array[Declaration]
-// Returns completion candidates after a namespace access operator (e.g., `Foo::`).
-// The required self_receiver kwarg is the caller's runtime self type, used to filter
-// visibility-restricted singleton methods (e.g., `private_class_method`). Pass `nil` when there
-// is no caller context.
+/*
+ * call-seq:
+ *   complete_namespace_access(name, self_receiver:) -> Array[Rubydex::Declaration]
+ *
+ * Returns completion candidates after a namespace access operator such as Foo::. The required self_receiver keyword
+ * argument is the caller's runtime self type; pass nil when there is no caller context.
+ */
 static VALUE rdxr_graph_complete_namespace_access(int argc, VALUE *argv, VALUE self) {
     VALUE name, opts;
     rb_scan_args(argc, argv, "1:", &name, &opts);
@@ -650,10 +724,13 @@ static VALUE rdxr_graph_complete_namespace_access(int argc, VALUE *argv, VALUE s
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_method_call: (String name, self_receiver:) -> Array[Declaration]
-// Returns completion candidates after a method call operator (e.g., `foo.`).
-// The required self_receiver kwarg is the caller's runtime self type, used for visibility checks (private/protected).
-// Pass `nil` when there is no caller context.
+/*
+ * call-seq:
+ *   complete_method_call(name, self_receiver:) -> Array[Rubydex::Method]
+ *
+ * Returns completion candidates after a method call operator such as foo. The required self_receiver keyword argument
+ * is the caller's runtime self type; pass nil when there is no caller context.
+ */
 static VALUE rdxr_graph_complete_method_call(int argc, VALUE *argv, VALUE self) {
     VALUE name, opts;
     rb_scan_args(argc, argv, "1:", &name, &opts);
@@ -669,9 +746,13 @@ static VALUE rdxr_graph_complete_method_call(int argc, VALUE *argv, VALUE self) 
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#complete_method_argument: (String name, Array[String] nesting, self_receiver:) -> Array[Declaration | Keyword | KeywordParameter]
-// Returns completion candidates inside a method call's argument list (e.g., `foo.bar(|)`).
-// See complete_expression for semantics of self_receiver (required, may be nil).
+/*
+ * call-seq:
+ *   complete_method_argument(name, nesting, self_receiver:) -> Array[Rubydex::Declaration | Rubydex::Keyword | Rubydex::KeywordParameter]
+ *
+ * Returns completion candidates inside a method call's argument list. See complete_expression for self_receiver
+ * semantics.
+ */
 static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE self) {
     VALUE name, nesting, opts;
     rb_scan_args(argc, argv, "2:", &name, &nesting, &opts);
@@ -694,8 +775,12 @@ static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE se
     return completion_result_to_ruby_array(result, self);
 }
 
-// Graph#exclude_paths: (Array[String] paths) -> void
-// Excludes the given paths from file discovery during indexing.
+/*
+ * call-seq:
+ *   exclude_paths(paths) -> nil
+ *
+ * Excludes the paths from file discovery during indexing.
+ */
 static VALUE rdxr_graph_exclude_paths(VALUE self, VALUE paths) {
     Check_Type(paths, T_ARRAY);
     rdxi_check_array_of_strings(paths);
@@ -712,8 +797,12 @@ static VALUE rdxr_graph_exclude_paths(VALUE self, VALUE paths) {
     return Qnil;
 }
 
-// Graph#excluded_paths: () -> Array[String]
-// Returns the list of paths currently excluded from file discovery.
+/*
+ * call-seq:
+ *   excluded_paths -> Array[String]
+ *
+ * Returns the paths currently excluded from file discovery.
+ */
 static VALUE rdxr_graph_excluded_paths(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void*, &graph_type, graph);
@@ -734,8 +823,12 @@ static VALUE rdxr_graph_excluded_paths(VALUE self) {
     return array;
 }
 
-// Graph#keyword: (String name) -> Keyword?
-// Returns a Keyword object for the given keyword name, or nil if it is not a keyword.
+/*
+ * call-seq:
+ *   keyword(name) -> Rubydex::Keyword?
+ *
+ * Returns the keyword object for the name, or nil if it is not a Ruby keyword.
+ */
 static VALUE rdxr_graph_keyword(VALUE self, VALUE name) {
     Check_Type(name, T_STRING);
 

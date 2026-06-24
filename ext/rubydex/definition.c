@@ -71,7 +71,12 @@ VALUE rdxi_definition_class_for_kind(DefinitionKind kind) {
     }
 }
 
-// Definition#location -> Rubydex::Location
+/*
+ * call-seq:
+ *   location -> Rubydex::Location
+ *
+ * Returns the source location for this definition.
+ */
 static VALUE rdxr_definition_location(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -86,7 +91,12 @@ static VALUE rdxr_definition_location(VALUE self) {
     return location;
 }
 
-// Definition#comments -> [Rubydex::Comment]
+/*
+ * call-seq:
+ *   comments -> Array[Rubydex::Comment]
+ *
+ * Returns the source comments associated with this definition.
+ */
 static VALUE rdxr_definition_comments(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -124,7 +134,12 @@ static VALUE rdxr_definition_comments(VALUE self) {
     return ary;
 }
 
-// Definition#name -> String
+/*
+ * call-seq:
+ *   name -> String?
+ *
+ * Returns the definition name.
+ */
 static VALUE rdxr_definition_name(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -141,7 +156,12 @@ static VALUE rdxr_definition_name(VALUE self) {
     return str;
 }
 
-// Definition#deprecated? -> bool
+/*
+ * call-seq:
+ *   deprecated? -> bool
+ *
+ * Returns whether this definition is marked as deprecated.
+ */
 static VALUE rdxr_definition_deprecated(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -153,9 +173,13 @@ static VALUE rdxr_definition_deprecated(VALUE self) {
     return deprecated ? Qtrue : Qfalse;
 }
 
-// Definition#name_location -> Rubydex::Location or nil
-// For class, module, singleton class, and method definitions, returns the location of just the name
-// (e.g., "Bar" in "class Foo::Bar", or "foo" in "def foo"). For other definition types, returns nil.
+/*
+ * call-seq:
+ *   name_location -> Rubydex::Location?
+ *
+ * For class, module, singleton class, and method definitions, returns the location of just the name, such as "Bar" in
+ * "class Foo::Bar" or "foo" in "def foo". For other definition types, returns nil.
+ */
 static VALUE rdxr_definition_name_location(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -173,9 +197,12 @@ static VALUE rdxr_definition_name_location(VALUE self) {
     return location;
 }
 
-// Definition#declaration -> Rubydex::Declaration?
-// Returns the declaration this definition belongs to or nil when it cannot be located (for example, before
-// `Graph#resolve` has run).
+/*
+ * call-seq:
+ *   declaration -> Rubydex::Declaration?
+ *
+ * Returns the declaration this definition belongs to or nil when it cannot be located.
+ */
 static VALUE rdxr_definition_declaration(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -203,8 +230,12 @@ static VALUE rdxi_build_definition(VALUE graph_obj, void *graph, uint64_t defini
     return rb_class_new_instance(2, argv, defn_class);
 }
 
-// Definition#lexical_owner -> Rubydex::Definition?
-// Returns the lexically enclosing definition, if any.
+/*
+ * call-seq:
+ *   lexical_owner -> Rubydex::Definition?
+ *
+ * Returns the lexically enclosing definition, if any.
+ */
 static VALUE rdxr_definition_lexical_owner(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -223,8 +254,12 @@ static VALUE rdxr_definition_lexical_owner(VALUE self) {
     return owner;
 }
 
-// Definition#lexical_nesting -> Array<Rubydex::Definition>
-// Returns the lexical nesting from the direct owner up to the root.
+/*
+ * call-seq:
+ *   lexical_nesting -> Array[Rubydex::Definition]
+ *
+ * Returns the lexical nesting from the direct owner up to the root.
+ */
 static VALUE rdxr_definition_lexical_nesting(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -258,7 +293,12 @@ static VALUE rdxi_build_constant_reference(VALUE graph_obj, const CConstantRefer
     return rb_class_new_instance(2, argv, ref_class);
 }
 
-// ClassDefinition#superclass -> ConstantReference?
+/*
+ * call-seq:
+ *   superclass -> Rubydex::ConstantReference?
+ *
+ * Returns the superclass constant reference, or nil if this class definition has no explicit superclass.
+ */
 static VALUE rdxr_class_definition_superclass(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -289,7 +329,12 @@ static VALUE rdxi_mixin_class_for_kind(MixinKind kind) {
     }
 }
 
-// Definition#mixins -> [Rubydex::Mixin]
+/*
+ * call-seq:
+ *   mixins -> Array[Rubydex::Mixin]
+ *
+ * Returns mixins attached to this definition.
+ */
 static VALUE rdxr_definition_mixins(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -317,7 +362,12 @@ static VALUE rdxr_definition_mixins(VALUE self) {
     return ary;
 }
 
-// MethodDefinition#signatures -> [Rubydex::Signature]
+/*
+ * call-seq:
+ *   signatures -> Array[Rubydex::Signature]
+ *
+ * Returns signatures for this method definition.
+ */
 static VALUE rdxr_method_definition_signatures(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -329,7 +379,12 @@ static VALUE rdxr_method_definition_signatures(VALUE self) {
     return rdxi_signatures_to_ruby(arr);
 }
 
-// MethodAliasDefinition#signatures -> [Rubydex::Signature]
+/*
+ * call-seq:
+ *   signatures -> Array[Rubydex::Signature]
+ *
+ * Returns signatures for this method alias definition.
+ */
 static VALUE rdxr_method_alias_definition_signatures(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
@@ -341,10 +396,13 @@ static VALUE rdxr_method_alias_definition_signatures(VALUE self) {
     return rdxi_signatures_to_ruby(arr);
 }
 
-// MethodAliasDefinition#target -> Rubydex::Method?
-// Returns the resolved target method declaration by following the alias chain, or nil if the chain could not be
-// resolved (the target name doesn't exist on the owner, or the owner itself never resolved). Raises
-// Rubydex::AliasCycleError when the alias chain forms a cycle.
+/*
+ * call-seq:
+ *   target -> Rubydex::Method?
+ *
+ * Returns the resolved target method declaration by following the alias chain, or nil if the chain could not be
+ * resolved. Raises Rubydex::AliasCycleError when the alias chain forms a cycle.
+ */
 static VALUE rdxr_method_alias_definition_target(VALUE self) {
     HandleData *data;
     TypedData_Get_Struct(self, HandleData, &handle_type, data);
