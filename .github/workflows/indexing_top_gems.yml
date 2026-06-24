@@ -2,6 +2,9 @@ name: Index top 100 gems
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   indexing_top_gems:
     runs-on: ubuntu-latest
