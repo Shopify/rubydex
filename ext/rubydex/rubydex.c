@@ -12,6 +12,11 @@ VALUE mRubydex;
 void Init_rubydex(void) {
     rb_ext_ractor_safe(true);
 
+    /*
+     * Document-module: Rubydex
+     *
+     * Namespace for Rubydex's Ruby API.
+     */
     mRubydex = rb_define_module("Rubydex");
     rdxi_initialize_graph(mRubydex);
     rdxi_initialize_declaration(mRubydex);

@@ -5,6 +5,11 @@
 #include "location.h"
 #include "rustbindings.h"
 
+/*
+ * RDoc parser workaround for https://github.com/ruby/rdoc/issues/1744:
+ * mRubydex = rb_define_module("Rubydex")
+ */
+
 VALUE cReference;
 VALUE cConstantReference;
 VALUE cUnresolvedConstantReference;

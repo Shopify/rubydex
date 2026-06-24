@@ -8,6 +8,11 @@
 #include "ruby/internal/scan_args.h"
 #include "rustbindings.h"
 
+/*
+ * RDoc parser workaround for https://github.com/ruby/rdoc/issues/1744:
+ * mRubydex = rb_define_module("Rubydex")
+ */
+
 static VALUE mRubydex;
 static VALUE cInclude;
 static VALUE cPrepend;

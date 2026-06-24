@@ -5,6 +5,11 @@
 #include "rustbindings.h"
 #include "utils.h"
 
+/*
+ * RDoc parser workaround for https://github.com/ruby/rdoc/issues/1744:
+ * mRubydex = rb_define_module("Rubydex")
+ */
+
 VALUE cDeclaration;
 VALUE cNamespace;
 VALUE cClass;

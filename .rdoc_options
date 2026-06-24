@@ -2,12 +2,6 @@ op_dir: _site
 title: Rubydex
 main_page: README.md
 
-exclude:
-- AGENTS.md
-- CLAUDE.md
-- tmp
-- rust
-
 footer_content:
   DOCUMENTATION:
     Home: index.html

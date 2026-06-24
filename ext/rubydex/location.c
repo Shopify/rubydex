@@ -1,5 +1,10 @@
 #include "location.h"
 
+/*
+ * RDoc parser workaround for https://github.com/ruby/rdoc/issues/1744:
+ * mRubydex = rb_define_module("Rubydex")
+ */
+
 VALUE cLocation;
 
 VALUE rdxi_build_location_value(Location *loc) {

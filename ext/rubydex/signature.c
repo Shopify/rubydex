@@ -1,6 +1,11 @@
 #include "signature.h"
 #include "location.h"
 
+/*
+ * RDoc parser workaround for https://github.com/ruby/rdoc/issues/1744:
+ * mRubydex = rb_define_module("Rubydex")
+ */
+
 static VALUE empty_params = Qundef;
 
 VALUE cSignature;
