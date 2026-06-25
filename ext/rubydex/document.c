@@ -3,6 +3,7 @@
 #include "graph.h"
 #include "handle.h"
 #include "rustbindings.h"
+#include "utils.h"
 
 VALUE cDocument;
 
@@ -85,6 +86,40 @@ static VALUE rdxr_document_definitions(VALUE self) {
     return self;
 }
 
+// Size function for the Document#method_references enumerator
+static VALUE document_method_references_size(VALUE self, VALUE _args, VALUE _eobj) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    struct MethodReferencesIter *iter = rdx_document_method_references_iter_new(graph, data->id);
+    size_t len = rdx_method_references_iter_len(iter);
+    rdx_method_references_iter_free(iter);
+
+    return SIZET2NUM(len);
+}
+
+// Document#method_references: () -> Enumerator[MethodReference]
+// Returns an enumerator that yields all method references for this document lazily
+static VALUE rdxr_document_method_references(VALUE self) {
+    if (!rb_block_given_p()) {
+        return rb_enumeratorize_with_size(self, rb_str_new2("method_references"), 0, NULL,
+                                          document_method_references_size);
+    }
+
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *iter = rdx_document_method_references_iter_new(graph, data->id);
+    VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
+    rb_ensure(rdxi_method_references_yield, args, rdxi_method_references_ensure, args);
+
+    return self;
+}
+
 void rdxi_initialize_document(VALUE mRubydex) {
     cDocument = rb_define_class_under(mRubydex, "Document", rb_cObject);
 
@@ -92,6 +127,7 @@ void rdxi_initialize_document(VALUE mRubydex) {
     rb_define_method(cDocument, "initialize", rdxr_handle_initialize, 2);
     rb_define_method(cDocument, "uri", rdxr_document_uri, 0);
     rb_define_method(cDocument, "definitions", rdxr_document_definitions, 0);
+    rb_define_method(cDocument, "method_references", rdxr_document_method_references, 0);
 
     rb_funcall(rb_singleton_class(cDocument), rb_intern("private"), 1, ID2SYM(rb_intern("new")));
 }

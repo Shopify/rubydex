@@ -249,6 +249,9 @@ class Rubydex::Document
   sig { returns(T::Enumerable[Rubydex::Definition]) }
   def definitions; end
 
+  sig { returns(T::Enumerable[Rubydex::MethodReference]) }
+  def method_references; end
+
   sig { returns(String) }
   def uri; end
 
