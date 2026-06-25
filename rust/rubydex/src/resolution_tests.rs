@@ -9,7 +9,11 @@ use crate::{
     assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target,
     assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     diagnostic::Rule,
-    model::{declaration::Ancestors, ids::DeclarationId, name::NameRef},
+    model::{
+        declaration::Ancestors,
+        ids::{DeclarationId, StringId},
+        name::{Name, NameRef, ParentScope},
+    },
     resolution::Resolver,
     test_utils::GraphTest,
 };
@@ -20,6 +24,113 @@ fn graph_test() -> GraphTest {
 
 mod constant_resolution_tests {
     use super::*;
+
+    #[test]
+    fn recursive_constant_resolution_resolves_parent_scope_chain_first() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar
+                CONST = 1
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Equivalent to resolving:
+        //
+        //     ::Foo::Bar::CONST
+        let mut graph = context.into_graph();
+        let foo_id = graph.add_name(Name::new(StringId::from("Foo"), ParentScope::TopLevel, None));
+        let bar_id = graph.add_name(Name::new(StringId::from("Bar"), ParentScope::Some(foo_id), None));
+        let const_id = graph.add_name(Name::new(StringId::from("CONST"), ParentScope::Some(bar_id), None));
+
+        let mut resolver = Resolver::new(&mut graph);
+
+        assert_eq!(None, resolver.resolve_constant(const_id));
+        assert_eq!(
+            Some(DeclarationId::from("Foo::Bar::CONST")),
+            resolver.resolve_constant_rec(const_id)
+        );
+    }
+
+    #[test]
+    fn recursive_constant_resolution_resolves_nesting_names_first() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              module Bar
+                CONST = 1
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        // Equivalent to resolving `CONST` from:
+        //
+        //     module ::Foo
+        //       module ::Foo::Bar
+        //         CONST
+        //       end
+        //     end
+        let mut graph = context.into_graph();
+        let outer_foo_id = graph.add_name(Name::new(StringId::from("Foo"), ParentScope::TopLevel, None));
+        let inner_parent_foo_id = graph.add_name(Name::new(
+            StringId::from("Foo"),
+            ParentScope::TopLevel,
+            Some(outer_foo_id),
+        ));
+        let inner_bar_id = graph.add_name(Name::new(
+            StringId::from("Bar"),
+            ParentScope::Some(inner_parent_foo_id),
+            Some(outer_foo_id),
+        ));
+        let const_id = graph.add_name(Name::new(
+            StringId::from("CONST"),
+            ParentScope::None,
+            Some(inner_bar_id),
+        ));
+
+        let mut resolver = Resolver::new(&mut graph);
+
+        assert_eq!(None, resolver.resolve_constant(const_id));
+        assert_eq!(
+            Some(DeclarationId::from("Foo::Bar::CONST")),
+            resolver.resolve_constant_rec(const_id)
+        );
+    }
+
+    #[test]
+    fn recursive_constant_resolution_resolves_attached_parent_scope_names_first() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            "
+        });
+        context.resolve();
+
+        // Equivalent to resolving `self` from:
+        //
+        //     class << ::Foo
+        //       self # equivalent to ::Foo::<Foo>
+        //     end
+        let mut graph = context.into_graph();
+        let foo_id = graph.add_name(Name::new(StringId::from("Foo"), ParentScope::TopLevel, None));
+        let singleton_id = graph.add_name(Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), None));
+
+        let mut resolver = Resolver::new(&mut graph);
+
+        assert_eq!(None, resolver.resolve_constant(singleton_id));
+        assert_eq!(
+            Some(DeclarationId::from("Foo::<Foo>")),
+            resolver.resolve_constant_rec(singleton_id)
+        );
+    }
 
     #[test]
     fn resolving_top_level_references() {
