@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# Measure the total memory used by the graph. Allows comparing a branch against main
+#
+# Usage:
+#   utils/bench-graph-memory <path>             # current branch only
+#   utils/bench-graph-memory --compare <path>   # main, then current branch
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+RUST_DIR="$PROJECT_ROOT/rust"
+COMPARE=0
+TARGET=""
+BRANCH="$(git branch --show-current)"
+
+for arg in "$@"; do
+    case "$arg" in
+        --compare) COMPARE=1 ;;
+        *) TARGET="$arg" ;;
+    esac
+done
+
+if [ -z "$TARGET" ]; then
+    echo "Usage: $0 [--compare] <path>" >&2
+    exit 1
+fi
+
+# Expand the target based on Rubydex's root directory
+case "$TARGET" in
+    /*) ;;
+    *) TARGET="$PROJECT_ROOT/$TARGET" ;;
+esac
+
+run_bench() {
+    cd "$RUST_DIR" && cargo bench --bench graph_memory -- "$TARGET"
+}
+
+if [ "$COMPARE" -eq 1 ]; then
+    if ! git merge-base --is-ancestor main HEAD; then
+        echo "Error: $BRANCH is not based on the current local main" >&2
+        echo "Please rebase first and run again." >&2
+        exit 1
+    fi
+
+    STASHED=0
+
+    if [ -n "$(git status --porcelain)" ]; then
+        git stash push --include-untracked --quiet
+        STASHED=1
+    fi
+
+    git checkout --quiet main
+    echo "########### Measuring main ############"
+    run_bench
+
+    git checkout --quiet "$BRANCH"
+
+    if [ "$STASHED" -eq 1 ]; then
+        git stash pop --quiet
+    fi
+fi
+
+echo "########### Measuring $BRANCH ############"
+run_bench
