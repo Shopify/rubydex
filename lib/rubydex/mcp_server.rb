@@ -143,7 +143,8 @@ module Rubydex
 
       #: (String, String) -> String
       def format_path(uri, root_path)
-        path = path_for_uri(uri)
+        path = file_path_for_uri(uri)
+        return uri unless path
 
         absolute_path = File.expand_path(path)
         absolute_root = File.expand_path(root_path)
@@ -159,16 +160,19 @@ module Rubydex
 
       #: (String) -> String
       def path_for_uri(uri)
-        parsed = URI.parse(uri)
-        if parsed.scheme == "file"
-          path = URI.decode_uri_component(parsed.path)
-          path.delete_prefix!("/") if Gem.win_platform?
-          return path
-        end
+        file_path_for_uri(uri) || uri
+      end
 
-        uri
+      #: (String) -> String?
+      def file_path_for_uri(uri)
+        parsed = URI.parse(uri)
+        return unless parsed.scheme == "file"
+
+        path = URI.decode_uri_component(parsed.path)
+        path.delete_prefix!("/") if Gem.win_platform?
+        path
       rescue URI::InvalidURIError, ArgumentError
-        uri
+        nil
       end
 
       #: (Graph, String, String) -> Document?
@@ -179,10 +183,16 @@ module Rubydex
           File.join(root_path, file_path)
         end
         canonical_target = File.realpath(absolute_target)
-        graph.documents.find { |document| File.expand_path(path_for_uri(document.uri)) == canonical_target }
+        graph.documents.find do |document|
+          path = file_path_for_uri(document.uri)
+          path && File.expand_path(path) == canonical_target
+        end
       rescue SystemCallError
         absolute_target = File.expand_path(absolute_target)
-        graph.documents.find { |document| File.expand_path(path_for_uri(document.uri)) == absolute_target }
+        graph.documents.find do |document|
+          path = file_path_for_uri(document.uri)
+          path && File.expand_path(path) == absolute_target
+        end
       end
 
       #: (Location, String) -> Hash

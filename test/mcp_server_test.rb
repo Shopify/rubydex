@@ -26,8 +26,9 @@ class MCPServerTest < Minitest::Test
       assert_kind_of(Rubydex::Graph, graph)
       assert_equal("LocalWorkspaceClass", graph["LocalWorkspaceClass"].name)
 
-      rbs_kernel = graph["Kernel"].definitions.find do |definition|
-        File.extname(URI(definition.location.uri).path) == ".rbs"
+      rbs_kernel = graph["Kernel"]&.definitions&.find do |definition|
+        path = URI(definition.location.uri).path
+        path && File.extname(path) == ".rbs"
       end
       assert(rbs_kernel, "Expected MCP startup indexing to include core RBS definitions")
     end
@@ -187,6 +188,10 @@ class MCPServerTest < Minitest::Test
     Gem.stubs(:win_platform?).returns(false)
 
     assert_equal("/tmp/my app.rb", Rubydex::MCPServer.path_for_uri("file:///tmp/my%20app.rb"))
+  end
+
+  def test_format_path_preserves_non_file_uris
+    assert_equal("untitled:Untitled-1", Rubydex::MCPServer.format_path("untitled:Untitled-1", Dir.pwd))
   end
 end
 
