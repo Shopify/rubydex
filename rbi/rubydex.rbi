@@ -308,7 +308,7 @@ class Rubydex::Graph
   sig { params(uri: String, source: String, language_id: String).void }
   def index_source(uri, source, language_id); end
 
-  # Index all files and dependencies of the workspace that exists in `@workspace_path`
+  # Index all files and dependencies of the workspace that exists in `workspace_path`
   sig { returns(T::Array[String]) }
   def index_workspace; end
 

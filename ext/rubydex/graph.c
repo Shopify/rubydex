@@ -830,6 +830,42 @@ static VALUE rdxr_graph_excluded_paths(VALUE self) {
 
 /*
  * call-seq:
+ *   workspace_path -> String
+ *
+ * Returns the root directory of the workspace being indexed.
+ */
+static VALUE rdxr_graph_workspace_path(VALUE self) {
+    void *graph;
+    TypedData_Get_Struct(self, void*, &graph_type, graph);
+
+    const char *result = rdx_graph_workspace_path(graph);
+    if (result == NULL) {
+        rb_raise(rb_eRuntimeError, "Converting workspace path to Ruby string failed");
+    }
+
+    VALUE path = rb_utf8_str_new_cstr(result);
+    free_c_string(result);
+    return path;
+}
+
+/*
+ * call-seq:
+ *   workspace_path=(path) -> void
+ *
+ * Sets the root directory of the workspace being indexed.
+ */
+static VALUE rdxr_graph_set_workspace_path(VALUE self, VALUE path) {
+    Check_Type(path, T_STRING);
+
+    void *graph;
+    TypedData_Get_Struct(self, void*, &graph_type, graph);
+
+    rdx_graph_set_workspace_path(graph, StringValueCStr(path));
+    return path;
+}
+
+/*
+ * call-seq:
  *   keyword(name) -> Rubydex::Keyword?
  *
  * Returns the keyword object for the name, or nil if it is not a Ruby keyword.
@@ -884,5 +920,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, -1);
     rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
     rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);
+    rb_define_method(cGraph, "workspace_path", rdxr_graph_workspace_path, 0);
+    rb_define_method(cGraph, "workspace_path=", rdxr_graph_set_workspace_path, 1);
     rb_define_method(cGraph, "keyword", rdxr_graph_keyword, 1);
 }

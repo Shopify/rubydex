@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::assert_mem_size;
 use crate::config::Config;
@@ -89,7 +89,7 @@ pub struct Graph {
     /// Project configuration
     config: Config,
 }
-assert_mem_size!(Graph, 336);
+assert_mem_size!(Graph, 352);
 
 impl Graph {
     #[must_use]
@@ -134,6 +134,17 @@ impl Graph {
     #[must_use]
     pub fn excluded_paths(&self) -> &HashSet<PathBuf> {
         self.config.excluded_paths()
+    }
+
+    /// Returns the root directory of the workspace being indexed.
+    #[must_use]
+    pub fn workspace_path(&self) -> &Path {
+        self.config.workspace_path()
+    }
+
+    /// Sets the root directory of the workspace being indexed.
+    pub fn set_workspace_path(&mut self, workspace_path: PathBuf) {
+        self.config.set_workspace_path(workspace_path);
     }
 
     /// # Panics

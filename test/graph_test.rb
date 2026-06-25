@@ -203,6 +203,25 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_workspace_path_defaults_to_pwd
+    graph = Rubydex::Graph.new
+    assert_equal(Dir.pwd, File.expand_path(graph.workspace_path))
+  end
+
+  def test_workspace_path_can_be_passed_to_initialize
+    with_context do |context|
+      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      assert_equal(context.absolute_path, graph.workspace_path)
+    end
+  end
+
+  def test_workspace_path_setter
+    graph = Rubydex::Graph.new
+    graph.workspace_path = "/some/workspace"
+
+    assert_equal("/some/workspace", graph.workspace_path)
+  end
+
   def test_graph_encoding_setter
     with_context do |context|
       context.write!("foo.rb", <<~RUBY)

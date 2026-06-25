@@ -19,17 +19,14 @@ module Rubydex
 
     INDEXABLE_EXTENSIONS = [".rb", ".rake", ".rbs", ".ru"].freeze
 
-    #: String
-    attr_accessor :workspace_path
+    #: (?workspace_path: String?) -> void
+    def initialize(workspace_path: nil)
+      self.workspace_path = workspace_path if workspace_path
 
-    #: (?workspace_path: String) -> void
-    def initialize(workspace_path: Dir.pwd)
-      @workspace_path = workspace_path
-
-      exclude_paths(IGNORED_DIRECTORIES.map { |dir| File.join(@workspace_path, dir) })
+      exclude_paths(IGNORED_DIRECTORIES.map { |dir| File.join(self.workspace_path, dir) })
     end
 
-    # Index all files and dependencies of the workspace that exists in `@workspace_path`
+    # Index all files and dependencies of the workspace that exists in `workspace_path`
     #: -> Array[String]
     def index_workspace
       index_all(workspace_paths)
@@ -41,9 +38,10 @@ module Rubydex
     #: -> Array[String]
     def workspace_paths
       paths = []
+      root = workspace_path
 
-      Dir.each_child(@workspace_path) do |entry|
-        full_path = File.join(@workspace_path, entry)
+      Dir.each_child(root) do |entry|
+        full_path = File.join(root, entry)
 
         if File.directory?(full_path)
           paths << full_path unless IGNORED_DIRECTORIES.include?(entry)

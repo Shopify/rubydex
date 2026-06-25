@@ -210,6 +210,36 @@ pub unsafe extern "C" fn rdx_graph_excluded_paths(
     })
 }
 
+/// Sets the workspace path used as the root directory for indexing and relative path resolution. Silently ignores the
+/// call if the given path is not valid UTF-8, leaving the existing workspace path untouched (mirrors
+/// `rdx_graph_set_encoding`). This avoids unwinding across the FFI boundary on malformed input.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `path` must be a valid, null-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_set_workspace_path(pointer: GraphPointer, path: *const c_char) {
+    let Ok(path) = (unsafe { utils::convert_char_ptr_to_string(path) }) else {
+        return;
+    };
+
+    with_mut_graph(pointer, |graph| graph.set_workspace_path(PathBuf::from(path)));
+}
+
+/// Returns the workspace path as a C string. Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_workspace_path(pointer: GraphPointer) -> *const c_char {
+    with_graph(pointer, |graph| {
+        CString::new(graph.workspace_path().to_string_lossy().as_ref())
+            .map_or(ptr::null(), |c_string| c_string.into_raw().cast_const())
+    })
+}
+
 /// Indexes all given file paths in parallel using the provided Graph pointer.
 /// Returns an array of error message strings and writes the count to `out_error_count`.
 /// Returns NULL if there are no errors. Caller must free with `free_c_string_array`.
