@@ -1,4 +1,5 @@
 pub mod compile_assertions;
+pub mod config;
 pub mod diagnostic;
 pub mod dot;
 pub mod errors;
