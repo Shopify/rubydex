@@ -2775,14 +2775,25 @@ mod tests {
         let foo_ref_id = Name::new(StringId::from("Foo"), ParentScope::None, Some(bar_id)).id();
         let nesting_name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_ref_id), Some(bar_id)).id();
 
-        assert_declaration_completion_eq!(
-            context,
-            CompletionReceiver::Expression {
+        let actual = completion_candidates(
+            context.graph(),
+            CompletionContext::new(CompletionReceiver::Expression {
                 self_decl_id: None,
                 nesting_name_id,
-            },
-            ["Bar#@@bar_cvar"]
-        );
+            }),
+        )
+        .unwrap()
+        .iter()
+        .filter_map(|candidate| {
+            let CompletionCandidate::Declaration(id) = candidate else {
+                return None;
+            };
+            let declaration = context.graph().declarations().get(id).unwrap();
+            declaration.as_class_variable().map(|_| declaration.name().to_string())
+        })
+        .collect::<Vec<_>>();
+
+        assert_eq!(actual, vec!["Bar#@@bar_cvar".to_string()]);
     }
 
     #[test]

@@ -148,15 +148,18 @@ impl<'a> Resolver<'a> {
     /// Handles a unit of work for resolving a constant definition or singleton method
     fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
         let mut needs_linearization = false;
+        let mut needs_singleton_class = false;
 
         let outcome = match self.graph.definitions().get(&id).unwrap() {
             Definition::Class(class) => {
+                needs_singleton_class = true;
                 self.handle_constant_declaration(*class.name_id(), id, false, |name, owner_id| {
                     needs_linearization = true;
                     Declaration::Namespace(Namespace::Class(Box::new(ClassDeclaration::new(name, owner_id))))
                 })
             }
             Definition::Module(module) => {
+                needs_singleton_class = true;
                 self.handle_constant_declaration(*module.name_id(), id, false, |name, owner_id| {
                     needs_linearization = true;
                     Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
@@ -219,10 +222,16 @@ impl<'a> Resolver<'a> {
                 if needs_linearization {
                     self.unit_queue.push_back(Unit::Ancestors(id));
                 }
+                if needs_singleton_class {
+                    self.get_or_create_singleton_class(id, false);
+                }
                 self.made_progress = true;
             }
-            Outcome::Resolved(_, Some(id_needing_linearization)) => {
+            Outcome::Resolved(id, Some(id_needing_linearization)) => {
                 self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                if needs_singleton_class {
+                    self.get_or_create_singleton_class(id, false);
+                }
                 self.made_progress = true;
             }
         }
@@ -986,7 +995,6 @@ impl<'a> Resolver<'a> {
         }
 
         let parent_ancestors = self.linearize_parent_ancestors(declaration_id, context);
-        self.materialize_singleton_class_for_namespace(declaration_id);
 
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
         let mut mixins = Vec::new();
@@ -1048,15 +1056,6 @@ impl<'a> Resolver<'a> {
 
         context.finalize(declaration_id);
         result
-    }
-
-    fn materialize_singleton_class_for_namespace(&mut self, declaration_id: DeclarationId) {
-        if matches!(
-            self.graph.declarations().get(&declaration_id),
-            Some(Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_)))
-        ) {
-            self.get_or_create_singleton_class(declaration_id, false);
-        }
     }
 
     fn linearize_parent_ancestors(

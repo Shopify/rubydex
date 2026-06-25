@@ -2406,6 +2406,16 @@ mod singleton_ancestors_tests {
     }
 
     #[test]
+    fn class_definitions_keep_meta_singleton_classes_lazy() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>::<<Foo>>");
+    }
+
+    #[test]
     fn extend_creates_singleton_class() {
         let mut context = graph_test();
         context.index_uri(
