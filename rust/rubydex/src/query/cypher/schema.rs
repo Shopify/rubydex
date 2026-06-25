@@ -11,10 +11,12 @@
 //! Relationship types mirror `dot.rs`:
 //! - `DEFINES`: `Document` → `Definition`
 //! - `DECLARES`: `Definition` → `Declaration`
-//! - `CONTAINS`: `Definition` → `Definition` (lexical nesting)
+//! - `CONTAINS`: `Definition` → `Definition` (lexical nesting in one file, e.g. a class written
+//!   inside a module; the source-level counterpart of declaration-level `OWNS`)
 //! - `INHERITS`: `Declaration` → `Declaration` (superclass)
 //! - `INCLUDES` / `PREPENDS` / `EXTENDS`: `Declaration` → `Declaration` (mixins)
-//! - `OWNS`: `Declaration` → `Declaration` (members)
+//! - `OWNS`: `Declaration` → `Declaration` (declaration-level membership, e.g. a namespace's methods
+//!   and nested constants, merged across all files)
 //! - `ANCESTOR`: `Declaration` → `Declaration` (linearized ancestor chain)
 //! - `DESCENDANT`: `Declaration` → `Declaration`
 //! - `REFERENCES`: `Document` → `Declaration` (constant references)
@@ -39,16 +41,32 @@ pub enum NodeRef {
 /// A relationship type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelType {
+    /// `Document` → `Definition`: a file defines a construct occurrence.
     Defines,
+    /// `Definition` → `Declaration`: a per-file occurrence declares the global merged entity.
     Declares,
+    /// `Definition` → `Definition`: lexical nesting within a single file, e.g. a class written
+    /// inside a module. This is the source-level structure; the declaration-level (merged across
+    /// files) counterpart is [`RelType::Owns`].
     Contains,
+    /// `Declaration` → `Declaration`: direct superclass (a single hop, not the full chain).
     Inherits,
+    /// `Declaration` → `Declaration`: an included module mixin.
     Includes,
+    /// `Declaration` → `Declaration`: a prepended module mixin.
     Prepends,
+    /// `Declaration` → `Declaration`: an extended module mixin.
     Extends,
+    /// `Declaration` → `Declaration`: declaration-level membership (a namespace's methods and
+    /// nested constants), merged across all files. The per-file source counterpart is
+    /// [`RelType::Contains`].
     Owns,
+    /// `Declaration` → `Declaration`: an entry in the linearized ancestor chain (transitive
+    /// superclasses plus included/prepended modules).
     Ancestor,
+    /// `Declaration` → `Declaration`: the reverse of [`RelType::Ancestor`].
     Descendant,
+    /// `Document` → `Declaration`: a constant reference in the file resolves to a declaration.
     References,
 }
 
