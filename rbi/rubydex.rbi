@@ -175,8 +175,17 @@ class Rubydex::AttrAccessorDefinition < Rubydex::Definition; end
 class Rubydex::AttrReaderDefinition < Rubydex::Definition; end
 class Rubydex::AttrWriterDefinition < Rubydex::Definition; end
 class Rubydex::ClassVariableDefinition < Rubydex::Definition; end
-class Rubydex::ConstantAliasDefinition < Rubydex::Definition; end
-class Rubydex::ConstantDefinition < Rubydex::Definition; end
+
+class Rubydex::ConstantAliasDefinition < Rubydex::Definition
+  sig { returns(String) }
+  def raw_name; end
+end
+
+class Rubydex::ConstantDefinition < Rubydex::Definition
+  sig { returns(String) }
+  def raw_name; end
+end
+
 class Rubydex::GlobalVariableAliasDefinition < Rubydex::Definition; end
 class Rubydex::GlobalVariableDefinition < Rubydex::Definition; end
 class Rubydex::InstanceVariableDefinition < Rubydex::Definition; end
@@ -271,6 +280,9 @@ class Rubydex::Signature::BlockParameter < Rubydex::Signature::Parameter; end
 class Rubydex::ModuleDefinition < Rubydex::Definition
   sig { returns(T::Array[Rubydex::Mixin]) }
   def mixins; end
+
+  sig { returns(String) }
+  def raw_name; end
 end
 
 class Rubydex::SingletonClassDefinition < Rubydex::Definition
@@ -284,6 +296,9 @@ class Rubydex::ClassDefinition < Rubydex::Definition
 
   sig { returns(T::Array[Rubydex::Mixin]) }
   def mixins; end
+
+  sig { returns(String) }
+  def raw_name; end
 end
 
 class Rubydex::Mixin

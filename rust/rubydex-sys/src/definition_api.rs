@@ -6,7 +6,9 @@ use crate::location_api::{Location, create_location_for_uri_and_offset};
 use crate::reference_api::CConstantReference;
 use libc::c_char;
 use rubydex::model::definitions::{Definition, Mixin};
-use rubydex::model::ids::DefinitionId;
+use rubydex::model::graph::Graph;
+use rubydex::model::ids::{DefinitionId, NameId};
+use rubydex::model::name::ParentScope;
 use rubydex::query::AliasResolutionError;
 use std::ffi::CString;
 use std::ptr;
@@ -107,6 +109,71 @@ pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_i
         } else {
             ptr::null()
         }
+    })
+}
+
+fn raw_name_for_name(graph: &Graph, name_id: NameId) -> String {
+    let mut raw_name = String::new();
+    append_raw_name(graph, name_id, &mut raw_name);
+    raw_name
+}
+
+fn append_raw_name(graph: &Graph, name_id: NameId, raw_name: &mut String) {
+    let name = graph
+        .names()
+        .get(&name_id)
+        .expect("name should exist while building raw_name");
+    let simple_name = graph
+        .strings()
+        .get(name.str())
+        .expect("string should exist while building raw_name")
+        .as_str();
+
+    match name.parent_scope() {
+        ParentScope::None => {}
+        ParentScope::TopLevel => raw_name.push_str("::"),
+        ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) => {
+            append_raw_name(graph, *parent_id, raw_name);
+            raw_name.push_str("::");
+        }
+    }
+
+    raw_name.push_str(simple_name);
+}
+
+fn raw_name_id(definition: &Definition) -> Option<&NameId> {
+    match definition {
+        Definition::Class(_) | Definition::Module(_) | Definition::Constant(_) | Definition::ConstantAlias(_) => {
+            definition.name_id()
+        }
+        _ => None,
+    }
+}
+
+/// Returns the UTF-8 raw name string for a class, module, constant, or constant-alias definition id.
+///
+/// The raw name is reconstructed from the definition's `Name`, preserving explicit parent scopes like `Foo::Bar` and
+/// rooted paths like `::Bar`. Returns null if the definition cannot be found or does not support raw names. Caller must
+/// free a non-null result with `free_c_string`.
+///
+/// # Panics
+///
+/// Panics if the graph contains an invalid name or string reference, or if the name contains an embedded null byte.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_definition_raw_name(pointer: GraphPointer, definition_id: u64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let Some(name_id) = graph.definitions().get(&def_id).and_then(raw_name_id) else {
+            return ptr::null();
+        };
+
+        let name = raw_name_for_name(graph, *name_id);
+        CString::new(name).unwrap().into_raw().cast_const()
     })
 }
 
