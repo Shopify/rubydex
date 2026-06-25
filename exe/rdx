@@ -108,11 +108,8 @@ when "console"
   graph = build_graph($stdout)
 
   begin
-    require "irb"
-    IRB.setup(nil)
-    IRB.conf[:IRB_NAME] = "rubydex"
-    workspace = IRB::WorkSpace.new(binding)
-    IRB::Irb.new(workspace).run(IRB.conf)
+    require "rubydex/console"
+    Rubydex::Console.start(graph)
   rescue LoadError
     abort("Interactive mode requires `irb` to be in the bundle")
   end
