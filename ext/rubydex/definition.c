@@ -163,6 +163,26 @@ static VALUE rdxr_definition_name(VALUE self) {
 
 /*
  * call-seq:
+ *   source_name -> String
+ *
+ * Returns the class, module, or constant source name, preserving explicit parent scopes like "Foo::Bar" and rooted
+ * paths like "::Bar".
+ */
+static VALUE rdxr_definition_source_name(VALUE self) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    const char *name = rdx_definition_source_name(graph, data->id);
+    VALUE str = rb_utf8_str_new_cstr(name);
+    free_c_string(name);
+    return str;
+}
+
+/*
+ * call-seq:
  *   deprecated? -> bool
  *
  * Returns whether this definition is marked as deprecated.
@@ -457,6 +477,7 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cDefinition, "lexical_nesting", rdxr_definition_lexical_nesting, 0);
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
+    rb_define_method(cClassDefinition, "source_name", rdxr_definition_source_name, 0);
     rb_define_method(cClassDefinition, "superclass", rdxr_class_definition_superclass, 0);
     rb_define_method(cClassDefinition, "mixins", rdxr_definition_mixins, 0);
 
@@ -464,10 +485,13 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cSingletonClassDefinition, "mixins", rdxr_definition_mixins, 0);
 
     cModuleDefinition = rb_define_class_under(mRubydex, "ModuleDefinition", cDefinition);
+    rb_define_method(cModuleDefinition, "source_name", rdxr_definition_source_name, 0);
     rb_define_method(cModuleDefinition, "mixins", rdxr_definition_mixins, 0);
 
     cConstantDefinition = rb_define_class_under(mRubydex, "ConstantDefinition", cDefinition);
+    rb_define_method(cConstantDefinition, "source_name", rdxr_definition_source_name, 0);
     cConstantAliasDefinition = rb_define_class_under(mRubydex, "ConstantAliasDefinition", cDefinition);
+    rb_define_method(cConstantAliasDefinition, "source_name", rdxr_definition_source_name, 0);
     cConstantVisibilityDefinition = rb_define_class_under(mRubydex, "ConstantVisibilityDefinition", cDefinition);
     cMethodVisibilityDefinition = rb_define_class_under(mRubydex, "MethodVisibilityDefinition", cDefinition);
     cMethodDefinition = rb_define_class_under(mRubydex, "MethodDefinition", cDefinition);
