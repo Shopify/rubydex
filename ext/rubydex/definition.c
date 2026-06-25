@@ -84,10 +84,7 @@ VALUE rdxi_definition_class_for_kind(DefinitionKind kind) {
  */
 static VALUE rdxr_definition_location(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     Location *loc = rdx_definition_location(graph, data->id);
     VALUE location = rdxi_build_location_value(loc);
@@ -104,10 +101,7 @@ static VALUE rdxr_definition_location(VALUE self) {
  */
 static VALUE rdxr_definition_comments(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     CommentArray *arr = rdx_definition_comments(graph, data->id);
     if (arr == NULL || arr->len == 0) {
@@ -147,10 +141,7 @@ static VALUE rdxr_definition_comments(VALUE self) {
  */
 static VALUE rdxr_definition_name(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const char *name = rdx_definition_name(graph, data->id);
     if (name == NULL) {
@@ -169,10 +160,7 @@ static VALUE rdxr_definition_name(VALUE self) {
  */
 static VALUE rdxr_definition_deprecated(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     bool deprecated = rdx_definition_is_deprecated(graph, data->id);
     return deprecated ? Qtrue : Qfalse;
@@ -187,10 +175,7 @@ static VALUE rdxr_definition_deprecated(VALUE self) {
  */
 static VALUE rdxr_definition_name_location(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     Location *loc = rdx_definition_name_location(graph, data->id);
     if (loc == NULL) {
@@ -210,10 +195,7 @@ static VALUE rdxr_definition_name_location(VALUE self) {
  */
 static VALUE rdxr_definition_declaration(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const struct CDeclaration *decl = rdx_definition_declaration(graph, data->id);
     if (decl == NULL) {
@@ -243,10 +225,7 @@ static VALUE rdxi_build_definition(VALUE graph_obj, void *graph, uint64_t defini
  */
 static VALUE rdxr_definition_lexical_owner(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const uint64_t *owner_id = rdx_definition_lexical_nesting_id(graph, data->id);
     if (owner_id == NULL) {
@@ -267,10 +246,7 @@ static VALUE rdxr_definition_lexical_owner(VALUE self) {
  */
 static VALUE rdxr_definition_lexical_nesting(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     VALUE nesting = rb_ary_new();
     uint64_t definition_id = data->id;
@@ -306,10 +282,7 @@ static VALUE rdxi_build_constant_reference(VALUE graph_obj, const CConstantRefer
  */
 static VALUE rdxr_class_definition_superclass(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const CConstantReference *ref = rdx_class_definition_superclass(graph, data->id);
     if (ref == NULL) {
@@ -342,10 +315,7 @@ static VALUE rdxi_mixin_class_for_kind(MixinKind kind) {
  */
 static VALUE rdxr_definition_mixins(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     MixinsIter *iter = rdx_definition_mixins(graph, data->id);
     if (iter == NULL) {
@@ -375,10 +345,7 @@ static VALUE rdxr_definition_mixins(VALUE self) {
  */
 static VALUE rdxr_method_definition_signatures(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     SignatureArray *arr = rdx_definition_signatures(graph, data->id);
     return rdxi_signatures_to_ruby(arr);
@@ -392,10 +359,7 @@ static VALUE rdxr_method_definition_signatures(VALUE self) {
  */
 static VALUE rdxr_method_alias_definition_signatures(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     SignatureArray *arr = rdx_method_alias_definition_signatures(graph, data->id);
     return rdxi_signatures_to_ruby(arr);
@@ -410,10 +374,7 @@ static VALUE rdxr_method_alias_definition_signatures(VALUE self) {
  */
 static VALUE rdxr_method_alias_definition_target(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     CMethodAliasTargetResult result = rdx_method_alias_definition_target(graph, data->id);
 

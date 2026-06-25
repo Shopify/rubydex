@@ -24,10 +24,7 @@ VALUE cMethodReference;
  */
 static VALUE rdxr_constant_reference_name(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const char *name = rdx_constant_reference_name(graph, data->id);
     if (name == NULL) {
@@ -47,10 +44,7 @@ static VALUE rdxr_constant_reference_name(VALUE self) {
  */
 static VALUE rdxr_constant_reference_location(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     Location *loc = rdx_constant_reference_location(graph, data->id);
     VALUE location = rdxi_build_location_value(loc);
@@ -66,10 +60,7 @@ static VALUE rdxr_constant_reference_location(VALUE self) {
  */
 static VALUE rdxr_method_reference_name(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const char *name = rdx_method_reference_name(graph, data->id);
     if (name == NULL) {
@@ -89,10 +80,7 @@ static VALUE rdxr_method_reference_name(VALUE self) {
  */
 static VALUE rdxr_method_reference_location(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     Location *loc = rdx_method_reference_location(graph, data->id);
     VALUE location = rdxi_build_location_value(loc);
@@ -109,10 +97,7 @@ static VALUE rdxr_method_reference_location(VALUE self) {
  */
 static VALUE rdxr_method_reference_receiver(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const struct CDeclaration *decl = rdx_method_reference_receiver_declaration(graph, data->id);
     if (decl == NULL) {
@@ -134,10 +119,7 @@ static VALUE rdxr_method_reference_receiver(VALUE self) {
  */
 static VALUE rdxr_resolved_constant_reference_declaration(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const struct CDeclaration *decl = rdx_resolved_constant_reference_declaration(graph, data->id);
     if (decl == NULL) {

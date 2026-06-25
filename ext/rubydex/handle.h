@@ -1,6 +1,7 @@
 #ifndef RUBYDEX_HANDLE_H
 #define RUBYDEX_HANDLE_H
 
+#include "graph.h"
 #include "ruby.h"
 
 typedef struct {
@@ -33,6 +34,18 @@ static const rb_data_type_t handle_type = {
     .data = NULL,
     .flags = RUBY_TYPED_FREE_IMMEDIATELY,
 };
+
+static inline void *rdxi_graph_from_handle(VALUE self, HandleData **out_data) {
+    HandleData *data;
+    TypedData_Get_Struct(self, HandleData, &handle_type, data);
+
+    void *graph;
+    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+
+    *out_data = data;
+
+    return graph;
+}
 
 static VALUE rdxr_handle_alloc(VALUE klass) {
     HandleData *data = ALLOC(HandleData);
