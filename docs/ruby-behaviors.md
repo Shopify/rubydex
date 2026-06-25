@@ -1476,8 +1476,9 @@ Class.instance_method(:new).owner
 # => Class
 ```
 
-When singleton classes for classes are materialized, their ancestor chains mirror normal class inheritance. A subclass's
-singleton class inherits from the superclass's singleton class:
+If singleton classes for classes are materialized, their ancestor chains mirror normal class inheritance. A subclass's
+singleton class inherits from the superclass's singleton class. This describes the semantic relationship that static
+analysis needs to model; it does not mean Ruby eagerly allocates every class object's singleton class:
 
 ```ruby
 class Foo; end
