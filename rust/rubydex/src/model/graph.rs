@@ -3,6 +3,7 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 
 use crate::assert_mem_size;
+use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::built_in::{OBJECT_ID, add_built_in_data};
@@ -85,8 +86,8 @@ pub struct Graph {
     /// Drained by `take_pending_work()` before resolution.
     pending_work: Vec<Unit>,
 
-    /// Paths to exclude from file discovery during indexing.
-    excluded_paths: HashSet<PathBuf>,
+    /// Project configuration
+    config: Config,
 }
 assert_mem_size!(Graph, 336);
 
@@ -104,7 +105,7 @@ impl Graph {
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
-            excluded_paths: HashSet::new(),
+            config: Config::new(),
         };
 
         add_built_in_data(&mut graph);
@@ -126,13 +127,13 @@ impl Graph {
     /// Adds paths to exclude from file discovery during indexing. Excluded directories will be skipped entirely during
     /// directory traversal.
     pub fn exclude_paths(&mut self, paths: Vec<PathBuf>) {
-        self.excluded_paths.extend(paths);
+        self.config.exclude_paths(paths);
     }
 
     /// Returns the set of paths excluded from file discovery.
     #[must_use]
     pub fn excluded_paths(&self) -> &HashSet<PathBuf> {
-        &self.excluded_paths
+        self.config.excluded_paths()
     }
 
     /// # Panics
