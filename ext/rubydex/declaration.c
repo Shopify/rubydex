@@ -62,14 +62,7 @@ static VALUE rdxr_declaration_name(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
     const char *name = rdx_declaration_name(graph, data->id);
 
-    if (name == NULL) {
-        return Qnil;
-    }
-
-    VALUE str = rb_utf8_str_new_cstr(name);
-    free_c_string(name);
-
-    return str;
+    return rdxi_owned_c_string_to_ruby(name);
 }
 
 /*
@@ -83,14 +76,7 @@ static VALUE rdxr_declaration_unqualified_name(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
     const char *name = rdx_declaration_unqualified_name(graph, data->id);
 
-    if (name == NULL) {
-        return Qnil;
-    }
-
-    VALUE str = rb_utf8_str_new_cstr(name);
-    free_c_string(name);
-
-    return str;
+    return rdxi_owned_c_string_to_ruby(name);
 }
 
 // Body function for rb_ensure in Declaration#definitions

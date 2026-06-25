@@ -13,6 +13,10 @@ void rdxi_free_str_array(char **array, size_t length);
 // Verify that the Ruby object is an array of strings or raise `TypeError`
 void rdxi_check_array_of_strings(VALUE array);
 
+// Convert a Rust-owned C string to a Ruby string and release it with free_c_string.
+// Returns nil when the Rust side returned NULL.
+VALUE rdxi_owned_c_string_to_ruby(const char *string);
+
 // Yield body for iterating over declarations
 VALUE rdxi_declarations_yield(VALUE args);
 

@@ -7,6 +7,7 @@
 #include "signature.h"
 #include "ruby/internal/scan_args.h"
 #include "rustbindings.h"
+#include "utils.h"
 
 /*
  * RDoc parser workaround for https://github.com/ruby/rdoc/issues/1744:
@@ -144,12 +145,7 @@ static VALUE rdxr_definition_name(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     const char *name = rdx_definition_name(graph, data->id);
-    if (name == NULL) {
-        return Qnil;
-    }
-    VALUE str = rb_utf8_str_new_cstr(name);
-    free_c_string(name);
-    return str;
+    return rdxi_owned_c_string_to_ruby(name);
 }
 
 /*

@@ -23,14 +23,7 @@ static VALUE rdxr_document_uri(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
     const char *uri = rdx_document_uri(graph, data->id);
 
-    if (uri == NULL) {
-        return Qnil;
-    }
-
-    VALUE str = rb_utf8_str_new_cstr(uri);
-    free_c_string(uri);
-
-    return str;
+    return rdxi_owned_c_string_to_ruby(uri);
 }
 
 // Body function for rb_ensure in Document#definitions

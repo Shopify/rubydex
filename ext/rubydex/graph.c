@@ -843,8 +843,7 @@ static VALUE rdxr_graph_workspace_path(VALUE self) {
         rb_raise(rb_eRuntimeError, "Converting workspace path to Ruby string failed");
     }
 
-    VALUE path = rb_utf8_str_new_cstr(result);
-    free_c_string(result);
+    VALUE path = rdxi_owned_c_string_to_ruby(result);
     return path;
 }
 
