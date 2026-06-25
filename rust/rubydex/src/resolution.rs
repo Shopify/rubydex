@@ -176,6 +176,27 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Resolves a single constant and the names it depends on against the graph. This is meant for APIs that create a
+    /// temporary name chain outside of the normal resolution phase.
+    pub fn resolve_constant_rec(&mut self, name_id: NameId) -> Option<DeclarationId> {
+        let name_ref = self
+            .graph
+            .names()
+            .get(&name_id)
+            .expect("name should exist while resolving a constant")
+            .clone();
+
+        if let Some(nesting_id) = name_ref.nesting() {
+            self.resolve_constant_rec(*nesting_id);
+        }
+
+        if let Some(parent_scope_id) = name_ref.parent_scope().as_ref() {
+            self.resolve_constant_rec(*parent_scope_id);
+        }
+
+        self.resolve_constant(name_id)
+    }
+
     /// Handles a unit of work for resolving a constant definition or singleton method
     fn handle_definition_unit(&mut self, unit_id: Unit, id: DefinitionId) {
         let mut needs_linearization = false;
