@@ -188,3 +188,26 @@ fn unknown_relationship_type_errors() {
     let parsed = parse("MATCH (a)-[:BOGUS]->(b) RETURN a").unwrap();
     assert!(execute(&graph, &parsed).is_err());
 }
+
+#[test]
+fn document_uri_path_and_name_are_distinct() {
+    let graph = fixture_graph();
+    let result = run(
+        &graph,
+        "MATCH (d:Document) WHERE d.uri = 'file:///zoo.rb' RETURN d.uri, d.path, d.name",
+    );
+    assert_eq!(
+        result.columns,
+        vec!["d.uri".to_string(), "d.path".to_string(), "d.name".to_string()]
+    );
+    // `uri` is the full URI and `name` is the basename on every platform.
+    assert_eq!(column_strings(&result, 0), vec!["file:///zoo.rb".to_string()]);
+    assert_eq!(column_strings(&result, 2), vec!["zoo.rb".to_string()]);
+
+    // `path` is the decoded file-system path. A drive-less `file://` URI has no valid Windows path,
+    // so there it falls back to the raw URI; on Unix it decodes to `/zoo.rb`.
+    #[cfg(not(windows))]
+    assert_eq!(column_strings(&result, 1), vec!["/zoo.rb".to_string()]);
+    #[cfg(windows)]
+    assert_eq!(column_strings(&result, 1), vec!["file:///zoo.rb".to_string()]);
+}

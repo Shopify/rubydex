@@ -218,7 +218,12 @@ const PROPERTIES: &[PropInfo] = &[
     PropInfo {
         node_type: "Document",
         property: "path",
-        description: "Basename of the document URI",
+        description: "File system path of the document",
+    },
+    PropInfo {
+        node_type: "Document",
+        property: "name",
+        description: "Base file name of the document",
     },
 ];
 

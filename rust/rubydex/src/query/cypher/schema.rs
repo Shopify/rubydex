@@ -255,13 +255,13 @@ pub fn node_name(graph: &Graph, node: NodeRef) -> String {
             .and_then(|decl_id| graph.declarations().get(decl_id))
             .map_or_else(String::new, |declaration| declaration.name().to_string()),
         NodeRef::Document(id) => graph.documents().get(&id).map_or_else(String::new, |document| {
-            let uri = document.uri();
-            uri.rsplit('/').next().unwrap_or(uri).to_string()
+            document.file_name().unwrap_or_else(|| document.uri().to_string())
         }),
     }
 }
 
-/// Resolves a node property to a value. Unknown properties yield `NULL`.
+/// Resolves a node property to a value, where `prop` is the property name read off the node (the
+/// `x` in `RETURN n.x` / `WHERE n.x = ...`). Unknown properties yield `NULL`.
 #[must_use]
 pub fn property(graph: &Graph, node: NodeRef, prop: &str) -> CypherValue {
     match prop {
@@ -319,12 +319,18 @@ fn document_property(graph: &Graph, id: UriId, prop: &str) -> CypherValue {
         return CypherValue::Null;
     };
 
+    // Non-`file://` URIs (the synthetic built-in document) have no file path, so `path`/`name` fall
+    // back to the raw URI.
     match prop {
+        // Full document URI, e.g. `file:///app/models/user.rb`.
         "uri" => CypherValue::Str(document.uri().to_string()),
-        "path" | "name" => {
-            let uri = document.uri();
-            CypherValue::Str(uri.rsplit('/').next().unwrap_or(uri).to_string())
-        }
+        // File-system path, e.g. `/app/models/user.rb`.
+        "path" => CypherValue::Str(document.file_path().map_or_else(
+            || document.uri().to_string(),
+            |path| path.to_string_lossy().into_owned(),
+        )),
+        // Base file name, e.g. `user.rb`.
+        "name" => CypherValue::Str(document.file_name().unwrap_or_else(|| document.uri().to_string())),
         _ => CypherValue::Null,
     }
 }
