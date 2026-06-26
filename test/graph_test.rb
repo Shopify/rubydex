@@ -52,7 +52,7 @@ class GraphTest < Minitest::Test
 
   def test_load_config_from_explicit_path_adds_exclusions
     with_context do |context|
-      context.write!(".rubydex_custom", "exclude = vendor, generated\n")
+      context.write!(".rubydex_custom", "exclude = [\"vendor\", \"generated\"]\n")
 
       graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
       graph.load_config(".rubydex_custom")
@@ -66,7 +66,7 @@ class GraphTest < Minitest::Test
 
   def test_load_config_without_argument_loads_the_default_rubydex
     with_context do |context|
-      context.write!(".rubydex", "exclude = vendor, generated\n")
+      context.write!("rubydex.toml", "exclude = [\"vendor\", \"generated\"]\n")
 
       graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
       graph.load_config
@@ -81,7 +81,7 @@ class GraphTest < Minitest::Test
     with_context do |context|
       graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
 
-      # A missing default `.rubydex` is not an error; defaults remain in place.
+      # A missing default `rubydex.toml` is not an error; defaults remain in place.
       graph.load_config
       assert_includes(graph.excluded_paths, context.absolute_path_to("node_modules"))
     end
