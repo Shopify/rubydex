@@ -213,7 +213,7 @@ class Rubydex::Prepend < Rubydex::Mixin; end
 class Rubydex::Extend < Rubydex::Mixin; end
 
 class Rubydex::Diagnostic
-  sig { params(rule: String, message: String, location: Rubydex::Location).void }
+  sig { params(rule: Symbol, message: String, location: Rubydex::Location).void }
   def initialize(rule:, message:, location:); end
 
   sig { returns(Rubydex::Location) }
@@ -222,7 +222,7 @@ class Rubydex::Diagnostic
   sig { returns(String) }
   def message; end
 
-  sig { returns(String) }
+  sig { returns(Symbol) }
   def rule; end
 end
 

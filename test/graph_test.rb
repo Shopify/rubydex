@@ -59,8 +59,8 @@ class GraphTest < Minitest::Test
 
       assert_diagnostics(
         [
-          { rule: "parse-error", path: "file.rb", message: "expected an `end` to close the `class` statement" },
-          { rule: "parse-error", path: "file.rb", message: "unexpected end-of-input, assuming it is closing the parent top level context" },
+          { rule: :"parse-error", path: "file.rb", message: "expected an `end` to close the `class` statement" },
+          { rule: :"parse-error", path: "file.rb", message: "unexpected end-of-input, assuming it is closing the parent top level context" },
         ],
         graph.diagnostics,
       )

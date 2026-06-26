@@ -531,7 +531,7 @@ static VALUE rdxr_graph_diagnostics(VALUE self) {
     for (size_t i = 0; i < array->len; i++) {
         DiagnosticEntry entry = array->items[i];
         VALUE message = entry.message == NULL ? Qnil : rb_utf8_str_new_cstr(entry.message);
-        VALUE rule = rb_str_new2(entry.rule);
+        VALUE rule = rb_str_intern(rb_str_new2(entry.rule));
         VALUE location = rdxi_build_location_value(entry.location);
 
         VALUE kwargs = rb_hash_new();
