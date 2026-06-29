@@ -275,6 +275,19 @@ end
 
 class Rubydex::IntegrityFailure < Rubydex::Failure; end
 
+class Rubydex::Query
+  class << self
+    sig { params(query: String).returns(Rubydex::Query) }
+    def parse(query); end
+
+    sig { params(format: T.any(String, Symbol)).returns(String) }
+    def schema(format = :table); end
+  end
+
+  sig { params(graph: Rubydex::Graph, format: T.any(String, Symbol)).returns(String) }
+  def render(graph, format = :table); end
+end
+
 class Rubydex::Graph
   IGNORED_DIRECTORIES = T.let(T.unsafe(nil), T::Array[String])
 
