@@ -964,6 +964,7 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let parent_nesting_id = self.current_nesting_definition_id();
+        let mixin_offset = Offset::from_prism_location(&node.location());
 
         // Collect all arguments as constant references. Ignore anything that isn't a constant
         let mixin_arguments = arguments
@@ -1015,9 +1016,9 @@ impl<'a> RubyIndexer<'a> {
                     .add_constant_reference(ConstantReference::new(id, self.uri_id, offset));
 
             let mixin = match mixin_type {
-                MixinType::Include => Mixin::Include(IncludeDefinition::new(constant_ref_id)),
-                MixinType::Prepend => Mixin::Prepend(PrependDefinition::new(constant_ref_id)),
-                MixinType::Extend => Mixin::Extend(ExtendDefinition::new(constant_ref_id)),
+                MixinType::Include => Mixin::Include(IncludeDefinition::new(constant_ref_id, mixin_offset.clone())),
+                MixinType::Prepend => Mixin::Prepend(PrependDefinition::new(constant_ref_id, mixin_offset.clone())),
+                MixinType::Extend => Mixin::Extend(ExtendDefinition::new(constant_ref_id, mixin_offset.clone())),
             };
 
             match self.local_graph.get_definition_mut(lexical_nesting_id).unwrap() {

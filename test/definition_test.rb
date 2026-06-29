@@ -280,12 +280,42 @@ class DefinitionTest < Minitest::Test
 
       assert_instance_of(Rubydex::Include, mixins[0])
       assert_instance_of(Rubydex::UnresolvedConstantReference, mixins[0].constant_reference)
+      assert_equal(
+        Rubydex::DisplayLocation.new(
+          uri: context.uri_to("file1.rb"),
+          start_line: 6,
+          start_column: 3,
+          end_line: 6,
+          end_column: 13,
+        ),
+        mixins[0].location.to_display,
+      )
 
       assert_instance_of(Rubydex::Prepend, mixins[1])
       assert_instance_of(Rubydex::UnresolvedConstantReference, mixins[1].constant_reference)
+      assert_equal(
+        Rubydex::DisplayLocation.new(
+          uri: context.uri_to("file1.rb"),
+          start_line: 7,
+          start_column: 3,
+          end_line: 7,
+          end_column: 13,
+        ),
+        mixins[1].location.to_display,
+      )
 
       assert_instance_of(Rubydex::Extend, mixins[2])
       assert_instance_of(Rubydex::UnresolvedConstantReference, mixins[2].constant_reference)
+      assert_equal(
+        Rubydex::DisplayLocation.new(
+          uri: context.uri_to("file1.rb"),
+          start_line: 8,
+          start_column: 3,
+          end_line: 8,
+          end_column: 12,
+        ),
+        mixins[2].location.to_display,
+      )
 
       # After resolution, mixins have resolved constant references
       graph.resolve
