@@ -20,20 +20,10 @@ VALUE cDocument;
  */
 static VALUE rdxr_document_uri(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     const char *uri = rdx_document_uri(graph, data->id);
 
-    if (uri == NULL) {
-        return Qnil;
-    }
-
-    VALUE str = rb_utf8_str_new_cstr(uri);
-    free_c_string(uri);
-
-    return str;
+    return rdxi_owned_c_string_to_ruby(uri);
 }
 
 // Body function for rb_ensure in Document#definitions
@@ -66,10 +56,7 @@ static VALUE document_definitions_ensure(VALUE args) {
 // Size function for the Document#definitions enumerator
 static VALUE document_definitions_size(VALUE self, VALUE _args, VALUE _eobj) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     struct DefinitionsIter *iter = rdx_document_definitions_iter_new(graph, data->id);
     size_t len = rdx_definitions_iter_len(iter);
     rdx_definitions_iter_free(iter);
@@ -89,10 +76,7 @@ static VALUE rdxr_document_definitions(VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     void *iter = rdx_document_definitions_iter_new(graph, data->id);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
     rb_ensure(document_definitions_yield, args, document_definitions_ensure, args);
@@ -103,10 +87,7 @@ static VALUE rdxr_document_definitions(VALUE self) {
 // Size function for the Document#method_references enumerator
 static VALUE document_method_references_size(VALUE self, VALUE _args, VALUE _eobj) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     struct MethodReferencesIter *iter = rdx_document_method_references_iter_new(graph, data->id);
     size_t len = rdx_method_references_iter_len(iter);
     rdx_method_references_iter_free(iter);
@@ -123,10 +104,7 @@ static VALUE rdxr_document_method_references(VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     void *iter = rdx_document_method_references_iter_new(graph, data->id);
     VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
     rb_ensure(rdxi_method_references_yield, args, rdxi_method_references_ensure, args);

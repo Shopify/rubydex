@@ -39,6 +39,19 @@ void rdxi_check_array_of_strings(VALUE array) {
     }
 }
 
+// Convert a Rust-owned C string to a Ruby string and release it with free_c_string.
+// Returns nil when the Rust side returned NULL.
+VALUE rdxi_owned_c_string_to_ruby(const char *string) {
+    if (string == NULL) {
+        return Qnil;
+    }
+
+    VALUE value = rb_utf8_str_new_cstr(string);
+    free_c_string(string);
+
+    return value;
+}
+
 // Yield body for iterating over declarations
 VALUE rdxi_declarations_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);

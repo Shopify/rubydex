@@ -59,20 +59,10 @@ VALUE rdxi_declaration_class_for_kind(CDeclarationKind kind) {
  */
 static VALUE rdxr_declaration_name(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     const char *name = rdx_declaration_name(graph, data->id);
 
-    if (name == NULL) {
-        return Qnil;
-    }
-
-    VALUE str = rb_utf8_str_new_cstr(name);
-    free_c_string(name);
-
-    return str;
+    return rdxi_owned_c_string_to_ruby(name);
 }
 
 /*
@@ -83,20 +73,10 @@ static VALUE rdxr_declaration_name(VALUE self) {
  */
 static VALUE rdxr_declaration_unqualified_name(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     const char *name = rdx_declaration_unqualified_name(graph, data->id);
 
-    if (name == NULL) {
-        return Qnil;
-    }
-
-    VALUE str = rb_utf8_str_new_cstr(name);
-    free_c_string(name);
-
-    return str;
+    return rdxi_owned_c_string_to_ruby(name);
 }
 
 // Body function for rb_ensure in Declaration#definitions
@@ -130,10 +110,7 @@ static VALUE declaration_definitions_ensure(VALUE args) {
 // Size function for the Declaration#definitions enumerator
 static VALUE declaration_definitions_size(VALUE self, VALUE _args, VALUE _eobj) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     struct DefinitionsIter *iter = rdx_declaration_definitions_iter_new(graph, data->id);
     size_t len = rdx_definitions_iter_len(iter);
     rdx_definitions_iter_free(iter);
@@ -153,10 +130,7 @@ static VALUE rdxr_declaration_definitions(VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     void *iter = rdx_declaration_definitions_iter_new(graph, data->id);
     VALUE args = rb_ary_new_from_args(2, self, ULL2NUM((uintptr_t)iter));
@@ -173,10 +147,7 @@ static VALUE rdxr_declaration_definitions(VALUE self) {
  */
 static VALUE rdxr_declaration_member(VALUE self, VALUE name) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     if (TYPE(name) != T_STRING) {
         rb_raise(rb_eTypeError, "expected String");
@@ -217,10 +188,7 @@ static VALUE rdxr_declaration_find_member(int argc, VALUE *argv, VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const CDeclaration *decl = rdx_declaration_find_member(graph, data->id, StringValueCStr(member), only_inherited);
     if (decl == NULL) {
@@ -242,10 +210,7 @@ static VALUE rdxr_declaration_find_member(int argc, VALUE *argv, VALUE self) {
  */
 static VALUE rdxr_declaration_singleton_class(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     const CDeclaration *decl = rdx_declaration_singleton_class(graph, data->id);
 
     if (decl == NULL) {
@@ -267,10 +232,7 @@ static VALUE rdxr_declaration_singleton_class(VALUE self) {
  */
 static VALUE rdxr_declaration_owner(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
     const CDeclaration *decl = rdx_declaration_owner(graph, data->id);
 
     if (decl == NULL) {
@@ -296,10 +258,7 @@ static VALUE rdxr_declaration_ancestors(VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     void *iter = rdx_declaration_ancestors(graph, data->id);
     if (iter == NULL) {
@@ -324,10 +283,7 @@ static VALUE rdxr_declaration_descendants(VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     void *iter = rdx_declaration_descendants(graph, data->id);
     if (iter == NULL) {
@@ -352,10 +308,7 @@ static VALUE rdxr_declaration_members(VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     void *iter = rdx_declaration_members(graph, data->id);
     if (iter == NULL) {
@@ -371,10 +324,7 @@ static VALUE rdxr_declaration_members(VALUE self) {
 // Size function for constant declaration references enumerator
 static VALUE constant_declaration_references_size(VALUE self, VALUE _args, VALUE _eobj) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     struct ConstantReferencesIter *iter = rdx_declaration_constant_references_iter_new(graph, data->id);
     if (iter == NULL) {
@@ -399,10 +349,7 @@ static VALUE rdxr_constant_declaration_references(VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     void *iter = rdx_declaration_constant_references_iter_new(graph, data->id);
     if (iter == NULL) {
@@ -418,10 +365,7 @@ static VALUE rdxr_constant_declaration_references(VALUE self) {
 // Size function for method declaration references enumerator
 static VALUE method_declaration_references_size(VALUE self, VALUE _args, VALUE _eobj) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     struct MethodReferencesIter *iter = rdx_declaration_method_references_iter_new(graph, data->id);
     if (iter == NULL) {
@@ -446,10 +390,7 @@ static VALUE rdxr_method_declaration_references(VALUE self) {
     }
 
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     void *iter = rdx_declaration_method_references_iter_new(graph, data->id);
     if (iter == NULL) {
@@ -493,10 +434,7 @@ static VALUE rdxi_visibility_to_symbol(CVisibility visibility) {
  */
 static VALUE rdxr_declaration_visibility(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const CVisibility *visibility = rdx_graph_visibility(graph, data->id);
     if (visibility == NULL) {
@@ -518,10 +456,7 @@ static VALUE rdxr_declaration_visibility(VALUE self) {
  */
 static VALUE rdxr_constant_alias_target(VALUE self) {
     HandleData *data;
-    TypedData_Get_Struct(self, HandleData, &handle_type, data);
-
-    void *graph;
-    TypedData_Get_Struct(data->graph_obj, void *, &graph_type, graph);
+    void *graph = rdxi_graph_from_handle(self, &data);
 
     const CDeclaration *decl = rdx_constant_alias_target(graph, data->id);
     if (decl == NULL) {
