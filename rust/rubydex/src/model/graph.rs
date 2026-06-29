@@ -498,10 +498,7 @@ impl Graph {
 
     #[must_use]
     pub fn all_diagnostics(&self) -> Vec<&Diagnostic> {
-        let document_diagnostics = self.documents.values().flat_map(Document::diagnostics);
-        let declaration_diagnostics = self.declarations.values().flat_map(Declaration::diagnostics);
-
-        document_diagnostics.chain(declaration_diagnostics).collect()
+        self.documents.values().flat_map(Document::diagnostics).collect()
     }
 
     /// Interns a string in the graph unless already interned. This method is only used to back the
@@ -1212,9 +1209,6 @@ impl Graph {
         if let Some(decl) = self.declarations.get_mut(&decl_id) {
             for def_id in detach_def_ids {
                 decl.remove_definition(def_id);
-            }
-            if !detach_def_ids.is_empty() {
-                decl.clear_diagnostics();
             }
         }
 

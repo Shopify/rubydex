@@ -710,18 +710,8 @@ impl<'a> Resolver<'a> {
                     offset,
                     format!("undefined method `{owner_name}#{method_name}` for visibility change"),
                 );
-                if is_singleton {
-                    // Document-scoped: the singleton class may be synthetic (created by this
-                    // visibility resolution) and won't be cleaned up on file delete, so attaching
-                    // the diagnostic to the declaration would leave it orphaned.
-                    self.graph.add_document_diagnostic(uri_id, diagnostic);
-                } else {
-                    self.graph
-                        .declarations_mut()
-                        .get_mut(&owner_id)
-                        .unwrap()
-                        .add_diagnostic(diagnostic);
-                }
+
+                self.graph.add_document_diagnostic(uri_id, diagnostic);
             }
         }
 

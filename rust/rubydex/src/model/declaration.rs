@@ -1,5 +1,4 @@
 use crate::assert_mem_size;
-use crate::diagnostic::Diagnostic;
 use crate::model::ids::{
     ClassVariableReferenceId, GlobalVariableReferenceId, InstanceVariableReferenceId, MethodReferenceId,
 };
@@ -111,8 +110,6 @@ macro_rules! namespace_declaration {
             descendants: IdentityHashSet<DeclarationId>,
             /// The singleton class associated with this declaration
             singleton_class_id: Option<DeclarationId>,
-            /// Diagnostics associated with this declaration
-            diagnostics: Vec<Diagnostic>,
         }
 
         impl $name {
@@ -127,13 +124,11 @@ macro_rules! namespace_declaration {
                     ancestors: Ancestors::Partial(Vec::new()),
                     descendants: IdentityHashSet::default(),
                     singleton_class_id: None,
-                    diagnostics: Vec::new(),
                 }
             }
 
-            pub fn extend(&mut self, mut other: Declaration) {
+            pub fn extend(&mut self, other: Declaration) {
                 self.definition_ids.extend(other.definitions());
-                self.diagnostics.extend(other.take_diagnostics());
 
                 match other {
                     Declaration::Namespace(namespace) => {
@@ -243,8 +238,6 @@ macro_rules! simple_declaration {
             references: IdentityHashSet<$reference_type>,
             /// The ID of the owner of this declaration
             owner_id: DeclarationId,
-            /// Diagnostics associated with this declaration
-            diagnostics: Vec<Diagnostic>,
         }
 
         impl $name {
@@ -255,13 +248,11 @@ macro_rules! simple_declaration {
                     definition_ids: Vec::new(),
                     references: IdentityHashSet::default(),
                     owner_id,
-                    diagnostics: Vec::new(),
                 }
             }
 
-            pub fn extend(&mut self, mut other: $name) {
+            pub fn extend(&mut self, other: $name) {
                 self.definition_ids.extend(other.definitions());
-                self.diagnostics.extend(other.take_diagnostics());
                 self.references.extend(other.references());
             }
 
@@ -276,10 +267,6 @@ macro_rules! simple_declaration {
 
             pub fn remove_reference(&mut self, reference_id: &$reference_type) {
                 self.references.remove(reference_id);
-            }
-
-            pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-                std::mem::take(&mut self.diagnostics)
             }
 
             #[must_use]
@@ -437,23 +424,6 @@ impl Declaration {
     }
 
     #[must_use]
-    pub fn diagnostics(&self) -> &[Diagnostic] {
-        all_declarations!(self, it => &it.diagnostics)
-    }
-
-    pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-        all_declarations!(self, it => std::mem::take(&mut it.diagnostics))
-    }
-
-    pub fn add_diagnostic(&mut self, diagnostic: Diagnostic) {
-        all_declarations!(self, it => it.diagnostics.push(diagnostic));
-    }
-
-    pub fn clear_diagnostics(&mut self) {
-        all_declarations!(self, it => it.diagnostics.clear());
-    }
-
-    #[must_use]
     pub fn reference_count(&self) -> usize {
         all_declarations!(self, it => it.references.len())
     }
@@ -544,15 +514,6 @@ impl Namespace {
     #[must_use]
     pub fn members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
         all_namespaces!(self, it => &it.members)
-    }
-
-    #[must_use]
-    pub fn diagnostics(&self) -> &[Diagnostic] {
-        all_namespaces!(self, it => &it.diagnostics)
-    }
-
-    pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-        all_namespaces!(self, it => std::mem::take(&mut it.diagnostics))
     }
 
     pub fn extend(&mut self, other: Declaration) {
@@ -647,25 +608,25 @@ impl Namespace {
 }
 
 namespace_declaration!(Class, ClassDeclaration);
-assert_mem_size!(ClassDeclaration, 216);
+assert_mem_size!(ClassDeclaration, 192);
 namespace_declaration!(Module, ModuleDeclaration);
-assert_mem_size!(ModuleDeclaration, 216);
+assert_mem_size!(ModuleDeclaration, 192);
 namespace_declaration!(SingletonClass, SingletonClassDeclaration);
-assert_mem_size!(SingletonClassDeclaration, 216);
+assert_mem_size!(SingletonClassDeclaration, 192);
 namespace_declaration!(Todo, TodoDeclaration);
-assert_mem_size!(TodoDeclaration, 216);
+assert_mem_size!(TodoDeclaration, 192);
 simple_declaration!(ConstantDeclaration, ConstantReferenceId);
-assert_mem_size!(ConstantDeclaration, 112);
+assert_mem_size!(ConstantDeclaration, 88);
 simple_declaration!(MethodDeclaration, MethodReferenceId);
-assert_mem_size!(MethodDeclaration, 112);
+assert_mem_size!(MethodDeclaration, 88);
 simple_declaration!(GlobalVariableDeclaration, GlobalVariableReferenceId);
-assert_mem_size!(GlobalVariableDeclaration, 112);
+assert_mem_size!(GlobalVariableDeclaration, 88);
 simple_declaration!(InstanceVariableDeclaration, InstanceVariableReferenceId);
-assert_mem_size!(InstanceVariableDeclaration, 112);
+assert_mem_size!(InstanceVariableDeclaration, 88);
 simple_declaration!(ClassVariableDeclaration, ClassVariableReferenceId);
-assert_mem_size!(ClassVariableDeclaration, 112);
+assert_mem_size!(ClassVariableDeclaration, 88);
 simple_declaration!(ConstantAliasDeclaration, ConstantReferenceId);
-assert_mem_size!(ConstantAliasDeclaration, 112);
+assert_mem_size!(ConstantAliasDeclaration, 88);
 
 #[cfg(test)]
 mod tests {
