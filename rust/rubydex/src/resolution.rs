@@ -44,15 +44,17 @@ struct LinearizationContext {
     seen_ids: IdentityHashSet<DeclarationId>,
     cyclic: bool,
     partial: bool,
+    eager_singletons: bool,
 }
 
 impl LinearizationContext {
-    fn new() -> Self {
+    fn new(eager_singletons: bool) -> Self {
         Self {
             descendants: IdentityHashSet::default(),
             seen_ids: IdentityHashSet::default(),
             cyclic: false,
             partial: false,
+            eager_singletons,
         }
     }
 
@@ -176,6 +178,7 @@ impl<'a> Resolver<'a> {
                 })
             }
             Definition::SingletonClass(singleton) => {
+                needs_singleton_class = singleton.mixins().iter().any(|mixin| matches!(mixin, Mixin::Extend(_)));
                 self.handle_constant_declaration(*singleton.name_id(), id, true, |name, owner_id| {
                     needs_linearization = true;
                     Declaration::Namespace(Namespace::SingletonClass(Box::new(SingletonClassDeclaration::new(
@@ -888,7 +891,7 @@ impl<'a> Resolver<'a> {
                 });
 
                 if eager_ancestors {
-                    let _ = self.ancestors_of(attached_id);
+                    let _ = self.ancestors_of_with_singletons(attached_id, true);
                 } else {
                     self.unit_queue.push_back(Unit::Ancestors(attached_id));
                 }
@@ -919,13 +922,89 @@ impl<'a> Resolver<'a> {
             )))),
         );
 
+        self.materialize_descendant_singleton_classes(attached_id, decl_id, eager_ancestors);
+
         if eager_ancestors {
-            let _ = self.ancestors_of(decl_id);
+            let _ = self.ancestors_of_with_singletons(decl_id, true);
         } else {
             self.unit_queue.push_back(Unit::Ancestors(decl_id));
         }
 
         Some(decl_id)
+    }
+
+    fn materialize_descendant_singleton_classes(
+        &mut self,
+        attached_id: DeclarationId,
+        singleton_id: DeclarationId,
+        eager_ancestors: bool,
+    ) {
+        let attached_depth = self.singleton_depth(attached_id);
+        let descendants = self
+            .graph
+            .declarations()
+            .get(&attached_id)
+            .and_then(Declaration::as_namespace)
+            .map(|namespace| namespace.descendants().iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        for descendant_id in descendants {
+            if self.singleton_depth(descendant_id) != attached_depth {
+                continue;
+            }
+
+            let Some(descendant_singleton_id) = self.get_or_create_singleton_class(descendant_id, eager_ancestors)
+            else {
+                continue;
+            };
+
+            self.add_descendant(singleton_id, descendant_singleton_id, eager_ancestors);
+        }
+    }
+
+    fn add_descendant(&mut self, ancestor_id: DeclarationId, descendant_id: DeclarationId, eager_ancestors: bool) {
+        let (ancestor_singleton_id, inserted) = {
+            let ancestor = self.graph.declarations_mut().get_mut(&ancestor_id).unwrap();
+            let namespace = ancestor.as_namespace_mut().unwrap();
+            let inserted = !namespace.descendants().contains(&descendant_id);
+            namespace.add_descendant(descendant_id);
+            (namespace.singleton_class().copied(), inserted)
+        };
+
+        if !inserted {
+            return;
+        }
+
+        let Some(ancestor_singleton_id) = ancestor_singleton_id else {
+            return;
+        };
+
+        // Built-in singleton chains can include descendants at different singleton depths
+        // (e.g. `Class::<Class>` and `Object::<Object>::<<Object>>`). Only lift same-depth
+        // descendant edges; deeper singleton classes can still be created by the lazy parent path.
+        if self.singleton_depth(ancestor_id) != self.singleton_depth(descendant_id) {
+            return;
+        }
+
+        let Some(descendant_singleton_id) = self.get_or_create_singleton_class(descendant_id, eager_ancestors) else {
+            return;
+        };
+
+        self.add_descendant(ancestor_singleton_id, descendant_singleton_id, eager_ancestors);
+    }
+
+    fn singleton_depth(&self, declaration_id: DeclarationId) -> usize {
+        let mut depth = 0;
+        let mut current_id = declaration_id;
+
+        while let Some(declaration @ Declaration::Namespace(Namespace::SingletonClass(_))) =
+            self.graph.declarations().get(&current_id)
+        {
+            depth += 1;
+            current_id = *declaration.owner_id();
+        }
+
+        depth
     }
 
     /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
@@ -935,7 +1014,12 @@ impl<'a> Resolver<'a> {
     /// Can panic if there's inconsistent data in the graph
     #[must_use]
     fn ancestors_of(&mut self, declaration_id: DeclarationId) -> Ancestors {
-        let mut context = LinearizationContext::new();
+        self.ancestors_of_with_singletons(declaration_id, false)
+    }
+
+    #[must_use]
+    fn ancestors_of_with_singletons(&mut self, declaration_id: DeclarationId, eager_singletons: bool) -> Ancestors {
+        let mut context = LinearizationContext::new(eager_singletons);
         self.linearize_ancestors(declaration_id, &mut context)
     }
 
@@ -956,7 +1040,7 @@ impl<'a> Resolver<'a> {
             // again
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().clone_ancestors();
-                self.propagate_descendants(&mut context.descendants, &cached);
+                self.propagate_descendants(&mut context.descendants, &cached, context.eager_singletons);
 
                 context.finalize(declaration_id);
                 return cached;
@@ -983,14 +1067,9 @@ impl<'a> Resolver<'a> {
 
             // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
             // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
-            for descendant in &context.descendants {
-                self.graph
-                    .declarations_mut()
-                    .get_mut(&declaration_id)
-                    .unwrap()
-                    .as_namespace_mut()
-                    .unwrap()
-                    .add_descendant(*descendant);
+            let descendants = context.descendants.iter().copied().collect::<Vec<_>>();
+            for descendant in descendants {
+                self.add_descendant(declaration_id, descendant, context.eager_singletons);
             }
         }
 
@@ -1221,18 +1300,13 @@ impl<'a> Resolver<'a> {
         &mut self,
         descendants: &mut HashSet<DeclarationId, S>,
         cached: &Ancestors,
+        eager_ancestors: bool,
     ) {
         if !descendants.is_empty() {
             for ancestor in cached {
                 if let Ancestor::Complete(ancestor_id) = ancestor {
                     for descendant in descendants.iter() {
-                        self.graph
-                            .declarations_mut()
-                            .get_mut(ancestor_id)
-                            .unwrap()
-                            .as_namespace_mut()
-                            .unwrap()
-                            .add_descendant(*descendant);
+                        self.add_descendant(*ancestor_id, *descendant, eager_ancestors);
                     }
                 }
             }

@@ -2487,6 +2487,106 @@ mod singleton_ancestors_tests {
     }
 
     #[test]
+    fn extended_meta_singleton_materializes_descendant_meta_singleton_classes() {
+        use crate::{model::ids::StringId, query::find_member_in_ancestors};
+
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module M
+              def m; end
+            end
+
+            class Foo
+              class << self
+                extend M
+              end
+            end
+
+            class Bar < Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>::<<Bar>>");
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>::<<Bar>>",
+            [
+                "Bar::<Bar>::<<Bar>>",
+                "Foo::<Foo>::<<Foo>>",
+                "M",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+        assert_descendants!(context, "M", ["Foo::<Foo>::<<Foo>>", "Bar::<Bar>::<<Bar>>"]);
+        assert_eq!(
+            find_member_in_ancestors(
+                context.graph(),
+                DeclarationId::from("Bar::<Bar>::<<Bar>>"),
+                StringId::from("m()"),
+                false,
+            ),
+            Ok(DeclarationId::from("M#m()")),
+        );
+    }
+
+    #[test]
+    fn deeply_nested_meta_singleton_materializes_descendants_at_same_depth() {
+        use crate::{model::ids::StringId, query::find_member_in_ancestors};
+
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            module M
+              def m; end
+            end
+
+            class Foo
+              class << self
+                class << self
+                  extend M
+                end
+              end
+            end
+
+            class Bar < Foo
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>::<<Bar>>::<<<Bar>>>");
+        assert_descendants!(
+            context,
+            "M",
+            ["Foo::<Foo>::<<Foo>>::<<<Foo>>>", "Bar::<Bar>::<<Bar>>::<<<Bar>>>"]
+        );
+        assert_eq!(
+            find_member_in_ancestors(
+                context.graph(),
+                DeclarationId::from("Bar::<Bar>::<<Bar>>::<<<Bar>>>"),
+                StringId::from("m()"),
+                false,
+            ),
+            Ok(DeclarationId::from("M#m()")),
+        );
+    }
+
+    #[test]
     fn extend_creates_singleton_class_with_existing_singleton_method() {
         let mut context = graph_test();
         context.index_uri(
