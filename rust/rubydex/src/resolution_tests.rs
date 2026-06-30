@@ -2350,6 +2350,99 @@ mod singleton_ancestors_tests {
     }
 
     #[test]
+    fn extend_inside_singleton_class_materializes_rank_2_singleton() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M; end
+
+            class A
+              class << self
+                extend M
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // `extend M` inside `class << self` extends the singleton of `A::<A>`, i.e. the rank-2
+        // singleton `A::<A>::<<A>>`. It must exist and carry `M` in its ancestors.
+        assert_declaration_exists!(context, "A::<A>::<<A>>");
+
+        assert_ancestors_eq!(
+            context,
+            "A::<A>::<<A>>",
+            [
+                "A::<A>::<<A>>",
+                "M",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn extend_inside_singleton_class_materializes_subclass_rank_2_singleton() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M; end
+
+            class A
+              class << self
+                extend M
+              end
+            end
+
+            class B < A; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // `extend M` inside `A`'s `class << self` produces the rank-2 singleton `A::<A>::<<A>>`.
+        // The subclass `B` must get its own rank-2 singleton `B::<B>::<<B>>`, which inherits the
+        // extended module `M` through `A::<A>::<<A>>`.
+        assert_declaration_exists!(context, "B::<B>::<<B>>");
+
+        assert_ancestors_eq!(
+            context,
+            "B::<B>::<<B>>",
+            [
+                "B::<B>::<<B>>",
+                "A::<A>::<<A>>",
+                "M",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+
+        // `M` is extended into `A::<A>::<<A>>`, so both rank-2 singletons are its descendants.
+        assert_descendants!(context, "M", ["M", "A::<A>::<<A>>", "B::<B>::<<B>>"]);
+    }
+
+    #[test]
     fn singleton_ancestors_for_modules() {
         let mut context = graph_test();
         context.index_uri("file:///foo.rb", {

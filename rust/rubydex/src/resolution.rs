@@ -171,13 +171,17 @@ impl<'a> Resolver<'a> {
         // - `class_parents`: each class paired with its resolved direct superclass. We resolve it here
         //   while the declaration is in hand; Stage 2 translates these edges to singleton ids (which
         //   do not exist until Stage 1 runs) to seed the `children` map.
-        // - `seed_owners_by_rank`: the owners of every source-backed rank-`>= 2` singleton, grouped by
-        //   the rank of that owner. An owner at rank `R` seeds materialization of rank-`(R + 1)`
-        //   singletons for all of its descendants in Stage 2. A rank-`>= 2` singleton is source-backed
-        //   when it has its own definition (a nested `class << self`) or members (e.g. a `def self.x`
-        //   written inside `class << self`). Singletons with neither are pure linearization artifacts:
-        //   linearizing an explicit singleton creates the singletons of its ancestors (e.g.
-        //   `Object::<Object>::<<Object>>`), and seeding on those would descend the whole class tree.
+        // - `seed_owners_by_rank`: the owners of every source-backed singleton, grouped by the rank of
+        //   that owner. An owner at rank `R` seeds materialization of rank-`(R + 1)` singletons for all
+        //   of its descendants in Stage 2. A singleton seeds the rank above it when it is source-backed,
+        //   which happens two ways: (a) the rank-`(R + 1)` singleton itself is explicit — it has its own
+        //   definition (a nested `class << self`) or members (e.g. a `def self.x` written inside
+        //   `class << self`) — so its rank-`R` owner is a seed; or (b) a rank-`R` singleton carries an
+        //   `extend M`, which mixes `M` into its rank-`(R + 1)` singleton, so that rank-`R` singleton is
+        //   itself the seed. A rank-`>= 2` singleton with neither a definition, members, nor an
+        //   incoming extend is a pure linearization artifact: linearizing an explicit singleton creates
+        //   the singletons of its ancestors (e.g. `Object::<Object>::<<Object>>`), and seeding on those
+        //   would descend the whole class tree.
         //
         // The seed set is fixed before this pass: explicit rank-`>= 2` singletons are created
         // organically during resolution, and Stage 1 only adds rank-1 singletons, so it never adds or
@@ -206,6 +210,15 @@ impl<'a> Resolver<'a> {
                             .or_default()
                             .insert(*namespace.owner_id());
                         max_rank = max_rank.max(rank);
+                    }
+                    // An `extend M` written inside this singleton's `class << self` mixes `M` into the
+                    // singleton's own singleton, i.e. the rank-`(rank + 1)` singleton. That singleton
+                    // carries `M` only as an ancestor (mixins are never members), so the checks above
+                    // miss it. Seed from this singleton so the rank-`(rank + 1)` singleton is
+                    // materialized for every subclass too, exactly as for an explicit `class << self`.
+                    if self.has_extend_mixin(namespace.definitions()) {
+                        seed_owners_by_rank.entry(rank).or_default().insert(*declaration_id);
+                        max_rank = max_rank.max(rank + 1);
                     }
                 }
                 _ => {}
@@ -1230,7 +1243,7 @@ impl<'a> Resolver<'a> {
         }
 
         // Ensure that we create the singleton and enqueue it for linearization if we see an extend
-        if has_extends && !is_singleton_class {
+        if has_extends {
             self.get_or_create_singleton_class(declaration_id, false);
         }
 
@@ -2258,6 +2271,16 @@ impl<'a> Resolver<'a> {
             Definition::Module(module) => Some(module.mixins().to_vec()),
             _ => None,
         }
+    }
+
+    /// Whether any of the given definitions carries an `extend` mixin. Used to detect that a
+    /// singleton spawns a higher-rank singleton (the extended module is mixed into it).
+    fn has_extend_mixin(&self, definition_ids: &[DefinitionId]) -> bool {
+        definition_ids
+            .iter()
+            .filter_map(|definition_id| self.mixins_of(*definition_id))
+            .flatten()
+            .any(|mixin| matches!(mixin, Mixin::Extend(_)))
     }
 }
 
