@@ -145,6 +145,8 @@ module Rubydex
         result = case method
         when "initialize"
           {
+            # This is not the latest protocol version. But as of implementation,
+            # this is the default protocol version the official MCP Ruby SDK uses.
             protocolVersion: "2025-03-26",
             capabilities: { tools: {} },
             serverInfo: {
