@@ -8,9 +8,9 @@ module Rubydex
       input_schema(properties: {})
 
       class << self
-        #: (server_state: State) -> Tool::Response
-        def call(server_state:)
-          graph = server_state.graph_or_error
+        #: (server: Server) -> Tool::Response
+        def call(server:)
+          graph = server.graph_or_error
 
           case graph
           when Error

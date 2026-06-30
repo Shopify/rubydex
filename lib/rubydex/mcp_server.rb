@@ -23,9 +23,9 @@ module Rubydex
       Pagination: tools that may return a high number of results include `total` for pagination. When `total` exceeds the number of returned items, use `offset` to fetch the next page.
     TEXT
 
-    class State
-      #: (String) -> void
-      def initialize(root_path)
+    class Server
+      #: (root_path: String) -> void
+      def initialize(root_path:)
         @root_path = root_path
         @mutex = Mutex.new
         @graph = Graph.new(workspace_path: @root_path)
@@ -37,15 +37,13 @@ module Rubydex
       #: -> Thread
       def spawn_indexer
         Thread.new do
-          graph = @graph
-          errors = graph.index_workspace
+          errors = @graph.index_workspace
           errors.each { |error| warn("Indexing error: #{error}") }
-          graph.resolve
-          warn("Rubydex indexed #{graph.documents.count} files, #{graph.declarations.count} declarations")
-
+          @graph.resolve
           @mutex.synchronize do
             @index_finished = true
           end
+          warn("Rubydex indexed #{@graph.documents.count} files, #{@graph.declarations.count} declarations")
         end
       end
 
@@ -67,10 +65,8 @@ module Rubydex
       #: (?String) -> void
       def run(path = ".")
         root = File.realpath(path)
-        state = State.new(root)
-        state.spawn_indexer
-
-        server = Server.new(server_state: state)
+        server = Server.new(root_path: root)
+        server.spawn_indexer
 
         StdioTransport.new(server).open
       end

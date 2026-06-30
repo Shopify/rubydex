@@ -100,11 +100,6 @@ module Rubydex
     end
 
     class Server
-      #: (server_state: State) -> void
-      def initialize(server_state:)
-        @server_state = server_state
-      end
-
       PARSE_ERROR = -32_700
       INVALID_REQUEST = -32_600
       METHOD_NOT_FOUND = -32_601
@@ -194,7 +189,7 @@ module Rubydex
           ).to_h
         end
 
-        response = tool.call(**arguments.transform_keys(&:to_sym), server_state: @server_state)
+        response = tool.call(**arguments.transform_keys(&:to_sym), server: self)
         response.to_h
       end
 

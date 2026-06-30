@@ -17,9 +17,9 @@ module Rubydex
       )
 
       class << self
-        #: (query: String, ?kind: String, ?match_mode: String, ?limit: Integer, ?offset: Integer, server_state: State) -> Tool::Response
-        def call(query:, kind: nil, match_mode: nil, limit: nil, offset: nil, server_state:)
-          graph = server_state.graph_or_error
+        #: (query: String, ?kind: String, ?match_mode: String, ?limit: Integer, ?offset: Integer, server: Server) -> Tool::Response
+        def call(query:, kind: nil, match_mode: nil, limit: nil, offset: nil, server:)
+          graph = server.graph_or_error
 
           case graph
           when Error
@@ -45,7 +45,7 @@ module Rubydex
             end
 
             page, total = MCPServer.paginate(declarations, offset, limit, 100)
-            root_path = server_state.root_path
+            root_path = server.root_path
             results = page.map do |declaration|
               {
                 name: declaration.name,

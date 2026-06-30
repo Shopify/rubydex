@@ -108,16 +108,9 @@ class MCPServerToolsTest < Minitest::Test
   def test_get_file_declarations_decodes_file_uri_paths
     with_context do |context|
       context.write!("my app.rb", "class SpacedFile; end")
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
-      errors = graph.index_all([context.absolute_path])
-      graph.resolve
+      server, errors = indexed_server(context.absolute_path, [context.absolute_path])
 
       assert_empty(errors)
-
-      server_state = Object.new
-      server_state.define_singleton_method(:root_path) { context.absolute_path }
-      server_state.define_singleton_method(:graph_or_error) { graph }
-      server = Rubydex::MCPServer::Server.new(server_state: server_state)
 
       file = call_tool(server, "get_file_declarations", file_path: "my app.rb")
 
@@ -156,19 +149,24 @@ class MCPServerToolsTest < Minitest::Test
   def with_mcp_server
     with_context do |context|
       write_fixture(context)
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
-      errors = graph.index_all([context.absolute_path])
-      graph.resolve
+      server, errors = indexed_server(context.absolute_path, [context.absolute_path])
 
       assert_empty(errors)
 
-      server_state = Object.new
-      server_state.define_singleton_method(:root_path) { context.absolute_path }
-      server_state.define_singleton_method(:graph_or_error) { graph }
-      server = Rubydex::MCPServer::Server.new(server_state: server_state)
-
       yield server
     end
+  end
+
+  def indexed_server(root_path, paths)
+    graph = Rubydex::Graph.new(workspace_path: root_path)
+    errors = graph.index_all(paths)
+    graph.resolve
+
+    server = Rubydex::MCPServer::Server.new(root_path: root_path)
+    server.instance_variable_set(:@graph, graph)
+    server.instance_variable_set(:@index_finished, true)
+
+    [server, errors]
   end
 
   def write_fixture(context)

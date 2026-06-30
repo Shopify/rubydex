@@ -15,9 +15,9 @@ module Rubydex
       )
 
       class << self
-        #: (name: String, ?limit: Integer, ?offset: Integer, server_state: State) -> Tool::Response
-        def call(name:, limit: nil, offset: nil, server_state:)
-          graph = server_state.graph_or_error
+        #: (name: String, ?limit: Integer, ?offset: Integer, server: Server) -> Tool::Response
+        def call(name:, limit: nil, offset: nil, server:)
+          graph = server.graph_or_error
 
           case graph
           when Error

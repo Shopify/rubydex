@@ -13,9 +13,9 @@ module Rubydex
       )
 
       class << self
-        #: (name: String, server_state: State) -> Tool::Response
-        def call(name:, server_state:)
-          graph = server_state.graph_or_error
+        #: (name: String, server: Server) -> Tool::Response
+        def call(name:, server:)
+          graph = server.graph_or_error
 
           case graph
           when Error
@@ -27,7 +27,7 @@ module Rubydex
             when Error
               MCPServer.response(declaration)
             else
-              root_path = server_state.root_path
+              root_path = server.root_path
               definitions = declaration.definitions.map do |definition|
                 MCPServer.display_location(definition.location, root_path).merge(
                   comments: definition.comments.map do |comment|

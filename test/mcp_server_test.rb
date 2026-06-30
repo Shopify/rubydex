@@ -17,11 +17,11 @@ class MCPServerTest < Minitest::Test
     with_context do |context|
       context.write!("app.rb", "class LocalWorkspaceClass; end")
 
-      state = Rubydex::MCPServer::State.new(context.absolute_path)
+      server = Rubydex::MCPServer::Server.new(root_path: context.absolute_path)
       capture_io do
-        state.spawn_indexer.join
+        server.spawn_indexer.join
       end
-      graph = state.graph_or_error
+      graph = server.graph_or_error
 
       assert_kind_of(Rubydex::Graph, graph)
       assert_equal("LocalWorkspaceClass", graph["LocalWorkspaceClass"].name)
@@ -43,8 +43,7 @@ class MCPServerTest < Minitest::Test
   end
 
   def test_codebase_stats_reports_indexing_until_graph_is_ready
-    state = Rubydex::MCPServer::State.new(Dir.pwd)
-    server = Rubydex::MCPServer::Server.new(server_state: state)
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
     send_request = {
       jsonrpc: "2.0",
@@ -67,8 +66,7 @@ class MCPServerTest < Minitest::Test
   end
 
   def test_ping_returns_empty_result
-    state = Rubydex::MCPServer::State.new(Dir.pwd)
-    server = Rubydex::MCPServer::Server.new(server_state: state)
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
     response = server.handle(
       {
@@ -82,8 +80,7 @@ class MCPServerTest < Minitest::Test
   end
 
   def test_unknown_method_returns_json_rpc_method_error
-    state = Rubydex::MCPServer::State.new(Dir.pwd)
-    server = Rubydex::MCPServer::Server.new(server_state: state)
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
     response = server.handle(
       {
@@ -100,8 +97,7 @@ class MCPServerTest < Minitest::Test
   end
 
   def test_invalid_json_rpc_request_returns_invalid_request
-    state = Rubydex::MCPServer::State.new(Dir.pwd)
-    server = Rubydex::MCPServer::Server.new(server_state: state)
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
     response = server.handle(
       {
@@ -118,8 +114,7 @@ class MCPServerTest < Minitest::Test
   end
 
   def test_explicit_null_id_returns_invalid_request
-    state = Rubydex::MCPServer::State.new(Dir.pwd)
-    server = Rubydex::MCPServer::Server.new(server_state: state)
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
     response = server.handle(
       {
@@ -137,8 +132,7 @@ class MCPServerTest < Minitest::Test
   end
 
   def test_batch_request_always_returns_array
-    state = Rubydex::MCPServer::State.new(Dir.pwd)
-    server = Rubydex::MCPServer::Server.new(server_state: state)
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
     response = server.handle(
       [
@@ -158,8 +152,7 @@ class MCPServerTest < Minitest::Test
   end
 
   def test_missing_required_tool_argument_returns_tool_error
-    state = Rubydex::MCPServer::State.new(Dir.pwd)
-    server = Rubydex::MCPServer::Server.new(server_state: state)
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
     response = server.handle(
       {
@@ -249,11 +242,7 @@ class MCPServerIntegrationTest < Minitest::Test
         puts Rubydex::VERSION
         puts Rubydex::Graph.name
 
-        state = Object.new
-        state.define_singleton_method(:root_path) { Dir.pwd }
-        state.define_singleton_method(:graph_or_error) { Rubydex::MCPServer::Error.new("indexing") }
-
-        response = Rubydex::MCPServer::Server.new(server_state: state).handle(
+        response = Rubydex::MCPServer::Server.new(root_path: Dir.pwd).handle(
           jsonrpc: "2.0",
           id: 1,
           method: "initialize",

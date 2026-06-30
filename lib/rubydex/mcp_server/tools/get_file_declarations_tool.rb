@@ -13,15 +13,15 @@ module Rubydex
       )
 
       class << self
-        #: (file_path: String, server_state: State) -> Tool::Response
-        def call(file_path:, server_state:)
-          graph = server_state.graph_or_error
+        #: (file_path: String, server: Server) -> Tool::Response
+        def call(file_path:, server:)
+          graph = server.graph_or_error
 
           case graph
           when Error
             MCPServer.response(graph)
           else
-            root_path = server_state.root_path
+            root_path = server.root_path
             absolute_target = if Pathname.new(file_path).absolute?
               file_path
             else
