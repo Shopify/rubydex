@@ -2206,6 +2206,150 @@ mod singleton_ancestors_tests {
     }
 
     #[test]
+    fn materializes_rank1_singletons_for_all_namespaces() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo; end
+            class Bar < Foo; end
+            module Baz; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // Rank-1 singletons exist even without self-methods, extends, or `class << self`.
+        assert_declaration_exists!(context, "Foo::<Foo>");
+        assert_declaration_exists!(context, "Bar::<Bar>");
+        assert_declaration_exists!(context, "Baz::<Baz>");
+        // Built-in classes are materialized too.
+        assert_declaration_exists!(context, "Object::<Object>");
+
+        // The singleton ancestor chain reflects the class hierarchy (#Bar < #Foo).
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>",
+            [
+                "Bar::<Bar>",
+                "Foo::<Foo>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+
+        // Descendants are the inverse of the singleton ancestor chains and are reflexive.
+        assert_descendants!(context, "Foo::<Foo>", ["Foo::<Foo>", "Bar::<Bar>"]);
+        assert_descendants!(context, "Object::<Object>", ["Foo::<Foo>", "Bar::<Bar>"]);
+    }
+
+    #[test]
+    fn materializes_rank_n_singletons_for_descendants_of_existing_singletons() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class A
+              class << self
+                class << self
+                end
+              end
+            end
+
+            class B < A; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // The nested `class << self` materializes a rank-2 singleton for `A`.
+        assert_declaration_exists!(context, "A::<A>::<<A>>");
+
+        // `B` has no rank-2 trigger of its own, but because it is a descendant of `A`, its rank-2
+        // singleton must be materialized so the rank-2 hierarchy under `A::<A>::<<A>>` is complete.
+        assert_declaration_exists!(context, "B::<B>::<<B>>");
+
+        // The rank-2 ancestor chain follows the superclass chain of the rank-1 singletons.
+        assert_ancestors_eq!(
+            context,
+            "B::<B>::<<B>>",
+            [
+                "B::<B>::<<B>>",
+                "A::<A>::<<A>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+
+        // Descendants are the inverse of the rank-2 ancestor chains and are reflexive.
+        assert_descendants!(context, "A::<A>::<<A>>", ["A::<A>::<<A>>", "B::<B>::<<B>>"]);
+    }
+
+    #[test]
+    fn materializes_rank_n_singletons_when_explicit_singleton_only_has_members() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class A
+              class << self
+                # `def self.bar` inside `class << self` attaches `bar` to the rank-2 singleton,
+                # creating `A::<A>::<<A>>` on demand. It has no definition of its own, only a member.
+                def self.bar; end
+              end
+            end
+
+            class B < A; end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // The rank-2 singleton exists because of `def self.bar`, even without a nested `class << self`.
+        assert_declaration_exists!(context, "A::<A>::<<A>>");
+        assert_declaration_exists!(context, "A::<A>::<<A>>#bar()");
+
+        // A member-only rank-2 singleton must still seed materialization for descendants.
+        assert_declaration_exists!(context, "B::<B>::<<B>>");
+
+        assert_ancestors_eq!(
+            context,
+            "B::<B>::<<B>>",
+            [
+                "B::<B>::<<B>>",
+                "A::<A>::<<A>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+
+        assert_descendants!(context, "A::<A>::<<A>>", ["A::<A>::<<A>>", "B::<B>::<<B>>"]);
+    }
+
+    #[test]
     fn singleton_ancestors_for_modules() {
         let mut context = graph_test();
         context.index_uri("file:///foo.rb", {
