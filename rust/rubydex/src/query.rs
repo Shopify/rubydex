@@ -914,7 +914,8 @@ mod tests {
             "
         });
         context.resolve();
-        assert_results_eq!(context, "Fo", ["Foo"]);
+        // `Foo::<Foo>` is materialized for every class, so the fuzzy query matches the singleton too.
+        assert_results_eq!(context, "Fo", ["Foo::<Foo>", "Foo"]);
     }
 
     #[test]
