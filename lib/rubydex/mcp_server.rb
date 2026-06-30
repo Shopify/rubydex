@@ -6,63 +6,22 @@ require "uri"
 
 require "rubydex"
 require "rubydex/mcp_server/protocol"
-require "rubydex/mcp_server/tools/codebase_stats_tool"
-require "rubydex/mcp_server/tools/find_constant_references_tool"
-require "rubydex/mcp_server/tools/get_declaration_tool"
-require "rubydex/mcp_server/tools/get_descendants_tool"
-require "rubydex/mcp_server/tools/get_file_declarations_tool"
-require "rubydex/mcp_server/tools/search_declarations_tool"
+
+Dir[File.join(__dir__, "mcp_server", "tools", "*_tool.rb")].sort.each { |file| require file }
 
 module Rubydex
   module MCPServer
     SERVER_INSTRUCTIONS = <<~TEXT
       Rubydex provides semantic Ruby code intelligence.
 
-      ONLY use these tools for Ruby files (.rb, .rbi, .rbs) -- never for Rust, JavaScript, or other languages.
+      Use these tools for Ruby source files (.rb, .rbi, .rbs) when you need structural information about declarations, locations, hierarchy, references, or codebase composition.
 
-      Use these tools INSTEAD OF Grep when working with Ruby code structure.
-
-      Decision guide:
-      - Know a name? -> search_declarations (fuzzy search by name)
-      - Have an exact fully qualified name? -> get_declaration (full details with docs, ancestors, members)
-      - Need reverse hierarchy? -> get_descendants (what inherits from this class/module)
-      - Refactoring a class/module/constant? -> find_constant_references (all precise usages across codebase)
-      - Exploring a file? -> get_file_declarations (structural overview)
-      - Want general statistics? -> codebase_stats (size and composition)
-
-      Typical workflow: search_declarations -> get_declaration -> find_constant_references.
+      Use text search instead for literal strings, comments, log messages, non-Ruby files, or content search rather than structural queries.
 
       Fully qualified name format: "Foo::Bar" for classes/modules/constants, "Foo::Bar#method_name" for instance methods.
 
       Pagination: tools that may return a high number of results include `total` for pagination. When `total` exceeds the number of returned items, use `offset` to fetch the next page.
-
-      Use Grep instead for: literal string search, log messages, comments, non-Ruby files, or content search rather than structural queries.
     TEXT
-    TOOLS = [
-      SearchDeclarationsTool,
-      GetDeclarationTool,
-      GetDescendantsTool,
-      FindConstantReferencesTool,
-      GetFileDeclarationsTool,
-      CodebaseStatsTool,
-    ].freeze
-
-    class Error
-      #: (String, ?String, ?String) -> void
-      def initialize(error, message = nil, suggestion = nil)
-        @error = error
-        @message = message
-        @suggestion = suggestion
-      end
-
-      #: (*untyped) -> String
-      def to_json(*args)
-        payload = { error: @error }
-        payload[:message] = @message if @message
-        payload[:suggestion] = @suggestion if @suggestion
-        payload.to_json(*args)
-      end
-    end
 
     class State
       #: (String) -> void

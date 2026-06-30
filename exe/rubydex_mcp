@@ -13,7 +13,7 @@ option_parser = OptionParser.new do |parser|
 
   parser.separator("")
   parser.separator("Arguments:")
-  parser.separator("    [PATH]  [default: .]")
+  parser.separator("    [PATH]  [default: current directory]")
   parser.separator("")
   parser.separator("Options:")
 
@@ -29,7 +29,7 @@ option_parser = OptionParser.new do |parser|
 end
 
 begin
-  option_parser.parse!(ARGV)
+  arguments = option_parser.parse(ARGV)
 rescue OptionParser::ParseError => e
   warn("error: #{e.message}")
   warn
@@ -37,14 +37,14 @@ rescue OptionParser::ParseError => e
   exit(2)
 end
 
-if ARGV.length > 1
-  warn("error: unexpected argument '#{ARGV[1]}' found")
+if arguments.length > 1
+  warn("error: unexpected argument '#{arguments[1]}' found")
   warn
   warn(option_parser)
   exit(2)
 end
 
-path = ARGV.fetch(0, ".")
+path = arguments.fetch(0, Dir.pwd)
 
 require "rubydex"
 require "rubydex/mcp_server"

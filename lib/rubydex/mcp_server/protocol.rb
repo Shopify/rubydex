@@ -4,7 +4,27 @@ require "json"
 
 module Rubydex
   module MCPServer
+    class Error
+      #: (String, ?String, ?String) -> void
+      def initialize(error, message = nil, suggestion = nil)
+        @error = error
+        @message = message
+        @suggestion = suggestion
+      end
+
+      #: (*untyped) -> String
+      def to_json(*args)
+        payload = { error: @error }
+        payload[:message] = @message if @message
+        payload[:suggestion] = @suggestion if @suggestion
+        payload.to_json(*args)
+      end
+    end
+
     class Tool
+      UNSET = Object.new.freeze
+      @tools = []
+
       class Response
         #: (Array[Hash], ?bool) -> void
         def initialize(content, error: false)
@@ -29,14 +49,30 @@ module Rubydex
       end
 
       class << self
-        #: (String) -> String
-        def tool_name(value)
-          @tool_name = value
+        attr_reader :tools
+
+        #: (Class) -> void
+        def inherited(tool)
+          tools << tool
+          @tools_by_name = nil
+          super
         end
 
-        #: (String) -> String
-        def description(value)
-          @description = value
+        #: -> Hash[String, Class]
+        def tools_by_name
+          @tools_by_name ||= tools.to_h { |tool| [tool.tool_name, tool] }
+        end
+
+        #: (?String) -> String
+        def tool_name(value = UNSET)
+          @tool_name = value unless value.equal?(UNSET)
+          @tool_name || raise(NotImplementedError, "#{name} must define tool_name")
+        end
+
+        #: (?String) -> String
+        def description(value = UNSET)
+          @description = value unless value.equal?(UNSET)
+          @description || raise(NotImplementedError, "#{name} must define description")
         end
 
         #: (?Hash, ?Array[String]) -> Hash
@@ -55,8 +91,8 @@ module Rubydex
         #: -> Hash
         def to_h
           {
-            name: @tool_name,
-            description: @description,
+            name: tool_name,
+            description: description,
             inputSchema: input_schema,
           }
         end
@@ -90,12 +126,12 @@ module Rubydex
           return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "Request must be a hash")
         end
 
-        has_id = request.key?(:id) || request.key?("id")
-        id = request.key?(:id) ? request[:id] : request["id"]
-        method = request[:method] || request["method"]
-        params = request.key?(:params) ? request[:params] : request["params"]
+        has_id = request.key?(:id)
+        id = request[:id]
+        method = request[:method]
+        params = request[:params]
 
-        unless request[:jsonrpc] == "2.0" || request["jsonrpc"] == "2.0"
+        unless request[:jsonrpc] == "2.0"
           return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "JSON-RPC version must be 2.0")
         end
 
@@ -123,7 +159,7 @@ module Rubydex
             instructions: SERVER_INSTRUCTIONS,
           }
         when "tools/list"
-          { tools: TOOLS.map(&:to_h) }
+          { tools: Tool.tools.map(&:to_h) }
         when "tools/call"
           call_tool(params || {})
         when "ping"
@@ -145,11 +181,11 @@ module Rubydex
 
       #: (Hash) -> Hash
       def call_tool(params)
-        tool_name = params[:name] || params["name"]
-        tool = TOOLS.find { |candidate| candidate.to_h.fetch(:name) == tool_name }
+        tool_name = params.fetch(:name)
+        tool = Tool.tools_by_name.fetch(tool_name, nil)
         raise KeyError, "Tool not found: #{tool_name}" unless tool
 
-        arguments = params[:arguments] || params["arguments"] || {}
+        arguments = params[:arguments] || {}
         missing_arguments = Array(tool.input_schema[:required]) - arguments.keys.map(&:to_s)
         unless missing_arguments.empty?
           return Tool::Response.new(
@@ -187,7 +223,7 @@ module Rubydex
       #: -> void
       def open
         @input.each_line do |line|
-          response = @server.handle(JSON.parse(line))
+          response = @server.handle(JSON.parse(line, symbolize_names: true))
           next unless response
 
           @output.puts(JSON.generate(response))
