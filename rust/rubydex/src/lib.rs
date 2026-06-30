@@ -1,3 +1,9 @@
+// Setting the global allocator needs to happen during linking and consumers may not always want to change the global
+// allocator. We gate the usage of jemalloc with a cargo feature, so that consumers can decide if they want to use it
+#[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 pub mod compile_assertions;
 pub mod config;
 pub mod diagnostic;

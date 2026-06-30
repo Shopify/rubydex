@@ -1,6 +1,4 @@
-//! Jemalloc does not compile on Windows, so this memory benchmark executable is a no-op
-
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
 mod imp {
     use std::collections::HashSet;
 
@@ -11,10 +9,6 @@ mod imp {
         resolution::Resolver,
     };
     use tikv_jemalloc_ctl::{epoch, stats};
-
-    // Substitute the global allocator by jemalloc, so that we can track all allocations and measure the graph usage
-    #[global_allocator]
-    static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
     /// Advance the jemalloc epoch (stats are cached between epochs) and read the
     /// number of bytes currently allocated by the application.
@@ -47,6 +41,6 @@ mod imp {
 }
 
 fn main() {
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
     imp::run();
 }

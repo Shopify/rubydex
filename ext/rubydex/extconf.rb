@@ -78,7 +78,7 @@ cargo_command = if ENV["SANITIZER"]
   ENV["RUSTFLAGS"] = "-Zsanitizer=#{ENV["SANITIZER"]}"
   "cargo +nightly build -Zbuild-std #{cargo_args.join(" ")}".strip
 else
-  "cargo build #{cargo_args.join(" ")}".strip
+  "cargo build --features rubydex/jemalloc_dylib #{cargo_args.join(" ")}".strip
 end
 
 lib_dir = gem_dir.join("lib").join("rubydex")
