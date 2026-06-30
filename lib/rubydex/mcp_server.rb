@@ -30,7 +30,6 @@ module Rubydex
         @mutex = Mutex.new
         @graph = Graph.new(workspace_path: @root_path)
         @index_finished = false
-        @error = nil
       end
 
       attr_reader :root_path
@@ -47,25 +46,12 @@ module Rubydex
           @mutex.synchronize do
             @index_finished = true
           end
-        rescue Exception => e # rubocop:disable Lint/RescueException
-          warn("Rubydex indexing failed: #{e.message}")
-          @mutex.synchronize do
-            @error = e.message
-          end
         end
       end
 
       #: -> Graph | Error
       def graph_or_error
         @mutex.synchronize do
-          if @error
-            return Error.new(
-              "indexing_failed",
-              "Rubydex indexing failed: #{@error}",
-              "Check server logs for details. The MCP server needs to be restarted.",
-            )
-          end
-
           return @graph if @index_finished
         end
 
@@ -108,12 +94,7 @@ module Rubydex
 
         absolute_path = File.expand_path(path)
         absolute_root = File.expand_path(root_path)
-        relative_path = begin
-          Pathname.new(absolute_path).relative_path_from(Pathname.new(absolute_root)).to_s
-        rescue ArgumentError
-          nil
-        end
-        return absolute_path unless relative_path
+        relative_path = Pathname.new(absolute_path).relative_path_from(Pathname.new(absolute_root)).to_s
 
         relative_path.start_with?("..") ? absolute_path : relative_path
       end
@@ -146,12 +127,6 @@ module Rubydex
         graph.documents.find do |document|
           path = file_path_for_uri(document.uri)
           path && File.expand_path(path) == canonical_target
-        end
-      rescue SystemCallError
-        absolute_target = File.expand_path(absolute_target)
-        graph.documents.find do |document|
-          path = file_path_for_uri(document.uri)
-          path && File.expand_path(path) == absolute_target
         end
       end
 

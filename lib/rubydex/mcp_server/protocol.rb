@@ -218,6 +218,9 @@ module Rubydex
         @server = server
         @input = input
         @output = output
+        @input.binmode
+        @output.binmode
+        @output.sync = true
       end
 
       #: -> void
