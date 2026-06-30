@@ -196,13 +196,10 @@ fn format_ancestors(graph: &Graph, ancestors: &Ancestors) -> Vec<serde_json::Val
                     "kind": ancestor_decl.kind(),
                 }))
             }
-            Ancestor::Partial(name_id) => {
-                let name_ref = graph.names().get(name_id)?;
-                Some(serde_json::json!({
-                    "name": format!("{name_ref:?}"),
-                    "kind": "Unresolved",
-                }))
-            }
+            Ancestor::Partial(name_id) => Some(serde_json::json!({
+                "name": graph.build_concatenated_name_from_name(*name_id),
+                "kind": "Unresolved",
+            })),
         })
         .collect()
 }
@@ -847,6 +844,22 @@ mod tests {
             ",
         );
         assert_includes!(get_declaration(&s, "Person"), "ancestors", "Greetable");
+    }
+
+    #[test]
+    fn get_declaration_unresolved_ancestor_renders_qualified_name() {
+        // A superclass defined outside the indexed workspace (e.g. a gem) stays an
+        // unresolved ancestor. Its name must still serialize as a readable constant
+        // path, not the internal `Name` debug representation.
+        let s = server_with_source("class Dog < ActiveRecord::Base; end");
+        let res = get_declaration(&s, "Dog");
+
+        let unresolved = array!(res, "ancestors")
+            .iter()
+            .find(|a| a["kind"].as_str() == Some("Unresolved"))
+            .expect("expected an Unresolved ancestor");
+        let name = unresolved["name"].as_str().expect("expected 'name' to be a string");
+        assert_eq!(name, "ActiveRecord::Base");
     }
 
     #[test]
