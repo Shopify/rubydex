@@ -49,6 +49,11 @@ pub fn declaration_search(graph: &Graph, query: &str, match_mode: &MatchMode) ->
                         .iter()
                         .filter(|id| {
                             let declaration = declarations.get(id).unwrap();
+                            // Singleton classes (e.g. `Foo::<Foo>`) are an internal representation,
+                            // not user-facing symbols, so they are never returned from search.
+                            if matches!(declaration, Declaration::Namespace(Namespace::SingletonClass(_))) {
+                                return false;
+                            }
                             let name = declaration.name();
                             match match_mode {
                                 MatchMode::Fuzzy => {
@@ -914,8 +919,32 @@ mod tests {
             "
         });
         context.resolve();
-        // `Foo::<Foo>` is materialized for every class, so the fuzzy query matches the singleton too.
-        assert_results_eq!(context, "Fo", ["Foo::<Foo>", "Foo"]);
+        assert_results_eq!(context, "Fo", ["Foo"]);
+    }
+
+    #[test]
+    fn search_excludes_singleton_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+            "
+        });
+        context.resolve();
+
+        // A rank-1 singleton is materialized for every class...
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Foo::<Foo>")),
+            "expected `Foo::<Foo>` to be materialized"
+        );
+        // ...but it is internal and must not surface in search results, even when the query
+        // matches the singleton's name directly.
+        assert_results_eq!(context, "<Foo>", &MatchMode::Exact, Vec::<&str>::new());
+        assert_results_eq!(context, "Foo", ["Foo"]);
     }
 
     #[test]
@@ -949,8 +978,17 @@ mod tests {
         let exact_results = declaration_search(context.graph(), "", &MatchMode::Exact);
         let fuzzy_results = declaration_search(context.graph(), "", &MatchMode::Fuzzy);
 
+        // An empty query returns every searchable declaration. Materialized singleton classes are
+        // excluded from search, so the expected count is all declarations minus the singletons.
+        let searchable = context
+            .graph()
+            .declarations()
+            .values()
+            .filter(|d| !matches!(d, Declaration::Namespace(Namespace::SingletonClass(_))))
+            .count();
+
         assert_eq!(exact_results.len(), fuzzy_results.len());
-        assert_eq!(context.graph().declarations().len(), exact_results.len());
+        assert_eq!(searchable, exact_results.len());
     }
 
     #[test]
