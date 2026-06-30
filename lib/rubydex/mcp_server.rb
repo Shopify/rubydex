@@ -28,7 +28,8 @@ module Rubydex
       def initialize(root_path)
         @root_path = root_path
         @mutex = Mutex.new
-        @graph = nil
+        @graph = Graph.new(workspace_path: @root_path)
+        @index_finished = false
         @error = nil
       end
 
@@ -37,14 +38,14 @@ module Rubydex
       #: -> Thread
       def spawn_indexer
         Thread.new do
-          graph = Graph.new(workspace_path: @root_path)
+          graph = @graph
           errors = graph.index_workspace
           errors.each { |error| warn("Indexing error: #{error}") }
           graph.resolve
           warn("Rubydex indexed #{graph.documents.count} files, #{graph.declarations.count} declarations")
 
           @mutex.synchronize do
-            @graph = graph
+            @index_finished = true
           end
         rescue Exception => e # rubocop:disable Lint/RescueException
           warn("Rubydex indexing failed: #{e.message}")
@@ -65,7 +66,7 @@ module Rubydex
             )
           end
 
-          return @graph if @graph
+          return @graph if @index_finished
         end
 
         Error.new(
