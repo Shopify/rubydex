@@ -128,7 +128,9 @@ fn prints_index_metrics() {
             .success()
             .stderr(predicate::str::is_empty())
             .stdout(predicate::str::contains("Indexed 3 files"))
-            .stdout(predicate::str::contains("Found 7 names"))
+            // 7 declarations (FirstClass, SecondModule, and 5 built-ins) plus a materialized
+            // rank-1 singleton class for each of them. Definitions do not include singletons.
+            .stdout(predicate::str::contains("Found 14 names"))
             .stdout(predicate::str::contains("Found 7 definitions"));
     });
 }

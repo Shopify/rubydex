@@ -1119,12 +1119,15 @@ mod tests {
         let res = parse(&s.codebase_stats());
 
         assert_eq!(res["files"], 3);
-        assert_json_int!(res, "declarations", 7);
+        // 7 declarations (Animal, Greetable, and 5 built-ins) plus a materialized rank-1 singleton
+        // class for each of them. Definitions do not include singletons.
+        assert_json_int!(res, "declarations", 14);
         assert_json_int!(res, "definitions", 7);
 
         let breakdown = &res["breakdown_by_kind"];
         assert_json_int!(breakdown, "Class", 5);
         assert_json_int!(breakdown, "Module", 2);
+        assert_json_int!(breakdown, "SingletonClass", 7);
     }
 
     // -- error states --

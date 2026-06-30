@@ -145,9 +145,44 @@ impl<'a> Resolver<'a> {
 
         self.handle_remaining_definitions(other_ids);
 
+        // Materialize a rank-1 singleton class for every class/module declaration. This runs after
+        // every site that creates singletons organically (the convergence loop and
+        // `handle_remaining_definitions`), so future rank-N passes — which only build singletons for
+        // already-materialized ones — can be appended here and still observe the complete set.
+        self.materialize_singleton_classes();
+
         // Descendants are derived from the finalized ancestor chains, so they must be updated after
         // all linearization has settled.
         self.update_descendants();
+    }
+
+    /// Materializes a rank-1 singleton class for every class and module declaration.
+    ///
+    /// During the convergence loop and [`Self::handle_remaining_definitions`], singleton classes are
+    /// only created on demand: when a self-method, an `extend`, a `class << self`, or a class-level
+    /// instance variable forces one into existence. Many class and module objects therefore never
+    /// get a singleton even though every Ruby object has one. This pass fills the gaps so the
+    /// singleton hierarchy is complete: for class `Foo` it ensures `Foo::<Foo>` exists. Ancestors are
+    /// linearized eagerly because the convergence queue is already drained at this point.
+    ///
+    /// Singleton classes themselves (rank >= 2) are intentionally skipped here; a later rank-N pass
+    /// builds those on top of the singletons materialized here.
+    fn materialize_singleton_classes(&mut self) {
+        // Collect the target ids first: `get_or_create_singleton_class` borrows the graph mutably.
+        let mut attached_ids: Vec<DeclarationId> = Vec::new();
+        for (declaration_id, declaration) in self.graph.declarations() {
+            if matches!(
+                declaration,
+                Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_))
+            ) {
+                attached_ids.push(*declaration_id);
+            }
+        }
+
+        for attached_id in attached_ids {
+            // Idempotent: returns the existing singleton when one was already created on demand.
+            let _ = self.get_or_create_singleton_class(attached_id, true);
+        }
     }
 
     /// Updates the `descendants` relation to match the finalized ancestor chains.
