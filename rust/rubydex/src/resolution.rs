@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque, hash_map::Entry};
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::{
@@ -140,33 +140,167 @@ impl<'a> Resolver<'a> {
         self.compute_descendants();
     }
 
-    /// Materializes a rank-1 singleton class for every class and module declaration.
+    /// Materializes the singleton class hierarchy so that it is complete after resolution.
     ///
     /// During the convergence loop and [`Self::handle_remaining_definitions`], singleton classes are
     /// only created on demand: when a self-method, an `extend`, a `class << self`, or a class-level
     /// instance variable forces one into existence. Many class and module objects therefore never
-    /// get a singleton even though every Ruby object has one. This pass fills the gaps so the
-    /// singleton hierarchy is complete: for class `Foo` it ensures `Foo::<Foo>` exists. Ancestors are
+    /// get a singleton even though every Ruby object has one. This pass fills the gaps. Ancestors are
     /// linearized eagerly because the convergence queue is already drained at this point.
     ///
-    /// Singleton classes themselves (rank >= 2) are intentionally skipped here; a later rank-N pass
-    /// builds those on top of the singletons materialized here.
+    /// The pass runs in two stages:
+    ///
+    /// 1. **rank-1**: ensure `Foo::<Foo>` exists for every class and module `Foo`.
+    /// 2. **rank-N**: climb the singleton ranks. A nested `class << self` produces an explicit
+    ///    rank-`N` singleton (e.g. `Foo::<Foo>::<<Foo>>`). When that happens, every subclass of
+    ///    `Foo` must also gain a rank-`N` singleton so the hierarchy stays complete. We materialize
+    ///    only the ranks reachable from an explicit (source-backed) singleton, descending the class
+    ///    inheritance tree from it — materializing *all* ranks for *all* classes would never
+    ///    terminate.
+    ///
+    /// The rank-`N` stage relies on the invariant that an explicit rank-`N` singleton always has an
+    /// existing rank-`(N-1)` owner (no gaps): every path that creates a singleton takes the rank
+    /// `(N-1)` declaration as input, and a nested `class << self` is indexed level by level, so each
+    /// intermediate rank is itself a definition.
     fn materialize_singleton_classes(&mut self) {
-        // Collect the target ids first: `get_or_create_singleton_class` borrows the graph mutably.
+        // Scan all declarations once to collect every input both stages need:
+        //
+        // - `attached_ids`: every class and module, for which Stage 1 materializes a rank-1
+        //   singleton. Ids are collected up front because `get_or_create_singleton_class` borrows the
+        //   graph mutably.
+        // - `class_parents`: each class paired with its resolved direct superclass. We resolve it here
+        //   while the declaration is in hand; Stage 2 translates these edges to singleton ids (which
+        //   do not exist until Stage 1 runs) to seed the `children` map.
+        // - `seed_owners_by_rank`: the owners of every source-backed rank-`>= 2` singleton, grouped by
+        //   the rank of that owner. An owner at rank `R` seeds materialization of rank-`(R + 1)`
+        //   singletons for all of its descendants in Stage 2. A rank-`>= 2` singleton is source-backed
+        //   when it has its own definition (a nested `class << self`) or members (e.g. a `def self.x`
+        //   written inside `class << self`). Singletons with neither are pure linearization artifacts:
+        //   linearizing an explicit singleton creates the singletons of its ancestors (e.g.
+        //   `Object::<Object>::<<Object>>`), and seeding on those would descend the whole class tree.
+        //
+        // The seed set is fixed before this pass: explicit rank-`>= 2` singletons are created
+        // organically during resolution, and Stage 1 only adds rank-1 singletons, so it never adds or
+        // removes a seed. That is why everything can be collected in this single scan.
         let mut attached_ids: Vec<DeclarationId> = Vec::new();
+        let mut class_parents: Vec<(DeclarationId, DeclarationId)> = Vec::new();
+        let mut seed_owners_by_rank: HashMap<usize, IdentityHashSet<DeclarationId>> = HashMap::new();
+        let mut max_rank = 1;
         for (declaration_id, declaration) in self.graph.declarations() {
-            if matches!(
-                declaration,
-                Declaration::Namespace(Namespace::Class(_) | Namespace::Module(_))
-            ) {
-                attached_ids.push(*declaration_id);
+            match declaration.as_namespace() {
+                Some(Namespace::Module(_)) => attached_ids.push(*declaration_id),
+                Some(namespace @ Namespace::Class(_)) => {
+                    attached_ids.push(*declaration_id);
+                    // Only classes participate in the inheritance tree Stage 2 descends; a module's
+                    // singleton parent is always `Module`, and modules cannot be subclassed.
+                    let (parent_class, _) = self.get_parent_class(namespace.definitions());
+                    class_parents.push((*declaration_id, parent_class));
+                }
+                Some(namespace @ Namespace::SingletonClass(_))
+                    if !namespace.definitions().is_empty() || !namespace.members().is_empty() =>
+                {
+                    let rank = self.singleton_rank(*declaration_id);
+                    if rank >= 2 {
+                        seed_owners_by_rank
+                            .entry(rank - 1)
+                            .or_default()
+                            .insert(*namespace.owner_id());
+                        max_rank = max_rank.max(rank);
+                    }
+                }
+                _ => {}
             }
         }
 
-        for attached_id in attached_ids {
+        // --- Stage 1: rank-1 singleton for every class and module ---
+        for attached_id in &attached_ids {
             // Idempotent: returns the existing singleton when one was already created on demand.
-            let _ = self.get_or_create_singleton_class(attached_id, true);
+            let _ = self.get_or_create_singleton_class(*attached_id, true);
         }
+
+        // --- Stage 2: rank-N singletons for descendants of explicit singletons ---
+        //
+        // `children` maps a singleton to the singletons of the *direct* subclasses of its attached
+        // object: for `class B < A`, `A::<A>`'s children contain `B::<B>`. It starts as the rank-1
+        // layer (translating the `class_parents` edges collected above, now that Stage 1 has
+        // materialized every rank-1 singleton) and grows one rank at a time as we climb: building
+        // `B::<B>::<<B>>` records it as a child of `A::<A>::<<A>>` for the next iteration. This is a
+        // local map; the global `descendants` relation is recomputed later by
+        // [`Self::compute_descendants`].
+        let mut children: IdentityHashMap<DeclarationId, IdentityHashSet<DeclarationId>> = IdentityHashMap::default();
+        for (child_class, parent_class) in &class_parents {
+            if let (Some(child_singleton), Some(parent_singleton)) =
+                (self.singleton_id_of(*child_class), self.singleton_id_of(*parent_class))
+            {
+                children.entry(parent_singleton).or_default().insert(child_singleton);
+            }
+        }
+
+        // Climb the ranks: at rank `R`, descend the class inheritance tree from each seed owner,
+        // materializing the rank-`(R + 1)` singleton of every node reached, and record the new
+        // rank-`(R + 1)` edges so the next iteration can descend them. Ranks are contiguous (an
+        // explicit rank-`(R + 1)` singleton implies an explicit rank-`R` owner), so every rank in
+        // `1..max_rank` has seeds.
+        for rank in 1..max_rank {
+            let Some(seed_owners) = seed_owners_by_rank.get(&rank) else {
+                continue;
+            };
+
+            let mut stack: Vec<DeclarationId> = seed_owners.iter().copied().collect();
+            let mut visited: IdentityHashSet<DeclarationId> = IdentityHashSet::default();
+            let mut next_edges: Vec<(DeclarationId, DeclarationId)> = Vec::new();
+
+            while let Some(parent) = stack.pop() {
+                if !visited.insert(parent) {
+                    continue;
+                }
+
+                let Some(parent_next) = self.get_or_create_singleton_class(parent, true) else {
+                    continue;
+                };
+
+                let Some(child_singletons) = children.get(&parent).map(|set| set.iter().copied().collect::<Vec<_>>())
+                else {
+                    continue;
+                };
+
+                for child in child_singletons {
+                    if let Some(child_next) = self.get_or_create_singleton_class(child, true) {
+                        next_edges.push((parent_next, child_next));
+                    }
+                    stack.push(child);
+                }
+            }
+
+            for (parent_next, child_next) in next_edges {
+                children.entry(parent_next).or_default().insert(child_next);
+            }
+        }
+    }
+
+    /// Returns the rank of a singleton class: how many singleton wrappers separate it from its
+    /// non-singleton attached object. A class declaration has rank `0`, `Foo::<Foo>` has rank `1`,
+    /// `Foo::<Foo>::<<Foo>>` has rank `2`, and so on. Computed by walking the owner chain so it does
+    /// not depend on how the name is spelled.
+    fn singleton_rank(&self, mut id: DeclarationId) -> usize {
+        let mut rank = 0;
+        while let Some(declaration) = self.graph.declarations().get(&id) {
+            let Some(namespace @ Namespace::SingletonClass(_)) = declaration.as_namespace() else {
+                break;
+            };
+            rank += 1;
+            id = *namespace.owner_id();
+        }
+        rank
+    }
+
+    /// Returns the id of the singleton class of the given declaration, if one has been materialized.
+    fn singleton_id_of(&self, attached_id: DeclarationId) -> Option<DeclarationId> {
+        self.graph
+            .declarations()
+            .get(&attached_id)
+            .and_then(Declaration::as_namespace)
+            .and_then(|namespace| namespace.singleton_class().copied())
     }
 
     /// Recomputes the `descendants` relation as the inverse of the linearized ancestors.
