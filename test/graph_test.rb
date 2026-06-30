@@ -50,6 +50,53 @@ class GraphTest < Minitest::Test
     assert_match(/FileError: Path `.*not_found.rb` does not exist/, errors.first)
   end
 
+  def test_load_config_from_explicit_path_adds_exclusions
+    with_context do |context|
+      context.write!(".rubydex_custom", "exclude = [\"vendor\", \"generated\"]\n")
+
+      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph.load_config(".rubydex_custom")
+
+      # Excluded paths are resolved against the workspace path.
+      assert_includes(graph.excluded_paths, context.absolute_path_to("vendor"))
+      assert_includes(graph.excluded_paths, context.absolute_path_to("generated"))
+      assert_includes(graph.excluded_paths, context.absolute_path_to("node_modules"))
+    end
+  end
+
+  def test_load_config_without_argument_loads_the_default_rubydex
+    with_context do |context|
+      context.write!("rubydex.toml", "exclude = [\"vendor\", \"generated\"]\n")
+
+      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph.load_config
+
+      assert_includes(graph.excluded_paths, context.absolute_path_to("vendor"))
+      assert_includes(graph.excluded_paths, context.absolute_path_to("generated"))
+      assert_includes(graph.excluded_paths, context.absolute_path_to("node_modules"))
+    end
+  end
+
+  def test_load_config_without_argument_ignores_a_missing_default_rubydex
+    with_context do |context|
+      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+
+      # A missing default `rubydex.toml` is not an error; defaults remain in place.
+      graph.load_config
+      assert_includes(graph.excluded_paths, context.absolute_path_to("node_modules"))
+    end
+  end
+
+  def test_load_config_raises_when_file_is_missing
+    graph = Rubydex::Graph.new
+    assert_raises(Rubydex::ConfigError) { graph.load_config(".rubydex_missing") }
+  end
+
+  def test_load_config_fails_if_argument_is_not_string
+    graph = Rubydex::Graph.new
+    assert_raises(TypeError) { graph.load_config(123) }
+  end
+
   def test_indexing_with_parse_errors
     with_context do |context|
       context.write!("file.rb", "class Foo")
@@ -635,8 +682,6 @@ class GraphTest < Minitest::Test
     with_context do |context|
       context.write!("lib/foo.rb", "class Foo; end")
       context.write!("app/bar.rb", "class Bar; end")
-      context.write!(".git/config", "")
-      context.write!("node_modules/pkg/index.js", "")
       context.write!("top_level.rb", "class TopLevel; end")
       context.write!("top_level.rake", "class TopLevelRake; end")
       context.write!("top_level.rbs", "class TopLevelRbs; end")
@@ -648,10 +693,6 @@ class GraphTest < Minitest::Test
       # Includes workspace directories
       assert_includes(paths, context.absolute_path_to("lib"))
       assert_includes(paths, context.absolute_path_to("app"))
-
-      # Excludes ignored directories
-      refute_includes(paths, context.absolute_path_to(".git"))
-      refute_includes(paths, context.absolute_path_to("node_modules"))
 
       # Includes the top level files
       assert_includes(paths, context.absolute_path_to("top_level.rb"))
@@ -1349,7 +1390,7 @@ class GraphTest < Minitest::Test
       context.write!("vendor/bundle/bar.rb", "class Bar; end")
 
       graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
-      graph.exclude_paths([context.absolute_path_to("vendor/bundle")])
+      graph.exclude_paths(["vendor/bundle"])
 
       assert_includes(graph.excluded_paths, context.absolute_path_to("vendor/bundle"))
 
@@ -1380,15 +1421,17 @@ class GraphTest < Minitest::Test
 
   def test_default_ignored_directories_are_excluded
     with_context do |context|
-      context.write!(".git/config", "")
-      context.write!("node_modules/pkg/index.js", "")
+      context.write!("node_modules/pkg/in_node_modules.rb", "class InNodeModules; end")
+      context.write!("tmp/in_tmp.rb", "class InTmp; end")
       context.write!("lib/foo.rb", "class Foo; end")
 
       graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph.index_all(graph.workspace_paths)
+      graph.resolve
 
-      Rubydex::Graph::IGNORED_DIRECTORIES.each do |dir|
-        assert_includes(graph.excluded_paths, context.absolute_path_to(dir))
-      end
+      refute_nil(graph["Foo"])
+      assert_nil(graph["InNodeModules"])
+      assert_nil(graph["InTmp"])
     end
   end
 

@@ -25,4 +25,6 @@ macro_rules! errors {
 
 errors!(
     FileError;
+    ConfigError;
+    ConfigNotFound;
 );

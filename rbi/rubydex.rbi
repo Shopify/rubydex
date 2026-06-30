@@ -174,10 +174,12 @@ class Rubydex::ConstantDefinition < Rubydex::Definition; end
 class Rubydex::GlobalVariableAliasDefinition < Rubydex::Definition; end
 class Rubydex::GlobalVariableDefinition < Rubydex::Definition; end
 class Rubydex::InstanceVariableDefinition < Rubydex::Definition; end
+
 class Rubydex::MethodAliasDefinition < Rubydex::Definition
   sig { returns(T.nilable(Rubydex::Method)) }
   def target; end
 end
+
 class Rubydex::MethodDefinition < Rubydex::Definition; end
 
 class Rubydex::ModuleDefinition < Rubydex::Definition
@@ -264,6 +266,7 @@ end
 
 class Rubydex::Error < StandardError; end
 class Rubydex::AliasCycleError < Rubydex::Error; end
+class Rubydex::ConfigError < Rubydex::Error; end
 
 class Rubydex::Failure
   sig { params(message: String).void }
@@ -276,8 +279,6 @@ end
 class Rubydex::IntegrityFailure < Rubydex::Failure; end
 
 class Rubydex::Graph
-  IGNORED_DIRECTORIES = T.let(T.unsafe(nil), T::Array[String])
-
   sig { params(workspace_path: T.nilable(String)).void }
   def initialize(workspace_path: nil); end
 
@@ -311,6 +312,13 @@ class Rubydex::Graph
   # Index all files and dependencies of the workspace that exists in `workspace_path`
   sig { returns(T::Array[String]) }
   def index_workspace; end
+
+  # Loads configuration, merging its excluded paths into the graph's configuration (the workspace path is never
+  # overridden). With `config_path` (resolved relative to the workspace path), an explicitly named file that does not
+  # exist raises `Rubydex::ConfigError`. With no argument, the default `.rubydex` is loaded if present and ignored if
+  # missing. Raises `Rubydex::ConfigError` if a file cannot be read or is malformed.
+  sig { params(config_path: T.nilable(String)).void }
+  def load_config(config_path = nil); end
 
   sig { returns(T::Enumerable[Rubydex::MethodReference]) }
   def method_references; end

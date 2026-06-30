@@ -5,25 +5,11 @@ module Rubydex
   #
   # Note: this class is partially defined in C to integrate with the Rust backend
   class Graph
-    IGNORED_DIRECTORIES = [
-      ".bundle",
-      ".claude",
-      ".git",
-      ".github",
-      ".ruby-lsp",
-      ".vscode",
-      "log",
-      "node_modules",
-      "tmp",
-    ].freeze
-
     INDEXABLE_EXTENSIONS = [".rb", ".rake", ".rbs", ".ru"].freeze
 
     #: (?workspace_path: String?) -> void
     def initialize(workspace_path: nil)
       self.workspace_path = workspace_path if workspace_path
-
-      exclude_paths(IGNORED_DIRECTORIES.map { |dir| File.join(self.workspace_path, dir) })
     end
 
     # Index all files and dependencies of the workspace that exists in `workspace_path`
@@ -32,8 +18,7 @@ module Rubydex
       index_all(workspace_paths)
     end
 
-    # Returns all workspace paths that should be indexed, excluding directories that we don't need to descend into such
-    # as `.git`, `node_modules`. Also includes any top level Ruby files
+    # Returns all workspace paths that should be indexed
     #
     #: -> Array[String]
     def workspace_paths
@@ -43,9 +28,7 @@ module Rubydex
       Dir.each_child(root) do |entry|
         full_path = File.join(root, entry)
 
-        if File.directory?(full_path)
-          paths << full_path unless IGNORED_DIRECTORIES.include?(entry)
-        elsif INDEXABLE_EXTENSIONS.include?(File.extname(entry))
+        if File.directory?(full_path) || INDEXABLE_EXTENSIONS.include?(File.extname(entry))
           paths << full_path
         end
       end

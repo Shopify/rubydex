@@ -35,6 +35,8 @@ def __with_timer(message, &block)
 end
 
 graph = Rubydex::Graph.new
+graph.load_config
+
 __with_timer("Indexing workspace...") { graph.index_workspace }
 __with_timer("Resolving graph...") { graph.resolve }
 
