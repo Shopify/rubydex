@@ -22,16 +22,15 @@ module Rubydex
             MCPServer.response(graph)
           else
             root_path = server_state.root_path
-            document = MCPServer.document_for_path(graph, root_path, file_path)
-            unless document
-              return MCPServer.response(
-                Error.new(
-                  "not_found",
-                  "File '#{file_path}' not found in the index",
-                  "Use a relative path like 'app/models/user.rb' or an absolute path matching the indexed project",
-                ),
-              )
+            absolute_target = if Pathname.new(file_path).absolute?
+              file_path
+            else
+              File.join(root_path, file_path)
             end
+            return file_not_found_response(file_path) unless File.exist?(absolute_target)
+
+            document = MCPServer.document_for_path(graph, root_path, file_path)
+            return file_not_found_response(file_path) unless document
 
             declarations = document.definitions.filter_map do |definition|
               declaration = definition.declaration
@@ -46,6 +45,19 @@ module Rubydex
 
             MCPServer.response(file: MCPServer.format_path(document.uri, root_path), declarations: declarations)
           end
+        end
+
+        private
+
+        #: (String) -> Tool::Response
+        def file_not_found_response(file_path)
+          MCPServer.response(
+            Error.new(
+              "not_found",
+              "File '#{file_path}' not found in the index",
+              "Use a relative path like 'app/models/user.rb' or an absolute path matching the indexed project",
+            ),
+          )
         end
       end
     end
