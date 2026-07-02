@@ -142,7 +142,7 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
 
         let mut resolver = Resolver::new(graph);
 
-        let declaration = match resolver.resolve_constant(name_id) {
+        let declaration = match resolver.resolve_constant_rec(name_id) {
             Some(id) => {
                 let decl = graph.declarations().get(&id).unwrap();
                 Box::into_raw(Box::new(CDeclaration::from_declaration(id, decl))).cast_const()

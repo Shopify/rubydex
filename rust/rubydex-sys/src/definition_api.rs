@@ -6,7 +6,9 @@ use crate::location_api::{Location, create_location_for_uri_and_offset};
 use crate::reference_api::CConstantReference;
 use libc::c_char;
 use rubydex::model::definitions::{Definition, Mixin};
-use rubydex::model::ids::DefinitionId;
+use rubydex::model::graph::Graph;
+use rubydex::model::ids::{DefinitionId, NameId};
+use rubydex::model::name::ParentScope;
 use rubydex::query::AliasResolutionError;
 use std::ffi::CString;
 use std::ptr;
@@ -107,6 +109,64 @@ pub unsafe extern "C" fn rdx_definition_name(pointer: GraphPointer, definition_i
         } else {
             ptr::null()
         }
+    })
+}
+
+fn source_name_for_name(graph: &Graph, name_id: NameId) -> String {
+    let name = graph
+        .names()
+        .get(&name_id)
+        .expect("name should exist while building source_name");
+    let simple_name_id = *name.str();
+    let simple_name = graph
+        .strings()
+        .get(&simple_name_id)
+        .expect("string should exist while building source_name")
+        .as_str();
+
+    match name.parent_scope() {
+        ParentScope::None => simple_name.to_string(),
+        ParentScope::TopLevel => format!("::{simple_name}"),
+        ParentScope::Some(parent_id) | ParentScope::Attached(parent_id) => {
+            let parent_name = source_name_for_name(graph, *parent_id);
+            format!("{parent_name}::{simple_name}")
+        }
+    }
+}
+
+fn definition_source_name_id(definition: &Definition) -> NameId {
+    match definition {
+        Definition::Class(definition) => *definition.name_id(),
+        Definition::Module(definition) => *definition.name_id(),
+        Definition::Constant(definition) => *definition.name_id(),
+        Definition::ConstantAlias(definition) => *definition.name_id(),
+        _ => panic!("source_name is only available for class, module, and constant definitions"),
+    }
+}
+
+/// Returns the UTF-8 source name string for a class, module, or constant definition id.
+///
+/// The source name is reconstructed from the definition's `Name`, preserving explicit parent scopes like `Foo::Bar`
+/// and rooted paths like `::Bar`. Caller must free with `free_c_string`.
+///
+/// # Safety
+///
+/// Assumes pointer is valid.
+///
+/// # Panics
+///
+/// This function will panic if the definition cannot be found or if it is not a class, module, or constant definition.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_definition_source_name(pointer: GraphPointer, definition_id: u64) -> *const c_char {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        let definition = graph
+            .definitions()
+            .get(&def_id)
+            .unwrap_or_else(|| panic!("Definition not found: {definition_id:?}"));
+
+        let name = source_name_for_name(graph, definition_source_name_id(definition));
+        CString::new(name).unwrap().into_raw().cast_const()
     })
 }
 
