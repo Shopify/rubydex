@@ -2021,7 +2021,8 @@ impl<'a> Resolver<'a> {
         }
 
         // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
-        // mismatch error. TODO: We should add a diagnostic here
+        // mismatch error.
+        // TODO: Add a diagnostic here https://github.com/Shopify/rubydex/issues/857
         (
             explicit_parents.first().copied().unwrap_or(*OBJECT_ID),
             unresolved_parent,
