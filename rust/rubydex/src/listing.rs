@@ -165,13 +165,21 @@ pub fn collect_file_paths<S: BuildHasher>(
     let (files_tx, files_rx) = unbounded();
     let (errors_tx, errors_rx) = unbounded();
 
-    // Canonicalize the excluded paths (they may be symlinks) and turn each into a pattern. Escaping keeps
-    // matching exact.
+    // Canonicalize concrete excluded paths (they may be symlinks) and escape them so they match exactly, not
+    // as globs. Globs are kept as written.
     let excluded_patterns: Arc<Vec<Pattern>> = Arc::new(
         excluded
             .iter()
-            .filter_map(|entry| fs::canonicalize(&**entry).ok())
-            .filter_map(|canonical| Pattern::new(&Pattern::escape(&canonical.to_string_lossy())).ok())
+            .filter_map(|entry| {
+                let entry: &str = entry;
+
+                if entry.contains(['*', '?', '[']) {
+                    Pattern::new(entry).ok()
+                } else {
+                    let canonical = fs::canonicalize(entry).ok()?;
+                    Pattern::new(&Pattern::escape(&canonical.to_string_lossy())).ok()
+                }
+            })
             .collect(),
     );
 
@@ -390,5 +398,22 @@ mod tests {
 
         assert!(errors.is_empty());
         assert_eq!(files, [included.to_str().unwrap().to_string()]);
+    }
+
+    #[test]
+    fn collect_files_excludes_glob_patterns() {
+        let context = Context::new();
+        let kept = PathBuf::from("lib").join("foo.rb");
+        let nested = PathBuf::from("lib").join("test/fixtures").join("bar.rb");
+        context.touch(&kept);
+        context.touch(&nested);
+
+        let mut excluded = HashSet::new();
+        excluded.insert("**/fixtures".into());
+
+        let (files, errors) = collect_document_paths_with_exclusions(&context, &["lib"], &excluded);
+
+        assert!(errors.is_empty());
+        assert_eq!(files, [kept.to_str().unwrap().to_string()]);
     }
 }
