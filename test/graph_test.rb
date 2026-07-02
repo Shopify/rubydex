@@ -146,6 +146,28 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_get_declaration_accepts_leading_double_colon
+    with_context do |context|
+      context.write!("file.rb", "module Foo; class Bar; end; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      # Built-ins are root-scoped, so `Object` and `::Object` must resolve to the same declaration.
+      refute_nil(graph["::Object"])
+      assert_equal(graph["Object"].name, graph["::Object"].name)
+
+      # Same for indexed declarations, top-level and nested.
+      refute_nil(graph["::Foo"])
+      refute_nil(graph["::Foo::Bar"])
+      assert_equal(graph["Foo::Bar"].name, graph["::Foo::Bar"].name)
+
+      # Unknown names still return nil when prefixed.
+      assert_nil(graph["::DoesNotExist"])
+    end
+  end
+
   def test_list_all_declarations_enumerator
     with_context do |context|
       context.write!("file1.rb", "class A; end")

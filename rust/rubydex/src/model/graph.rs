@@ -578,6 +578,9 @@ impl Graph {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
+        // Accept an optional leading `::` root-scope marker so `"::Object"` and `"Object"`
+        // resolve to the same declaration. All stored FQNs are implicitly root-scoped.
+        let name = name.strip_prefix("::").unwrap_or(name);
         let declaration_id = DeclarationId::from(name);
         let declaration = self.declarations.get(&declaration_id)?;
 
@@ -1990,6 +1993,26 @@ mod tests {
         let definitions = context.graph().get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].offset().start(), 6);
+    }
+
+    #[test]
+    fn get_accepts_leading_double_colon() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; module Bar; end; end");
+        context.resolve();
+
+        // Built-in declarations (root-scoped):
+        let unqualified = context.graph().get("Object").expect("unqualified `Object` lookup");
+        let qualified = context.graph().get("::Object").expect("qualified `::Object` lookup");
+        assert_eq!(unqualified.len(), qualified.len());
+
+        // Indexed declarations, top-level and nested:
+        assert!(context.graph().get("::Foo").is_some());
+        assert!(context.graph().get("::Foo::Bar").is_some());
+
+        // Unknown names still return None when prefixed:
+        assert!(context.graph().get("::DoesNotExist").is_none());
     }
 
     #[test]
