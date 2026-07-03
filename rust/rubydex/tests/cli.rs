@@ -156,6 +156,74 @@ fn dot_flag() {
 }
 
 #[test]
+fn query_flag_table_output() {
+    with_context(|context| {
+        context.write("zoo.rb", "class Animal\nend\n\nclass Dog < Animal\nend\n");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--query",
+            "MATCH (c:Class)-[:HAS_PARENT]->(p:Class) WHERE c.name = 'Dog' RETURN p.name",
+        ])
+        .success()
+        .stdout(predicate::str::contains("p.name"))
+        .stdout(predicate::str::contains("Animal"))
+        .stdout(predicate::str::contains("1 row"));
+    });
+}
+
+#[test]
+fn query_flag_json_output() {
+    with_context(|context| {
+        context.write("zoo.rb", "class Animal\nend\n\nclass Dog < Animal\nend\n");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--query",
+            "MATCH (c:Class {name: 'Dog'}) RETURN c.name",
+            "--format",
+            "json",
+        ])
+        .success()
+        .stdout(predicate::str::contains("[{\"c.name\":\"Dog\"}]"));
+    });
+}
+
+#[test]
+fn schema_flag_describes_model() {
+    rdx(&["--schema"])
+        .success()
+        .stdout(predicate::str::contains("Node labels"))
+        .stdout(predicate::str::contains("Relationship types"))
+        .stdout(predicate::str::contains("Properties"))
+        .stdout(predicate::str::contains("HAS_PARENT"))
+        .stdout(predicate::str::contains("unqualified_name"));
+}
+
+#[test]
+fn schema_flag_json_format() {
+    rdx(&["--schema", "--format", "json"])
+        .success()
+        .stdout(predicate::str::contains("\"node_labels\":["))
+        .stdout(predicate::str::contains("\"type\":\"DEFINES\""));
+}
+
+#[test]
+fn query_flag_reports_syntax_error() {
+    with_context(|context| {
+        context.write("zoo.rb", "class Animal\nend\n");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--query",
+            "MATCH (c RETURN c",
+        ])
+        .failure()
+        .stderr(predicate::str::contains("Cypher syntax error"));
+    });
+}
+
+#[test]
 fn stop_after() {
     with_context(|context| {
         context.write("file1.rb", "class Class1\nend\n");

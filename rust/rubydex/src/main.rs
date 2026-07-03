@@ -1,4 +1,4 @@
-use clap::{Parser, ValueEnum};
+use clap::{ArgGroup, Parser, ValueEnum};
 use std::{
     fs, mem,
     path::{Path, PathBuf},
@@ -10,6 +10,7 @@ use rubydex::{
     indexing::{self, IndexerBackend, LanguageId, build_local_graph},
     integrity, listing,
     model::graph::Graph,
+    query::cypher::{self, OutputFormat},
     resolution::Resolver,
     stats::{
         memory::MemoryStats,
@@ -20,6 +21,9 @@ use url::Url;
 
 #[derive(Parser, Debug)]
 #[command(name = "rubydex_cli", about = "A Static Analysis Toolkit for Ruby", version)]
+// `--query` and `--schema` are the two Cypher modes; they are mutually exclusive, and `--format`
+// only makes sense alongside one of them.
+#[command(group(ArgGroup::new("cypher").args(["query", "schema"])))]
 #[allow(clippy::struct_excessive_bools)]
 struct Args {
     #[arg(
@@ -35,7 +39,11 @@ struct Args {
     #[arg(long = "dot", help = "Output a DOT graph visualization")]
     dot: bool,
 
-    #[arg(long = "show-builtins", help = "Include built-in declarations in DOT output")]
+    #[arg(
+        long = "show-builtins",
+        requires = "dot",
+        help = "Include built-in declarations in DOT output"
+    )]
     show_builtins: bool,
 
     #[arg(long = "stats", help = "Show detailed performance statistics")]
@@ -76,6 +84,45 @@ struct Args {
         help = "Number of files to re-index per incremental cycle"
     )]
     incremental_files: usize,
+
+    #[arg(long = "query", value_name = "CYPHER", help = "Run a Cypher query against the graph")]
+    query: Option<String>,
+
+    #[arg(
+        long = "schema",
+        help = "Describe the queryable Cypher schema (labels, relationships, properties) and exit"
+    )]
+    schema: bool,
+
+    #[arg(
+        long = "format",
+        value_enum,
+        requires = "cypher",
+        help = "Output format for --query and --schema results (default: table)"
+    )]
+    format: Option<Format>,
+}
+
+impl Args {
+    /// The output format for Cypher results, defaulting to `Table` when `--format` is omitted.
+    fn output_format(&self) -> OutputFormat {
+        self.format.unwrap_or(Format::Table).into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Format {
+    Table,
+    Json,
+}
+
+impl From<Format> for OutputFormat {
+    fn from(format: Format) -> Self {
+        match format {
+            Format::Table => OutputFormat::Table,
+            Format::Json => OutputFormat::Json,
+        }
+    }
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -114,8 +161,62 @@ fn workspace_path_for(paths: &[String]) -> Option<PathBuf> {
     fs::canonicalize(first_path).ok().filter(|path| path.is_dir())
 }
 
+/// Executes a parsed Cypher query against the built graph, prints the result, and exits the process
+/// (the graph is leaked so the OS reclaims it at exit rather than paying for deallocation).
+/// Checks graph integrity and reports the result, exiting with a non-zero status on any issue.
+fn check_integrity_or_exit(graph: &Graph) {
+    let errors = time_it!(integrity_check, { integrity::check_integrity(graph) });
+
+    if errors.is_empty() {
+        println!("Integrity check passed: no issues found");
+    } else {
+        eprintln!("Integrity check found {} issue(s):", errors.len());
+
+        for error in &errors {
+            eprintln!("  - {error}");
+        }
+
+        std::process::exit(1);
+    }
+}
+
+fn run_cypher_query(graph: Graph, query: &cypher::Query, output_format: OutputFormat, stats: bool) -> ! {
+    match time_it!(querying, { cypher::run_parsed(&graph, query, output_format) }) {
+        Ok(output) => print!("{output}"),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+
+    if stats {
+        Timer::print_breakdown();
+        MemoryStats::print_memory_usage();
+    }
+
+    mem::forget(graph);
+    std::process::exit(0);
+}
+
 fn main() {
     let args = Args::parse();
+    // Computed up front: `args.paths` is moved out below, after which `args` can't be borrowed whole.
+    let output_format = args.output_format();
+
+    // The Cypher schema is static, so describe it without indexing the workspace.
+    if args.schema {
+        print!("{}", cypher::schema(output_format));
+        std::process::exit(0);
+    }
+
+    // Parse the query up front, before any indexing, so a malformed query fails fast.
+    let parsed_query = args.query.as_ref().map(|query| match cypher::parse(query) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    });
 
     if args.stats {
         Timer::set_global_timer(Timer::new());
@@ -186,19 +287,7 @@ fn main() {
 
     // Integrity check
     if args.check_integrity {
-        let errors = time_it!(integrity_check, { integrity::check_integrity(&graph) });
-
-        if errors.is_empty() {
-            println!("Integrity check passed: no issues found");
-        } else {
-            eprintln!("Integrity check found {} issue(s):", errors.len());
-
-            for error in &errors {
-                eprintln!("  - {error}");
-            }
-
-            std::process::exit(1);
-        }
+        check_integrity_or_exit(&graph);
     }
 
     // Querying
@@ -226,6 +315,11 @@ fn main() {
             }
             Err(e) => eprintln!("Failed to create orphan report file: {e}"),
         }
+    }
+
+    // Cypher query: execute the query parsed earlier against the now-built graph.
+    if let Some(query) = &parsed_query {
+        run_cypher_query(graph, query, output_format, args.stats);
     }
 
     // Generate visualization or print statistics
