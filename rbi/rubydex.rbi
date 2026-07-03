@@ -278,6 +278,19 @@ end
 
 class Rubydex::IntegrityFailure < Rubydex::Failure; end
 
+class Rubydex::Query
+  class << self
+    sig { params(query: String).returns(Rubydex::Query) }
+    def parse(query); end
+
+    sig { params(format: T.any(String, Symbol)).returns(String) }
+    def schema(format = :table); end
+  end
+
+  sig { params(graph: Rubydex::Graph, format: T.any(String, Symbol)).returns(String) }
+  def render(graph, format = :table); end
+end
+
 class Rubydex::Graph
   sig { params(workspace_path: T.nilable(String)).void }
   def initialize(workspace_path: nil); end

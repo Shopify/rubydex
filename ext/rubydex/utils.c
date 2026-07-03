@@ -52,6 +52,18 @@ VALUE rdxi_owned_c_string_to_ruby(const char *string) {
     return value;
 }
 
+// Coerce an optional String, Symbol, or nil to a C string, defaulting to `default_value` for nil.
+const char *rdxi_symbol_or_string_cstr(VALUE value, const char *default_value) {
+    if (NIL_P(value)) {
+        return default_value;
+    }
+    if (RB_TYPE_P(value, T_SYMBOL)) {
+        value = rb_sym2str(value);
+    }
+    Check_Type(value, T_STRING);
+    return StringValueCStr(value);
+}
+
 // Yield body for iterating over declarations
 VALUE rdxi_declarations_yield(VALUE args) {
     VALUE self = rb_ary_entry(args, 0);

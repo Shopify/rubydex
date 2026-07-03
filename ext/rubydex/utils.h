@@ -17,6 +17,11 @@ void rdxi_check_array_of_strings(VALUE array);
 // Returns nil when the Rust side returned NULL.
 VALUE rdxi_owned_c_string_to_ruby(const char *string);
 
+// Coerce an optional String, Symbol, or nil to a C string, returning `default_value` when the value
+// is nil. A non-nil value must be a String or Symbol, otherwise a `TypeError` is raised. The
+// returned pointer is owned by the Ruby VALUE and is only valid while it stays live.
+const char *rdxi_symbol_or_string_cstr(VALUE value, const char *default_value);
+
 // Yield body for iterating over declarations
 VALUE rdxi_declarations_yield(VALUE args);
 

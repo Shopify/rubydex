@@ -4,6 +4,7 @@
 #include "document.h"
 #include "graph.h"
 #include "location.h"
+#include "query.h"
 #include "reference.h"
 #include "signature.h"
 
@@ -19,6 +20,7 @@ void Init_rubydex(void) {
      */
     mRubydex = rb_define_module("Rubydex");
     rdxi_initialize_graph(mRubydex);
+    rdxi_initialize_query(mRubydex);
     rdxi_initialize_declaration(mRubydex);
     rdxi_initialize_document(mRubydex);
     rdxi_initialize_definition(mRubydex);
