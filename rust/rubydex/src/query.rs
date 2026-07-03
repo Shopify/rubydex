@@ -15,6 +15,8 @@ use crate::model::keywords::{self, Keyword};
 use crate::model::name::NameRef;
 use crate::model::visibility::Visibility;
 
+pub mod cypher;
+
 /// Controls how declaration names are matched against the search query.
 #[derive(Default)]
 pub enum MatchMode {
