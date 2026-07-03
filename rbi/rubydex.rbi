@@ -335,11 +335,11 @@ class Rubydex::Graph
   sig { params(require_path: String, load_paths: T::Array[String]).returns(T.nilable(Rubydex::Document)) }
   def resolve_require_path(require_path, load_paths); end
 
-  sig { params(query: String).returns(T::Enumerable[Rubydex::Declaration]) }
-  def search(query); end
+  sig { params(queries: String).returns(T::Enumerable[Rubydex::Declaration]) }
+  def search(*queries); end
 
-  sig { params(query: String).returns(T::Enumerable[Rubydex::Declaration]) }
-  def fuzzy_search(query); end
+  sig { params(queries: String).returns(T::Enumerable[Rubydex::Declaration]) }
+  def fuzzy_search(*queries); end
 
   sig { params(encoding: String).void }
   def encoding=(encoding); end

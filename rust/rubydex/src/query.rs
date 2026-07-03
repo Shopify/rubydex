@@ -27,12 +27,25 @@ pub enum MatchMode {
     Exact,
 }
 
+/// Searches all declarations in parallel based on fully qualified names. Accepts multiple queries in case the caller
+/// wants to find multiple patterns without having to re-traverse the graph and also accepts match mode.
+///
+/// Note: an empty query returns all declarations, so if any are included the rest of the queries will be ignored.
+///
 /// # Panics
 ///
 /// Will panic if any of the threads panic
-pub fn declaration_search(graph: &Graph, query: &str, match_mode: &MatchMode) -> Vec<DeclarationId> {
+pub fn declaration_search(graph: &Graph, queries: &[&str], match_mode: &MatchMode) -> Vec<DeclarationId> {
     let num_threads = thread::available_parallelism().map_or(4, std::num::NonZero::get);
     let declarations = graph.declarations();
+
+    // An empty query matches all declarations as per the LSP specification and is equivalent to fetching all of them
+    // directly. Since an empty query matches all, there's no point in checking the other queries or pay the price of
+    // spawning threads.
+    if queries.iter().any(|q| q.is_empty()) {
+        return declarations.keys().copied().collect();
+    }
+
     let ids: Vec<DeclarationId> = declarations.keys().copied().collect();
     let chunk_size = ids.len().div_ceil(num_threads);
 
@@ -48,16 +61,8 @@ pub fn declaration_search(graph: &Graph, query: &str, match_mode: &MatchMode) ->
                     chunk
                         .iter()
                         .filter(|id| {
-                            let declaration = declarations.get(id).unwrap();
-                            let name = declaration.name();
-                            match match_mode {
-                                MatchMode::Fuzzy => {
-                                    // When the query is empty, we return everything as per the LSP specification.
-                                    // Otherwise, we compute the match score and return anything with a score greater than zero
-                                    query.is_empty() || match_score(query, name) > 0
-                                }
-                                MatchMode::Exact => name.contains(query),
-                            }
+                            let name = declarations.get(id).unwrap().name();
+                            queries.iter().any(|query| matches_query(query, name, match_mode))
                         })
                         .copied()
                         .collect::<Vec<_>>()
@@ -67,6 +72,15 @@ pub fn declaration_search(graph: &Graph, query: &str, match_mode: &MatchMode) ->
 
         handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
     })
+}
+
+/// Returns whether a single `query` matches `name` under the given [`MatchMode`].
+#[must_use]
+fn matches_query(query: &str, name: &str, match_mode: &MatchMode) -> bool {
+    match match_mode {
+        MatchMode::Fuzzy => match_score(query, name) > 0,
+        MatchMode::Exact => name.contains(query),
+    }
 }
 
 #[must_use]
@@ -836,7 +850,7 @@ mod tests {
             assert_results_eq!($context, $query, &MatchMode::default(), $expected);
         };
         ($context:expr, $query:expr, $match_mode:expr, $expected:expr) => {
-            let actual = declaration_search(&$context.graph(), $query, $match_mode);
+            let actual = declaration_search(&$context.graph(), &[$query], $match_mode);
             assert_eq!(
                 actual,
                 $expected
@@ -945,8 +959,8 @@ mod tests {
             "
         });
         context.resolve();
-        let exact_results = declaration_search(context.graph(), "", &MatchMode::Exact);
-        let fuzzy_results = declaration_search(context.graph(), "", &MatchMode::Fuzzy);
+        let exact_results = declaration_search(context.graph(), &[""], &MatchMode::Exact);
+        let fuzzy_results = declaration_search(context.graph(), &[""], &MatchMode::Fuzzy);
 
         assert_eq!(exact_results.len(), fuzzy_results.len());
         assert_eq!(context.graph().declarations().len(), exact_results.len());
@@ -970,6 +984,51 @@ mod tests {
 
         assert_results_eq!(context, "#Is_A?()", &MatchMode::Exact, Vec::<&str>::new());
         assert_results_eq!(context, "#Is_A?()", ["Foo#is_a_foo?()", "Bar#is_a?()"]);
+    }
+
+    #[test]
+    fn multiple_queries_return_union_of_matches() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def foo_method; end
+              def bar_method; end
+              def other_method; end
+            end
+            "
+        });
+        context.resolve();
+
+        let results = declaration_search(context.graph(), &["#foo_method()", "#bar_method()"], &MatchMode::Exact);
+        let mut names: Vec<String> = results
+            .iter()
+            .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+            .collect();
+        names.sort();
+
+        assert_eq!(names, ["Foo#bar_method()", "Foo#foo_method()"]);
+    }
+
+    #[test]
+    fn overlapping_queries_do_not_duplicate_results() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+              def is_a_foo?; end
+            end
+            "
+        });
+        context.resolve();
+
+        let results = declaration_search(context.graph(), &["is_a", "foo?"], &MatchMode::Exact);
+        let matches = results
+            .iter()
+            .filter(|id| context.graph().declarations().get(id).unwrap().name() == "Foo#is_a_foo?()")
+            .count();
+
+        assert_eq!(matches, 1);
     }
 
     fn test_root() -> PathBuf {

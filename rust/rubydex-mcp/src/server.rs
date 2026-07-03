@@ -241,7 +241,7 @@ impl RubydexServer {
                 .to_string();
             }
         };
-        let ids = rubydex::query::declaration_search(graph, &params.query, &match_mode);
+        let ids = rubydex::query::declaration_search(graph, &[params.query.as_str()], &match_mode);
 
         let limit = params.limit.filter(|&l| l > 0).unwrap_or(50).min(100); // default 50, max 100
         let offset = params.offset.unwrap_or(0);

@@ -58,64 +58,75 @@ where
     result
 }
 
-/// Searches the graph using exact substring matching
+/// Searches the graph using exact substring matching, returning every declaration whose name matches any of the
+/// queries.
 ///
 /// # Safety
 ///
-/// Expects both the graph and the query pointers to be valid
+/// Expects `pointer` to be a valid graph and `c_queries` to point to an array of `count` valid, NUL-terminated C
+/// strings. Returns a null pointer when `count` is zero, `c_queries` is null, or any query is not valid UTF-8.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_declarations_search(
     pointer: GraphPointer,
-    c_query: *const c_char,
+    c_queries: *const *const c_char,
+    count: usize,
 ) -> *mut DeclarationsIter {
-    {
-        let Ok(query) = (unsafe { utils::convert_char_ptr_to_string(c_query) }) else {
-            return ptr::null_mut();
-        };
-
-        let entries = with_graph(pointer, |graph| {
-            query::declaration_search(graph, &query, &query::MatchMode::Exact)
-                .into_iter()
-                .filter_map(|id| {
-                    let decl = graph.declarations().get(&id)?;
-                    Some(CDeclaration::from_declaration(id, decl))
-                })
-                .collect::<Vec<CDeclaration>>()
-                .into_boxed_slice()
-        });
-
-        DeclarationsIter::new(entries)
+    if count == 0 || c_queries.is_null() {
+        return ptr::null_mut();
     }
+
+    let Ok(queries) = (unsafe { utils::convert_double_pointer_to_vec(c_queries, count) }) else {
+        return ptr::null_mut();
+    };
+    let query_refs: Vec<&str> = queries.iter().map(String::as_str).collect();
+
+    let entries = with_graph(pointer, |graph| {
+        query::declaration_search(graph, &query_refs, &query::MatchMode::Exact)
+            .into_iter()
+            .filter_map(|id| {
+                let decl = graph.declarations().get(&id)?;
+                Some(CDeclaration::from_declaration(id, decl))
+            })
+            .collect::<Vec<CDeclaration>>()
+            .into_boxed_slice()
+    });
+
+    DeclarationsIter::new(entries)
 }
 
-/// Searches the graph using fuzzy matching
+/// Searches the graph using fuzzy matching, returning every declaration whose name matches any of the queries.
 ///
 /// # Safety
 ///
-/// Expects both the graph and the query pointers to be valid
+/// Expects `pointer` to be a valid graph and `c_queries` to point to an array of `count` valid, NUL-terminated C
+/// strings. Returns a null pointer when `count` is zero, `c_queries` is null, or any query is not valid UTF-8.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_declarations_fuzzy_search(
     pointer: GraphPointer,
-    c_query: *const c_char,
+    c_queries: *const *const c_char,
+    count: usize,
 ) -> *mut DeclarationsIter {
-    {
-        let Ok(query) = (unsafe { utils::convert_char_ptr_to_string(c_query) }) else {
-            return ptr::null_mut();
-        };
-
-        let entries = with_graph(pointer, |graph| {
-            query::declaration_search(graph, &query, &query::MatchMode::Fuzzy)
-                .into_iter()
-                .filter_map(|id| {
-                    let decl = graph.declarations().get(&id)?;
-                    Some(CDeclaration::from_declaration(id, decl))
-                })
-                .collect::<Vec<CDeclaration>>()
-                .into_boxed_slice()
-        });
-
-        DeclarationsIter::new(entries)
+    if count == 0 || c_queries.is_null() {
+        return ptr::null_mut();
     }
+
+    let Ok(queries) = (unsafe { utils::convert_double_pointer_to_vec(c_queries, count) }) else {
+        return ptr::null_mut();
+    };
+    let query_refs: Vec<&str> = queries.iter().map(String::as_str).collect();
+
+    let entries = with_graph(pointer, |graph| {
+        query::declaration_search(graph, &query_refs, &query::MatchMode::Fuzzy)
+            .into_iter()
+            .filter_map(|id| {
+                let decl = graph.declarations().get(&id)?;
+                Some(CDeclaration::from_declaration(id, decl))
+            })
+            .collect::<Vec<CDeclaration>>()
+            .into_boxed_slice()
+    });
+
+    DeclarationsIter::new(entries)
 }
 
 /// # Panics
