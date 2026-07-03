@@ -250,6 +250,37 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_search_matches_any_of_multiple_queries
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        class Foo
+          def is_a_foo?; end
+        end
+
+        class Bar
+          def is_a_bar?; end
+        end
+
+        class Baz
+          def something_else; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      results = graph.search("#is_a_foo?()", "#is_a_bar?()").map(&:name).sort
+      assert_equal(["Bar#is_a_bar?()", "Foo#is_a_foo?()"], results)
+    end
+  end
+
+  def test_graph_search_requires_at_least_one_query
+    graph = Rubydex::Graph.new
+    assert_raises(ArgumentError) { graph.search }
+    assert_raises(ArgumentError) { graph.fuzzy_search }
+  end
+
   def test_workspace_path_defaults_to_pwd
     graph = Rubydex::Graph.new
     assert_equal(Dir.pwd, File.expand_path(graph.workspace_path))
