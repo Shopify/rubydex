@@ -300,3 +300,58 @@ fn mcp_server_e2e() {
         let _ = child.wait().unwrap();
     });
 }
+
+#[test]
+fn mcp_server_skips_ignored_directories() {
+    with_context(|context| {
+        context.write("app.rb", "class IndexedClass; end");
+        // Lives under an ignored directory and must never be indexed.
+        context.write(".claude/worktrees/scratch.rb", "class IgnoredClass; end");
+
+        let mut child = Command::cargo_bin("rubydex_mcp")
+            .unwrap()
+            .args([context.absolute_path().to_str().unwrap()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut reader = BufReader::new(stdout);
+
+        initialize_session(&mut stdin, &mut reader);
+
+        let mut request_id = 3;
+        let stats = wait_for_indexing_to_complete(&mut stdin, &mut reader, &mut request_id);
+        // app.rb plus the synthetic core document; scratch.rb under .claude is excluded.
+        assert_eq!(stats["files"], 2, "Expected only app.rb to be indexed");
+
+        let search_response = call_next_tool(
+            &mut stdin,
+            &mut reader,
+            &mut request_id,
+            "search_declarations",
+            &json!({ "query": "IgnoredClass" }),
+        );
+        assert_eq!(
+            search_response["total"].as_u64().unwrap(),
+            0,
+            "Expected no results for a declaration under .claude, got: {search_response}"
+        );
+
+        let indexed_response = call_next_tool(
+            &mut stdin,
+            &mut reader,
+            &mut request_id,
+            "search_declarations",
+            &json!({ "query": "IndexedClass" }),
+        );
+        let indexed_names = names_from_entries(indexed_response["results"].as_array().unwrap());
+        assert_has_name(&indexed_names, "IndexedClass", "search results");
+
+        drop(stdin);
+        let _ = child.wait().unwrap();
+    });
+}
