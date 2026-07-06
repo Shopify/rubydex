@@ -877,7 +877,7 @@ pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
             graph,
             CompletionReceiver::NamespaceAccess {
                 self_decl_id,
-                namespace_decl_id: DeclarationId::from(name_str.as_str()),
+                namespace_decl_id: DeclarationId::from_lookup_name(&name_str),
             },
             Vec::new(),
         )
@@ -911,7 +911,7 @@ pub unsafe extern "C" fn rdx_graph_complete_method_call(
             graph,
             CompletionReceiver::MethodCall {
                 self_decl_id,
-                receiver_decl_id: DeclarationId::from(name_str.as_str()),
+                receiver_decl_id: DeclarationId::from_lookup_name(&name_str),
             },
             Vec::new(),
         )
@@ -955,7 +955,7 @@ pub unsafe extern "C" fn rdx_graph_complete_method_argument(
             CompletionReceiver::MethodArgument {
                 self_decl_id,
                 nesting_name_id,
-                method_decl_id: DeclarationId::from(name_str.as_str()),
+                method_decl_id: DeclarationId::from_lookup_name(&name_str),
             },
             names_to_untrack,
         )

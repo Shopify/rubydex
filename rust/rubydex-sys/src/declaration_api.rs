@@ -80,7 +80,7 @@ pub(crate) unsafe fn decl_id_from_char_ptr(ptr: *const c_char) -> Option<Declara
     if s.is_empty() {
         return None;
     }
-    Some(DeclarationId::from(s.as_str()))
+    Some(DeclarationId::from_lookup_name(&s))
 }
 
 /// An iterator over declaration IDs
