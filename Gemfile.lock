@@ -24,6 +24,8 @@ GEM
     minitest (6.0.3)
       drb (~> 2.0)
       prism (~> 1.5)
+    mocha (3.1.0)
+      ruby2_keywords (>= 0.0.5)
     nokogiri (1.19.4)
       mini_portile2 (~> 2.8.2)
       racc (~> 1.4)
@@ -73,6 +75,7 @@ GEM
     rubocop-shopify (2.18.0)
       rubocop (~> 1.62)
     ruby-progressbar (1.13.0)
+    ruby2_keywords (0.0.5)
     ruby_memcheck (3.0.1)
       nokogiri
     tsort (0.2.0)
@@ -89,6 +92,7 @@ DEPENDENCIES
   extconf_compile_commands_json
   irb
   minitest
+  mocha
   rake (~> 13.3)
   rake-compiler
   rbs
