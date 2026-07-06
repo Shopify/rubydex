@@ -1,17 +1,52 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "rbconfig"
+require "rubydex/version"
+require "optparse"
 
-host_os = RbConfig::CONFIG.fetch("host_os")
-executable = host_os.match?(/mswin|mingw|cygwin/) ? "rubydex_mcp.exe" : "rubydex_mcp"
-binary = File.expand_path("../lib/rubydex/bin/#{executable}", __dir__)
+option_parser = OptionParser.new do |parser|
+  parser.banner = <<~TEXT.chomp
+    Rubydex MCP server for AI assistants using Ruby code intelligence
 
-unless File.executable?(binary)
-  abort(<<~MESSAGE.chomp)
-    rubydex_mcp is not available at #{binary}.
-    Install a precompiled rubydex gem, or reinstall rubydex with Cargo available so the MCP executable can be built locally.
-  MESSAGE
+    Usage: rubydex_mcp [PATH]
+  TEXT
+
+  parser.separator("")
+  parser.separator("Arguments:")
+  parser.separator("    [PATH]  [default: current directory]")
+  parser.separator("")
+  parser.separator("Options:")
+
+  parser.on("-h", "--help", "Print help") do
+    puts parser
+    exit
+  end
+
+  parser.on("-V", "--version", "Print version") do
+    puts "rubydex_mcp #{Rubydex::VERSION}"
+    exit
+  end
 end
 
-exec(binary, *ARGV)
+begin
+  arguments = option_parser.parse(ARGV)
+rescue OptionParser::ParseError => e
+  warn("error: #{e.message}")
+  warn
+  warn(option_parser)
+  exit(2)
+end
+
+if arguments.length > 1
+  warn("error: unexpected argument '#{arguments[1]}' found")
+  warn
+  warn(option_parser)
+  exit(2)
+end
+
+path = arguments.fetch(0, Dir.pwd)
+
+require "rubydex"
+require "rubydex/mcp_server"
+
+Rubydex::MCPServer.run(path)
