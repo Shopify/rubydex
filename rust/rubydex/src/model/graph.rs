@@ -564,10 +564,7 @@ impl Graph {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
-        // Accept an optional leading `::` root-scope marker so `"::Object"` and `"Object"`
-        // resolve to the same declaration. All stored FQNs are implicitly root-scoped.
-        let name = name.strip_prefix("::").unwrap_or(name);
-        let declaration_id = DeclarationId::from(name);
+        let declaration_id = DeclarationId::from_lookup_name(name);
         let declaration = self.declarations.get(&declaration_id)?;
 
         Some(

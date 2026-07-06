@@ -9,6 +9,17 @@ pub struct DeclarationMarker;
 /// `DeclarationId` represents the ID of a fully qualified name. For example, `Foo::Bar` or `Foo#my_method`
 pub type DeclarationId = Id<DeclarationMarker>;
 
+impl Id<DeclarationMarker> {
+    /// Creates a `DeclarationId` from a user-facing lookup name.
+    ///
+    /// Declaration names are stored without the root-scope marker, so `"::Object"`
+    /// and `"Object"` must resolve to the same declaration ID.
+    #[must_use]
+    pub fn from_lookup_name(name: &str) -> Self {
+        Self::from(name.strip_prefix("::").unwrap_or(name))
+    }
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub struct DefinitionMarker;
 
@@ -84,3 +95,24 @@ assert_mem_size!(ClassVariableReferenceId, 8);
 pub struct InstanceVariableMarker;
 pub type InstanceVariableReferenceId = Id<InstanceVariableMarker>;
 assert_mem_size!(InstanceVariableReferenceId, 8);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declaration_id_from_lookup_name_accepts_root_scope_marker() {
+        assert_eq!(
+            DeclarationId::from("Object"),
+            DeclarationId::from_lookup_name("::Object")
+        );
+        assert_eq!(
+            DeclarationId::from("Foo::Bar"),
+            DeclarationId::from_lookup_name("::Foo::Bar")
+        );
+        assert_ne!(
+            DeclarationId::from("Object"),
+            DeclarationId::from_lookup_name("::::Object")
+        );
+    }
+}

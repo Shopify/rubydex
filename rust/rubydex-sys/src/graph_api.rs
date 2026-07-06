@@ -458,10 +458,7 @@ pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: 
     };
 
     with_graph(pointer, |graph| {
-        // Accept an optional leading `::` root-scope marker so `"::Object"` and `"Object"`
-        // resolve to the same declaration. All stored FQNs are implicitly root-scoped.
-        let lookup_name = name_str.strip_prefix("::").unwrap_or(name_str.as_str());
-        let decl_id = DeclarationId::from(lookup_name);
+        let decl_id = DeclarationId::from_lookup_name(&name_str);
 
         if let Some(decl) = graph.declarations().get(&decl_id) {
             Box::into_raw(Box::new(CDeclaration::from_declaration(decl_id, decl))).cast_const()
