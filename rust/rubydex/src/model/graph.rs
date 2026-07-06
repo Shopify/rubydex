@@ -12,7 +12,10 @@ use crate::model::definitions::{Definition, MethodVisibilityDefinition, Receiver
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
-use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
+use crate::model::ids::{
+    ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId,
+    declaration_id_from_lookup_name,
+};
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
@@ -564,7 +567,7 @@ impl Graph {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
-        let declaration_id = DeclarationId::from_lookup_name(name);
+        let declaration_id = declaration_id_from_lookup_name(name);
         let declaration = self.declarations.get(&declaration_id)?;
 
         Some(

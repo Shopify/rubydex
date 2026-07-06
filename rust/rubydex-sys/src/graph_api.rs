@@ -10,7 +10,7 @@ use libc::{c_char, c_void};
 use rubydex::indexing::LanguageId;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
-use rubydex::model::ids::{DeclarationId, NameId, UriId};
+use rubydex::model::ids::{DeclarationId, NameId, UriId, declaration_id_from_lookup_name};
 use rubydex::model::keywords;
 use rubydex::model::name::NameRef;
 use rubydex::model::visibility::Visibility;
@@ -458,7 +458,7 @@ pub unsafe extern "C" fn rdx_graph_get_declaration(pointer: GraphPointer, name: 
     };
 
     with_graph(pointer, |graph| {
-        let decl_id = DeclarationId::from_lookup_name(&name_str);
+        let decl_id = declaration_id_from_lookup_name(&name_str);
 
         if let Some(decl) = graph.declarations().get(&decl_id) {
             Box::into_raw(Box::new(CDeclaration::from_declaration(decl_id, decl))).cast_const()
@@ -877,7 +877,7 @@ pub unsafe extern "C" fn rdx_graph_complete_namespace_access(
             graph,
             CompletionReceiver::NamespaceAccess {
                 self_decl_id,
-                namespace_decl_id: DeclarationId::from_lookup_name(&name_str),
+                namespace_decl_id: declaration_id_from_lookup_name(&name_str),
             },
             Vec::new(),
         )
@@ -911,7 +911,7 @@ pub unsafe extern "C" fn rdx_graph_complete_method_call(
             graph,
             CompletionReceiver::MethodCall {
                 self_decl_id,
-                receiver_decl_id: DeclarationId::from_lookup_name(&name_str),
+                receiver_decl_id: declaration_id_from_lookup_name(&name_str),
             },
             Vec::new(),
         )
@@ -955,7 +955,7 @@ pub unsafe extern "C" fn rdx_graph_complete_method_argument(
             CompletionReceiver::MethodArgument {
                 self_decl_id,
                 nesting_name_id,
-                method_decl_id: DeclarationId::from_lookup_name(&name_str),
+                method_decl_id: declaration_id_from_lookup_name(&name_str),
             },
             names_to_untrack,
         )
