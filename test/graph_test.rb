@@ -146,6 +146,28 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_get_declaration_accepts_leading_double_colon
+    with_context do |context|
+      context.write!("file.rb", "module Foo; class Bar; end; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      # Built-ins are root-scoped, so `Object` and `::Object` must resolve to the same declaration.
+      refute_nil(graph["::Object"])
+      assert_equal(graph["Object"].name, graph["::Object"].name)
+
+      # Same for indexed declarations, top-level and nested.
+      refute_nil(graph["::Foo"])
+      refute_nil(graph["::Foo::Bar"])
+      assert_equal(graph["Foo::Bar"].name, graph["::Foo::Bar"].name)
+
+      # Unknown names still return nil when prefixed.
+      assert_nil(graph["::DoesNotExist"])
+    end
+  end
+
   def test_list_all_declarations_enumerator
     with_context do |context|
       context.write!("file1.rb", "class A; end")
@@ -1095,6 +1117,36 @@ class GraphTest < Minitest::Test
 
     assert(candidates.any? { |c| c.is_a?(Rubydex::Constant) && c.name == "Foo::CONST" })
     assert(candidates.any? { |c| c.is_a?(Rubydex::Method) && c.name == "Foo::<Foo>#bar()" })
+  end
+
+  def test_completion_declaration_lookups_accept_leading_double_colon
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", <<~RUBY, "ruby")
+      class Foo
+        CONST = 1
+
+        def instance_method; end
+        def self.helper(name:); end
+      end
+    RUBY
+    graph.resolve
+
+    namespace_candidates = graph.complete_namespace_access("::Foo", self_receiver: "::Foo")
+    assert(namespace_candidates.any? { |c| c.name == "Foo::CONST" })
+    assert(namespace_candidates.any? { |c| c.name == "Foo::<Foo>#helper()" })
+
+    method_candidates = graph.complete_method_call("::Foo", self_receiver: "::Foo").map(&:name)
+    assert_includes(method_candidates, "Foo#instance_method()")
+
+    expression_candidates = graph.complete_expression(["Foo"], self_receiver: "::Foo").map(&:name)
+    assert_includes(expression_candidates, "Foo#instance_method()")
+
+    argument_candidates = graph.complete_method_argument(
+      "::Foo::<Foo>#helper()",
+      ["Foo"],
+      self_receiver: "::Foo::<Foo>",
+    ).map(&:name)
+    assert_includes(argument_candidates, "name")
   end
 
   def test_complete_namespace_access_for_non_namespace

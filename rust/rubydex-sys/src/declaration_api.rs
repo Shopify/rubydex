@@ -9,7 +9,7 @@ use crate::definition_api::{DefinitionsIter, rdx_definitions_iter_new_from_ids};
 use crate::graph_api::{GraphPointer, with_graph};
 use crate::reference_api::{CConstantReference, CMethodReference, ConstantReferencesIter, MethodReferencesIter};
 use crate::utils;
-use rubydex::model::ids::{DeclarationId, StringId};
+use rubydex::model::ids::{DeclarationId, StringId, declaration_id_from_lookup_name};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -80,7 +80,7 @@ pub(crate) unsafe fn decl_id_from_char_ptr(ptr: *const c_char) -> Option<Declara
     if s.is_empty() {
         return None;
     }
-    Some(DeclarationId::from(s.as_str()))
+    Some(declaration_id_from_lookup_name(&s))
 }
 
 /// An iterator over declaration IDs

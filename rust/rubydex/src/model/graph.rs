@@ -13,7 +13,10 @@ use crate::model::definitions::{Definition, MethodVisibilityDefinition, Receiver
 use crate::model::document::Document;
 use crate::model::encoding::Encoding;
 use crate::model::identity_maps::{IdentityHashMap, IdentityHashSet};
-use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
+use crate::model::ids::{
+    ConstantReferenceId, DeclarationId, DefinitionId, MethodReferenceId, NameId, StringId, UriId,
+    declaration_id_from_lookup_name,
+};
 use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
@@ -578,7 +581,7 @@ impl Graph {
 
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Vec<&Definition>> {
-        let declaration_id = DeclarationId::from(name);
+        let declaration_id = declaration_id_from_lookup_name(name);
         let declaration = self.declarations.get(&declaration_id)?;
 
         Some(
@@ -1570,6 +1573,10 @@ mod tests {
         assert_members_eq, assert_no_diagnostics, assert_no_members,
     };
 
+    fn definition_ids(definitions: Vec<&Definition>) -> Vec<DefinitionId> {
+        definitions.into_iter().map(Definition::id).collect()
+    }
+
     #[test]
     fn deleting_a_uri() {
         let mut context = GraphTest::new();
@@ -1990,6 +1997,34 @@ mod tests {
         let definitions = context.graph().get("Foo").unwrap();
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].offset().start(), 6);
+    }
+
+    #[test]
+    fn get_accepts_leading_double_colon() {
+        let mut context = GraphTest::new();
+
+        context.index_uri("file:///foo.rb", "module Foo; module Bar; end; end");
+        context.resolve();
+
+        // Built-in declarations (root-scoped):
+        let unqualified = context.graph().get("Object").expect("unqualified `Object` lookup");
+        let qualified = context.graph().get("::Object").expect("qualified `::Object` lookup");
+        assert_eq!(definition_ids(unqualified), definition_ids(qualified));
+
+        // Indexed declarations, top-level and nested:
+        let unqualified = context.graph().get("Foo").expect("unqualified `Foo` lookup");
+        let qualified = context.graph().get("::Foo").expect("qualified `::Foo` lookup");
+        assert_eq!(definition_ids(unqualified), definition_ids(qualified));
+
+        let unqualified = context.graph().get("Foo::Bar").expect("unqualified `Foo::Bar` lookup");
+        let qualified = context
+            .graph()
+            .get("::Foo::Bar")
+            .expect("qualified `::Foo::Bar` lookup");
+        assert_eq!(definition_ids(unqualified), definition_ids(qualified));
+
+        // Unknown names still return None when prefixed:
+        assert!(context.graph().get("::DoesNotExist").is_none());
     }
 
     #[test]
