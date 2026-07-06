@@ -1559,6 +1559,10 @@ mod tests {
         assert_members_eq, assert_no_diagnostics, assert_no_members,
     };
 
+    fn definition_ids(definitions: Vec<&Definition>) -> Vec<DefinitionId> {
+        definitions.into_iter().map(Definition::id).collect()
+    }
+
     #[test]
     fn deleting_a_uri() {
         let mut context = GraphTest::new();
@@ -1991,11 +1995,19 @@ mod tests {
         // Built-in declarations (root-scoped):
         let unqualified = context.graph().get("Object").expect("unqualified `Object` lookup");
         let qualified = context.graph().get("::Object").expect("qualified `::Object` lookup");
-        assert_eq!(unqualified.len(), qualified.len());
+        assert_eq!(definition_ids(unqualified), definition_ids(qualified));
 
         // Indexed declarations, top-level and nested:
-        assert!(context.graph().get("::Foo").is_some());
-        assert!(context.graph().get("::Foo::Bar").is_some());
+        let unqualified = context.graph().get("Foo").expect("unqualified `Foo` lookup");
+        let qualified = context.graph().get("::Foo").expect("qualified `::Foo` lookup");
+        assert_eq!(definition_ids(unqualified), definition_ids(qualified));
+
+        let unqualified = context.graph().get("Foo::Bar").expect("unqualified `Foo::Bar` lookup");
+        let qualified = context
+            .graph()
+            .get("::Foo::Bar")
+            .expect("qualified `::Foo::Bar` lookup");
+        assert_eq!(definition_ids(unqualified), definition_ids(qualified));
 
         // Unknown names still return None when prefixed:
         assert!(context.graph().get("::DoesNotExist").is_none());
