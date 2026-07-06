@@ -69,6 +69,8 @@ pub struct Resolver<'a> {
     graph: &'a mut Graph,
     /// Contains all units of work for resolution, sorted in order for resolution (less complex constant names first)
     unit_queue: VecDeque<Unit>,
+    /// Ancestor declarations already present in `unit_queue`.
+    queued_ancestors: IdentityHashSet<DeclarationId>,
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
 }
@@ -78,6 +80,7 @@ impl<'a> Resolver<'a> {
         Self {
             graph,
             unit_queue: VecDeque::new(),
+            queued_ancestors: IdentityHashSet::default(),
             made_progress: false,
         }
     }
@@ -132,6 +135,7 @@ impl<'a> Resolver<'a> {
         // deleted but will be re-added). Drain leftovers back to pending_work so
         // they're retried on the next resolve() call.
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
+        self.queued_ancestors.clear();
 
         self.handle_remaining_definitions(other_ids);
     }
@@ -213,16 +217,16 @@ impl<'a> Resolver<'a> {
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
                 self.unit_queue.push_back(unit_id);
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                self.push_ancestor_unit(id_needing_linearization);
             }
             Outcome::Resolved(id, None) => {
                 if needs_linearization {
-                    self.unit_queue.push_back(Unit::Ancestors(id));
+                    self.push_ancestor_unit(id);
                 }
                 self.made_progress = true;
             }
             Outcome::Resolved(_, Some(id_needing_linearization)) => {
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                self.push_ancestor_unit(id_needing_linearization);
                 self.made_progress = true;
             }
         }
@@ -241,7 +245,7 @@ impl<'a> Resolver<'a> {
             }
             Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
                 self.unit_queue.push_back(unit_id);
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                self.push_ancestor_unit(id_needing_linearization);
             }
             Outcome::Resolved(declaration_id, None) => {
                 self.graph.record_resolved_reference(id, declaration_id);
@@ -250,13 +254,15 @@ impl<'a> Resolver<'a> {
             Outcome::Resolved(resolved_id, Some(id_needing_linearization)) => {
                 self.graph.record_resolved_reference(id, resolved_id);
                 self.made_progress = true;
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+                self.push_ancestor_unit(id_needing_linearization);
             }
         }
     }
 
     /// Handles a unit of work for linearizing ancestors of a declaration
     fn handle_ancestor_unit(&mut self, id: DeclarationId) {
+        self.queued_ancestors.remove(&id);
+
         match self.ancestors_of(id) {
             Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
                 // We succeeded in some capacity this time
@@ -265,8 +271,14 @@ impl<'a> Resolver<'a> {
             Ancestors::Partial(_) => {
                 // We still couldn't linearize ancestors, but there's a chance that this will succeed next time. We
                 // re-enqueue for another try, but we don't consider it as making progress
-                self.unit_queue.push_back(Unit::Ancestors(id));
+                self.push_ancestor_unit(id);
             }
+        }
+    }
+
+    fn push_ancestor_unit(&mut self, id: DeclarationId) {
+        if self.queued_ancestors.insert(id) {
+            self.unit_queue.push_back(Unit::Ancestors(id));
         }
     }
 
@@ -871,7 +883,7 @@ impl<'a> Resolver<'a> {
                 if eager_ancestors {
                     let _ = self.ancestors_of(attached_id);
                 } else {
-                    self.unit_queue.push_back(Unit::Ancestors(attached_id));
+                    self.push_ancestor_unit(attached_id);
                 }
             } else {
                 return None;
@@ -903,7 +915,7 @@ impl<'a> Resolver<'a> {
         if eager_ancestors {
             let _ = self.ancestors_of(decl_id);
         } else {
-            self.unit_queue.push_back(Unit::Ancestors(decl_id));
+            self.push_ancestor_unit(decl_id);
         }
 
         Some(decl_id)
@@ -1273,7 +1285,7 @@ impl<'a> Resolver<'a> {
                         self.graph.promote_constant_to_namespace(owner_id, |name, owner_id| {
                             Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
                         });
-                        self.unit_queue.push_back(Unit::Ancestors(owner_id));
+                        self.push_ancestor_unit(owner_id);
                     }
                 }
 
@@ -1942,9 +1954,12 @@ impl<'a> Resolver<'a> {
         self.unit_queue.extend(definitions.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(const_refs.into_iter().map(|(id, _)| id));
         self.unit_queue.extend(singleton_methods);
-        self.unit_queue.extend(ancestors.into_iter().map(Unit::Ancestors));
+        let other_ids = others.into_iter().map(|(id, _)| id).collect();
+        for id in ancestors {
+            self.push_ancestor_unit(id);
+        }
 
-        others.into_iter().map(|(id, _)| id).collect()
+        other_ids
     }
 
     /// Returns the singleton parent ID for an attached object ID. A singleton class' parent depends on what the attached
