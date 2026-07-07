@@ -239,9 +239,8 @@ impl<'a> Resolver<'a> {
                 // parent namespace was deleted but will be re-added).
                 self.unit_queue.push_back(unit_id);
             }
-            Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
+            Outcome::Retry(Some(_)) | Outcome::Unresolved(Some(_)) => {
                 self.unit_queue.push_back(unit_id);
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
             }
             Outcome::Resolved(declaration_id, None) => {
                 self.graph.record_resolved_reference(id, declaration_id);
