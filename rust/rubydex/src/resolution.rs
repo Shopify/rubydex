@@ -37,6 +37,19 @@ impl Outcome {
     }
 }
 
+/// Controls how `get_or_create_singleton_class` schedules linearization of the singleton it touches.
+#[derive(Clone, Copy)]
+enum SingletonAncestors {
+    /// Linearize the ancestors inline, immediately. Should only be used after the convergence loop, when every
+    /// namespace is already resolved.
+    Eager,
+    /// Enqueue a `Unit::Ancestors` so the convergence loop linearizes it on a later pass.
+    Enqueue,
+    /// Do nothing: the caller is already mid-linearization and will linearize this singleton inline
+    /// within the current `LinearizationContext`, so a separate unit would be pure duplicate work.
+    Deferred,
+}
+
 struct LinearizationContext {
     descendants: IdentityHashSet<DeclarationId>,
     seen_ids: IdentityHashSet<DeclarationId>,
@@ -184,16 +197,18 @@ impl<'a> Resolver<'a> {
                 };
                 let str_id = *method.str_id();
                 match self.graph.definition_id_to_declaration_id(*def_id) {
-                    Some(&owner_decl_id) => match self.get_or_create_singleton_class(owner_decl_id, false) {
-                        Some(singleton_id) => {
-                            self.create_declaration(str_id, id, singleton_id, |name| {
-                                Declaration::Method(Box::new(MethodDeclaration::new(name, singleton_id)))
-                            });
-                            Outcome::Resolved(singleton_id)
+                    Some(&owner_decl_id) => {
+                        match self.get_or_create_singleton_class(owner_decl_id, SingletonAncestors::Enqueue) {
+                            Some(singleton_id) => {
+                                self.create_declaration(str_id, id, singleton_id, |name| {
+                                    Declaration::Method(Box::new(MethodDeclaration::new(name, singleton_id)))
+                                });
+                                Outcome::Resolved(singleton_id)
+                            }
+                            // Owner is a non-promotable constant — method is orphaned
+                            None => Outcome::Unresolved,
                         }
-                        // Owner is a non-promotable constant — method is orphaned
-                        None => Outcome::Unresolved,
-                    },
+                    }
                     // Owning class not resolved yet — retry next pass
                     None => Outcome::Retry {
                         partial_ancestors: false,
@@ -275,7 +290,9 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
-                            let Some(singleton_id) = self.get_or_create_singleton_class(receiver_decl_id, true) else {
+                            let Some(singleton_id) =
+                                self.get_or_create_singleton_class(receiver_decl_id, SingletonAncestors::Eager)
+                            else {
                                 continue;
                             };
 
@@ -379,7 +396,9 @@ impl<'a> Resolver<'a> {
                                 };
 
                                 // Instance variable in singleton method - owned by the receiver's singleton class
-                                let Some(owner_id) = self.get_or_create_singleton_class(receiver_decl_id, true) else {
+                                let Some(owner_id) =
+                                    self.get_or_create_singleton_class(receiver_decl_id, SingletonAncestors::Eager)
+                                else {
                                     continue;
                                 };
                                 {
@@ -437,7 +456,9 @@ impl<'a> Resolver<'a> {
                                 .copied()
                                 .unwrap_or(*OBJECT_ID);
 
-                            let Some(owner_id) = self.get_or_create_singleton_class(nesting_decl_id, true) else {
+                            let Some(owner_id) =
+                                self.get_or_create_singleton_class(nesting_decl_id, SingletonAncestors::Eager)
+                            else {
                                 continue;
                             };
                             {
@@ -467,7 +488,7 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
                             let owner_id = self
-                                .get_or_create_singleton_class(singleton_class_decl_id, true)
+                                .get_or_create_singleton_class(singleton_class_decl_id, SingletonAncestors::Eager)
                                 .expect("singleton class nesting should always be a namespace");
                             {
                                 debug_assert!(
@@ -508,7 +529,8 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
-                            let Some(owner_id) = self.get_or_create_singleton_class(decl_id, true) else {
+                            let Some(owner_id) = self.get_or_create_singleton_class(decl_id, SingletonAncestors::Eager)
+                            else {
                                 continue;
                             };
 
@@ -636,7 +658,9 @@ impl<'a> Resolver<'a> {
             };
 
             let owner_id = if is_singleton {
-                let Some(singleton_id) = self.get_or_create_singleton_class(lexical_owner_id, true) else {
+                let Some(singleton_id) =
+                    self.get_or_create_singleton_class(lexical_owner_id, SingletonAncestors::Eager)
+                else {
                     continue;
                 };
                 singleton_id
@@ -829,19 +853,20 @@ impl<'a> Resolver<'a> {
     /// If the declaration is a `Constant` with all-promotable definitions, it is automatically promoted to a `Class`
     /// namespace before creating the singleton. Returns `None` if the declaration is not a namespace and cannot be
     /// promoted (e.g., `FOO = 42`).
-    /// When `eager_ancestors` is `true`, ancestor chains are linearized inline (used after the convergence loop when all
-    /// namespaces are resolved). When `false`, a `Unit::Ancestors` item is enqueued for the convergence loop to process.
+    /// `ancestors` controls how the singleton's ancestor chain is scheduled for linearization —
+    /// inline now (`Eager`), enqueued for the convergence loop (`Enqueue`), or left to the caller
+    /// that is already linearizing it inline (`Deferred`). See [`SingletonAncestors`].
     fn get_or_create_singleton_class(
         &mut self,
         attached_id: DeclarationId,
-        eager_ancestors: bool,
+        mode: SingletonAncestors,
     ) -> Option<DeclarationId> {
         let attached_decl = self.graph.declarations().get(&attached_id).unwrap();
 
         // If the attached object is a constant alias, follow the alias chain to find the actual namespace
         if matches!(attached_decl, Declaration::ConstantAlias(_)) {
             return match self.resolve_to_namespace(attached_id) {
-                Some(id) => self.get_or_create_singleton_class(id, eager_ancestors),
+                Some(id) => self.get_or_create_singleton_class(id, mode),
                 None => None,
             };
         }
@@ -852,11 +877,7 @@ impl<'a> Resolver<'a> {
                     Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
                 });
 
-                if eager_ancestors {
-                    let _ = self.ancestors_of(attached_id);
-                } else {
-                    self.unit_queue.push_back(Unit::Ancestors(attached_id));
-                }
+                self.schedule_singleton_ancestors(attached_id, mode);
             } else {
                 return None;
             }
@@ -884,13 +905,24 @@ impl<'a> Resolver<'a> {
             )))),
         );
 
-        if eager_ancestors {
-            let _ = self.ancestors_of(decl_id);
-        } else {
-            self.unit_queue.push_back(Unit::Ancestors(decl_id));
-        }
+        self.schedule_singleton_ancestors(decl_id, mode);
 
         Some(decl_id)
+    }
+
+    /// Schedules linearization of a singleton's ancestor chain according to the requested policy.
+    fn schedule_singleton_ancestors(&mut self, id: DeclarationId, mode: SingletonAncestors) {
+        match mode {
+            SingletonAncestors::Eager => {
+                let _ = self.ancestors_of(id);
+            }
+            SingletonAncestors::Enqueue => {
+                self.unit_queue.push_back(Unit::Ancestors(id));
+            }
+            // The caller is already linearizing this singleton inline within the current
+            // `LinearizationContext`, so a separate unit would be redundant work.
+            SingletonAncestors::Deferred => {}
+        }
     }
 
     /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
@@ -995,7 +1027,7 @@ impl<'a> Resolver<'a> {
 
         // Ensure that we create the singleton and enqueue it for linearization if we see an extend
         if has_extends && !is_singleton_class {
-            self.get_or_create_singleton_class(declaration_id, false);
+            self.get_or_create_singleton_class(declaration_id, SingletonAncestors::Enqueue);
         }
 
         let (linearized_prepends, linearized_includes) =
@@ -1434,6 +1466,7 @@ impl<'a> Resolver<'a> {
     /// Attempts to resolve a constant reference against the graph. Returns the fully qualified declaration ID that the
     /// reference is related to or `None`. This method mutates the graph to remember which constants have already been
     /// resolved
+    #[allow(clippy::too_many_lines)]
     fn resolve_constant_internal(&mut self, name_id: NameId) -> Outcome {
         let name_ref = self.graph.names().get(&name_id).unwrap().clone();
 
@@ -1483,7 +1516,9 @@ impl<'a> Resolver<'a> {
 
                         // If we found a singleton reference with a resolved attached object parent scope, we
                         // automatically create the singleton class
-                        let Some(singleton_id) = self.get_or_create_singleton_class(target_decl_id, false) else {
+                        let Some(singleton_id) =
+                            self.get_or_create_singleton_class(target_decl_id, SingletonAncestors::Enqueue)
+                        else {
                             return Outcome::Unresolved;
                         };
                         self.graph.record_resolved_name(name_id, singleton_id);
@@ -1992,7 +2027,7 @@ impl<'a> Resolver<'a> {
 
                 let (inner_parent, partial) = self.singleton_parent_id(owner_id);
                 (
-                    self.get_or_create_singleton_class(inner_parent, false)
+                    self.get_or_create_singleton_class(inner_parent, SingletonAncestors::Deferred)
                         .expect("singleton parent should always be a namespace"),
                     partial,
                 )
@@ -2003,7 +2038,7 @@ impl<'a> Resolver<'a> {
 
                 let (picked_parent, unresolved_parent) = self.get_parent_class(&definition_ids);
                 (
-                    self.get_or_create_singleton_class(picked_parent, false)
+                    self.get_or_create_singleton_class(picked_parent, SingletonAncestors::Deferred)
                         .expect("parent class should always be a namespace"),
                     unresolved_parent.is_some(),
                 )
