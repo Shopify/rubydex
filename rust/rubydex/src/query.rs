@@ -2826,7 +2826,16 @@ mod tests {
                 self_decl_id: None,
                 nesting_name_id,
             },
-            ["Bar#@@bar_cvar"]
+            [
+                "Bar",
+                "Bar#@@bar_cvar",
+                "BasicObject",
+                "Class",
+                "Foo",
+                "Kernel",
+                "Module",
+                "Object"
+            ]
         );
     }
 
