@@ -1,5 +1,5 @@
 use clap::{Parser, ValueEnum};
-use std::{collections::HashSet, mem};
+use std::{fs, mem, path::PathBuf};
 
 use rubydex::{
     dot,
@@ -17,7 +17,11 @@ use rubydex::{
 #[command(name = "rubydex_cli", about = "A Static Analysis Toolkit for Ruby", version)]
 #[allow(clippy::struct_excessive_bools)]
 struct Args {
-    #[arg(value_name = "PATHS", default_value = ".")]
+    #[arg(
+        value_name = "PATHS",
+        default_value = ".",
+        help = "Path(s) to index. If the first path is a directory, it is used as the workspace root for rubydex.toml"
+    )]
     paths: Vec<String>,
 
     #[arg(long = "stop-after", help = "Stop after the given stage")]
@@ -85,6 +89,11 @@ fn exit(print_stats: bool) {
     std::process::exit(0);
 }
 
+fn workspace_path_for(paths: &[String]) -> Option<PathBuf> {
+    let first_path = paths.first()?;
+    fs::canonicalize(first_path).ok().filter(|path| path.is_dir())
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -92,9 +101,21 @@ fn main() {
         Timer::set_global_timer(Timer::new());
     }
 
+    let mut graph = Graph::new();
+
+    if let Some(workspace_path) = workspace_path_for(&args.paths) {
+        graph.set_workspace_path(workspace_path);
+        if let Err(error) = graph.load_config(None) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+
     // Listing
 
-    let (file_paths, errors) = time_it!(listing, { listing::collect_file_paths(args.paths, &HashSet::new()) });
+    let (file_paths, errors) = time_it!(listing, {
+        listing::collect_file_paths(args.paths, &graph.excluded_paths())
+    });
 
     for error in errors {
         eprintln!("{error}");
@@ -106,7 +127,6 @@ fn main() {
 
     // Indexing
 
-    let mut graph = Graph::new();
     let backend = IndexerBackend::from(&args.indexer);
     let errors = time_it!(indexing, { indexing::index_files(&mut graph, file_paths, backend) });
 

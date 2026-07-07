@@ -19,6 +19,9 @@ fn prints_help() {
         .success()
         .stdout(predicate::str::contains("A Static Analysis Toolkit for Ruby"))
         .stdout(predicate::str::contains("Usage:"))
+        .stdout(predicate::str::contains(
+            "If the first path is a directory, it is used as the workspace root for rubydex.toml",
+        ))
         .stdout(predicate::str::contains("--stats"))
         .stdout(predicate::str::contains("--dot"))
         .stdout(predicate::str::contains("--stop-after"));
@@ -49,6 +52,69 @@ fn paths_argument_variants() {
         .success()
         .stderr(predicate::str::is_empty())
         .stdout(predicate::str::contains("Indexed 4 files"));
+    });
+}
+
+#[test]
+fn single_directory_argument_is_workspace_root_for_config() {
+    with_context(|context| {
+        context.write("included.rb", "class Included\nend\n");
+        context.write("excluded/skipped.rb", "class Skipped\nend\n");
+        context.write("rubydex.toml", "exclude = [\"excluded\"]\n");
+
+        rdx(&[context.absolute_path().to_str().unwrap()])
+            .success()
+            .stderr(predicate::str::is_empty())
+            .stdout(predicate::str::contains("Indexed 2 files"));
+    });
+}
+
+#[test]
+fn first_directory_argument_is_workspace_root_for_config() {
+    with_context(|context| {
+        context.write("included/kept.rb", "class Included\nend\n");
+        context.write("excluded/skipped.rb", "class Skipped\nend\n");
+        context.write("rubydex.toml", "exclude = [\"excluded\"]\n");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            context.absolute_path_to("included").to_str().unwrap(),
+            context.absolute_path_to("excluded").to_str().unwrap(),
+        ])
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("Indexed 2 files"));
+    });
+}
+
+#[test]
+fn single_file_argument_is_not_used_as_workspace_root() {
+    with_context(|context| {
+        context.write("included.rb", "class Included\nend\n");
+        context.write("excluded/skipped.rb", "class Skipped\nend\n");
+        context.write("rubydex.toml", "exclude = [\"excluded\"]\n");
+
+        rdx(&[context.absolute_path_to("excluded/skipped.rb").to_str().unwrap()])
+            .success()
+            .stderr(predicate::str::is_empty())
+            .stdout(predicate::str::contains("Indexed 2 files"));
+    });
+}
+
+#[test]
+fn first_file_argument_is_not_used_as_workspace_root() {
+    with_context(|context| {
+        context.write("included.rb", "class Included\nend\n");
+        context.write("excluded/skipped.rb", "class Skipped\nend\n");
+        context.write("rubydex.toml", "exclude = [\"excluded\"]\n");
+
+        rdx(&[
+            context.absolute_path_to("included.rb").to_str().unwrap(),
+            context.absolute_path_to("excluded").to_str().unwrap(),
+        ])
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("Indexed 3 files"));
     });
 }
 
