@@ -2,7 +2,7 @@
 
 module Rubydex
   module MCPServer
-    class FindConstantReferencesTool < Tool
+    class FindConstantReferencesTool < BaseTool
       tool_name "find_constant_references"
       description "Find all resolved references to a Ruby class, module, or constant across the codebase. Returns file paths, line numbers, and columns for each usage. Results are paginated: the response includes `total`. If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
       input_schema(
@@ -14,41 +14,31 @@ module Rubydex
         required: ["name"],
       )
 
-      class << self
-        #: (name: String, ?limit: Integer, ?offset: Integer, server: Server) -> Tool::Response
-        def call(name:, limit: nil, offset: nil, server:)
-          graph = server.graph_or_error
+      #: (name: String, ?limit: Integer, ?offset: Integer) -> Tool::Response
+      def call(name:, limit: nil, offset: nil)
+        declaration = lookup_declaration(name)
 
-          case graph
-          when Error
-            MCPServer.response(graph)
+        case declaration
+        when Error
+          response(declaration)
+        else
+          references = case declaration
+          when Rubydex::Namespace, Rubydex::Constant, Rubydex::ConstantAlias
+            declaration.references
           else
-            declaration = MCPServer.lookup_declaration(graph, name)
-
-            case declaration
-            when Error
-              MCPServer.response(declaration)
-            else
-              references = case declaration
-              when Rubydex::Namespace, Rubydex::Constant, Rubydex::ConstantAlias
-                declaration.references
-              else
-                []
-              end
-              page, total = MCPServer.paginate(references, offset, limit, 200)
-              root_path = server.root_path
-              payload = page.map do |reference|
-                display = reference.location.to_display
-                {
-                  path: MCPServer.format_path(display.uri, root_path),
-                  line: display.start_line,
-                  column: display.start_column,
-                }
-              end
-
-              MCPServer.response(name: name, references: payload, total: total)
-            end
+            []
           end
+          page, total = paginate(references, offset, limit, 200)
+          payload = page.map do |reference|
+            display = reference.location.to_display
+            {
+              path: format_path(display.uri),
+              line: display.start_line,
+              column: display.start_column,
+            }
+          end
+
+          response(name: name, references: payload, total: total)
         end
       end
     end

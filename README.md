@@ -94,16 +94,16 @@ like Claude to semantically query your Ruby codebase.
    bundle install
    ```
 
-3. Configure your MCP client to run `bundle exec rubydex_mcp`.
+3. Configure your MCP client to run `bundle exec rdx --mcp`.
 
    Using Claude Code as an example:
    ```bash
-   claude mcp add --scope project rubydex -- bundle exec rubydex_mcp
+   claude mcp add --scope project rubydex -- bundle exec rdx --mcp
    ```
 
    Using Codex as an example:
    ```bash
-   codex mcp add rubydex -- bundle exec rubydex_mcp
+   codex mcp add rubydex -- bundle exec rdx --mcp
    ```
 
    Start your MCP client from that project directory. The MCP server indexes

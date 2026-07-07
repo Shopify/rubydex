@@ -2,7 +2,7 @@
 
 module Rubydex
   module MCPServer
-    class SearchDeclarationsTool < Tool
+    class SearchDeclarationsTool < BaseTool
       tool_name "search_declarations"
       description 'Search for Ruby classes, modules, methods, or constants by name. Use this INSTEAD OF Grep when you know part of a Ruby identifier name and want to find its definition. Returns fully qualified names, kinds, and file locations. Use the `kind` filter ("Class", "Module", "Method", "Constant") to narrow results. Set `match_mode` to "exact" for precise substring matching or "fuzzy" for LSP-style workspace symbol search (default). Results are paginated: the response includes `total` (the full count of matches). If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages.'
       input_schema(
@@ -16,49 +16,39 @@ module Rubydex
         required: ["query"],
       )
 
-      class << self
-        #: (query: String, ?kind: String, ?match_mode: String, ?limit: Integer, ?offset: Integer, server: Server) -> Tool::Response
-        def call(query:, kind: nil, match_mode: nil, limit: nil, offset: nil, server:)
-          graph = server.graph_or_error
-
-          case graph
-          when Error
-            MCPServer.response(graph)
-          else
-            declarations = case match_mode
-            when nil, "fuzzy"
-              graph.fuzzy_search(query)
-            when "exact"
-              graph.search(query)
-            else
-              return MCPServer.response(
-                Error.new(
-                  "invalid_match_mode",
-                  "Invalid match_mode '#{match_mode}'",
-                  'Use "fuzzy" or "exact"',
-                ),
-              )
-            end
-
-            if kind
-              declarations = declarations.lazy.select { |declaration| MCPServer.declaration_kind(declaration).casecmp?(kind) }
-            end
-
-            page, total = MCPServer.paginate(declarations, offset, limit, 100)
-            root_path = server.root_path
-            results = page.map do |declaration|
-              {
-                name: declaration.name,
-                kind: MCPServer.declaration_kind(declaration),
-                locations: declaration.definitions.map do |definition|
-                  MCPServer.display_location(definition.location, root_path)
-                end,
-              }
-            end
-
-            MCPServer.response(results: results, total: total)
-          end
+      #: (query: String, ?kind: String, ?match_mode: String, ?limit: Integer, ?offset: Integer) -> Tool::Response
+      def call(query:, kind: nil, match_mode: nil, limit: nil, offset: nil)
+        declarations = case match_mode
+        when nil, "fuzzy"
+          @graph.fuzzy_search(query)
+        when "exact"
+          @graph.search(query)
+        else
+          return response(
+            Error.new(
+              "invalid_match_mode",
+              "Invalid match_mode '#{match_mode}'",
+              'Use "fuzzy" or "exact"',
+            ),
+          )
         end
+
+        if kind
+          declarations = declarations.lazy.select { |declaration| declaration_kind(declaration).casecmp?(kind) }
+        end
+
+        page, total = paginate(declarations, offset, limit, 100)
+        results = page.map do |declaration|
+          {
+            name: declaration.name,
+            kind: declaration_kind(declaration),
+            locations: declaration.definitions.map do |definition|
+              display_location(definition.location)
+            end,
+          }
+        end
+
+        response(results: results, total: total)
       end
     end
   end

@@ -2,7 +2,7 @@
 
 module Rubydex
   module MCPServer
-    class GetDescendantsTool < Tool
+    class GetDescendantsTool < BaseTool
       tool_name "get_descendants"
       description "Returns all known descendants for the given namespace including itself and all transitive descendants. Can be used to understand how a module/class is used across the codebase. Results are paginated: the response includes `total`. If `total` exceeds the number of returned results, use `offset` to fetch subsequent pages."
       input_schema(
@@ -14,40 +14,31 @@ module Rubydex
         required: ["name"],
       )
 
-      class << self
-        #: (name: String, ?limit: Integer, ?offset: Integer, server: Server) -> Tool::Response
-        def call(name:, limit: nil, offset: nil, server:)
-          graph = server.graph_or_error
+      #: (name: String, ?limit: Integer, ?offset: Integer) -> Tool::Response
+      def call(name:, limit: nil, offset: nil)
+        declaration = lookup_declaration(name)
 
-          case graph
-          when Error
-            MCPServer.response(graph)
-          else
-            declaration = MCPServer.lookup_declaration(graph, name)
-
-            case declaration
-            when Error
-              MCPServer.response(declaration)
-            when Rubydex::Namespace
-              page, total = MCPServer.paginate(declaration.descendants, offset, limit, 500)
-              descendants = page.map do |descendant|
-                {
-                  name: descendant.name,
-                  kind: MCPServer.declaration_kind(descendant),
-                }
-              end
-
-              MCPServer.response(name: declaration.name, descendants: descendants, total: total)
-            else
-              MCPServer.response(
-                Error.new(
-                  "invalid_kind",
-                  "'#{name}' is not a class or module (it is a #{MCPServer.declaration_kind(declaration)})",
-                  "get_descendants only works on classes and modules, not methods or constants",
-                ),
-              )
-            end
+        case declaration
+        when Error
+          response(declaration)
+        when Rubydex::Namespace
+          page, total = paginate(declaration.descendants, offset, limit, 500)
+          descendants = page.map do |descendant|
+            {
+              name: descendant.name,
+              kind: declaration_kind(descendant),
+            }
           end
+
+          response(name: declaration.name, descendants: descendants, total: total)
+        else
+          response(
+            Error.new(
+              "invalid_kind",
+              "'#{name}' is not a class or module (it is a #{declaration_kind(declaration)})",
+              "get_descendants only works on classes and modules, not methods or constants",
+            ),
+          )
         end
       end
     end

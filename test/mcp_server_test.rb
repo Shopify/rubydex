@@ -7,6 +7,7 @@ require "mocha/minitest"
 require "rubydex/mcp_server"
 require "open3"
 require "rbconfig"
+require "stringio"
 require "timeout"
 require "uri"
 
@@ -151,6 +152,137 @@ class MCPServerTest < Minitest::Test
     assert_equal([{ jsonrpc: "2.0", id: 1, result: {} }], response)
   end
 
+  def test_main_loop_handles_requests_concurrently
+    transport = Class.new do
+      attr_reader :writes
+
+      def initialize
+        @writes = Queue.new
+        @closed = false
+      end
+
+      def open
+        yield({ jsonrpc: "2.0", id: 1, method: "slow" })
+        yield({ jsonrpc: "2.0", id: 2, method: "fast" })
+      end
+
+      def write(response)
+        @writes << response
+      end
+
+      def close
+        @closed = true
+      end
+
+      def closed?
+        @closed
+      end
+    end.new
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd, transport: transport)
+    slow_request_started = Queue.new
+    release_slow_request = Queue.new
+
+    server.define_singleton_method(:handle) do |request|
+      if request.fetch(:id) == 1
+        slow_request_started << true
+        release_slow_request.pop
+      end
+
+      { jsonrpc: "2.0", id: request.fetch(:id), result: {} }
+    end
+
+    server_thread = Thread.new { server.main_loop }
+    slow_request_started.pop
+    first_response = Timeout.timeout(1) { transport.writes.pop }
+
+    assert_equal(2, first_response.fetch(:id))
+
+    release_slow_request << true
+    server_thread.join
+    second_response = Timeout.timeout(1) { transport.writes.pop }
+
+    assert_equal(1, second_response.fetch(:id))
+    assert_predicate(transport, :closed?)
+  end
+
+  def test_main_loop_serializes_writes_through_output_queue
+    transport = Class.new do
+      attr_reader :errors, :writes
+
+      def initialize
+        @errors = Queue.new
+        @writes = Queue.new
+        @writing = false
+      end
+
+      def open
+        10.times do |index|
+          yield({ jsonrpc: "2.0", id: index, method: "ping" })
+        end
+      end
+
+      def write(response)
+        @errors << "concurrent write" if @writing
+        @writing = true
+        sleep(0.001)
+        @writes << response
+        @writing = false
+      end
+
+      def close
+      end
+    end.new
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd, transport: transport)
+
+    server.define_singleton_method(:handle) do |request|
+      { jsonrpc: "2.0", id: request.fetch(:id), result: {} }
+    end
+
+    server.main_loop
+
+    responses = 10.times.map { Timeout.timeout(1) { transport.writes.pop } }
+    assert_empty(transport.errors.size.times.map { transport.errors.pop })
+    assert_equal((0...10).to_a, responses.map { |response| response.fetch(:id) }.sort)
+  end
+
+  def test_main_loop_routes_parse_errors_through_output_queue
+    output = StringIO.new
+    transport = Rubydex::MCPServer::StdioTransport.new
+    transport.instance_variable_set(:@input, StringIO.new("{bad json\n"))
+    transport.instance_variable_set(:@output, output)
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd, transport: transport)
+
+    server.main_loop
+
+    response = JSON.parse(output.string)
+    error = response.fetch("error")
+    assert_equal(-32_700, error.fetch("code"))
+    assert_equal("Parse error", error.fetch("message"))
+  end
+
+  def test_unknown_tool_argument_returns_tool_error
+    server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
+
+    response = server.handle(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "search_declarations",
+          arguments: {
+            query: "Dog",
+            unexpected: true,
+          },
+        },
+      },
+    )
+
+    result = response.fetch(:result)
+    assert_equal(true, result.fetch(:isError))
+    assert_equal("Unknown arguments: unexpected", result.fetch(:content)[0].fetch(:text))
+  end
+
   def test_missing_required_tool_argument_returns_tool_error
     server = Rubydex::MCPServer::Server.new(root_path: Dir.pwd)
 
@@ -170,22 +302,6 @@ class MCPServerTest < Minitest::Test
     assert_equal(true, result.fetch(:isError))
     assert_equal("Missing required arguments: query", result.fetch(:content)[0].fetch(:text))
   end
-
-  def test_path_for_uri_removes_windows_file_uri_leading_slash
-    Gem.stubs(:win_platform?).returns(true)
-
-    assert_equal("D:/a/_temp/app.rb", Rubydex::MCPServer.path_for_uri("file:///D:/a/_temp/app.rb"))
-  end
-
-  def test_path_for_uri_decodes_file_uri_paths
-    Gem.stubs(:win_platform?).returns(false)
-
-    assert_equal("/tmp/my app.rb", Rubydex::MCPServer.path_for_uri("file:///tmp/my%20app.rb"))
-  end
-
-  def test_format_path_preserves_non_file_uris
-    assert_equal("untitled:Untitled-1", Rubydex::MCPServer.format_path("untitled:Untitled-1", Dir.pwd))
-  end
 end
 
 class MCPServerIntegrationTest < Minitest::Test
@@ -197,43 +313,33 @@ class MCPServerIntegrationTest < Minitest::Test
     stdout, _stderr, status = run_executable("--help")
 
     assert_predicate(status, :success?)
-    assert_equal(<<~TEXT, stdout)
-      Rubydex MCP server for AI assistants using Ruby code intelligence
-
-      Usage: rubydex_mcp [PATH]
-
-      Arguments:
-          [PATH]  [default: current directory]
-
-      Options:
-          -h, --help                       Print help
-          -V, --version                    Print version
-    TEXT
+    assert_includes(stdout, "--mcp")
+    assert_includes(stdout, "Run the MCP server for AI assistants")
   end
 
   def test_executable_prints_version
     stdout, _stderr, status = run_executable("--version")
 
     assert_predicate(status, :success?)
-    assert_equal("rubydex_mcp #{Rubydex::VERSION}\n", stdout)
+    assert_equal("v#{Rubydex::VERSION}\n", stdout)
   end
 
   def test_executable_rejects_extra_arguments
-    stdout, stderr, status = run_executable("foo", "bar")
+    stdout, stderr, status = run_executable("--mcp", "foo", "bar")
 
     assert_equal(2, status.exitstatus)
     assert_empty(stdout)
     assert_includes(stderr, "error: unexpected argument 'bar' found")
-    assert_includes(stderr, "Usage: rubydex_mcp [PATH]")
+    assert_includes(stderr, "--mcp")
   end
 
   def test_executable_rejects_unknown_options
-    stdout, stderr, status = run_executable("--unknown")
+    stdout, stderr, status = run_executable("--mcp", "--unknown")
 
     assert_equal(2, status.exitstatus)
     assert_empty(stdout)
     assert_includes(stderr, "error: invalid option: --unknown")
-    assert_includes(stderr, "Usage: rubydex_mcp [PATH]")
+    assert_includes(stderr, "--mcp")
   end
 
   def test_mcp_server_can_be_required_directly
@@ -294,7 +400,7 @@ class MCPServerIntegrationTest < Minitest::Test
       RUBY
 
       stderr_output = +""
-      Open3.popen3(RbConfig.ruby, "-rbundler/setup", executable_path, context.absolute_path) do |stdin, stdout, stderr, wait_thr|
+      Open3.popen3(RbConfig.ruby, "-rbundler/setup", executable_path, "--mcp", context.absolute_path) do |stdin, stdout, stderr, wait_thr|
         stderr_reader = Thread.new { stderr_output << stderr.read }
 
         initialize_session(stdin, stdout)
@@ -351,7 +457,7 @@ class MCPServerIntegrationTest < Minitest::Test
         stderr_reader.join
       rescue Timeout::Error
         Process.kill("TERM", wait_thr.pid)
-        flunk("rubydex_mcp did not exit after stdin closed. stderr:\n#{stderr_output}")
+        flunk("rdx --mcp did not exit after stdin closed. stderr:\n#{stderr_output}")
       end
     end
   end
@@ -368,7 +474,7 @@ class MCPServerIntegrationTest < Minitest::Test
   end
 
   def executable_path
-    File.expand_path("../exe/rubydex_mcp", __dir__)
+    File.expand_path("../exe/rdx", __dir__)
   end
 
   def send_message(stdin, message)

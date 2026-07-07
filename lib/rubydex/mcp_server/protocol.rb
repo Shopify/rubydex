@@ -4,6 +4,29 @@ require "json"
 
 module Rubydex
   module MCPServer
+    module JSONRPC
+      PARSE_ERROR = -32_700
+      INVALID_REQUEST = -32_600
+      METHOD_NOT_FOUND = -32_601
+      INVALID_PARAMS = -32_602
+      INTERNAL_ERROR = -32_603
+
+      class << self
+        #: (untyped, Integer, String, ?data: untyped) -> Hash
+        def error_response(id, code, message, data: nil)
+          {
+            jsonrpc: "2.0",
+            id: id,
+            error: {
+              code: code,
+              message: message,
+              data: data,
+            }.compact,
+          }
+        end
+      end
+    end
+
     class Error
       #: (String, ?String, ?String) -> void
       def initialize(error, message = nil, suggestion = nil)
@@ -22,7 +45,6 @@ module Rubydex
     end
 
     class Tool
-      UNSET = Object.new.freeze
       @tools = []
 
       class Response
@@ -53,25 +75,24 @@ module Rubydex
 
         #: (Class) -> void
         def inherited(tool)
-          tools << tool
-          @tools_by_name = nil
+          Tool.tools << tool unless tool.name&.end_with?("::BaseTool")
           super
         end
 
         #: -> Hash[String, Class]
         def tools_by_name
-          @tools_by_name ||= tools.to_h { |tool| [tool.tool_name, tool] }
+          tools.to_h { |tool| [tool.tool_name, tool] }
         end
 
         #: (?String) -> String
-        def tool_name(value = UNSET)
-          @tool_name = value unless value.equal?(UNSET)
+        def tool_name(value = nil)
+          @tool_name = value if value
           @tool_name || raise(NotImplementedError, "#{name} must define tool_name")
         end
 
         #: (?String) -> String
-        def description(value = UNSET)
-          @description = value unless value.equal?(UNSET)
+        def description(value = nil)
+          @description = value if value
           @description || raise(NotImplementedError, "#{name} must define description")
         end
 
@@ -99,139 +120,36 @@ module Rubydex
       end
     end
 
-    class Server
-      PARSE_ERROR = -32_700
-      INVALID_REQUEST = -32_600
-      METHOD_NOT_FOUND = -32_601
-      INVALID_PARAMS = -32_602
-      INTERNAL_ERROR = -32_603
-
-      #: (Hash | Array | untyped) -> Hash | Array[Hash]?
-      def handle(request)
-        if request.is_a?(Array)
-          return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "Request is an empty array") if request.empty?
-
-          responses = request.filter_map { |entry| handle(entry) }
-          return responses if responses.any?
-
-          return
-        end
-
-        unless request.is_a?(Hash)
-          return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "Request must be a hash")
-        end
-
-        has_id = request.key?(:id)
-        id = request[:id]
-        method = request[:method]
-        params = request[:params]
-
-        unless request[:jsonrpc] == "2.0"
-          return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "JSON-RPC version must be 2.0")
-        end
-
-        unless !has_id || id.is_a?(Integer) || (id.is_a?(String) && id.match?(/\A[a-zA-Z0-9_-]+\z/))
-          return error_response(nil, INVALID_REQUEST, "Invalid Request", data: "Request ID must be a string or integer")
-        end
-
-        unless method.is_a?(String) && !method.start_with?("rpc.")
-          return error_response(nil, INVALID_REQUEST, "Invalid Request", data: 'Method name must be a string and not start with "rpc."')
-        end
-
-        unless params.nil? || params.is_a?(Hash)
-          return error_response(id, INVALID_PARAMS, "Invalid params", data: "Method parameters must be an object or null")
-        end
-
-        result = case method
-        when "initialize"
-          {
-            # This is not the latest protocol version. But as of implementation,
-            # this is the default protocol version the official MCP Ruby SDK uses.
-            protocolVersion: "2025-03-26",
-            capabilities: { tools: {} },
-            serverInfo: {
-              name: "rubydex_mcp",
-              version: Rubydex::VERSION,
-            },
-            instructions: SERVER_INSTRUCTIONS,
-          }
-        when "tools/list"
-          { tools: Tool.tools.map(&:to_h) }
-        when "tools/call"
-          call_tool(params || {})
-        when "ping"
-          {}
-        when "notifications/initialized"
-          return
-        else
-          return has_id ? error_response(id, METHOD_NOT_FOUND, "Method not found", data: method) : nil
-        end
-
-        has_id ? { jsonrpc: "2.0", id: id, result: result } : nil
-      rescue KeyError => e
-        has_id ? error_response(id, INVALID_PARAMS, "Invalid params", data: e.message) : nil
-      rescue StandardError => e
-        has_id ? error_response(id, INTERNAL_ERROR, "Internal error", data: e.message) : nil
-      end
-
-      private
-
-      #: (Hash) -> Hash
-      def call_tool(params)
-        tool_name = params.fetch(:name)
-        tool = Tool.tools_by_name.fetch(tool_name, nil)
-        raise KeyError, "Tool not found: #{tool_name}" unless tool
-
-        arguments = params[:arguments] || {}
-        missing_arguments = Array(tool.input_schema[:required]) - arguments.keys.map(&:to_s)
-        unless missing_arguments.empty?
-          return Tool::Response.new(
-            [{ type: "text", text: "Missing required arguments: #{missing_arguments.join(", ")}" }],
-            error: true,
-          ).to_h
-        end
-
-        response = tool.call(**arguments.transform_keys(&:to_sym), server: self)
-        response.to_h
-      end
-
-      #: (untyped, Integer, String, ?data: untyped) -> Hash
-      def error_response(id, code, message, data: nil)
-        {
-          jsonrpc: "2.0",
-          id: id,
-          error: {
-            code: code,
-            message: message,
-            data: data,
-          }.compact,
-        }
-      end
-    end
-
     class StdioTransport
-      #: (Server, ?IO, ?IO) -> void
-      def initialize(server, input: $stdin, output: $stdout)
-        @server = server
-        @input = input
-        @output = output
+      #: -> void
+      def initialize
+        @input = $stdin
+        @output = $stdout
         @input.binmode
+        @input.sync = true
         @output.binmode
         @output.sync = true
       end
 
-      #: -> void
+      #: { (Hash | Array?, Hash?) -> void } -> void
       def open
         @input.each_line do |line|
-          response = @server.handle(JSON.parse(line, symbolize_names: true))
-          next unless response
-
-          @output.puts(JSON.generate(response))
-          @output.flush
+          yield JSON.parse(line, symbolize_names: true)
         rescue JSON::ParserError
-          @output.puts(JSON.generate(jsonrpc: "2.0", id: nil, error: { code: Server::PARSE_ERROR, message: "Parse error", data: "Invalid JSON" }))
-          @output.flush
+          yield nil, JSONRPC.error_response(nil, JSONRPC::PARSE_ERROR, "Parse error", data: "Invalid JSON")
         end
+      end
+
+      #: (Hash | Array[Hash]?) -> void
+      def write(response)
+        return unless response
+
+        @output.puts(JSON.generate(response))
+      end
+
+      #: -> void
+      def close
+        @output.flush
       end
     end
   end
