@@ -63,11 +63,11 @@ const rb_data_type_t graph_type = {
     },
     .parent = NULL,
     .data = NULL,
-    .flags = RUBY_TYPED_FREE_IMMEDIATELY,
+    .flags = RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_FROZEN_SHAREABLE,
 };
 
-// Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
-// as a void pointer
+// Custom allocator for the Graph class. Calls into Rust to create a new graph that gets stored internally as a void
+// pointer
 static VALUE rdxr_graph_alloc(VALUE klass) {
     void *graph = rdx_graph_new();
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
@@ -80,6 +80,7 @@ static VALUE rdxr_graph_alloc(VALUE klass) {
  * Returns an array of I/O error messages encountered during indexing.
  */
 static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
+    rb_check_frozen(self);
     rdxi_check_array_of_strings(file_paths);
 
     // Convert the given file paths into a char** array, so that we can pass to Rust
@@ -115,6 +116,7 @@ static VALUE rdxr_graph_index_all(VALUE self, VALUE file_paths) {
  * Indexes a single source string in memory, dispatching to the appropriate indexer based on language_id.
  */
 static VALUE rdxr_graph_index_source(VALUE self, VALUE uri, VALUE source, VALUE language_id) {
+    rb_check_frozen(self);
     Check_Type(uri, T_STRING);
     Check_Type(source, T_STRING);
     Check_Type(language_id, T_STRING);
@@ -426,6 +428,7 @@ static VALUE rdxr_graph_document(VALUE self, VALUE uri) {
  * exist.
  */
 static VALUE rdxr_graph_delete_document(VALUE self, VALUE uri) {
+    rb_check_frozen(self);
     Check_Type(uri, T_STRING);
 
     void *graph;
@@ -448,6 +451,7 @@ static VALUE rdxr_graph_delete_document(VALUE self, VALUE uri) {
  * Runs the resolver to compute declarations and ownership.
  */
 static VALUE rdxr_graph_resolve(VALUE self) {
+    rb_check_frozen(self);
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
     rdx_graph_resolve(graph);
@@ -461,6 +465,7 @@ static VALUE rdxr_graph_resolve(VALUE self) {
  * Sets the encoding used for transforming byte offsets into LSP code unit line and column positions.
  */
 static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
+    rb_check_frozen(self);
     Check_Type(encoding, T_STRING);
 
     void *graph;
@@ -481,6 +486,7 @@ static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
  * Runs the resolver on a single constant reference to determine what it points to.
  */
 static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesting) {
+    rb_check_frozen(self);
     Check_Type(const_name, T_STRING);
     rdxi_check_array_of_strings(nesting);
 
@@ -702,6 +708,7 @@ static VALUE completion_result_to_ruby_array(struct CompletionResult result, VAL
  * required self_receiver keyword argument overrides the self type; pass nil when the self type is unknown.
  */
 static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
+    rb_check_frozen(self);
     VALUE nesting, opts;
     rb_scan_args(argc, argv, "1:", &nesting, &opts);
     rdxi_check_array_of_strings(nesting);
@@ -729,6 +736,7 @@ static VALUE rdxr_graph_complete_expression(int argc, VALUE *argv, VALUE self) {
  * argument is the caller's runtime self type; pass nil when there is no caller context.
  */
 static VALUE rdxr_graph_complete_namespace_access(int argc, VALUE *argv, VALUE self) {
+    rb_check_frozen(self);
     VALUE name, opts;
     rb_scan_args(argc, argv, "1:", &name, &opts);
     Check_Type(name, T_STRING);
@@ -751,6 +759,7 @@ static VALUE rdxr_graph_complete_namespace_access(int argc, VALUE *argv, VALUE s
  * is the caller's runtime self type; pass nil when there is no caller context.
  */
 static VALUE rdxr_graph_complete_method_call(int argc, VALUE *argv, VALUE self) {
+    rb_check_frozen(self);
     VALUE name, opts;
     rb_scan_args(argc, argv, "1:", &name, &opts);
     Check_Type(name, T_STRING);
@@ -773,6 +782,7 @@ static VALUE rdxr_graph_complete_method_call(int argc, VALUE *argv, VALUE self) 
  * semantics.
  */
 static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE self) {
+    rb_check_frozen(self);
     VALUE name, nesting, opts;
     rb_scan_args(argc, argv, "2:", &name, &nesting, &opts);
 
@@ -801,6 +811,7 @@ static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE se
  * Excludes the paths from file discovery during indexing.
  */
 static VALUE rdxr_graph_exclude_paths(VALUE self, VALUE paths) {
+    rb_check_frozen(self);
     Check_Type(paths, T_ARRAY);
     rdxi_check_array_of_strings(paths);
 
@@ -868,6 +879,7 @@ static VALUE rdxr_graph_workspace_path(VALUE self) {
  * Sets the root directory of the workspace being indexed.
  */
 static VALUE rdxr_graph_set_workspace_path(VALUE self, VALUE path) {
+    rb_check_frozen(self);
     Check_Type(path, T_STRING);
 
     void *graph;
@@ -886,6 +898,7 @@ static VALUE rdxr_graph_set_workspace_path(VALUE self, VALUE path) {
  * file does not exist.
  */
 static VALUE rdxr_graph_load_config(int argc, VALUE *argv, VALUE self) {
+    rb_check_frozen(self);
     VALUE config_path;
     rb_scan_args(argc, argv, "01", &config_path);
 
@@ -943,12 +956,24 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     id_self_receiver = rb_intern("self_receiver");
 
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
+
+    // Mutating methods. Must check if the graph is frozen to guarantee Ractor safety
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
     rb_define_method(cGraph, "index_source", rdxr_graph_index_source, 3);
-    rb_define_method(cGraph, "document", rdxr_graph_document, 1);
     rb_define_method(cGraph, "delete_document", rdxr_graph_delete_document, 1);
     rb_define_method(cGraph, "resolve", rdxr_graph_resolve, 0);
     rb_define_method(cGraph, "resolve_constant", rdxr_graph_resolve_constant, 2);
+    rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);
+    rb_define_method(cGraph, "complete_expression", rdxr_graph_complete_expression, -1);
+    rb_define_method(cGraph, "complete_namespace_access", rdxr_graph_complete_namespace_access, -1);
+    rb_define_method(cGraph, "complete_method_call", rdxr_graph_complete_method_call, -1);
+    rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, -1);
+    rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
+    rb_define_method(cGraph, "workspace_path=", rdxr_graph_set_workspace_path, 1);
+    rb_define_method(cGraph, "load_config", rdxr_graph_load_config, -1);
+
+    // Read-only methods
+    rb_define_method(cGraph, "document", rdxr_graph_document, 1);
     rb_define_method(cGraph, "declarations", rdxr_graph_declarations, 0);
     rb_define_method(cGraph, "documents", rdxr_graph_documents, 0);
     rb_define_method(cGraph, "constant_references", rdxr_graph_constant_references, 0);
@@ -958,17 +983,9 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
     rb_define_method(cGraph, "search", rdxr_graph_search, -1);
     rb_define_method(cGraph, "fuzzy_search", rdxr_graph_fuzzy_search, -1);
-    rb_define_method(cGraph, "encoding=", rdxr_graph_set_encoding, 1);
     rb_define_method(cGraph, "resolve_require_path", rdxr_graph_resolve_require_path, 2);
     rb_define_method(cGraph, "require_paths", rdxr_graph_require_paths, 1);
-    rb_define_method(cGraph, "complete_expression", rdxr_graph_complete_expression, -1);
-    rb_define_method(cGraph, "complete_namespace_access", rdxr_graph_complete_namespace_access, -1);
-    rb_define_method(cGraph, "complete_method_call", rdxr_graph_complete_method_call, -1);
-    rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, -1);
-    rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
     rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);
     rb_define_method(cGraph, "workspace_path", rdxr_graph_workspace_path, 0);
-    rb_define_method(cGraph, "workspace_path=", rdxr_graph_set_workspace_path, 1);
-    rb_define_method(cGraph, "load_config", rdxr_graph_load_config, -1);
     rb_define_method(cGraph, "keyword", rdxr_graph_keyword, 1);
 }

@@ -1585,6 +1585,57 @@ class GraphTest < Minitest::Test
     assert_equal("file:///bar.rb", document.uri)
   end
 
+  def test_graph_can_be_shared_and_queried_across_ractors
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.resolve
+    Ractor.make_shareable(graph)
+
+    ractors = (0...4).map do |i|
+      # Each ractor fetches the name of one ancestor of Foo. We return the name (a String) rather than the
+      # Namespace handle because handles are not shareable and cannot cross the Ractor boundary.
+      Ractor.new(graph, i) do |shared_graph, index|
+        shared_graph["Foo"].ancestors.to_a[index].name
+      end
+    end
+
+    assert_equal(["Foo", "Object", "Kernel", "BasicObject"], ractors.map(&:value))
+  end
+
+  def test_frozen_graph_raises_on_mutating_operations
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.resolve
+    graph.freeze
+
+    assert_raises(FrozenError) { graph.index_source("file:///bar.rb", "class Bar; end", "ruby") }
+    assert_raises(FrozenError) { graph.index_all(["file:///baz.rb"]) }
+    assert_raises(FrozenError) { graph.resolve }
+    assert_raises(FrozenError) { graph.delete_document("file:///foo.rb") }
+    assert_raises(FrozenError) { graph.exclude_paths(["vendor"]) }
+    assert_raises(FrozenError) { graph.workspace_path = "/tmp" }
+    assert_raises(FrozenError) { graph.encoding = "utf8" }
+    assert_raises(FrozenError) { graph.load_config }
+
+    assert_raises(FrozenError) { graph.resolve_constant("Foo", []) }
+    assert_raises(FrozenError) { graph.complete_expression([], self_receiver: nil) }
+    assert_raises(FrozenError) { graph.complete_namespace_access("Foo", self_receiver: nil) }
+    assert_raises(FrozenError) { graph.complete_method_call("foo", self_receiver: nil) }
+    assert_raises(FrozenError) { graph.complete_method_argument("foo", [], self_receiver: nil) }
+  end
+
+  def test_frozen_graph_still_answers_read_only_queries
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///foo.rb", "class Foo; end", "ruby")
+    graph.resolve
+    graph.freeze
+
+    assert_equal("Foo", graph["Foo"].name)
+    assert_equal(["Foo", "Object", "Kernel", "BasicObject"], graph["Foo"].ancestors.map(&:name))
+    refute_nil(graph.document("file:///foo.rb"))
+    assert_empty(graph.diagnostics)
+  end
+
   private
 
   def assert_diagnostics(expected, actual)

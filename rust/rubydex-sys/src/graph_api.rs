@@ -24,7 +24,8 @@ use std::{mem, ptr};
 
 pub type GraphPointer = *mut c_void;
 
-/// Creates a new graph within a mutex. This is meant to be used when creating new Graph objects in Ruby
+/// Creates a new heap-allocated graph and leaks it as an opaque pointer. Meant to be used when creating new Graph
+/// objects in Ruby; ownership returns to Rust in `rdx_graph_free`.
 #[unsafe(no_mangle)]
 pub extern "C" fn rdx_graph_new() -> GraphPointer {
     Box::into_raw(Box::new(Graph::new())) as GraphPointer
@@ -42,10 +43,8 @@ pub fn with_graph<F, T>(pointer: GraphPointer, action: F) -> T
 where
     F: FnOnce(&Graph) -> T,
 {
-    let mut graph = unsafe { Box::from_raw(pointer.cast::<Graph>()) };
-    let result = action(&mut graph);
-    mem::forget(graph);
-    result
+    let graph = unsafe { &*pointer.cast::<Graph>() };
+    action(graph)
 }
 
 fn with_mut_graph<F, T>(pointer: GraphPointer, action: F) -> T
