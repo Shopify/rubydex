@@ -204,25 +204,16 @@ impl<'a> Resolver<'a> {
         };
 
         match outcome {
-            Outcome::Retry(None) => {
-                // There might be dependencies we haven't figured out yet, so we need to retry
+            Outcome::Retry(_) | Outcome::Unresolved(Some(_)) => {
                 self.unit_queue.push_back(unit_id);
             }
             Outcome::Unresolved(None) => {
                 // We couldn't resolve this name. Emit a diagnostic
             }
-            Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
-                self.unit_queue.push_back(unit_id);
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
-            }
-            Outcome::Resolved(id, None) => {
+            Outcome::Resolved(id, _) => {
                 if needs_linearization {
                     self.unit_queue.push_back(Unit::Ancestors(id));
                 }
-                self.made_progress = true;
-            }
-            Outcome::Resolved(_, Some(id_needing_linearization)) => {
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
                 self.made_progress = true;
             }
         }
@@ -233,24 +224,12 @@ impl<'a> Resolver<'a> {
         let constant_ref = self.graph.constant_references().get(&id).unwrap();
 
         match self.resolve_constant_internal(*constant_ref.name_id()) {
-            Outcome::Retry(None) | Outcome::Unresolved(None) => {
-                // Retry: dependencies not resolved yet, or name genuinely unknown
-                // (which can be temporary during incremental invalidation when the
-                // parent namespace was deleted but will be re-added).
-                self.unit_queue.push_back(unit_id);
-            }
-            Outcome::Retry(Some(id_needing_linearization)) | Outcome::Unresolved(Some(id_needing_linearization)) => {
-                self.unit_queue.push_back(unit_id);
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
-            }
-            Outcome::Resolved(declaration_id, None) => {
+            Outcome::Resolved(declaration_id, _) => {
                 self.graph.record_resolved_reference(id, declaration_id);
                 self.made_progress = true;
             }
-            Outcome::Resolved(resolved_id, Some(id_needing_linearization)) => {
-                self.graph.record_resolved_reference(id, resolved_id);
-                self.made_progress = true;
-                self.unit_queue.push_back(Unit::Ancestors(id_needing_linearization));
+            Outcome::Retry(_) | Outcome::Unresolved(_) => {
+                self.unit_queue.push_back(unit_id);
             }
         }
     }
@@ -1493,7 +1472,9 @@ impl<'a> Resolver<'a> {
                             return Outcome::Unresolved(None);
                         };
                         self.graph.record_resolved_name(name_id, singleton_id);
-                        Outcome::Resolved(singleton_id, Some(singleton_id))
+                        // `get_or_create_singleton_class` already enqueued the singleton's ancestors on
+                        // creation, so there is nothing to hand back for re-enqueueing.
+                        Outcome::Resolved(singleton_id, None)
                     }
                     ParentScope::None => {
                         // Otherwise, it's a simple constant read and we can resolve it directly
