@@ -4,6 +4,8 @@ require "mkmf"
 require "fileutils"
 require "pathname"
 
+require_relative "../../lib/rubydex/mcp_executable_build"
+
 unless system("cargo", "--version", out: File::NULL, err: File::NULL)
   abort "Installing Rubydex requires Cargo, the Rust package manager for platforms that we do not precompile binaries."
 end
@@ -19,20 +21,26 @@ gem_dir = Pathname.new("../..").expand_path(__dir__)
 
 bundle_gemfile = ENV["BUNDLE_GEMFILE"]
 developing_rubydex = bundle_gemfile && Pathname.new(bundle_gemfile).expand_path.dirname == gem_dir
-release = ENV["RELEASE"] || !developing_rubydex
+precompiling_gem = !!ENV["RELEASE"]
+release = precompiling_gem || !developing_rubydex
 
 root_dir = gem_dir.join("rust")
-target_dir = root_dir.join("target")
-target_dir = target_dir.join("x86_64-pc-windows-gnu") if Gem.win_platform?
-target_dir = target_dir.join(release ? "release" : "debug")
-
 bindings_path = root_dir.join("rubydex-sys").join("rustbindings.h")
 
+extension_target = "x86_64-pc-windows-gnu" if Gem.win_platform?
+mcp_build = Rubydex::MCPExecutableBuild.new(release:, static_musl: precompiling_gem)
+split_mcp_build = mcp_build.target && mcp_build.target != extension_target
+
+target_dir = root_dir.join("target")
+target_dir = target_dir.join(extension_target) if extension_target
+target_dir = target_dir.join(release ? "release" : "debug")
+
 cargo_args = ["--manifest-path #{root_dir.join("Cargo.toml")}"]
+cargo_args << "--package rubydex-sys" if split_mcp_build
 cargo_args << "--release" if release
 
-if Gem.win_platform?
-  cargo_args << "--target x86_64-pc-windows-gnu"
+if extension_target
+  cargo_args << "--target #{extension_target}"
   ENV["RUSTFLAGS"] = "-C target-feature=+crt-static"
 end
 
@@ -85,9 +93,10 @@ lib_dir = gem_dir.join("lib").join("rubydex")
 mcp_bin_dir = lib_dir.join("bin")
 FileUtils.mkdir_p(mcp_bin_dir)
 
-mcp_executable = Gem.win_platform? ? "rubydex_mcp.exe" : "rubydex_mcp"
-mcp_src = target_dir.join(mcp_executable)
-mcp_dst = mcp_bin_dir.join(mcp_executable)
+mcp_src = split_mcp_build ? root_dir.join(mcp_build.relative_binary_path) : target_dir.join(mcp_build.executable_name)
+mcp_dst = mcp_bin_dir.join(mcp_build.executable_name)
+mcp_cargo_command = mcp_build.cargo_command(root_dir.join("Cargo.toml")) if split_mcp_build
+mcp_verify_static_command = mcp_build.verify_static_command(mcp_src, ruby: "$(RUBY)")
 
 copy_dylib_commands = if Gem.win_platform?
   ""
@@ -113,6 +122,8 @@ new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.cho
 
   .rust_built: $(RUST_SRCS)
   \t#{cargo_command} || (echo "Compiling Rust failed" && exit 1)
+  #{"\t#{mcp_cargo_command} || (echo \"Compiling rubydex_mcp failed\" && exit 1)" if mcp_cargo_command}
+  #{"\t#{mcp_verify_static_command} || (echo \"rubydex_mcp is not fully static\" && exit 1)" if mcp_verify_static_command}
   \t$(COPY) #{bindings_path} #{__dir__}
   \t$(COPY) #{mcp_src} #{mcp_dst}
   \ttouch $@
