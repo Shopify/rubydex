@@ -368,6 +368,8 @@ class MCPServerIntegrationTest < Minitest::Test
   end
 
   def test_mcp_server_e2e
+    skip("This test times out when running with Valgrind") if ENV["RUBY_MEMCHECK_RUNNING"]
+
     with_context do |context|
       context.write!("app.rb", <<~RUBY)
         class Animal

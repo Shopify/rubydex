@@ -28,7 +28,6 @@ Gem::Specification.new do |spec|
 
   if ENV["RELEASE"]
     spec.files << "THIRD_PARTY_LICENSES.html"
-    spec.files << "lib/rubydex/bin/#{Gem.win_platform? ? "rubydex_mcp.exe" : "rubydex_mcp"}"
     if RUBY_PLATFORM.include?("darwin")
       spec.files << "lib/rubydex/librubydex_sys.dylib"
     elsif RUBY_PLATFORM.include?("linux")

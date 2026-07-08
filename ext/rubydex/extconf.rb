@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "mkmf"
-require "fileutils"
 require "pathname"
 
 unless system("cargo", "--version", out: File::NULL, err: File::NULL)
@@ -82,12 +81,6 @@ else
 end
 
 lib_dir = gem_dir.join("lib").join("rubydex")
-mcp_bin_dir = lib_dir.join("bin")
-FileUtils.mkdir_p(mcp_bin_dir)
-
-mcp_executable = Gem.win_platform? ? "rubydex_mcp.exe" : "rubydex_mcp"
-mcp_src = target_dir.join(mcp_executable)
-mcp_dst = mcp_bin_dir.join(mcp_executable)
 
 copy_dylib_commands = if Gem.win_platform?
   ""
@@ -114,7 +107,6 @@ new_makefile = makefile.gsub("$(OBJS): $(HDRS) $(ruby_headers)", <<~MAKEFILE.cho
   .rust_built: $(RUST_SRCS)
   \t#{cargo_command} || (echo "Compiling Rust failed" && exit 1)
   \t$(COPY) #{bindings_path} #{__dir__}
-  \t$(COPY) #{mcp_src} #{mcp_dst}
   \ttouch $@
 
   compile_rust: .rust_built
