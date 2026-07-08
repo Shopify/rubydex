@@ -90,11 +90,11 @@ impl Job for FileDiscoveryJob {
 
             let path = entry.path();
 
-            if entry.file_type().unwrap().is_dir() {
-                if is_excluded(&self.excluded_patterns, &path) {
-                    continue;
-                }
+            if is_excluded(&self.excluded_patterns, &path) {
+                continue;
+            }
 
+            if entry.file_type().unwrap().is_dir() {
                 self.queue.push(Box::new(FileDiscoveryJob::new(
                     path,
                     Arc::clone(&self.queue),
@@ -420,5 +420,22 @@ mod tests {
         // The requested root is traversed; files are indexed under the requested (symlink) path.
         let foo = PathBuf::from("link").join("foo.rb");
         assert_eq!(files, [foo.to_str().unwrap().to_string()]);
+    }
+
+    #[test]
+    fn collect_files_excludes_nested_files_matching_globs() {
+        let context = Context::new();
+        let kept = PathBuf::from("lib").join("foo.rb");
+        let excluded_file = PathBuf::from("lib").join("version.rb");
+        context.touch(&kept);
+        context.touch(&excluded_file);
+
+        let mut excluded = HashSet::new();
+        excluded.insert("**/version.rb".into());
+
+        let (files, errors) = collect_document_paths_with_exclusions(&context, &["lib"], &excluded);
+
+        assert!(errors.is_empty());
+        assert_eq!(files, [kept.to_str().unwrap().to_string()]);
     }
 }
