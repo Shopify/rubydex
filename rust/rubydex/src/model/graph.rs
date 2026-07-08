@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::assert_mem_size;
 use crate::config::Config;
@@ -92,8 +93,14 @@ pub struct Graph {
 
     /// Project configuration
     config: Config,
+
+    /// Lazily-memoized decoded file paths, keyed by document URI. `Document::file_path` runs
+    /// `Url::parse`, which is hot during Cypher property reads; the URI is immutable, so we parse at
+    /// most once per document here. Kept on the graph (a single instance) rather than on `Document`
+    /// so the per-document struct stays small across a hyper-scale workspace.
+    file_path_cache: Mutex<IdentityHashMap<UriId, Option<PathBuf>>>,
 }
-assert_mem_size!(Graph, 352);
+assert_mem_size!(Graph, 400);
 
 impl Graph {
     #[must_use]
@@ -110,6 +117,7 @@ impl Graph {
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
             config: Config::new(),
+            file_path_cache: Mutex::new(IdentityHashMap::default()),
         };
 
         add_built_in_data(&mut graph);
@@ -323,6 +331,28 @@ impl Graph {
     #[must_use]
     pub fn documents(&self) -> &IdentityHashMap<UriId, Document> {
         &self.documents
+    }
+
+    /// Returns the decoded file-system path of the document with `uri_id`, memoized so the URI is
+    /// parsed at most once (see [`Document::file_path`]). A document's path is a pure function of
+    /// its immutable URI, so the cache never goes stale.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cache mutex was poisoned by a previous panic while it was held.
+    #[must_use]
+    pub fn document_file_path(&self, uri_id: UriId) -> Option<PathBuf> {
+        if let Some(cached) = self.file_path_cache.lock().expect("file path cache poisoned").get(&uri_id) {
+            return cached.clone();
+        }
+
+        // Computed outside the lock so `Url::parse` doesn't serialize concurrent callers.
+        let path = self.documents.get(&uri_id).and_then(Document::file_path);
+        self.file_path_cache
+            .lock()
+            .expect("file path cache poisoned")
+            .insert(uri_id, path.clone());
+        path
     }
 
     /// Attaches a diagnostic to the document with the given `uri_id`. The diagnostic clears

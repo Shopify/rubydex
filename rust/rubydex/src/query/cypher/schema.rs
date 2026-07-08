@@ -26,6 +26,7 @@ use std::collections::{HashSet, VecDeque};
 
 use crate::model::declaration::Declaration;
 use crate::model::definitions::{Definition, Mixin};
+use crate::model::document::Document;
 use crate::model::graph::Graph;
 use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, UriId};
 
@@ -479,10 +480,21 @@ pub fn node_name(graph: &Graph, node: NodeRef) -> String {
             .and_then(|definition| graph.definition_to_declaration_id(definition))
             .and_then(|decl_id| graph.declarations().get(decl_id))
             .map_or_else(String::new, |declaration| declaration.name().to_string()),
-        NodeRef::Document(id) => graph.documents().get(&id).map_or_else(String::new, |document| {
-            document.file_name().unwrap_or_else(|| document.uri().to_string())
-        }),
+        NodeRef::Document(id) => graph
+            .documents()
+            .get(&id)
+            .map_or_else(String::new, |document| document_basename(graph, id, document)),
     }
+}
+
+/// Base file name of a document, using the graph's memoized file path so the URI isn't re-parsed on
+/// every access; falls back to the document's own derivation (rare non-`file://` case) then the URI.
+fn document_basename(graph: &Graph, uri_id: UriId, document: &Document) -> String {
+    graph
+        .document_file_path(uri_id)
+        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .or_else(|| document.file_name())
+        .unwrap_or_else(|| document.uri().to_string())
 }
 
 /// Resolves a node property to a value, where `prop` is the property name read off the node (the
@@ -550,12 +562,12 @@ fn document_property(graph: &Graph, id: UriId, prop: &str) -> CypherValue {
         // Full document URI, e.g. `file:///app/models/user.rb`.
         "uri" => CypherValue::Str(document.uri().to_string()),
         // File-system path, e.g. `/app/models/user.rb`.
-        "path" => CypherValue::Str(document.file_path().map_or_else(
+        "path" => CypherValue::Str(graph.document_file_path(id).map_or_else(
             || document.uri().to_string(),
             |path| path.to_string_lossy().into_owned(),
         )),
         // Base file name, e.g. `user.rb`.
-        "name" => CypherValue::Str(document.file_name().unwrap_or_else(|| document.uri().to_string())),
+        "name" => CypherValue::Str(document_basename(graph, id, document)),
         _ => CypherValue::Null,
     }
 }
