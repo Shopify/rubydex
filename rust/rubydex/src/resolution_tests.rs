@@ -3166,11 +3166,20 @@ mod declaration_creation_tests {
             .collect::<Vec<_>>();
         assert_eq!(10, names.len());
 
-        names.sort_by_key(|(id, _)| depths.get(id).unwrap());
+        // Sort by depth with the name string as tie-breaker. Equal depths have no inherent order
+        // (the resolver tie-breaks by URI and offset), so without an explicit tie-breaker this
+        // test would depend on hashmap iteration order, which changes whenever the NameId hashing
+        // scheme changes
+        names.sort_by_key(|(id, n)| {
+            (
+                *depths.get(id).unwrap(),
+                context.graph().strings().get(n.str()).unwrap().as_str(),
+            )
+        });
 
         assert_eq!(
             [
-                "Top", "Foo", "Bar", "Qux", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
+                "Foo", "Top", "AfterTop", "Bar", "Qux", "Baz", "Zip", "Zap", "Zop", "Boop"
             ],
             names
                 .iter()
