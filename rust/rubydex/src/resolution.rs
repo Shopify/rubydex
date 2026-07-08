@@ -1741,6 +1741,35 @@ impl<'a> Resolver<'a> {
 
     /// Search for a member in a declaration's ancestor chain.
     fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        // Fast path: if this declaration's ancestors are already fully linearized, search the cached
+        // chain by reference. This avoids cloning the entire ancestor chain, allocating a
+        // `LinearizationContext` and re-propagating descendants on every lookup, which dominates
+        // resolution time in large codebases (this runs at least once per constant reference)
+        if let Some(namespace) = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .and_then(|declaration| declaration.as_namespace())
+            && namespace.has_complete_ancestors()
+        {
+            for ancestor in namespace.ancestors() {
+                if let Ancestor::Complete(ancestor_id) = ancestor
+                    && let Some(id) = self
+                        .graph
+                        .declarations()
+                        .get(ancestor_id)
+                        .unwrap()
+                        .as_namespace()
+                        .unwrap()
+                        .member(&str_id)
+                {
+                    return Outcome::Resolved(*id);
+                }
+            }
+
+            return Outcome::Unresolved;
+        }
+
         match self.ancestors_of(declaration_id) {
             Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
                 .iter()
