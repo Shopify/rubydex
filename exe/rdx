@@ -7,7 +7,7 @@ require "optparse"
 
 options = {}
 
-OptionParser.new do |parser|
+option_parser = OptionParser.new do |parser|
   parser.on("--version", "Print the gem's version") do
     require "rubydex/version"
     puts "v#{Rubydex::VERSION}"
@@ -22,9 +22,35 @@ OptionParser.new do |parser|
   parser.on("-i", "--interactive", "Open an interactive session with a populated graph for the current workspace") do
     options[:interactive] = true
   end
-end.parse!
+
+  parser.on("--mcp", "Run the MCP server for AI assistants") do
+    options[:mcp] = true
+  end
+end
+
+begin
+  arguments = option_parser.parse(ARGV)
+rescue OptionParser::ParseError => e
+  warn("error: #{e.message}")
+  warn
+  warn(option_parser)
+  exit(2)
+end
 
 require "rubydex"
+
+if options[:mcp]
+  if arguments.length > 1
+    warn("error: unexpected argument '#{arguments[1]}' found")
+    warn
+    warn(option_parser)
+    exit(2)
+  end
+
+  require "rubydex/mcp_server"
+  Rubydex::MCPServer.run(arguments.fetch(0, Dir.pwd))
+  exit
+end
 
 def __with_timer(message, &block)
   print(message)
