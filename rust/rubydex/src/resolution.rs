@@ -1984,19 +1984,24 @@ impl<'a> Resolver<'a> {
 
                     match definition {
                         Definition::Class(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri, definition.offset())));
                         }
                         Definition::Module(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri, definition.offset())));
                         }
                         Definition::Constant(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri, definition.offset())));
                         }
                         Definition::ConstantAlias(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri, definition.offset())));
                         }
                         Definition::SingletonClass(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri, definition.offset())));
                         }
                         // SelfReceiver methods create singleton classes, which need
                         // ancestor linearization. Process them in the convergence loop
@@ -2018,10 +2023,8 @@ impl<'a> Resolver<'a> {
                         continue;
                     };
                     let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
-                    const_refs.push((
-                        Unit::ConstantRef(id),
-                        (*constant_ref.name_id(), uri, constant_ref.offset()),
-                    ));
+                    let depth = *depths.get(constant_ref.name_id()).unwrap();
+                    const_refs.push((Unit::ConstantRef(id), (depth, uri, constant_ref.offset())));
                 }
                 Unit::Ancestors(id) => {
                     if !seen_ancestors.insert(id) {
@@ -2035,15 +2038,13 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // Sort namespaces based on their name complexity so that simpler names are always first
-        // When the depth is the same, sort by URI and offset to maintain determinism
-        definitions.sort_unstable_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
-        });
+        // Sort namespaces based on their name complexity so that simpler names are always first.
+        // When the depth is the same, sort by URI and offset to maintain determinism. The depth is
+        // computed once when building the entries, so the comparator doesn't perform hashmap
+        // lookups on every comparison
+        definitions.sort_unstable_by(|(_, key_a), (_, key_b)| key_a.cmp(key_b));
 
-        const_refs.sort_unstable_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
-        });
+        const_refs.sort_unstable_by(|(_, key_a), (_, key_b)| key_a.cmp(key_b));
 
         others.sort_unstable_by_key(|(_, key)| *key);
 
