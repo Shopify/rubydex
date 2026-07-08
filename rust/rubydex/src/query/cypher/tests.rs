@@ -226,3 +226,50 @@ fn document_uri_path_and_name_are_distinct() {
     #[cfg(windows)]
     assert_eq!(column_strings(&result, 1), vec!["file:///zoo.rb".to_string()]);
 }
+
+fn calls_graph() -> Graph {
+    let mut context = GraphTest::new();
+    context.index_uri(
+        "file:///m.rb",
+        "
+            class Foo
+              def self.bar; end
+            end
+
+            class Client
+              def run
+                Foo.bar       # constant receiver -> resolvable
+                helper        # implicit receiver -> not resolvable
+              end
+
+              def helper; end
+            end
+        ",
+    );
+    context.resolve();
+    context.into_graph()
+}
+
+#[test]
+fn calls_resolves_method_references_with_a_known_receiver() {
+    let graph = calls_graph();
+    let result = run(
+        &graph,
+        "MATCH (:Document)-[:CALLS]->(m:Method) RETURN m.unqualified_name",
+    );
+    // `Foo.bar` (constant receiver, class method) and `helper` (implicit self) both resolve.
+    assert_eq!(
+        column_strings(&result, 0),
+        vec!["bar()".to_string(), "helper()".to_string()]
+    );
+}
+
+#[test]
+fn calls_reverse_finds_callers_of_a_method() {
+    let graph = calls_graph();
+    let result = run(
+        &graph,
+        "MATCH (d:Document)-[:CALLS]->(m:Method {unqualified_name: 'bar()'}) RETURN d.name",
+    );
+    assert_eq!(column_strings(&result, 0), vec!["m.rb".to_string()]);
+}
