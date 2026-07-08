@@ -210,6 +210,14 @@ macro_rules! namespace_declaration {
                 self.descendants.insert(descendant_id);
             }
 
+            /// Adds many descendants at once. Reserving up front lets the underlying set allocate a
+            /// single time instead of rehashing repeatedly as it grows, which matters for hot
+            /// ancestors (e.g. `Object`) whose descendant set spans most of the codebase.
+            pub fn extend_descendants(&mut self, descendants: Vec<DeclarationId>) {
+                self.descendants.reserve(descendants.len());
+                self.descendants.extend(descendants);
+            }
+
             fn remove_descendant(&mut self, descendant_id: &DeclarationId) {
                 self.descendants.remove(descendant_id);
             }
@@ -546,6 +554,10 @@ impl Namespace {
 
     pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
         all_namespaces!(self, it => it.add_descendant(descendant_id));
+    }
+
+    pub fn extend_descendants(&mut self, descendants: Vec<DeclarationId>) {
+        all_namespaces!(self, it => it.extend_descendants(descendants));
     }
 
     pub fn remove_descendant(&mut self, descendant_id: &DeclarationId) {

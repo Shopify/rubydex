@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashSet, VecDeque, hash_map::Entry},
-    hash::BuildHasher,
-};
+use std::collections::{HashSet, VecDeque, hash_map::Entry};
 
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::{
@@ -51,7 +48,6 @@ enum SingletonAncestors {
 }
 
 struct LinearizationContext {
-    descendants: IdentityHashSet<DeclarationId>,
     seen_ids: IdentityHashSet<DeclarationId>,
     cyclic: bool,
     partial: bool,
@@ -60,7 +56,6 @@ struct LinearizationContext {
 impl LinearizationContext {
     fn new() -> Self {
         Self {
-            descendants: IdentityHashSet::default(),
             seen_ids: IdentityHashSet::default(),
             cyclic: false,
             partial: false,
@@ -71,7 +66,6 @@ impl LinearizationContext {
     /// the linearization algorithm, regardless of whether we are returning a cached result or a freshly built ancestor
     /// chain
     fn finalize(&mut self, declaration_id: DeclarationId) {
-        self.descendants.remove(&declaration_id);
         self.seen_ids.remove(&declaration_id);
     }
 }
@@ -145,6 +139,71 @@ impl<'a> Resolver<'a> {
         self.graph.extend_work(std::mem::take(&mut self.unit_queue));
 
         self.handle_remaining_definitions(other_ids);
+
+        // Descendants are derived from the finalized ancestor chains, so they must be computed
+        // after all linearization has settled.
+        self.compute_descendants();
+    }
+
+    /// Recomputes the `descendants` relation as the inverse of the linearized ancestors.
+    ///
+    /// After resolution, `descendants(D)` must contain exactly the declarations `x` such that
+    /// `Ancestor::Complete(D)` appears in `x`'s linearized ancestors. Because a declaration is its
+    /// own ancestor (see [`Self::linearize_ancestors`]), this relation is reflexive.
+    ///
+    /// Maintaining the relation while linearizing ancestors is error-prone: a declaration may be
+    /// linearized under a tentative parent in one pass and a different parent in a later pass, and
+    /// the stale descendant edges from the abandoned parent are never cleared, which inflates the
+    /// relation. Computing it once here, by inverting the final ancestor chains, keeps it exact.
+    ///
+    /// This rebuilds the entire relation in one `O(total ancestors)` pass. That matches the
+    /// full-resolution path this code is optimized for and replaces the costlier per-linearization
+    /// descendant bookkeeping.
+    fn compute_descendants(&mut self) {
+        // Clear any previously recorded descendants.
+        for declaration in self.graph.declarations_mut().values_mut() {
+            if let Some(namespace) = declaration.as_namespace_mut() {
+                namespace.clear_descendants();
+            }
+        }
+
+        // Invert the ancestor chains: each `Complete(ancestor)` edge in `x`'s ancestors makes `x` a
+        // descendant of `ancestor`. We group descendants by ancestor first, rather than collecting
+        // flat `(ancestor, descendant)` pairs, so the insert phase can size each descendant set
+        // exactly and fill it in a single batch. This grouping happens against an immutable borrow
+        // of the declarations map, which we can't hold while mutating the same map below.
+        //
+        // `Ancestors::iter` walks the entries of every chain state, so declarations whose overall
+        // chain is `Cyclic` or `Partial` still contribute their resolved entries here. We only skip
+        // individual `Ancestor::Partial` entries: those are unresolved ancestor names that carry a
+        // `NameId` rather than a `DeclarationId`, so there is no declaration to record the descendant
+        // on.
+        let mut grouped: IdentityHashMap<DeclarationId, Vec<DeclarationId>> = IdentityHashMap::default();
+        for (declaration_id, declaration) in self.graph.declarations() {
+            let Some(namespace) = declaration.as_namespace() else {
+                continue;
+            };
+
+            for ancestor in namespace.ancestors() {
+                if let Ancestor::Complete(ancestor_id) = ancestor {
+                    grouped.entry(*ancestor_id).or_default().push(*declaration_id);
+                }
+            }
+        }
+
+        // Fill each ancestor's descendant set in one batch. Because the whole set is cleared above
+        // and rebuilt here, a reserved bulk extend avoids the repeated growth/rehash that
+        // one-at-a-time insertion incurs for ancestors with many descendants.
+        for (ancestor_id, descendants) in grouped {
+            if let Some(namespace) = self
+                .graph
+                .declarations_mut()
+                .get_mut(&ancestor_id)
+                .and_then(Declaration::as_namespace_mut)
+            {
+                namespace.extend_descendants(descendants);
+            }
+        }
     }
 
     /// Resolves a single constant against the graph. This method is not meant to be used by the resolution phase, but by
@@ -946,14 +1005,10 @@ impl<'a> Resolver<'a> {
         {
             let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
 
-            // Add this declaration to the descendants so that we capture transitive descendant relationships
-            context.descendants.insert(declaration_id);
-
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
             // again
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().clone_ancestors();
-                self.propagate_descendants(&mut context.descendants, &cached);
 
                 context.finalize(declaration_id);
                 return cached;
@@ -976,18 +1031,6 @@ impl<'a> Resolver<'a> {
 
                 context.finalize(declaration_id);
                 return estimated_ancestors;
-            }
-
-            // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
-            // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
-            for descendant in &context.descendants {
-                self.graph
-                    .declarations_mut()
-                    .get_mut(&declaration_id)
-                    .unwrap()
-                    .as_namespace_mut()
-                    .unwrap()
-                    .add_descendant(*descendant);
             }
         }
 
@@ -1218,29 +1261,6 @@ impl<'a> Resolver<'a> {
         }
 
         (linearized_prepends, linearized_includes)
-    }
-
-    /// Propagate descendants to all cached ancestors
-    fn propagate_descendants<S: BuildHasher>(
-        &mut self,
-        descendants: &mut HashSet<DeclarationId, S>,
-        cached: &Ancestors,
-    ) {
-        if !descendants.is_empty() {
-            for ancestor in cached {
-                if let Ancestor::Complete(ancestor_id) = ancestor {
-                    for descendant in descendants.iter() {
-                        self.graph
-                            .declarations_mut()
-                            .get_mut(ancestor_id)
-                            .unwrap()
-                            .as_namespace_mut()
-                            .unwrap()
-                            .add_descendant(*descendant);
-                    }
-                }
-            }
-        }
     }
 
     // Handles the resolution of the namespace name, the creation of the declaration and membership
