@@ -112,6 +112,25 @@ impl LocalGraph {
         string_id
     }
 
+    /// Interns a string slice, only allocating an owned `String` when the value hasn't been
+    /// interned yet. Prefer this over [`Self::intern_string`] when the caller has a borrowed
+    /// string, since repeated occurrences of the same identifier don't allocate
+    pub fn intern_str(&mut self, string: &str) -> StringId {
+        let string_id = StringId::from(string);
+
+        match self.strings.entry(string_id) {
+            Entry::Occupied(mut entry) => {
+                debug_assert!(string == entry.get().as_str(), "StringId collision in local graph");
+                entry.get_mut().increment_ref_count(1);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(StringRef::new(string.to_string()));
+            }
+        }
+
+        string_id
+    }
+
     // Names
 
     #[must_use]
