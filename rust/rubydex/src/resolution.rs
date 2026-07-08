@@ -1441,6 +1441,15 @@ impl<'a> Resolver<'a> {
     /// Resolves a declaration ID through any alias chain to get the primary (first) namespace.
     /// Returns `Retry` if the primary alias target hasn't been resolved yet.
     fn resolve_to_primary_namespace(&self, declaration_id: DeclarationId) -> Outcome {
+        // Fast path: non-alias declarations always resolve to themselves. Avoid the allocations in
+        // `resolve_alias_chains` entirely
+        if !matches!(
+            self.graph.declarations().get(&declaration_id),
+            Some(Declaration::ConstantAlias(_)) | None
+        ) {
+            return Outcome::Resolved(declaration_id);
+        }
+
         let resolved_ids = self.resolve_alias_chains(declaration_id);
 
         // Get the primary (first) resolved target
@@ -1626,6 +1635,14 @@ impl<'a> Resolver<'a> {
     /// When an alias has multiple definitions with different targets (e.g., conditional assignment),
     /// this returns all possible final targets.
     fn resolve_alias_chains(&self, declaration_id: DeclarationId) -> Vec<DeclarationId> {
+        // Fast path: the overwhelmingly common case is a non-alias declaration, which resolves to
+        // itself. Avoid allocating the queue and seen set for those
+        match self.graph.declarations().get(&declaration_id) {
+            Some(Declaration::ConstantAlias(_)) => {}
+            Some(_) => return vec![declaration_id],
+            None => panic!("Declaration {declaration_id:?} not found in graph"),
+        }
+
         let mut results = Vec::new();
         let mut queue = VecDeque::from([declaration_id]);
         let mut seen = HashSet::new();
