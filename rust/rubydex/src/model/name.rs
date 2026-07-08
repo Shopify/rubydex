@@ -127,12 +127,21 @@ impl Name {
 
     #[must_use]
     pub fn id(&self) -> NameId {
-        NameId::from(&format!(
-            "{}{}{}",
-            self.str,
-            self.parent_scope,
-            self.nesting.map_or(String::from("None"), |id| id.to_string())
-        ))
+        // The tag distinguishes the parent scope kind so that IDs can't collide across variants.
+        // Nesting needs no tag: real IDs are non-zero, so 0 unambiguously means "no nesting"
+        let (parent_tag, parent_id) = match self.parent_scope {
+            ParentScope::None => (0u64, 0u64),
+            ParentScope::TopLevel => (1u64, 0u64),
+            ParentScope::Some(id) => (2u64, id.get()),
+            ParentScope::Attached(id) => (3u64, id.get()),
+        };
+
+        NameId::from_components(&[
+            self.str.get(),
+            parent_tag,
+            parent_id,
+            self.nesting.map_or(0, |id| id.get()),
+        ])
     }
 }
 
