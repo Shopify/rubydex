@@ -1,136 +1,284 @@
 # Architecture
 
-Rubydex indexes Ruby codebases in two distinct stages: **Discovery** and **Resolution**. Understanding this separation is crucial for working with the codebase.
+Rubydex analyzes Ruby codebases in two distinct phases: **Indexing** and **Resolution**. Understanding this separation
+is crucial for working with the codebase.
 
-## Core Concepts: Definition vs Declaration
+## Phases diagram
 
-A **Definition** represents a single source-level construct found at a specific location in the code. It captures exactly what the parser sees without making assumptions about runtime behavior.
+```
 
-A **Declaration** represents the global semantic concept of a name, combining all definitions that contribute to the same fully qualified name. Declarations are produced during resolution.
+                          | workspace path
+                          |
+                          ▼
+            ┌─────────────────────────────┐
+            |           Listing           |  Traverse directories and list files in parallel
+            └─────────────────────────────┘
+                          | document list
+                          │
+                          ▼
+    ┌───────────────── Indexing ─────────────────┐
+    |       ┌─────────────────────────────┐      |
+    |       |          Indexing           |      | Documents are indexed in parallel
+    |       └─────────────────────────────┘      | Each document produces a single local graph
+    |                     |                      |
+    |        local graphs stream in as parsed    |
+    |                     ▼                      |
+    |       ┌─────────────────────────────┐      |
+    |       |         Graph merge         |      | Main thread keeps merging local graphs into
+    |       └─────────────────────────────┘      | the global one
+    └────────────────────────────────────────────┘
+                          | definitions + references pending resolution
+                          | on initial boot, this is all of them
+                          ▼
+    ┌──────────────── Resolution ────────────────┐
+    |       ┌─────────────────────────────┐      |
+    |       |        Order worklist       |      |
+    |       |     based on dependencies   |      |
+    |       └─────────────────────────────┘      |
+    |                     | Unit queue           |
+    |                     |                      |
+    |                     ▼                      |
+    |       ┌─────────────────────────────┐      |
+    |       |    Fixed-point resolution   |      |
+    |       |            loop             |      |
+    |       └─────────────────────────────┘      |
+    └────────────────────────────────────────────┘
+                          |
+                          |
+                          ▼
+              Global graph with semantic
+              representation of the codebase
+```
+
+## Core model
+
+Rubydex represents Ruby code through a graph, which is essentially a collection of nodes (entities) and edges
+(relationships). For example, if a class `Foo` inherits from class `Bar`, we have two entities related to each other
+through inheritance.
+
+All top level nodes and edges are stored in hashmaps in `rust/rubydex/src/model/graph.rs`. Note that certain nodes also
+store edges within their structs (e.g.: `rust/rubydex/src/model/declaration.rs`,
+`rust/rubydex/src/model/definitions.rs`).
+
+A **Definition** represents a single source-level construct found at a specific location in the code. It captures
+exactly what was found in the file, with no attempts to derive semantic meaning from the data. Definitions are produced
+during indexing.
+
+A **Declaration** represents the global semantic concept of an entity, combining all definitions that contribute to the
+same fully qualified name. Declarations are produced during resolution.
+
+A **Document** represents a file whether it is committed to disk or not. Documents are produced during indexing.
 
 Consider this example:
 
 ```ruby
 # foo.rb
-module Foo
-  class Bar; end
+module Foo # 1
+  class Bar # 2
+  end
 end
 
 # other_foos.rb
-class Foo::Bar; end
-class Foo::Bar; end
-```
-
-**Definitions** (4 total - what the indexer discovers):
-
-1. Module definition for `Foo` in `foo.rb`
-2. Class definition for `Bar` (nested inside `Foo`) in `foo.rb`
-3. Class definition for `Foo::Bar` in `other_foos.rb`
-4. Class definition for `Foo::Bar` in `other_foos.rb`
-
-**Declarations** (2 total - what resolution produces):
-
-1. `Foo` - A module that has a constant `Bar` under its namespace
-2. `Foo::Bar` - A class, composed of definitions 2, 3, and 4
-
-## Two-Stage Indexing Pipeline
-
-### Stage 1: Discovery
-
-Discovery walks the AST and extracts definitions from source code. It captures **only what is explicitly written**, making no assumptions about runtime behavior.
-
-**What Discovery does:**
-
-- Creates `Definition` objects for classes, modules, methods, constants, variables
-- Records source locations, comments, and lexical ownership (`owner_id`)
-- Captures unresolved constant references (e.g., `Foo::Bar` as a `NameId`)
-- Records mixins (`include`, `prepend`, `extend`) on their containing class/module
-
-**What Discovery does NOT do:**
-
-- Compute fully qualified names
-- Resolve constant references to declarations
-- Determine inheritance hierarchies
-- Assign semantic membership
-
-#### Why No Assumptions During Discovery?
-
-Consider this example:
-
-```ruby
-module Bar; end
-
-class Foo
-  class Bar::Baz; end
+class Foo::Bar # 3
+end
+class Foo::Bar # 4
 end
 ```
 
-Without resolving constant references, it may appear that `Bar::Baz` is created under `Foo`. But it's actually not - `Bar` resolves to the top-level `Bar`, so the class is `Bar::Baz`, not `Foo::Bar::Baz`.
+Indexing extracts 4 definitions:
 
-Discovery cannot know this without first resolving `Bar`. This is why fully qualified names and semantic membership are computed during Resolution, not Discovery.
+- module Foo (1 in foo.rb)
+- class Bar (2 foo.rb)
+- class Foo::Bar (3 in other_foos.rb)
+- class Foo::Bar (4 in other_foos.rb)
 
-### Stage 2: Resolution
+Which produce 2 declarations during resolution: `Foo` and `Foo::Bar`. All graph edges are represented using IDs (defined
+in `rust/rubydex/src/model/ids.rs`), which are deterministic hashes derived from node characteristics wrapper in
+distinct types to provide higher type safety. For example, `DeclarationId` and `UriId` are distinct types, which
+internally store a u64 number, and each is derived by hashing the declaration's fully qualified name and a URI,
+respectively. Despite the underlying number being the same type, it is intentionally not possible to pass a
+`DeclarationId` where a `UriId` is expected.
 
-Resolution combines the discovered definitions to build a semantic understanding of the codebase.
+The graph can be traversed from the bottom (documents) or from the top (declarations). For example, if a consumer wants
+to discover all declarations that are defined in a document, they enter the graph from the bottom by using a UriId
+(derived from a string URI). If a consumer wants to access data about a specific declaration directly, they enter the
+graph through the top using a DeclarationId (derived from the fully qualified name).
 
-**What Resolution does:**
+```
+    ┌─────────────┐
+    | Declaration |  one per fully qualified name
+    └─────────────┘
+           ▲
+           |   many definitions that contribute to the same fully qualified name -> one declaration
+           ▼
+    ┌─────────────┐
+    | Definition  |   a single source-level construct
+    └─────────────┘
+           ▲
+           |   one document -> the many definitions found inside it
+           ▼
+    ┌─────────────┐
+    |  Document   | a file
+    └─────────────┘
+```
 
-- Compute fully qualified names for all definitions
-- Create `Declaration` objects that group definitions by fully qualified name
+### References
+
+The Rubydex graph also tracks references, which are a URI + offsets combination in the code where we found a usage of a
+certain declaration. In constant references, there's an important distinction between a reference and a name (explained
+below), which is essentially what makes each data structure unique.
+
+```ruby
+class Foo; end
+
+Foo
+Foo
+```
+
+In the example above, there are 2 constant references to the class declaration `Foo`, since it is used 2 times. However,
+the constant name being referred to is the same in both cases. Constant references are unique based on their URI +
+offsets combination (i.e.: where they appeared in the code), names are unique based on their lexical scope structure.
+
+### Names
+
+Names are unique constant name structures that connect all of the pieces required to resolve them against the graph
+(implemented in `rust/rubydex/src/model/name.rs`). They contain the unqualified name of the constant (interned string),
+an optional parent scope (an ID to another name) and an optional nesting (an ID to another name). It is the connection
+of the 3 pieces that allows resolution to determine what a constant refers to.
+
+For example:
+
+```ruby
+# Foo: Name(str: StringId(Foo), parent_scope: None, nesting: None)
+module Foo
+  # Bar: Name(str: StringId(Bar), parent_scope: None, nesting: NameId(Foo))
+  # Qux: Name(str: StringId(Qux), parent_scope: NameId(Bar), nesting: NameId(Foo))
+  class Bar::Qux
+  end
+end
+```
+
+## Phases
+
+### Indexing
+
+Indexing traverses ASTs that might be coming from different languages (Ruby, RBS) and extracts the information exactly
+as found, without attempting to derive semantic meaning from it. Consider the following example:
+
+```ruby
+# foo.rb
+module Foo
+end
+
+# bar.rb
+module Bar
+  class Foo::Qux
+  end
+end
+```
+
+The files `foo.rb` and `bar.rb` can be indexed in arbitrary order, as it's not possible to statically predict Ruby's
+file loading order due to `autoload` or requires that depend on runtime behavior (like loops or conditionals). Because
+of this, we wouldn't know what the `Foo` constant reference in `Foo::Qux` points to when `bar.rb` is indexed. If we
+consider that there are no other files being analyzed:
+
+- If `foo.rb` is indexed first, then the `Foo` reference resolves to top level module `Foo`
+- If `bar.rb` is indexed first, then the `Foo` reference is undefined and we don't know where `Qux` is being defined
+
+The key insight regarding this initial phase is that we can only capture document-specific data and any understanding
+that requires cross-file knowledge can only be derived once indexing is complete.
+
+### Resolution
+
+Resolution combines all of the data discovered during indexing to build a semantic representation of the codebase. The
+full resolution implementation is in `rust/rubydex/src/resolution.rs`.
+
+- Compute fully qualified names and create declarations for all definitions (e.g.: `Foo::Bar`, `Foo#method()`,
+  `Bar#@ivar`)
 - Resolve constant references to their target declarations
-- Linearize ancestor chains (including resolving mixins)
-- Assign semantic membership (which methods/constants belong to which class)
-- Create implicit singleton classes from `def self.method` patterns
+- Linearize ancestor chains and track descendants
+- Assign semantic ownership (which methods/constants belong to which class)
+- Create implicit singleton classes
 
-## Graph Structure
+The resolution algorithm is implemented as a worklist (unit queue) loop with multiple passes. Since constants in Ruby
+have inter-dependencies with lexical scopes and ancestors, we first order all of the work based on fewest to highest
+number of dependencies.
 
-Rubydex represents the codebase as a graph, where entities are nodes and relationships are edges. The visualization below shows the conceptual structure (implemented as an adjacency list using IDs).
+Each pass goes through the entire worklist once and remembers whether we made some progress, which means either
+successfully resolving a constant or linearizing an ancestor chain. Making progress means that we solved some
+dependencies, which might unblock completing more work. If progress was made, we continue iterating in the next pass.
 
-[Open in Excalidraw](https://excalidraw.com/#json=hQiLSD8nJRVxONhuwtSn4,L78TkfeB4YL1HJTf5L0bvw)
+If the loop ends with no progress, then we have converged to a fixed-point, which exits the loop. Any unresolved
+constants are stored as pending work, so that the next round of resolution can attempt to resolve them again (for
+example, if a user edits a file). A constant being left as pending work means it is undefined from the perspective of
+the analysis.
 
-![Graph visualization](images/graph.png)
+The purpose of the loop is to solve all of the work that has inverse dependencies. For example, resolving a constant may
+depend on another constant being resolved. After we're done, we have a separate step for processing definitions that
+have no inverse dependencies (like instance variables).
 
-### Key Files
+#### Important design and implementation note
 
-- `model/document.rs`: Represents a registered file (e.g., `foo.rb`, `other_foos.rb`)
-- `model/definitions.rs`: Individual definitions discovered from source code
-- `model/declaration.rs`: Global declarations produced during resolution
-- `model/graph.rs`: The main graph structure containing all entities
+When making changes to resolution, it is critical to understand if they fit the overall approach of the algorithm. The
+design is intended to iterate through the worklist until we converge to maximum constant resolution and, after we solved
+as many dependencies as possible, we move on to processing items that have no inverse dependencies (for example, no
+resolution depends on a method definition or an instance variable being processed).
 
-### ID Types
+The worklist is populated from pending work left from previous iterations. On the first resolution, everything is
+pending, and future passes operate on the smallest possible subset of work that needs to be resolved again.
 
-Connections between nodes use hashed IDs defined in `ids.rs`:
+When making changes, we have to ensure that it is following the natural path of the algorithm. Avoid treating symptoms
+and uncover the root cause of why something is not supported or not working. Here are the main pillars that should not
+be violated:
 
-- `DefinitionId`: Hash of URI, byte offset, and name
-- `DeclarationId`: Hash of fully qualified name (e.g., `Foo::Bar` or `Foo#my_method`)
-- `NameId`: Hash of unqualified name combined with parent scope and lexical nesting context
-- `UriId`: Hash of file URI
-- `StringId`: ID for interned string values
-- `ReferenceId`: ID for constant or method reference occurrences (combines reference kind, URI, and offset)
+- Single source of truth: the unit queue (worklist) and pending work (feeds worklist) dictate the items that must be
+  processed as part of the fixed-point loop. Introducing competing data structures that track similar state is a smell
+  that the implementation is not fitting the algorithm.
+- Single convergence point: all constant related resolution and dependency solving must happen inside of the resolution
+  loop. If a change requires moving constant related solving out of the loop, it's a smell that the change does not fit.
+- Minimal work: resolution always consumes the least amount of work that needs to be solved. If a change is
+  requiring a full graph traversal, then it's a smell that it does not fit the algorithm.
 
-## MCP Server
+## Incremental invalidation
 
-The MCP server exposes rubydex's code intelligence as MCP tools over stdio JSON-RPC. The server indexes the codebase on startup, then serves tool requests against the immutable graph.
+Rubydex aims to provide extremely fast incremental analysis. When a document is changed, we want to determine the
+minimum set of graph state that needs to be invalidated and re-analyzed. The invalidation algorithm lives in
+`rust/rubydex/src/model/graph.rs` and it produces the pending work that feeds the resolution pass.
 
-### Pagination
+In its ideal form, Rubydex should be able to perform layered incremental invalidation by asking layered questions to
+decide which level of invalidation is needed.
 
-Tools that may return a high number of results accept `offset` and `limit` parameters and return a `total` count to support pagination.
+Let's say we have:
 
-Pagination returns the requested page and a `total` count so callers can continue fetching later pages.
+```rb
+# Comment
+class Foo; end
 
-### Result Ordering
+class Bar < Foo; end
+```
 
-All collection-returning tools iterate over `IdentityHashMap` or `IdentityHashSet` structures. These use a deterministic hasher, so iteration order is fixed for a given map state.
+1. Does the change modify things that do not impact resolution?
+    - If a change modifies comments or adds blank lines, then we need to update the definition/reference data, but no
+    resolution is required as a result
+2. Does the change modify definitions or constant references?
+    - If a change defines new constants or adds new references (like adding `, Qux` to an include), then that can
+    potentially invalidate resolution data, including what a reference resolves to and ancestor chain information
+3. Does the change modify ancestor chains?
+    - If a change modifies ancestors, like changing parent classes, includes, prepends or extends, then every constant
+    reference inside of that namespace may now resolve to a different declaration. Additionally, all descendants of the
+    namespace also have their own ancestor chains invalidated because they depend on the namespace that got modified,
+    which recurses and keeps triggering invalidation until we reach the end of all dependent declarations and references
 
-- **Within a server session**: Order is consistent between requests as long as the graph has not been re-indexed. Incremental re-indexing (e.g., after a file save) may change the graph between paginated requests, causing items to shift, appear, or disappear. Callers should not assume pagination stability across graph changes.
-- **Across server restarts**: Order may change. Indexing is parallelized, so thread scheduling affects insertion order into the graph, which determines HashMap/HashSet bucket layout.
+The essence of the algorithm is that we want to invalidate as little as possible to produce accurate analysis. In our
+example:
 
-### Key Files
+- If the ancestors of `Bar` change because of a new include, we do not have to invalidate anything related to `Foo`
+- However, if we add an include to `Foo`, then the ancestors of `Bar` are also impacted (it is a descendant of `Foo`),
+  which means we need to recurse and invalidate `Bar` as well
 
-- `lib/rubydex/mcp_server.rb`: JSON-RPC dispatch, indexing lifecycle, and tool execution
-- `lib/rubydex/mcp_server/protocol.rb`: MCP protocol primitives and stdio transport
-- `lib/rubydex/mcp_server/tools/`: Tool implementations
-- `test/mcp_server_test.rb`: Integration tests (full MCP protocol over stdio)
+In more abstract terms, changing a document causes the invalidation of a subset of the Rubydex graph. The key to
+achieving optimal performance is ensuring that the subset is as small as possible while maintaining correctness. Any
+changes that involve resolution or incremental invalidation must comply with this over-arching goal.
 
 ## FFI Layer
 
