@@ -313,7 +313,7 @@ class Rubydex::Graph
   sig { returns(T::Array[String]) }
   def index_workspace; end
 
-  # Loads configuration, merging its excluded paths into the graph's configuration (the workspace path is never
+  # Loads configuration, merging its exclusion patterns into the graph's configuration (the workspace path is never
   # overridden). With `config_path` (resolved relative to the workspace path), an explicitly named file that does not
   # exist raises `Rubydex::ConfigError`. With no argument, the default `.rubydex` is loaded if present and ignored if
   # missing. Raises `Rubydex::ConfigError` if a file cannot be read or is malformed.
@@ -418,11 +418,11 @@ class Rubydex::Graph
   sig { params(paths: T::Array[String]).void }
   def add_workspace_dependency_paths(paths); end
 
-  sig { params(paths: T::Array[String]).void }
-  def exclude_paths(paths); end
+  sig { params(patterns: T::Array[String]).void }
+  def exclude_patterns(patterns); end
 
   sig { returns(T::Array[String]) }
-  def excluded_paths; end
+  def excluded_patterns; end
 end
 
 class Rubydex::DisplayLocation < Rubydex::Location

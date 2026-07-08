@@ -128,16 +128,16 @@ impl Graph {
         &mut self.declarations
     }
 
-    /// Adds paths to exclude from file discovery during indexing. Excluded directories will be skipped entirely during
-    /// directory traversal.
-    pub fn exclude_paths(&mut self, paths: Vec<PathBuf>) {
-        self.config.exclude_paths(paths);
+    /// Adds glob patterns to exclude from file discovery during indexing. Excluded directories will be skipped entirely
+    /// during directory traversal.
+    pub fn exclude_patterns(&mut self, patterns: Vec<Box<str>>) {
+        self.config.exclude_patterns(patterns);
     }
 
-    /// Returns the set of paths excluded from file discovery.
+    /// Returns the set of exclusion patterns.
     #[must_use]
-    pub fn excluded_paths(&self) -> HashSet<PathBuf> {
-        self.config.excluded_paths()
+    pub fn excluded_patterns(&self) -> HashSet<Box<str>> {
+        self.config.excluded_patterns()
     }
 
     /// Returns the root directory of the workspace being indexed.

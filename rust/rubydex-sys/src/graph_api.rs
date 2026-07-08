@@ -169,37 +169,41 @@ pub unsafe extern "C" fn rdx_graph_resolve_constant(
     })
 }
 
-/// Adds paths to exclude from file discovery during indexing.
+/// Adds glob patterns to exclude from file discovery during indexing.
 ///
 /// # Panics
 ///
-/// Will panic if the given array of C string paths cannot be converted to a `Vec<String>`.
+/// Will panic if the given array of C string patterns cannot be converted to a `Vec<String>`.
 ///
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - `paths` must be an array of `count` valid, null-terminated UTF-8 strings.
+/// - `patterns` must be an array of `count` valid, null-terminated UTF-8 strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_exclude_paths(pointer: GraphPointer, paths: *const *const c_char, count: usize) {
-    let paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(paths, count).unwrap() };
-    let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    with_mut_graph(pointer, |graph| graph.exclude_paths(path_bufs));
+pub unsafe extern "C" fn rdx_graph_exclude_patterns(
+    pointer: GraphPointer,
+    patterns: *const *const c_char,
+    count: usize,
+) {
+    let patterns: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(patterns, count).unwrap() };
+    let entries: Vec<Box<str>> = patterns.into_iter().map(String::into_boxed_str).collect();
+    with_mut_graph(pointer, |graph| graph.exclude_patterns(entries));
 }
 
-/// Returns the currently excluded paths as an array of C strings. Writes the count to `out_count`. Returns NULL if no
-/// paths are excluded. Caller must free with `free_c_string_array`.
+/// Returns the currently excluded glob patterns as an array of C strings. Writes the count to `out_count`. Returns NULL
+/// if no patterns are excluded. Caller must free with `free_c_string_array`.
 ///
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 /// - `out_count` must be a valid, writable pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_excluded_paths(
+pub unsafe extern "C" fn rdx_graph_excluded_patterns(
     pointer: GraphPointer,
     out_count: *mut usize,
 ) -> *const *const c_char {
     with_graph(pointer, |graph| {
-        let excluded = graph.excluded_paths();
+        let excluded = graph.excluded_patterns();
 
         if excluded.is_empty() {
             unsafe { *out_count = 0 };
@@ -213,7 +217,7 @@ pub unsafe extern "C" fn rdx_graph_excluded_paths(
                 // on Windows if a configuration file is using forward slashes. For example:
                 //
                 // C:\project/vendor/bundle
-                let normalized = path.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+                let normalized = path.replace(std::path::MAIN_SEPARATOR, "/");
 
                 CString::new(normalized)
                     .ok()
@@ -313,7 +317,7 @@ pub unsafe extern "C" fn rdx_index_all(
     let file_paths: Vec<String> = unsafe { utils::convert_double_pointer_to_vec(file_paths, count).unwrap() };
 
     with_mut_graph(pointer, |graph| {
-        let (file_paths, listing_errors) = listing::collect_file_paths(file_paths, &graph.excluded_paths());
+        let (file_paths, listing_errors) = listing::collect_file_paths(file_paths, &graph.excluded_patterns());
         let indexing_errors = indexing::index_files(graph, file_paths, indexing::IndexerBackend::RubyIndexer);
 
         let all_errors: Vec<String> = listing_errors
