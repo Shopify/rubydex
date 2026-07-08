@@ -102,7 +102,7 @@ impl GraphTest {
         self.graph()
             .name_dependents()
             .get(&name_id)
-            .cloned()
+            .map(|deps| deps.iter().copied().collect())
             .unwrap_or_default()
     }
 
