@@ -796,38 +796,38 @@ static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE se
 
 /*
  * call-seq:
- *   exclude_paths(paths) -> nil
+ *   exclude_patterns(patterns) -> nil
  *
- * Excludes the paths from file discovery during indexing.
+ * Excludes files matching the given glob patterns from discovery during indexing.
  */
-static VALUE rdxr_graph_exclude_paths(VALUE self, VALUE paths) {
-    Check_Type(paths, T_ARRAY);
-    rdxi_check_array_of_strings(paths);
+static VALUE rdxr_graph_exclude_patterns(VALUE self, VALUE patterns) {
+    Check_Type(patterns, T_ARRAY);
+    rdxi_check_array_of_strings(patterns);
 
-    size_t length = RARRAY_LEN(paths);
-    char **converted_paths = rdxi_str_array_to_char(paths, length);
+    size_t length = RARRAY_LEN(patterns);
+    char **converted_patterns = rdxi_str_array_to_char(patterns, length);
 
     void *graph;
     TypedData_Get_Struct(self, void*, &graph_type, graph);
 
-    rdx_graph_exclude_paths(graph, (const char **)converted_paths, length);
-    rdxi_free_str_array(converted_paths, length);
+    rdx_graph_exclude_patterns(graph, (const char **)converted_patterns, length);
+    rdxi_free_str_array(converted_patterns, length);
 
     return Qnil;
 }
 
 /*
  * call-seq:
- *   excluded_paths -> Array[String]
+ *   excluded_patterns -> Array[String]
  *
- * Returns the paths currently excluded from file discovery.
+ * Returns the glob patterns currently excluded from file discovery.
  */
-static VALUE rdxr_graph_excluded_paths(VALUE self) {
+static VALUE rdxr_graph_excluded_patterns(VALUE self) {
     void *graph;
     TypedData_Get_Struct(self, void*, &graph_type, graph);
 
     size_t out_count = 0;
-    const char *const *results = rdx_graph_excluded_paths(graph, &out_count);
+    const char *const *results = rdx_graph_excluded_patterns(graph, &out_count);
 
     if (results == NULL) {
         return rb_ary_new();
@@ -965,8 +965,8 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "complete_namespace_access", rdxr_graph_complete_namespace_access, -1);
     rb_define_method(cGraph, "complete_method_call", rdxr_graph_complete_method_call, -1);
     rb_define_method(cGraph, "complete_method_argument", rdxr_graph_complete_method_argument, -1);
-    rb_define_method(cGraph, "exclude_paths", rdxr_graph_exclude_paths, 1);
-    rb_define_method(cGraph, "excluded_paths", rdxr_graph_excluded_paths, 0);
+    rb_define_method(cGraph, "exclude_patterns", rdxr_graph_exclude_patterns, 1);
+    rb_define_method(cGraph, "excluded_patterns", rdxr_graph_excluded_patterns, 0);
     rb_define_method(cGraph, "workspace_path", rdxr_graph_workspace_path, 0);
     rb_define_method(cGraph, "workspace_path=", rdxr_graph_set_workspace_path, 1);
     rb_define_method(cGraph, "load_config", rdxr_graph_load_config, -1);

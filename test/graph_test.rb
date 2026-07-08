@@ -58,9 +58,9 @@ class GraphTest < Minitest::Test
       graph.load_config(".rubydex_custom")
 
       # Excluded paths are resolved against the workspace path.
-      assert_includes(graph.excluded_paths, context.absolute_path_to("vendor"))
-      assert_includes(graph.excluded_paths, context.absolute_path_to("generated"))
-      assert_includes(graph.excluded_paths, context.absolute_path_to("node_modules"))
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("vendor"))
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("generated"))
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("node_modules"))
     end
   end
 
@@ -71,9 +71,9 @@ class GraphTest < Minitest::Test
       graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
       graph.load_config
 
-      assert_includes(graph.excluded_paths, context.absolute_path_to("vendor"))
-      assert_includes(graph.excluded_paths, context.absolute_path_to("generated"))
-      assert_includes(graph.excluded_paths, context.absolute_path_to("node_modules"))
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("vendor"))
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("generated"))
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("node_modules"))
     end
   end
 
@@ -83,7 +83,7 @@ class GraphTest < Minitest::Test
 
       # A missing default `rubydex.toml` is not an error; defaults remain in place.
       graph.load_config
-      assert_includes(graph.excluded_paths, context.absolute_path_to("node_modules"))
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("node_modules"))
     end
   end
 
@@ -1467,15 +1467,15 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_exclude_paths_filters_nested_directories
+  def test_exclude_patterns_filters_nested_directories
     with_context do |context|
       context.write!("vendor/gems/foo.rb", "class Foo; end")
       context.write!("vendor/bundle/bar.rb", "class Bar; end")
 
       graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
-      graph.exclude_paths(["vendor/bundle"])
+      graph.exclude_patterns(["vendor/bundle"])
 
-      assert_includes(graph.excluded_paths, context.absolute_path_to("vendor/bundle"))
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("vendor/bundle"))
 
       # vendor itself should be included since only vendor/bundle is excluded
       paths = graph.workspace_paths
@@ -1490,15 +1490,15 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_exclude_paths_with_invalid_arguments
+  def test_exclude_patterns_with_invalid_arguments
     graph = Rubydex::Graph.new
 
     assert_raises(TypeError) do
-      graph.exclude_paths(123)
+      graph.exclude_patterns(123)
     end
 
     assert_raises(TypeError) do
-      graph.exclude_paths(["/valid/path", 456])
+      graph.exclude_patterns(["/valid/path", 456])
     end
   end
 

@@ -134,7 +134,7 @@ fn main() {
     // Listing
 
     let (file_paths, errors) = time_it!(listing, {
-        listing::collect_file_paths(args.paths, &graph.excluded_paths())
+        listing::collect_file_paths(args.paths, &graph.excluded_patterns())
     });
 
     for error in errors {

@@ -32,7 +32,7 @@ pub struct Config {
     /// Path to the workspace being analyzed
     workspace_path: Box<Path>,
     /// Patterns to exclude from file discovery during indexing.
-    excluded_paths: HashSet<Box<str>>,
+    excluded_patterns: HashSet<Box<str>>,
 }
 assert_mem_size!(Config, 64);
 
@@ -50,7 +50,7 @@ impl Config {
             workspace_path: std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .into_boxed_path(),
-            excluded_paths: DEFAULT_EXCLUDED_DIRECTORIES.iter().map(|&dir| Box::from(dir)).collect(),
+            excluded_patterns: DEFAULT_EXCLUDED_DIRECTORIES.iter().map(|&dir| Box::from(dir)).collect(),
         }
     }
 
@@ -67,14 +67,14 @@ impl Config {
 
     /// Adds patterns to exclude from file discovery during indexing. Excluded directories will be skipped entirely during
     /// directory traversal.
-    pub fn exclude_paths(&mut self, paths: impl IntoIterator<Item = Box<str>>) {
-        self.excluded_paths.extend(paths);
+    pub fn exclude_patterns(&mut self, patterns: impl IntoIterator<Item = Box<str>>) {
+        self.excluded_patterns.extend(patterns);
     }
 
     /// Returns the set of exclusion patterns resolved against the workspace path.
     #[must_use]
-    pub fn excluded_paths(&self) -> HashSet<Box<str>> {
-        self.excluded_paths
+    pub fn excluded_patterns(&self) -> HashSet<Box<str>> {
+        self.excluded_patterns
             .iter()
             .map(|entry| {
                 self.workspace_path
@@ -130,7 +130,7 @@ impl Config {
             Errors::ConfigError(format!("Invalid config file `{}`: {error}", config_path.display()))
         })?;
 
-        self.excluded_paths.extend(parsed.exclude);
+        self.excluded_patterns.extend(parsed.exclude);
         Ok(())
     }
 
@@ -150,16 +150,16 @@ mod tests {
     }
 
     #[test]
-    fn excluded_paths_resolves_patterns_against_the_workspace_path() {
+    fn excluded_patterns_resolves_patterns_against_the_workspace_path() {
         let mut config = Config::new();
         config.set_workspace_path(PathBuf::from("/workspace"));
-        config.exclude_paths([
+        config.exclude_patterns([
             Box::from("vendor"),
             Box::from("**/fixtures"),
             Box::from("/absolute/path"),
         ]);
 
-        let excluded = config.excluded_paths();
+        let excluded = config.excluded_patterns();
 
         let vendor = workspace_exclusion("vendor");
         let fixtures = workspace_exclusion("**/fixtures");
@@ -179,14 +179,14 @@ mod tests {
 
         for default in DEFAULT_EXCLUDED_DIRECTORIES {
             assert!(
-                config.excluded_paths.contains(*default),
+                config.excluded_patterns.contains(*default),
                 "expected `{default}` to be excluded by default"
             );
         }
     }
 
     #[test]
-    fn load_file_merges_excluded_paths_and_leaves_the_workspace_path_untouched() {
+    fn load_file_merges_excluded_patterns_and_leaves_the_workspace_path_untouched() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_path = dir.path().join("rubydex.toml");
         fs::write(&config_path, "exclude = [\"vendor\", \"generated\"]\n").unwrap();
@@ -198,7 +198,7 @@ mod tests {
             .load_file(&config_path)
             .expect("expected the config file to load");
 
-        let excluded = config.excluded_paths();
+        let excluded = config.excluded_patterns();
         // Entries from the file are merged in and resolved against the workspace path.
         assert!(excluded.contains(workspace_exclusion("vendor").as_str()));
         assert!(excluded.contains(workspace_exclusion("generated").as_str()));
@@ -223,7 +223,7 @@ mod tests {
             .load_file(&dir.path().join("b.toml"))
             .expect("expected the second file to load");
 
-        let excluded = config.excluded_paths();
+        let excluded = config.excluded_patterns();
         assert!(excluded.contains(workspace_exclusion("vendor").as_str()));
         assert!(excluded.contains(workspace_exclusion("generated").as_str()));
     }
@@ -264,7 +264,7 @@ mod tests {
         config.load_default().expect("expected rubydex.toml to load");
 
         let expected = dir.path().join("vendor").to_string_lossy().into_owned();
-        assert!(config.excluded_paths().contains(expected.as_str()));
+        assert!(config.excluded_patterns().contains(expected.as_str()));
     }
 
     #[test]
@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_defaults_the_excluded_paths_to_empty_when_the_key_is_absent() {
+    fn parse_defaults_the_excluded_patterns_to_empty_when_the_key_is_absent() {
         let file = Config::parse("").expect("an empty config is valid");
         assert!(file.exclude.is_empty());
     }
