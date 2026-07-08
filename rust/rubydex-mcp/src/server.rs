@@ -44,11 +44,15 @@ impl RubydexServer {
     }
 
     /// Spawns a background thread that indexes the codebase and marks the server as ready.
-    pub fn spawn_indexer(&self, path: String) {
+    pub fn spawn_indexer(&self, paths: Vec<String>) {
         let state = Arc::clone(&self.state);
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let (file_paths, errors) = rubydex::listing::collect_file_paths(vec![path], &HashSet::new());
+                // Paths may overlap (e.g. a dependency's require_path nested under the workspace, or the
+                // workspace's own gemspec resolving back to the root). This is harmless: the graph keys
+                // documents by UriId and overwrites on re-index, so a file discovered twice costs only
+                // wasted indexing work, never duplicate declarations.
+                let (file_paths, errors) = rubydex::listing::collect_file_paths(paths, &HashSet::new());
                 for error in &errors {
                     eprintln!("Listing error: {error}");
                 }

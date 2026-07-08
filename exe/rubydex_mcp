@@ -1,11 +1,11 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "rbconfig"
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
-host_os = RbConfig::CONFIG.fetch("host_os")
-executable = host_os.match?(/mswin|mingw|cygwin/) ? "rubydex_mcp.exe" : "rubydex_mcp"
-binary = File.expand_path("../lib/rubydex/bin/#{executable}", __dir__)
+require "rubydex/mcp_server_bridge"
+
+binary = Rubydex::MCPServerBridge.binary_path
 
 unless File.executable?(binary)
   abort(<<~MESSAGE.chomp)
@@ -14,4 +14,13 @@ unless File.executable?(binary)
   MESSAGE
 end
 
-exec(binary, *ARGV)
+args = if Rubydex::MCPServerBridge.passthrough?(ARGV)
+  ARGV
+elsif Rubydex::MCPServerBridge.setup_bundler_context(ARGV.first || Dir.pwd)
+  # The wrapper only discovers paths that require Ruby/Bundler context. Rust still performs the indexing pass.
+  Rubydex::MCPServerBridge.compute_index_paths(ARGV)
+else
+  ARGV.empty? ? [Dir.pwd] : ARGV
+end
+
+exec(binary, *args)
