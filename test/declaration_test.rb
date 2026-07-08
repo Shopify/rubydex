@@ -124,7 +124,7 @@ class DeclarationTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_nil(graph["Foo"].singleton_class)
+      assert_equal("Foo::<Foo>", graph["Foo"].singleton_class.name)
 
       bar = graph["Foo::Bar"]
       assert_equal("Foo::Bar::<Bar>", bar.singleton_class.name)
