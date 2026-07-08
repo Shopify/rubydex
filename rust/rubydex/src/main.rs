@@ -270,6 +270,9 @@ fn run_incremental_resolution(
 
     println!();
     println!("Incremental resolution ({cycles} cycle(s), {files_per_cycle} file(s)/cycle)");
+    println!("  Scenario: no-op reindex; files are indexed again without changing their contents.");
+    println!("  This should be the fastest incremental resolution path.");
+    println!("  Add scenario-based benchmarks before optimizing incremental resolution.");
 
     for cycle in 0..cycles {
         // Re-index the window of files for this cycle. Rotating the window across cycles samples
