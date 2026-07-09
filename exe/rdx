@@ -116,10 +116,8 @@ operation =
     end.parse!
 
     lambda do |graph|
-      require "irb"
-      IRB.setup(nil)
-      IRB.conf[:IRB_NAME] = "rubydex"
-      IRB::Irb.new(IRB::WorkSpace.new(binding)).run(IRB.conf)
+      require "rubydex/console"
+      Rubydex::Console.start(graph)
     rescue LoadError
       abort("Interactive mode requires `irb` to be in the bundle")
     end
