@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use line_index::LineIndex;
 use url::Url;
+use xxhash_rust::xxh3::xxh3_64;
 
 use crate::assert_mem_size;
 use crate::diagnostic::Diagnostic;
@@ -17,8 +18,9 @@ pub struct Document {
     method_reference_ids: Vec<MethodReferenceId>,
     constant_reference_ids: Vec<ConstantReferenceId>,
     diagnostics: Vec<Diagnostic>,
+    content_hash: u64,
 }
-assert_mem_size!(Document, 176);
+assert_mem_size!(Document, 184);
 
 impl Document {
     #[must_use]
@@ -30,12 +32,18 @@ impl Document {
             method_reference_ids: Vec::new(),
             constant_reference_ids: Vec::new(),
             diagnostics: Vec::new(),
+            content_hash: xxh3_64(source.as_bytes()),
         }
     }
 
     #[must_use]
     pub fn uri(&self) -> &str {
         &self.uri
+    }
+
+    #[must_use]
+    pub fn content_hash(&self) -> u64 {
+        self.content_hash
     }
 
     #[must_use]

@@ -1044,7 +1044,17 @@ impl Graph {
     /// 3. `extend` -- merges the new `LocalGraph` into the now-clean graph
     pub fn consume_document_changes(&mut self, other: LocalGraph) {
         let uri_id = other.uri_id();
-        let old_document = self.documents.remove(&uri_id);
+
+        let old_document = match self.documents.entry(uri_id) {
+            Entry::Occupied(entry) => {
+                // No changes to the document, skip invalidation and merging
+                if entry.get().content_hash() == other.document().content_hash() {
+                    return;
+                }
+                Some(entry.remove())
+            }
+            Entry::Vacant(_) => None,
+        };
 
         // Skip invalidation during boot indexing (no documents have been resolved yet)
         // or when the document is brand new (no old data to invalidate against).
@@ -4208,5 +4218,22 @@ mod incremental_resolution_tests {
                 "Kernel has stale descendant id {id:?} with no backing declaration"
             );
         }
+    }
+
+    #[test]
+    fn unchanged_document_does_not_trigger_invalidation() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///a.rb", "class Foo; end");
+        context.resolve();
+
+        // Re-indexing the same content should not trigger any invalidation or changes
+        context.index_uri("file:///a.rb", "class Foo; end");
+
+        let mut graph = context.into_graph();
+
+        assert!(
+            graph.take_pending_work().is_empty(),
+            "Graph should have no pending work after re-indexing unchanged document"
+        );
     }
 } // mod incremental_resolution_tests
