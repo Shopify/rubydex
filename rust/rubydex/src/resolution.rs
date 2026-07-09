@@ -14,7 +14,7 @@ use crate::model::{
     definitions::{Definition, Mixin, Receiver},
     graph::{Graph, Unit},
     identity_maps::{IdentityHashBuilder, IdentityHashMap, IdentityHashSet},
-    ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId},
+    ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId, UriId},
     name::{Name, NameRef, ParentScope},
 };
 
@@ -1912,6 +1912,22 @@ impl<'a> Resolver<'a> {
         let names = self.graph.names();
         let depths = Self::compute_name_depths(names);
 
+        // Precompute the lexicographic rank of every document URI. Definitions and references are sorted by
+        // (name depth, URI, offset) below; storing precomputed integer sort keys instead of looking up name
+        // depths and comparing URI strings on every comparison makes sorting substantially cheaper on large graphs.
+        let mut uris: Vec<(&str, UriId)> = self
+            .graph
+            .documents()
+            .iter()
+            .map(|(uri_id, document)| (document.uri(), *uri_id))
+            .collect();
+        uris.sort_unstable();
+        let mut uri_ranks: IdentityHashMap<UriId, u32> =
+            IdentityHashMap::with_capacity_and_hasher(uris.len(), IdentityHashBuilder);
+        for (rank, (_, uri_id)) in uris.into_iter().enumerate() {
+            uri_ranks.insert(uri_id, u32::try_from(rank).expect("more documents than u32::MAX"));
+        }
+
         // Dedup: when multiple files are indexed before resolution runs, pending_work accumulates
         // and the same definition/reference ID can be enqueued more than once.
         let mut seen_defs = IdentityHashSet::<DefinitionId>::default();
@@ -1928,23 +1944,28 @@ impl<'a> Resolver<'a> {
                     let Some(definition) = self.graph.definitions().get(&id) else {
                         continue;
                     };
-                    let uri = self.graph.documents().get(definition.uri_id()).unwrap().uri();
+                    let uri_rank = *uri_ranks.get(definition.uri_id()).unwrap();
 
                     match definition {
                         Definition::Class(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::Module(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::Constant(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::ConstantAlias(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::SingletonClass(def) => {
-                            definitions.push((Unit::Definition(id), (*def.name_id(), uri, definition.offset())));
+                            let depth = *depths.get(def.name_id()).unwrap();
+                            definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         // SelfReceiver methods create singleton classes, which need
                         // ancestor linearization. Process them in the convergence loop
@@ -1965,11 +1986,9 @@ impl<'a> Resolver<'a> {
                     let Some(constant_ref) = self.graph.constant_references().get(&id) else {
                         continue;
                     };
-                    let uri = self.graph.documents().get(&constant_ref.uri_id()).unwrap().uri();
-                    const_refs.push((
-                        Unit::ConstantRef(id),
-                        (*constant_ref.name_id(), uri, constant_ref.offset()),
-                    ));
+                    let uri_rank = *uri_ranks.get(&constant_ref.uri_id()).unwrap();
+                    let depth = *depths.get(constant_ref.name_id()).unwrap();
+                    const_refs.push((Unit::ConstantRef(id), (depth, uri_rank, constant_ref.offset())));
                 }
                 Unit::Ancestors(id) => {
                     if !seen_ancestors.insert(id) {
@@ -1984,14 +2003,10 @@ impl<'a> Resolver<'a> {
         }
 
         // Sort namespaces based on their name complexity so that simpler names are always first
-        // When the depth is the same, sort by URI and offset to maintain determinism
-        definitions.sort_unstable_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
-        });
+        // When the depth is the same, sort by URI rank and offset to maintain determinism
+        definitions.sort_unstable_by_key(|(_, key)| *key);
 
-        const_refs.sort_unstable_by(|(_, (name_a, uri_a, offset_a)), (_, (name_b, uri_b, offset_b))| {
-            (depths.get(name_a).unwrap(), uri_a, offset_a).cmp(&(depths.get(name_b).unwrap(), uri_b, offset_b))
-        });
+        const_refs.sort_unstable_by_key(|(_, key)| *key);
 
         others.sort_unstable_by_key(|(_, key)| *key);
 
