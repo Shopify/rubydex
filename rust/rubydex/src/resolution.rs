@@ -76,6 +76,9 @@ pub struct Resolver<'a> {
     unit_queue: VecDeque<Unit>,
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
+    /// Declarations whose ancestors went stale: they gained a definition (or were promoted) after their ancestors were
+    /// last linearized, so mixins/superclass may have changed and any cached partial ancestors must not be reused
+    stale_ancestors: IdentityHashSet<DeclarationId>,
     /// Declarations whose ancestor chain this resolver (re-)wrote via `set_ancestors`. A fresh resolver is created for
     /// every `resolve()`, so this only ever holds the declarations linearized by the current run. Used to update the
     /// `descendants` relation from just these declarations instead of rebuilding it from scratch.
@@ -88,6 +91,7 @@ impl<'a> Resolver<'a> {
             graph,
             unit_queue: VecDeque::new(),
             made_progress: false,
+            stale_ancestors: IdentityHashSet::default(),
             linearized_declarations: IdentityHashSet::default(),
         }
     }
@@ -294,6 +298,9 @@ impl<'a> Resolver<'a> {
             }
             Outcome::Resolved(id) => {
                 if needs_linearization {
+                    // A new definition landed on this declaration, so a previously built (partial) chain may be
+                    // missing mixins or a superclass from it
+                    self.stale_ancestors.insert(id);
                     self.unit_queue.push_back(Unit::Ancestors(id));
                 }
                 self.made_progress = true;
@@ -321,8 +328,49 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Returns whether a declaration's partial ancestors would rebuild identically, so they can be reused instead.
+    ///
+    /// A partial chain records which unresolved names block it as `Ancestor::Partial` entries (blockers of partially
+    /// linearized parents and mixins get inlined into the chain too). The chain only needs to be rebuilt when one of
+    /// those names has since been resolved, or when the declaration gained a new definition (marked stale), which can add
+    /// mixins or a superclass. Chains without recorded blockers (never linearized, or partial through a singleton's
+    /// attached class) always report false so they are conservatively rebuilt
+    fn is_reusable_partial_ancestors(&self, declaration_id: DeclarationId) -> bool {
+        if self.stale_ancestors.contains(&declaration_id) {
+            return false;
+        }
+
+        let namespace = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+        let mut has_blockers = false;
+
+        for ancestor in namespace.ancestors() {
+            if let Ancestor::Partial(name_id) = ancestor {
+                has_blockers = true;
+
+                if matches!(self.graph.names().get(name_id), Some(NameRef::Resolved(_))) {
+                    return false;
+                }
+            }
+        }
+
+        has_blockers
+    }
+
     /// Handles a unit of work for linearizing ancestors of a declaration
     fn handle_ancestor_unit(&mut self, id: DeclarationId) {
+        // If the chain is still blocked on the exact dependencies it was built against, rebuilding it would
+        // reproduce the identical partial chain — keep waiting instead
+        if self.is_reusable_partial_ancestors(id) {
+            self.unit_queue.push_back(Unit::Ancestors(id));
+            return;
+        }
+
         match self.ancestors_of(id) {
             Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
                 // We succeeded in some capacity this time
@@ -943,6 +991,7 @@ impl<'a> Resolver<'a> {
                 self.graph.promote_constant_to_namespace(attached_id, |name, owner_id| {
                     Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
                 });
+                self.stale_ancestors.insert(attached_id);
 
                 self.schedule_singleton_ancestors(attached_id, mode);
             } else {
@@ -1011,16 +1060,36 @@ impl<'a> Resolver<'a> {
     #[must_use]
     fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
         {
-            let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
+            let declaration = self.graph.declarations().get(&declaration_id).unwrap();
 
-            // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
-            // again
+            // A complete or cyclic chain is final — return it directly from the cache.
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().clone_ancestors();
 
                 context.finalize(declaration_id);
                 return cached;
             }
+        }
+
+        // Reuse a partial chain that is still blocked on the same unresolved names it was built against: rebuilding
+        // it would walk the same graph state and produce the identical chain
+        if self.is_reusable_partial_ancestors(declaration_id) {
+            let cached = self
+                .graph
+                .declarations()
+                .get(&declaration_id)
+                .unwrap()
+                .as_namespace()
+                .unwrap()
+                .clone_ancestors();
+
+            context.partial = true;
+            context.finalize(declaration_id);
+            return cached;
+        }
+
+        {
+            let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
 
             if !context.seen_ids.insert(declaration_id) {
                 // If we find a cycle when linearizing ancestors, it's an error that the programmer must fix. However, we try to
@@ -1110,6 +1179,7 @@ impl<'a> Resolver<'a> {
             .unwrap()
             .set_ancestors(result.clone());
 
+        self.stale_ancestors.remove(&declaration_id);
         self.linearized_declarations.insert(declaration_id);
 
         context.finalize(declaration_id);
@@ -1322,6 +1392,7 @@ impl<'a> Resolver<'a> {
                         self.graph.promote_constant_to_namespace(owner_id, |name, owner_id| {
                             Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
                         });
+                        self.stale_ancestors.insert(owner_id);
                         self.unit_queue.push_back(Unit::Ancestors(owner_id));
                     }
                 }
