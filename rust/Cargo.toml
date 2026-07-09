@@ -1,7 +1,6 @@
 [workspace]
 members = [
   "rubydex",
-  "rubydex-mcp",
   "rubydex-sys",
 ]
 

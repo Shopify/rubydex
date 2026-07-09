@@ -110,13 +110,13 @@ Connections between nodes use hashed IDs defined in `ids.rs`:
 
 ## MCP Server
 
-The `rubydex-mcp` crate exposes rubydex's code intelligence as MCP tools over stdio JSON-RPC. The server indexes the codebase on startup, then serves tool requests against the immutable graph.
+The MCP server exposes rubydex's code intelligence as MCP tools over stdio JSON-RPC. The server indexes the codebase on startup, then serves tool requests against the immutable graph.
 
 ### Pagination
 
 Tools that may return a high number of results accept `offset` and `limit` parameters and return a `total` count to support pagination.
 
-Pagination uses a two-pass approach: first collect all entries that pass filtering into a `Vec`, then apply `skip(offset).take(limit)`. This ensures `total` accurately reflects the number of results the caller can page through.
+Pagination returns the requested page and a `total` count so callers can continue fetching later pages.
 
 ### Result Ordering
 
@@ -127,9 +127,10 @@ All collection-returning tools iterate over `IdentityHashMap` or `IdentityHashSe
 
 ### Key Files
 
-- `rubydex-mcp/src/server.rs`: Tool handler implementations and pagination logic
-- `rubydex-mcp/src/tools.rs`: Parameter struct definitions with JSON Schema annotations
-- `rubydex-mcp/tests/mcp.rs`: Integration tests (full MCP protocol over stdio)
+- `lib/rubydex/mcp_server.rb`: JSON-RPC dispatch, indexing lifecycle, and tool execution
+- `lib/rubydex/mcp_server/protocol.rb`: MCP protocol primitives and stdio transport
+- `lib/rubydex/mcp_server/tools/`: Tool implementations
+- `test/mcp_server_test.rb`: Integration tests (full MCP protocol over stdio)
 
 ## FFI Layer
 
