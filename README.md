@@ -77,6 +77,41 @@ diagnostic.message
 diagnostic.location
 ```
 
+## Querying with Cypher
+
+Rubydex exposes the indexed graph through a read-only subset of the
+[Cypher](https://opencypher.org/) query language. Only read clauses (`MATCH`,
+`WHERE`, `RETURN`, ...) are supported; there is no way to mutate the graph.
+
+From the command line:
+
+```bash
+# Run a query against the current workspace
+bundle exec rdx query "MATCH (c:Class)-[:DEFINES]->(m:Method) RETURN c.name, m.name"
+
+# Render results as JSON instead of a table
+bundle exec rdx query "MATCH (c:Class) RETURN c.name" --format json
+
+# Describe the queryable schema (node labels and relationship types) without indexing
+bundle exec rdx query --schema
+```
+
+From Ruby:
+
+```ruby
+graph = Rubydex::Graph.new
+graph.index_workspace
+graph.resolve
+
+# Parse once, render against a graph as a table or JSON string
+query = Rubydex::Query.parse("MATCH (c:Class) RETURN c.name")
+puts query.render(graph, "table")
+puts query.render(graph, "json")
+
+# Describe the schema
+puts Rubydex::Query.schema("table")
+```
+
 ## MCP Server (Experimental)
 
 Rubydex can run as an MCP (Model Context Protocol) server, enabling AI assistants
@@ -94,16 +129,16 @@ like Claude to semantically query your Ruby codebase.
    bundle install
    ```
 
-3. Configure your MCP client to run `bundle exec rdx --mcp`.
+3. Configure your MCP client to run `bundle exec rdx mcp`.
 
    Using Claude Code as an example:
    ```bash
-   claude mcp add --scope project rubydex -- bundle exec rdx --mcp
+   claude mcp add --scope project rubydex -- bundle exec rdx mcp
    ```
 
    Using Codex as an example:
    ```bash
-   codex mcp add rubydex -- bundle exec rdx --mcp
+   codex mcp add rubydex -- bundle exec rdx mcp
    ```
 
    Start your MCP client from that project directory. The MCP server indexes

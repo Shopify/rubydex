@@ -84,6 +84,39 @@ impl Document {
         self.diagnostics.push(diagnostic);
     }
 
+    /// The file-system path of this document, decoded from its URI.
+    ///
+    /// Returns `None` when the URI is not a `file://` URL (e.g. the synthetic built-in document) or
+    /// cannot be converted to a path. Uses `Url` so percent-encoding and platform-specific paths
+    /// (including Windows drive paths) are handled correctly.
+    #[must_use]
+    pub fn file_path(&self) -> Option<PathBuf> {
+        let url = Url::parse(&self.uri).ok()?;
+        if url.scheme() != "file" {
+            return None;
+        }
+        url.to_file_path().ok()
+    }
+
+    /// The base file name of this document (the last path segment), decoded from its URI.
+    ///
+    /// Prefers the platform file path, but falls back to the last URL path segment so it still works
+    /// for `file://` URIs that don't convert to a local path on the current platform (e.g. a
+    /// drive-less path like `file:///foo.rb` on Windows). Returns `None` only when the URI has no
+    /// usable path segment (e.g. the synthetic built-in document).
+    #[must_use]
+    pub fn file_name(&self) -> Option<String> {
+        if let Some(path) = self.file_path()
+            && let Some(name) = path.file_name()
+        {
+            return Some(name.to_string_lossy().into_owned());
+        }
+
+        let url = Url::parse(&self.uri).ok()?;
+        let segment = url.path_segments()?.rfind(|segment| !segment.is_empty())?;
+        Some(segment.to_string())
+    }
+
     /// Computes the require path for this document given load paths.
     ///
     /// Returns `None` if:
@@ -97,12 +130,7 @@ impl Document {
     /// Panics if load path entries exceed u16.
     #[must_use]
     pub fn require_path(&self, load_paths: &[PathBuf]) -> Option<(String, u16)> {
-        let url = Url::parse(&self.uri).ok()?;
-        if url.scheme() != "file" {
-            return None;
-        }
-
-        let file_path = url.to_file_path().ok()?;
+        let file_path = self.file_path()?;
         if file_path.extension().is_none_or(|ext| ext != "rb") {
             return None;
         }

@@ -313,7 +313,7 @@ class MCPServerIntegrationTest < Minitest::Test
     stdout, _stderr, status = run_executable("--help")
 
     assert_predicate(status, :success?)
-    assert_includes(stdout, "--mcp")
+    assert_includes(stdout, "mcp [PATH]")
     assert_includes(stdout, "Run the MCP server for AI assistants")
   end
 
@@ -325,21 +325,21 @@ class MCPServerIntegrationTest < Minitest::Test
   end
 
   def test_executable_rejects_extra_arguments
-    stdout, stderr, status = run_executable("--mcp", "foo", "bar")
+    stdout, stderr, status = run_executable("mcp", "foo", "bar")
 
-    assert_equal(2, status.exitstatus)
+    assert_equal(1, status.exitstatus)
     assert_empty(stdout)
-    assert_includes(stderr, "error: unexpected argument 'bar' found")
-    assert_includes(stderr, "--mcp")
+    assert_includes(stderr, "unexpected argument: bar")
+    assert_includes(stderr, "mcp [PATH]")
   end
 
   def test_executable_rejects_unknown_options
-    stdout, stderr, status = run_executable("--mcp", "--unknown")
+    stdout, stderr, status = run_executable("mcp", "--unknown")
 
-    assert_equal(2, status.exitstatus)
+    assert_equal(1, status.exitstatus)
     assert_empty(stdout)
-    assert_includes(stderr, "error: invalid option: --unknown")
-    assert_includes(stderr, "--mcp")
+    assert_includes(stderr, "invalid option: --unknown")
+    assert_includes(stderr, "mcp [PATH]")
   end
 
   def test_mcp_server_can_be_required_directly
@@ -402,7 +402,7 @@ class MCPServerIntegrationTest < Minitest::Test
       RUBY
 
       stderr_output = +""
-      Open3.popen3(RbConfig.ruby, "-rbundler/setup", executable_path, "--mcp", context.absolute_path) do |stdin, stdout, stderr, wait_thr|
+      Open3.popen3(RbConfig.ruby, "-rbundler/setup", executable_path, "mcp", context.absolute_path) do |stdin, stdout, stderr, wait_thr|
         stderr_reader = Thread.new { stderr_output << stderr.read }
 
         initialize_session(stdin, stdout)
@@ -459,7 +459,7 @@ class MCPServerIntegrationTest < Minitest::Test
         stderr_reader.join
       rescue Timeout::Error
         Process.kill("TERM", wait_thr.pid)
-        flunk("rdx --mcp did not exit after stdin closed. stderr:\n#{stderr_output}")
+        flunk("rdx mcp did not exit after stdin closed. stderr:\n#{stderr_output}")
       end
     end
   end
