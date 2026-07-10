@@ -158,6 +158,9 @@ class Rubydex::Definition
   sig { returns(T::Array[Rubydex::Definition]) }
   def lexical_nesting; end
 
+  sig { returns(Rubydex::Document) }
+  def document; end
+
   class << self
     private
 

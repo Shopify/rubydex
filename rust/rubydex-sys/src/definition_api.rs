@@ -493,6 +493,25 @@ pub unsafe extern "C" fn rdx_definition_mixins(pointer: GraphPointer, definition
     })
 }
 
+/// Returns a pointer to the URI ID of the document a definition belongs to, or
+/// NULL if the definition cannot be found. Caller must free the returned pointer
+/// with `free_u64`.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `definition_id` must be a valid definition id.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_definition_document(pointer: GraphPointer, definition_id: u64) -> *const u64 {
+    with_graph(pointer, |graph| {
+        let def_id = DefinitionId::new(definition_id);
+        if let Some(defn) = graph.definitions().get(&def_id) {
+            Box::into_raw(Box::new(**defn.uri_id())).cast_const()
+        } else {
+            ptr::null()
+        }
+    })
+}
+
 /// Status of a `MethodAliasDefinition#target` resolution.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

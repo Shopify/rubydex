@@ -18,6 +18,7 @@ static VALUE mRubydex;
 static VALUE cInclude;
 static VALUE cPrepend;
 static VALUE cExtend;
+static VALUE cDocument;
 VALUE cComment;
 VALUE cDefinition;
 VALUE cClassDefinition;
@@ -261,6 +262,27 @@ static VALUE rdxr_definition_lexical_nesting(VALUE self) {
     return nesting;
 }
 
+/*
+ * call-seq:
+ *   document -> Rubydex::Document
+ *
+ * Returns the document this definition belongs to.
+ */
+static VALUE rdxr_definition_document(VALUE self) {
+    HandleData *data;
+    void *graph = rdxi_graph_from_handle(self, &data);
+
+    const uint64_t *uri_id = rdx_definition_document(graph, data->id);
+    if (uri_id == NULL) {
+        rb_raise(rb_eRuntimeError, "Definition not found");
+    }
+
+    VALUE argv[] = {data->graph_obj, ULL2NUM(*uri_id)};
+    free_u64(uri_id);
+
+    return rb_class_new_instance(2, argv, cDocument);
+}
+
 static VALUE rdxi_build_constant_reference(VALUE graph_obj, const CConstantReference *cref) {
     VALUE ref_class = (cref->declaration_id == 0)
         ? cUnresolvedConstantReference
@@ -397,6 +419,7 @@ void rdxi_initialize_definition(VALUE mod) {
     cInclude = rb_const_get(mRubydex, rb_intern("Include"));
     cPrepend = rb_const_get(mRubydex, rb_intern("Prepend"));
     cExtend = rb_const_get(mRubydex, rb_intern("Extend"));
+    cDocument = rb_const_get(mRubydex, rb_intern("Document"));
 
     cComment = rb_define_class_under(mRubydex, "Comment", rb_cObject);
 
@@ -412,6 +435,7 @@ void rdxi_initialize_definition(VALUE mod) {
     rb_define_method(cDefinition, "declaration", rdxr_definition_declaration, 0);
     rb_define_method(cDefinition, "lexical_owner", rdxr_definition_lexical_owner, 0);
     rb_define_method(cDefinition, "lexical_nesting", rdxr_definition_lexical_nesting, 0);
+    rb_define_method(cDefinition, "document", rdxr_definition_document, 0);
 
     cClassDefinition = rb_define_class_under(mRubydex, "ClassDefinition", cDefinition);
     rb_define_method(cClassDefinition, "superclass", rdxr_class_definition_superclass, 0);

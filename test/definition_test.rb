@@ -114,6 +114,40 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_definition_document
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      definition = document.definitions.find { |defn| defn.name == "A" }
+      refute_nil(definition)
+
+      assert_instance_of(Rubydex::Document, definition.document)
+      assert_equal(context.uri_to("file1.rb"), definition.document.uri)
+    end
+  end
+
+  def test_definition_document_raises_when_definition_is_gone
+    with_context do |context|
+      context.write!("file1.rb", "class A; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      definition = document.definitions.find { |defn| defn.name == "A" }
+      refute_nil(definition)
+
+      graph.delete_document(context.uri_to("file1.rb"))
+
+      error = assert_raises(RuntimeError) { definition.document }
+      assert_equal("Definition not found", error.message)
+    end
+  end
+
   def test_definition_comments
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
