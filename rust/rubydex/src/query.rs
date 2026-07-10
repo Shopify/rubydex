@@ -3453,9 +3453,11 @@ mod tests {
         );
     }
 
-    /// Returns the smallest `MethodAlias` `DefinitionId` for the declaration named `alias_decl_fqn`
-    /// (e.g., `"Foo#aliased()"`). Picking the smallest mirrors `follow_method_alias`'s own
-    /// determinism rule for tests where multiple aliases share a declaration (e.g. cross-file fixtures).
+    /// Returns the `MethodAlias` `DefinitionId` for the declaration named `alias_decl_fqn`
+    /// (e.g., `"Foo#aliased()"`). When multiple aliases share a declaration, the one appearing
+    /// last in source order (URI, then offset) is picked, mirroring Ruby's behavior where a later
+    /// `alias` for the same name redefines the earlier one. Source order is used instead of
+    /// picking by raw `DefinitionId` because ID values are hashes with no meaningful order.
     fn alias_def_id(context: &GraphTest, alias_decl_fqn: &str) -> DefinitionId {
         let decl = context
             .graph()
@@ -3472,7 +3474,17 @@ mod tests {
                     Some(Definition::MethodAlias(_)),
                 )
             })
-            .min()
+            .max_by_key(|def_id| {
+                let definition = context.graph().definitions().get(def_id).unwrap();
+                let uri = context
+                    .graph()
+                    .documents()
+                    .get(definition.uri_id())
+                    .unwrap()
+                    .uri()
+                    .to_string();
+                (uri, definition.offset().start())
+            })
             .unwrap_or_else(|| panic!("declaration {alias_decl_fqn} has no MethodAlias definition"))
     }
 

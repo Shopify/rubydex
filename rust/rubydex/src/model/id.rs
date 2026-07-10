@@ -38,6 +38,30 @@ impl<T> Id<T> {
     }
 }
 
+impl<T> Id<T> {
+    /// Builds an ID by hashing a sequence of `u64` components without allocating.
+    ///
+    /// This is the allocation-free equivalent of formatting the components into a string and
+    /// hashing it: the components are laid out in a fixed-size stack buffer as little-endian
+    /// bytes and hashed in one shot.
+    ///
+    /// # Panics
+    ///
+    /// Panics if more than 8 components are provided.
+    #[must_use]
+    pub fn from_components(components: &[u64]) -> Self {
+        let mut buffer = [0u8; 64];
+        let len = components.len() * 8;
+        assert!(len <= buffer.len(), "Id::from_components supports at most 8 components");
+
+        for (i, component) in components.iter().enumerate() {
+            buffer[i * 8..(i + 1) * 8].copy_from_slice(&component.to_le_bytes());
+        }
+
+        Self::new(xxh3::xxh3_64(&buffer[..len]))
+    }
+}
+
 impl<T> Deref for Id<T> {
     type Target = u64;
 
@@ -106,5 +130,12 @@ mod tests {
     fn zero_hash_maps_to_nonzero() {
         let id = TestId::new(0);
         assert_eq!(id.get(), u64::MAX);
+    }
+
+    #[test]
+    fn from_components_is_deterministic_and_order_sensitive() {
+        assert_eq!(TestId::from_components(&[1, 2, 3]), TestId::from_components(&[1, 2, 3]));
+        assert_ne!(TestId::from_components(&[1, 2, 3]), TestId::from_components(&[3, 2, 1]));
+        assert_ne!(TestId::from_components(&[1, 2]), TestId::from_components(&[1, 2, 0]));
     }
 }

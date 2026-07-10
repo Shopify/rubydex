@@ -27,7 +27,7 @@ assert_mem_size!(DefinitionId, 8);
 
 #[must_use]
 pub fn namespace_definition_id(uri_id: UriId, offset: &Offset, name_id: NameId) -> DefinitionId {
-    DefinitionId::from(&format!("{}{}{}", *uri_id, offset.start(), *name_id))
+    DefinitionId::from_components(&[uri_id.get(), u64::from(offset.start()), name_id.get()])
 }
 
 #[must_use]
@@ -37,14 +37,20 @@ pub fn method_definition_id(
     str_id: StringId,
     receiver: Option<&Receiver>,
 ) -> DefinitionId {
-    let mut formatted_id = format!("{}{}{}", *uri_id, offset.start(), *str_id);
-    if let Some(receiver) = receiver {
-        match receiver {
-            Receiver::SelfReceiver(def_id) => formatted_id.push_str(&def_id.to_string()),
-            Receiver::ConstantReceiver(name_id) => formatted_id.push_str(&name_id.to_string()),
-        }
-    }
-    DefinitionId::from(&formatted_id)
+    // The tag distinguishes the receiver kind so that IDs can't collide across variants
+    let (receiver_tag, receiver_id) = match receiver {
+        None => (0u64, 0u64),
+        Some(Receiver::SelfReceiver(def_id)) => (1u64, def_id.get()),
+        Some(Receiver::ConstantReceiver(name_id)) => (2u64, name_id.get()),
+    };
+
+    DefinitionId::from_components(&[
+        uri_id.get(),
+        u64::from(offset.start()),
+        str_id.get(),
+        receiver_tag,
+        receiver_id,
+    ])
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]

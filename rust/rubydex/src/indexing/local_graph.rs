@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
-use crate::model::graph::NameDependent;
+use crate::model::graph::{NameDependent, NameDependentSet};
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
 use crate::model::name::{Name, NameRef};
@@ -19,7 +19,7 @@ type LocalGraphParts = (
     IdentityHashMap<NameId, NameRef>,
     IdentityHashMap<ConstantReferenceId, ConstantReference>,
     IdentityHashMap<MethodReferenceId, MethodRef>,
-    IdentityHashMap<NameId, Vec<NameDependent>>,
+    IdentityHashMap<NameId, NameDependentSet>,
 );
 
 #[derive(Debug)]
@@ -31,7 +31,7 @@ pub struct LocalGraph {
     names: IdentityHashMap<NameId, NameRef>,
     constant_references: IdentityHashMap<ConstantReferenceId, ConstantReference>,
     method_references: IdentityHashMap<MethodReferenceId, MethodRef>,
-    name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
+    name_dependents: IdentityHashMap<NameId, NameDependentSet>,
 }
 
 impl LocalGraph {
@@ -78,7 +78,7 @@ impl LocalGraph {
             self.name_dependents
                 .entry(*name_id)
                 .or_default()
-                .push(NameDependent::Definition(definition_id));
+                .insert(NameDependent::Definition(definition_id));
         }
 
         if self.definitions.insert(definition_id, definition).is_some() {
@@ -112,6 +112,25 @@ impl LocalGraph {
         string_id
     }
 
+    /// Interns a string slice, only allocating an owned `String` when the value hasn't been
+    /// interned yet. Prefer this over [`Self::intern_string`] when the caller has a borrowed
+    /// string, since repeated occurrences of the same identifier don't allocate
+    pub fn intern_str(&mut self, string: &str) -> StringId {
+        let string_id = StringId::from(string);
+
+        match self.strings.entry(string_id) {
+            Entry::Occupied(mut entry) => {
+                debug_assert!(string == entry.get().as_str(), "StringId collision in local graph");
+                entry.get_mut().increment_ref_count(1);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(StringRef::new(string.to_string()));
+            }
+        }
+
+        string_id
+    }
+
     // Names
 
     #[must_use]
@@ -132,13 +151,13 @@ impl LocalGraph {
                     self.name_dependents
                         .entry(parent_scope)
                         .or_default()
-                        .push(NameDependent::ChildName(name_id));
+                        .insert(NameDependent::ChildName(name_id));
                 }
                 if let Some(&nesting_id) = name.nesting().as_ref() {
                     self.name_dependents
                         .entry(nesting_id)
                         .or_default()
-                        .push(NameDependent::NestedName(name_id));
+                        .insert(NameDependent::NestedName(name_id));
                 }
                 entry.insert(NameRef::Unresolved(Box::new(name)));
             }
@@ -159,7 +178,7 @@ impl LocalGraph {
         self.name_dependents
             .entry(*reference.name_id())
             .or_default()
-            .push(NameDependent::Reference(reference_id));
+            .insert(NameDependent::Reference(reference_id));
 
         if self.constant_references.insert(reference_id, reference).is_some() {
             debug_assert!(false, "ReferenceId collision in local graph");
@@ -202,7 +221,7 @@ impl LocalGraph {
     // Name dependents
 
     #[must_use]
-    pub fn name_dependents(&self) -> &IdentityHashMap<NameId, Vec<NameDependent>> {
+    pub fn name_dependents(&self) -> &IdentityHashMap<NameId, NameDependentSet> {
         &self.name_dependents
     }
 
@@ -214,20 +233,20 @@ impl LocalGraph {
         strings: IdentityHashMap<StringId, StringRef>,
         names: IdentityHashMap<NameId, NameRef>,
     ) -> Self {
-        let mut name_dependents: IdentityHashMap<NameId, Vec<NameDependent>> = IdentityHashMap::default();
+        let mut name_dependents: IdentityHashMap<NameId, NameDependentSet> = IdentityHashMap::default();
         for (name_id, name_ref) in &names {
             if let NameRef::Unresolved(name) = name_ref {
                 if let Some(&parent_scope) = name.parent_scope().as_ref() {
                     name_dependents
                         .entry(parent_scope)
                         .or_default()
-                        .push(NameDependent::ChildName(*name_id));
+                        .insert(NameDependent::ChildName(*name_id));
                 }
                 if let Some(&nesting_id) = name.nesting().as_ref() {
                     name_dependents
                         .entry(nesting_id)
                         .or_default()
-                        .push(NameDependent::NestedName(*name_id));
+                        .insert(NameDependent::NestedName(*name_id));
                 }
             }
         }

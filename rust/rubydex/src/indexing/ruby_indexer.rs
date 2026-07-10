@@ -160,8 +160,14 @@ impl<'a> RubyIndexer<'a> {
         String::from_utf8_lossy(location.as_slice()).to_string()
     }
 
-    fn offset_to_string(&self, offset: &Offset) -> String {
-        self.source[offset.start() as usize..offset.end() as usize].to_string()
+    /// Borrowed version of [`Self::location_to_string`]. Only allocates when the source slice
+    /// isn't valid UTF-8, which makes it the preferred way to feed [`LocalGraph::intern_str`]
+    fn location_str<'l>(location: &'l ruby_prism::Location) -> std::borrow::Cow<'l, str> {
+        String::from_utf8_lossy(location.as_slice())
+    }
+
+    fn offset_str(&self, offset: &Offset) -> &'a str {
+        &self.source[offset.start() as usize..offset.end() as usize]
     }
 
     fn find_comments_for(&self, offset: u32) -> (Box<[Comment]>, DefinitionFlags) {
@@ -217,7 +223,7 @@ impl<'a> RubyIndexer<'a> {
         if let Some(parameters_list) = node.parameters() {
             for parameter in &parameters_list.requireds() {
                 let location = parameter.location();
-                let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
+                let str_id = self.local_graph.intern_str(&Self::location_str(&location));
 
                 parameters.push(Parameter::RequiredPositional(ParameterStruct::new(
                     Offset::from_prism_location(&location),
@@ -228,7 +234,7 @@ impl<'a> RubyIndexer<'a> {
             for parameter in &parameters_list.optionals() {
                 let opt_param = parameter.as_optional_parameter_node().unwrap();
                 let name_loc = opt_param.name_loc();
-                let str_id = self.local_graph.intern_string(Self::location_to_string(&name_loc));
+                let str_id = self.local_graph.intern_str(&Self::location_str(&name_loc));
 
                 parameters.push(Parameter::OptionalPositional(ParameterStruct::new(
                     Offset::from_prism_location(&name_loc),
@@ -240,7 +246,7 @@ impl<'a> RubyIndexer<'a> {
             if let Some(rest) = parameters_list.rest() {
                 let rest_param = rest.as_rest_parameter_node().unwrap();
                 let location = rest_param.name_loc().unwrap_or_else(|| rest.location());
-                let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
+                let str_id = self.local_graph.intern_str(&Self::location_str(&location));
 
                 parameters.push(Parameter::RestPositional(ParameterStruct::new(
                     Offset::from_prism_location(&location),
@@ -250,7 +256,7 @@ impl<'a> RubyIndexer<'a> {
 
             for post in &parameters_list.posts() {
                 let location = post.location();
-                let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
+                let str_id = self.local_graph.intern_str(&Self::location_str(&location));
 
                 parameters.push(Parameter::Post(ParameterStruct::new(
                     Offset::from_prism_location(&location),
@@ -265,7 +271,8 @@ impl<'a> RubyIndexer<'a> {
                         let loc = required.name_loc();
                         let full = Offset::from_prism_location(&loc);
                         let offset = Offset::new(full.start(), full.end() - 1); // Exclude trailing colon
-                        let str_id = self.local_graph.intern_string(self.offset_to_string(&offset));
+                        let name = self.offset_str(&offset);
+                        let str_id = self.local_graph.intern_str(name);
 
                         parameters.push(Parameter::RequiredKeyword(ParameterStruct::new(offset, str_id)));
                     }
@@ -274,7 +281,8 @@ impl<'a> RubyIndexer<'a> {
                         let loc = optional.name_loc();
                         let full = Offset::from_prism_location(&loc);
                         let offset = Offset::new(full.start(), full.end() - 1); // Exclude trailing colon
-                        let str_id = self.local_graph.intern_string(self.offset_to_string(&offset));
+                        let name = self.offset_str(&offset);
+                        let str_id = self.local_graph.intern_str(name);
 
                         parameters.push(Parameter::OptionalKeyword(ParameterStruct::new(offset, str_id)));
                         self.visit(&optional.value());
@@ -291,7 +299,7 @@ impl<'a> RubyIndexer<'a> {
                             .unwrap()
                             .name_loc()
                             .unwrap_or_else(|| rest.location());
-                        let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
+                        let str_id = self.local_graph.intern_str(&Self::location_str(&location));
 
                         parameters.push(Parameter::RestKeyword(ParameterStruct::new(
                             Offset::from_prism_location(&location),
@@ -300,7 +308,7 @@ impl<'a> RubyIndexer<'a> {
                     }
                     ruby_prism::Node::ForwardingParameterNode { .. } => {
                         let location = rest.location();
-                        let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
+                        let str_id = self.local_graph.intern_str(&Self::location_str(&location));
 
                         parameters.push(Parameter::Forward(ParameterStruct::new(
                             Offset::from_prism_location(&location),
@@ -315,7 +323,7 @@ impl<'a> RubyIndexer<'a> {
 
             if let Some(block) = parameters_list.block() {
                 let location = block.name_loc().unwrap_or_else(|| block.location());
-                let str_id = self.local_graph.intern_string(Self::location_to_string(&location));
+                let str_id = self.local_graph.intern_str(&Self::location_str(&location));
 
                 parameters.push(Parameter::Block(ParameterStruct::new(
                     Offset::from_prism_location(&location),
@@ -493,8 +501,8 @@ impl<'a> RubyIndexer<'a> {
         };
 
         let offset = Offset::from_prism_location(&location);
-        let name = Self::location_to_string(&location);
-        let string_id = self.local_graph.intern_string(name);
+        let name = Self::location_str(&location);
+        let string_id = self.local_graph.intern_str(&name);
         let name_id = self.local_graph.add_name(Name::new(
             string_id,
             parent_scope_id,
@@ -509,9 +517,9 @@ impl<'a> RubyIndexer<'a> {
         Some(name_id)
     }
 
-    fn index_method_reference(&mut self, name: String, location: &ruby_prism::Location, receiver: Option<NameId>) {
+    fn index_method_reference(&mut self, name: &str, location: &ruby_prism::Location, receiver: Option<NameId>) {
         let offset = Offset::from_prism_location(location);
-        let str_id = self.local_graph.intern_string(name);
+        let str_id = self.local_graph.intern_str(name);
         let reference = MethodRef::new(str_id, self.uri_id, offset, receiver);
         self.local_graph.add_method_reference(reference);
     }
@@ -520,8 +528,8 @@ impl<'a> RubyIndexer<'a> {
     where
         F: FnOnce(StringId, Offset, Box<[Comment]>, DefinitionFlags, Option<DefinitionId>, UriId) -> Definition,
     {
-        let name = Self::location_to_string(location);
-        let str_id = self.local_graph.intern_string(name);
+        let name = Self::location_str(location);
+        let str_id = self.local_graph.intern_str(&name);
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
         let parent_nesting_id = self.parent_nesting_id();
@@ -536,8 +544,8 @@ impl<'a> RubyIndexer<'a> {
     }
 
     fn add_instance_variable_definition(&mut self, location: &ruby_prism::Location) -> DefinitionId {
-        let name = Self::location_to_string(location);
-        let str_id = self.local_graph.intern_string(name);
+        let name = Self::location_str(location);
+        let str_id = self.local_graph.intern_str(&name);
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
         let parent_nesting_id = self.parent_nesting_id();
@@ -562,8 +570,8 @@ impl<'a> RubyIndexer<'a> {
     /// Class variables use lexical scoping - they belong to the lexically enclosing class/module,
     /// not the method receiver. This is different from instance variables which follow the receiver.
     fn add_class_variable_definition(&mut self, location: &ruby_prism::Location) -> DefinitionId {
-        let name = Self::location_to_string(location);
-        let str_id = self.local_graph.intern_string(name);
+        let name = Self::location_str(location);
+        let str_id = self.local_graph.intern_str(&name);
         let offset = Offset::from_prism_location(location);
         let (comments, flags) = self.find_comments_for(offset.start());
         // Class variables use the enclosing class/module (skipping methods) as lexical nesting
@@ -1039,8 +1047,9 @@ impl<'a> RubyIndexer<'a> {
             self.visit(&receiver);
         }
 
-        let message = String::from_utf8_lossy(node.name().as_slice()).to_string();
-        self.index_method_reference(message, &node.message_loc().unwrap(), method_receiver);
+        let name = node.name();
+        let message = String::from_utf8_lossy(name.as_slice());
+        self.index_method_reference(&message, &node.message_loc().unwrap(), method_receiver);
     }
 
     /// Visits every part of a call node, except for the message itself. Convenient for when we're only interested in
@@ -1797,8 +1806,9 @@ impl Visit<'_> for RubyIndexer<'_> {
                         self.visit(&call_target_node.receiver());
                     }
 
-                    let name = String::from_utf8_lossy(call_target_node.name().as_slice()).to_string();
-                    self.index_method_reference(name, &call_target_node.location(), method_receiver);
+                    let target_name = call_target_node.name();
+                    let name = String::from_utf8_lossy(target_name.as_slice());
+                    self.index_method_reference(&name, &call_target_node.location(), method_receiver);
                 }
                 _ => {}
             }
@@ -1808,7 +1818,8 @@ impl Visit<'_> for RubyIndexer<'_> {
     }
 
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode) {
-        let name = Self::location_to_string(&node.name_loc());
+        let name_loc = node.name_loc();
+        let name = Self::location_str(&name_loc);
         let str_id = self.local_graph.intern_string(format!("{name}()"));
         let offset = Offset::from_prism_location(&node.location());
         let name_offset = Offset::from_prism_location(&node.name_loc());
@@ -2228,11 +2239,11 @@ impl Visit<'_> for RubyIndexer<'_> {
                     self.visit(&receiver);
                 }
 
-                self.index_method_reference(message.clone(), &node.message_loc().unwrap(), method_receiver);
+                self.index_method_reference(&message, &node.message_loc().unwrap(), method_receiver);
 
                 match message.as_str() {
                     ">" | "<" | ">=" | "<=" => {
-                        self.index_method_reference("<=>".to_string(), &node.message_loc().unwrap(), method_receiver);
+                        self.index_method_reference("<=>", &node.message_loc().unwrap(), method_receiver);
                     }
                     _ => {}
                 }
@@ -2249,11 +2260,13 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
-        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
+        let read_name_id = node.read_name();
+        let read_name = String::from_utf8_lossy(read_name_id.as_slice());
+        self.index_method_reference(&read_name, &node.operator_loc(), method_receiver);
 
-        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.operator_loc(), method_receiver);
+        let write_name_id = node.write_name();
+        let write_name = String::from_utf8_lossy(write_name_id.as_slice());
+        self.index_method_reference(&write_name, &node.operator_loc(), method_receiver);
 
         self.visit(&node.value());
     }
@@ -2267,11 +2280,13 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
-        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.call_operator_loc().unwrap(), method_receiver);
+        let read_name_id = node.read_name();
+        let read_name = String::from_utf8_lossy(read_name_id.as_slice());
+        self.index_method_reference(&read_name, &node.call_operator_loc().unwrap(), method_receiver);
 
-        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.call_operator_loc().unwrap(), method_receiver);
+        let write_name_id = node.write_name();
+        let write_name = String::from_utf8_lossy(write_name_id.as_slice());
+        self.index_method_reference(&write_name, &node.call_operator_loc().unwrap(), method_receiver);
 
         self.visit(&node.value());
     }
@@ -2285,11 +2300,13 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&receiver);
         }
 
-        let read_name = String::from_utf8_lossy(node.read_name().as_slice()).to_string();
-        self.index_method_reference(read_name, &node.operator_loc(), method_receiver);
+        let read_name_id = node.read_name();
+        let read_name = String::from_utf8_lossy(read_name_id.as_slice());
+        self.index_method_reference(&read_name, &node.operator_loc(), method_receiver);
 
-        let write_name = String::from_utf8_lossy(node.write_name().as_slice()).to_string();
-        self.index_method_reference(write_name, &node.operator_loc(), method_receiver);
+        let write_name_id = node.write_name();
+        let write_name = String::from_utf8_lossy(write_name_id.as_slice());
+        self.index_method_reference(&write_name, &node.operator_loc(), method_receiver);
 
         self.visit(&node.value());
     }
@@ -2393,8 +2410,9 @@ impl Visit<'_> for RubyIndexer<'_> {
             match expression {
                 ruby_prism::Node::SymbolNode { .. } => {
                     let symbol = expression.as_symbol_node().unwrap();
-                    let name = Self::location_to_string(&symbol.value_loc().unwrap());
-                    self.index_method_reference(name, &node.location(), None);
+                    let value_loc = symbol.value_loc().unwrap();
+                    let name = Self::location_str(&value_loc);
+                    self.index_method_reference(&name, &node.location(), None);
                 }
                 _ => {
                     self.visit(&expression);
@@ -2435,7 +2453,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let definition_id = self.local_graph.add_definition(definition);
 
         self.add_member_to_current_owner(definition_id);
-        self.index_method_reference(old_name, &node.old_name().location(), None);
+        self.index_method_reference(&old_name, &node.old_name().location(), None);
     }
 
     fn visit_alias_global_variable_node(&mut self, node: &ruby_prism::AliasGlobalVariableNode<'_>) {
@@ -2467,7 +2485,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&left);
         }
 
-        self.index_method_reference("&&".to_string(), &node.location(), method_receiver);
+        self.index_method_reference("&&", &node.location(), method_receiver);
         self.visit(&node.right());
     }
 
@@ -2479,7 +2497,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&left);
         }
 
-        self.index_method_reference("||".to_string(), &node.location(), method_receiver);
+        self.index_method_reference("||", &node.location(), method_receiver);
         self.visit(&node.right());
     }
 }

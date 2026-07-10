@@ -36,6 +36,25 @@ pub enum NameDependent {
 }
 assert_mem_size!(NameDependent, 16);
 
+impl std::hash::Hash for NameDependent {
+    /// The inner IDs are already high-quality 64 bit hashes, so we just mix in a per-variant
+    /// constant and emit a single `write_u64`, which makes `NameDependent` compatible with
+    /// [`IdentityHashSet`] and keeps hashing deterministic across runs.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let (tag, id) = match self {
+            NameDependent::Definition(id) => (0x9E37_79B9_7F4A_7C15_u64, id.get()),
+            NameDependent::Reference(id) => (0xC2B2_AE3D_27D4_EB4F_u64, id.get()),
+            NameDependent::ChildName(id) => (0x1656_67B1_9E37_79F9_u64, id.get()),
+            NameDependent::NestedName(id) => (0x27D4_EB2F_1656_67C5_u64, id.get()),
+        };
+
+        state.write_u64(id ^ tag);
+    }
+}
+
+/// The set of entities whose validity depends on a particular name.
+pub type NameDependentSet = IdentityHashSet<NameDependent>;
+
 /// Items processed by the unified invalidation worklist.
 enum InvalidationItem {
     /// Ancestor chain is stale, or declaration has become empty and needs removal.
@@ -84,7 +103,7 @@ pub struct Graph {
 
     /// Reverse index: for each `NameId`, which definitions, references, and child/nested names depend on it.
     /// Used during invalidation to efficiently find affected entities without scanning the full graph.
-    name_dependents: IdentityHashMap<NameId, Vec<NameDependent>>,
+    name_dependents: IdentityHashMap<NameId, NameDependentSet>,
 
     /// Accumulated work items from update/delete operations.
     /// Drained by `take_pending_work()` before resolution.
@@ -668,7 +687,7 @@ impl Graph {
     }
 
     #[must_use]
-    pub fn name_dependents(&self) -> &IdentityHashMap<NameId, Vec<NameDependent>> {
+    pub fn name_dependents(&self) -> &IdentityHashMap<NameId, NameDependentSet> {
         &self.name_dependents
     }
 
@@ -803,7 +822,7 @@ impl Graph {
     /// cleaning up the entry if no dependents remain.
     fn remove_name_dependent(&mut self, name_id: NameId, dependent: NameDependent) {
         if let Some(deps) = self.name_dependents.get_mut(&name_id) {
-            deps.retain(|d| *d != dependent);
+            deps.remove(&dependent);
             if deps.is_empty() {
                 self.name_dependents.remove(&name_id);
             }
@@ -1023,12 +1042,9 @@ impl Graph {
         }
 
         for (name_id, deps) in name_dependents {
-            let global_deps = self.name_dependents.entry(name_id).or_default();
-            for dep in deps {
-                if !global_deps.contains(&dep) {
-                    global_deps.push(dep);
-                }
-            }
+            // Set union: deduplication is handled by the set itself, instead of a linear
+            // `contains` scan per dependent (which was quadratic for hot names during indexing)
+            self.name_dependents.entry(name_id).or_default().extend(deps);
         }
     }
 
@@ -1346,7 +1362,7 @@ impl Graph {
     /// The name's structural dependency is broken (its nesting or parent scope was removed).
     /// Unresolves the name and cascades to all dependents — both references and definitions.
     fn unresolve_dependent_name(&mut self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
-        let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
+        let dependents: NameDependentSet = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
         self.queue_structural_cascade(name_id, queue);
 
         if let Some(old_decl_id) = self.unresolve_name(name_id) {
@@ -1382,7 +1398,7 @@ impl Graph {
     /// Ancestor context changed but the name itself is still valid.
     /// Unresolves constant references under this name without unresolving the name itself.
     fn unresolve_dependent_references(&mut self, name_id: NameId, queue: &mut Vec<InvalidationItem>) {
-        let dependents: Vec<NameDependent> = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
+        let dependents: NameDependentSet = self.name_dependents.get(&name_id).cloned().unwrap_or_default();
         self.queue_ancestor_triggered_invalidation(name_id, queue);
 
         let is_resolved = matches!(self.names.get(&name_id), Some(NameRef::Resolved(_)));

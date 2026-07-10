@@ -32,7 +32,7 @@ impl Hasher for IdentityHasher {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct IdentityHashBuilder;
 
 impl BuildHasher for IdentityHashBuilder {
