@@ -226,6 +226,25 @@ pub unsafe extern "C" fn rdx_resolved_constant_reference_declaration(
     })
 }
 
+/// Returns a pointer to the URI ID of the document a constant reference belongs
+/// to, or NULL if the reference cannot be found. Caller must free the returned
+/// pointer with `free_u64`.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `reference_id` must be a valid reference id.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_constant_reference_document(pointer: GraphPointer, reference_id: u64) -> *const u64 {
+    with_graph(pointer, |graph| {
+        let ref_id = ConstantReferenceId::new(reference_id);
+        if let Some(reference) = graph.constant_references().get(&ref_id) {
+            Box::into_raw(Box::new(*reference.uri_id())).cast_const()
+        } else {
+            ptr::null()
+        }
+    })
+}
+
 /// Returns the declaration of the resolved receiver for the given method reference. Returns NULL when the method
 /// reference has no tracked receiver or when the receiver could not be resolved. Caller must free with
 /// `free_c_declaration`.
@@ -285,6 +304,25 @@ pub unsafe extern "C" fn rdx_method_reference_location(pointer: GraphPointer, re
             .expect("Document should exist");
 
         create_location_for_uri_and_offset(graph, document, reference.offset())
+    })
+}
+
+/// Returns a pointer to the URI ID of the document a method reference belongs
+/// to, or NULL if the reference cannot be found. Caller must free the returned
+/// pointer with `free_u64`.
+///
+/// # Safety
+/// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
+/// - `reference_id` must be a valid reference id.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_method_reference_document(pointer: GraphPointer, reference_id: u64) -> *const u64 {
+    with_graph(pointer, |graph| {
+        let ref_id = MethodReferenceId::new(reference_id);
+        if let Some(reference) = graph.method_references().get(&ref_id) {
+            Box::into_raw(Box::new(*reference.uri_id())).cast_const()
+        } else {
+            ptr::null()
+        }
     })
 }
 

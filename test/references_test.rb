@@ -217,6 +217,40 @@ class ReferencesTest < Minitest::Test
     end
   end
 
+  def test_constant_reference_document
+    with_context do |context|
+      context.write!("file1.rb", "class B < A; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      file_uri = context.uri_to("file1.rb")
+      reference = graph.constant_references.find { |ref| ref.name == "A" }
+      refute_nil(reference)
+
+      assert_instance_of(Rubydex::Document, reference.document)
+      assert_equal(file_uri, reference.document.uri)
+    end
+  end
+
+  def test_constant_reference_document_raises_when_reference_is_gone
+    with_context do |context|
+      context.write!("file1.rb", "class B < A; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      file_uri = context.uri_to("file1.rb")
+      reference = graph.constant_references.find { |ref| ref.name == "A" }
+      refute_nil(reference)
+
+      graph.delete_document(file_uri)
+
+      error = assert_raises(RuntimeError) { reference.document }
+      assert_equal("Constant reference not found", error.message)
+    end
+  end
+
   def test_graph_method_references_enumerator
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
@@ -409,6 +443,52 @@ class ReferencesTest < Minitest::Test
       receiver = method_ref.receiver
       assert_kind_of(Rubydex::SingletonClass, receiver)
       assert_equal("Bar::<Bar>", receiver.name)
+    end
+  end
+
+  def test_method_reference_document
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bar
+            baz
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      file_uri = context.uri_to("file1.rb")
+      reference = graph.method_references.find { |ref| ref.name == "baz" }
+      refute_nil(reference)
+
+      assert_instance_of(Rubydex::Document, reference.document)
+      assert_equal(file_uri, reference.document.uri)
+    end
+  end
+
+  def test_method_reference_document_raises_when_reference_is_gone
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          def bar
+            baz
+          end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      file_uri = context.uri_to("file1.rb")
+      reference = graph.method_references.find { |ref| ref.name == "baz" }
+      refute_nil(reference)
+
+      graph.delete_document(file_uri)
+
+      error = assert_raises(RuntimeError) { reference.document }
+      assert_equal("Method reference not found", error.message)
     end
   end
 end
