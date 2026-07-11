@@ -148,7 +148,7 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
     })
 }
 
-/// Returns the UTF-8 name string for a method reference id.
+/// Returns the UTF-8 name string for a method reference id, or NULL if the reference cannot be found.
 /// Caller must free with `free_c_string`.
 ///
 /// # Safety
@@ -157,12 +157,14 @@ pub unsafe extern "C" fn rdx_constant_reference_name(pointer: GraphPointer, refe
 ///
 /// # Panics
 ///
-/// This function will panic if the reference cannot be found.
+/// This function will panic if the reference's name cannot be found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, reference_id: u64) -> *const c_char {
     with_graph(pointer, |graph| {
         let ref_id = MethodReferenceId::new(reference_id);
-        let reference = graph.method_references().get(&ref_id).expect("Reference not found");
+        let Some(reference) = graph.method_references().get(&ref_id) else {
+            return ptr::null();
+        };
         let name = graph
             .strings()
             .get(reference.str())

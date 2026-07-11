@@ -84,6 +84,9 @@ static VALUE rdxr_method_reference_name(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     const char *name = rdx_method_reference_name(graph, data->id);
+    if (name == NULL) {
+        rb_raise(rb_eRuntimeError, "Method reference must exist for a valid id");
+    }
     return rdxi_owned_c_string_to_ruby(name);
 }
 
