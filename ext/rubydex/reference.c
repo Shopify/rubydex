@@ -47,6 +47,9 @@ static VALUE rdxr_constant_reference_location(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     Location *loc = rdx_constant_reference_location(graph, data->id);
+    if (loc == NULL) {
+        rb_raise(rb_eRuntimeError, "Constant reference must exist for a valid id");
+    }
     VALUE location = rdxi_build_location_value(loc);
     rdx_location_free(loc);
     return location;

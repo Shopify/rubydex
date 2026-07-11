@@ -174,7 +174,7 @@ pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, refere
     })
 }
 
-/// Returns a newly allocated `Location` for the given constant reference id.
+/// Returns a newly allocated `Location` for the given constant reference id, or NULL if the reference cannot be found.
 /// Caller must free the returned pointer with `rdx_location_free`.
 ///
 /// # Safety
@@ -184,12 +184,14 @@ pub unsafe extern "C" fn rdx_method_reference_name(pointer: GraphPointer, refere
 ///
 /// # Panics
 ///
-/// This function will panic if a reference or document cannot be found.
+/// This function will panic if the reference's document cannot be found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_constant_reference_location(pointer: GraphPointer, reference_id: u64) -> *mut Location {
     with_graph(pointer, |graph| {
         let ref_id = ConstantReferenceId::new(reference_id);
-        let reference = graph.constant_references().get(&ref_id).expect("Reference not found");
+        let Some(reference) = graph.constant_references().get(&ref_id) else {
+            return ptr::null_mut();
+        };
         let document = graph
             .documents()
             .get(&reference.uri_id())
