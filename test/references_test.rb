@@ -251,6 +251,24 @@ class ReferencesTest < Minitest::Test
     end
   end
 
+  def test_constant_reference_name_raises_when_source_document_is_deleted
+    with_context do |context|
+      context.write!("file1.rb", "class B < A; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      file_uri = context.uri_to("file1.rb")
+      reference = graph.constant_references.find { |r| r.document.uri == file_uri }
+      refute_nil(reference)
+
+      graph.delete_document(file_uri)
+
+      error = assert_raises(RuntimeError) { reference.name }
+      assert_equal("Constant reference must exist for a valid id", error.message)
+    end
+  end
+
   def test_graph_method_references_enumerator
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
