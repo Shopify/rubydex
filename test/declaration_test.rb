@@ -154,6 +154,27 @@ class DeclarationTest < Minitest::Test
     end
   end
 
+  def test_declaration_owner_raises_when_source_document_is_deleted
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          class Bar; end
+        end
+      RUBY
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      declaration = graph["Foo::Bar"]
+      refute_nil(declaration)
+
+      graph.delete_document(context.uri_to("file1.rb"))
+
+      error = assert_raises(RuntimeError) { declaration.owner }
+      assert_equal("Declaration must exist for a valid id", error.message)
+    end
+  end
+
   def test_singleton_class_attached_class_aliases_owner
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)
