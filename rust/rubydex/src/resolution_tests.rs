@@ -983,6 +983,139 @@ mod superclass_tests {
     use super::*;
 
     #[test]
+    fn missing_superclass_implies_object() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
+    }
+
+    /// The same class can be reopened in multiple different files. Ruby will determine the superclass from
+    /// whichever definition it loads first, so there's an inherent load-order race.
+    ///
+    /// We don't want to be dependent on the load order, so we will pick whichever superclass we see among all of the
+    /// definitions.
+    /// If at least one definition sets the superclass, the rest can skip it (but that does *not* imply `< Object`!)
+    #[test]
+    fn superclass_is_load_order_independent() {
+        // The real definition that we will use to determine the superclass
+        let real_definition = r"
+            class Foo < Bar
+            end
+        ";
+
+        // A reopening of the class which doesn't specify the superclass. We will *not* infer `< Object` from this.
+        let use_as_namespace = r#"
+            class Foo
+                VERSION = "1.2.3"
+            end
+        "#;
+
+        // First ordering: real definition won the race
+        let c1 = {
+            let mut context = graph_test();
+
+            // Ruby would set the superclass to `Bar`, because it loaded the definition with `< Bar` first.
+            context.index_uri("file:///foo.rb", real_definition);
+            context.index_uri("file:///foo/version.rb", use_as_namespace);
+
+            context.resolve();
+            assert_no_diagnostics!(&context);
+
+            context
+        };
+
+        // Second ordering: real definition lost the race
+        let c2 = {
+            let mut context = graph_test();
+
+            // Ruby would set the superclass to the `Object`, but because we don't want to be load-order dependent,
+            // we will pick the superclass from the real definition and ignore that the other def was loaded first.
+            context.index_uri("file:///foo/version.rb", use_as_namespace);
+            context.index_uri("file:///foo.rb", real_definition);
+
+            context.resolve();
+            assert_no_diagnostics!(&context);
+
+            context
+        };
+
+        assert_ancestors_eq!(c1, "Foo", ["Foo", "Partial(Bar)", "Object", "Kernel", "BasicObject"]);
+        assert_ancestors_eq!(c2, "Foo", ["Foo", "Partial(Bar)", "Object", "Kernel", "BasicObject"]);
+    }
+
+    #[test]
+    #[ignore = "Not implemented yet https://github.com/Shopify/rubydex/issues/857"]
+    fn diagnose_contradictory_superclasses() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo < Bar; end
+
+            class Foo < NotBar; end
+            "
+        });
+        context.resolve();
+
+        assert_diagnostics_eq!(
+            context,
+            &[
+                "contradictory-superclasses: Attempted to define `Foo` with contradictory superclasses (`Bar` in file:///foo.rb:1:13-1:16 and `NotBar` in file:///foo.rb:3:1-3:19)."
+            ]
+        );
+    }
+
+    /// Unlike the `superclass_is_load_order_independent()` test which covers contradictions across files,
+    /// contradictions within the same file are deterministically an issue.
+    #[test]
+    #[ignore = "Not implemented yet https://github.com/Shopify/rubydex/issues/858"]
+    fn diagnose_contradictory_superclasses_with_unspecified_superclass() {
+        // Problem case: unspecific superclass definition is first
+        {
+            let mut context = graph_test();
+            context.index_uri("file:///foo.rb", {
+                r#"
+                class Foo; end
+
+                class Foo < Bar; end # ❌ TypeError: superclass mismatch for `class Foo`
+                "#
+            });
+            context.resolve();
+
+            assert_diagnostics_eq!(
+                context,
+                &[
+                    "contradictory-superclasses: Attempted to define `Foo` with contradictory superclasses (`Object` in file:///foo.rb:1:1-1:10 and `Bar` in file:///foo.rb:3:1-3:16)."
+                ]
+            );
+        }
+
+        // Contrast with this case, which Ruby allows::
+        {
+            let mut context = graph_test();
+            context.index_uri("file:///foo.rb", {
+                r#"
+                class Foo < Bar; end
+
+                class Foo; end # No `< Bar`, but that's ok
+                "#
+            });
+
+            context.resolve();
+
+            assert_no_diagnostics!(&context);
+        }
+    }
+
+    #[test]
     fn linearizing_super_classes() {
         let mut context = graph_test();
         context.index_uri("file:///foo.rb", {
