@@ -368,7 +368,7 @@ class MCPServerIntegrationTest < Minitest::Test
   end
 
   def test_mcp_server_e2e
-    skip("This test times out when running with Valgrind") if ENV["RUBY_MEMCHECK_RUNNING"]
+    skip("This external process e2e times out when ruby_memcheck traces child processes under Valgrind") if ENV["RUBY_MEMCHECK_RUNNING"]
 
     with_context do |context|
       context.write!("app.rb", <<~RUBY)
@@ -403,7 +403,12 @@ class MCPServerIntegrationTest < Minitest::Test
 
       stderr_output = +""
       Open3.popen3(RbConfig.ruby, "-rbundler/setup", executable_path, "mcp", context.absolute_path) do |stdin, stdout, stderr, wait_thr|
-        stderr_reader = Thread.new { stderr_output << stderr.read }
+        stderr_reader = Thread.new do
+          stderr_output << stderr.read
+        rescue IOError
+          # This thread only drains stderr. If teardown closes the pipe while read is blocked, there is
+          # no more stderr to capture and the subprocess exit status is still checked through wait_thr.
+        end
 
         initialize_session(stdin, stdout)
         assert_tools_are_registered(stdin, stdout)
