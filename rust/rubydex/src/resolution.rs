@@ -1884,9 +1884,11 @@ impl<'a> Resolver<'a> {
         depth
     }
 
-    /// Pre-compute name depths for all names into a `NameId → depth` map. Each name's depth is
-    /// computed once via memoized recursion, then used as an O(1) lookup key during sorting in
-    /// `prepare_units`.
+    /// Computes name depths for all names into a `NameId → depth` map via memoized recursion.
+    ///
+    /// `prepare_units` computes depths on demand for only the names it sorts; this eager variant exists so tests
+    /// can assert the depth of every name in a fixture.
+    #[cfg(test)]
     pub(crate) fn compute_name_depths(names: &IdentityHashMap<NameId, NameRef>) -> IdentityHashMap<NameId, u32> {
         let mut cache = IdentityHashMap::with_capacity_and_hasher(names.len(), IdentityHashBuilder);
 
@@ -1910,7 +1912,12 @@ impl<'a> Resolver<'a> {
         let mut const_refs = Vec::new();
         let mut ancestors = vec![*BASIC_OBJECT_ID, *KERNEL_ID, *OBJECT_ID, *MODULE_ID, *CLASS_ID];
         let names = self.graph.names();
-        let depths = Self::compute_name_depths(names);
+        // Memoize name depths on demand for only the names referenced by the pending work. During incremental
+        // resolution this avoids walking every name in the graph just to sort the small subset of units below.
+        // A pending unit references at most one name, so `estimated` (bounded by the total number of names) is a
+        // reasonable capacity that avoids rehashing as depths accumulate.
+        let mut depths: IdentityHashMap<NameId, u32> =
+            IdentityHashMap::with_capacity_and_hasher(estimated.min(names.len()), IdentityHashBuilder);
 
         // Precompute the lexicographic rank of every document URI. Definitions and references are sorted by
         // (name depth, URI, offset) below; storing precomputed integer sort keys instead of looking up name
@@ -1948,23 +1955,23 @@ impl<'a> Resolver<'a> {
 
                     match definition {
                         Definition::Class(def) => {
-                            let depth = *depths.get(def.name_id()).unwrap();
+                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::Module(def) => {
-                            let depth = *depths.get(def.name_id()).unwrap();
+                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::Constant(def) => {
-                            let depth = *depths.get(def.name_id()).unwrap();
+                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::ConstantAlias(def) => {
-                            let depth = *depths.get(def.name_id()).unwrap();
+                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::SingletonClass(def) => {
-                            let depth = *depths.get(def.name_id()).unwrap();
+                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         // SelfReceiver methods create singleton classes, which need
@@ -1987,7 +1994,7 @@ impl<'a> Resolver<'a> {
                         continue;
                     };
                     let uri_rank = *uri_ranks.get(&constant_ref.uri_id()).unwrap();
-                    let depth = *depths.get(constant_ref.name_id()).unwrap();
+                    let depth = Self::name_depth(*constant_ref.name_id(), names, &mut depths);
                     const_refs.push((Unit::ConstantRef(id), (depth, uri_rank, constant_ref.offset())));
                 }
                 Unit::Ancestors(id) => {
