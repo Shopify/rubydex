@@ -1229,14 +1229,16 @@ impl<'a> Resolver<'a> {
         if !descendants.is_empty() {
             for ancestor in cached {
                 if let Ancestor::Complete(ancestor_id) = ancestor {
+                    let namespace = self
+                        .graph
+                        .declarations_mut()
+                        .get_mut(ancestor_id)
+                        .unwrap()
+                        .as_namespace_mut()
+                        .unwrap();
+
                     for descendant in descendants.iter() {
-                        self.graph
-                            .declarations_mut()
-                            .get_mut(ancestor_id)
-                            .unwrap()
-                            .as_namespace_mut()
-                            .unwrap()
-                            .add_descendant(*descendant);
+                        namespace.add_descendant(*descendant);
                     }
                 }
             }
