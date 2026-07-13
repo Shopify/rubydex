@@ -33,8 +33,26 @@ case "$TARGET" in
     *) TARGET="$PROJECT_ROOT/$TARGET" ;;
 esac
 
+# Check if dependencies are installed, otherwise the benchmark can't run with dependencies
+if ! /bin/bash -lc 'cd "$1" && bundle check 2>/dev/null' bash "$TARGET"; then
+    echo "Error: dependencies are not installed for the target repo at $TARGET" >&2
+    echo "Please run 'bundle install' there and try again." >&2
+    exit 1
+fi
+
+# Collect RBS and dependency paths, so that the graph we're using to benchmark has complete ancestors. Otherwise, we
+# benchmark with missing declarations, like `Object`, which leads to ancestor chains never being completed and several
+# constant references never resolving.
+INDEX_PATHS=()
+while IFS= read -r line; do
+    [ -e "$line" ] && INDEX_PATHS+=("$line")
+done < <(/bin/bash -lc 'cd "$1" && bundle exec ruby -e "require \"rubydex\"; puts Rubydex::Graph.new.workspace_paths" 2>/dev/null' bash "$TARGET")
+
+# Print the path count. This helps identify if there's an obvious mistake and the number is too low
+echo "Benchmarking with ${#INDEX_PATHS[@]} paths"
+
 run_bench() {
-    cd "$RUST_DIR" && cargo bench --bench graph_memory -- "$TARGET"
+    cd "$RUST_DIR" && cargo bench --bench graph_memory -- "$TARGET" "${INDEX_PATHS[@]}"
 }
 
 if [ "$COMPARE" -eq 1 ]; then

@@ -1,6 +1,6 @@
 #[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
 mod imp {
-    use std::collections::HashSet;
+    use std::time::Instant;
 
     use rubydex::{
         indexing::{self, IndexerBackend},
@@ -18,13 +18,31 @@ mod imp {
     }
 
     pub fn run() {
-        let paths: Vec<String> = std::env::args().skip(1).collect();
-        let paths = if paths.is_empty() { vec![".".to_string()] } else { paths };
-        let (file_paths, _) = listing::collect_file_paths(paths, &HashSet::new());
+        let mut args = std::env::args().skip(1);
+
+        let workspace = args
+            .next()
+            .expect("incorrect usage of cargo bench --bench graph_memory. Please use `utils/bench-graph-memory` instead of invoking this benchmark directly.");
+        let workspace_path = std::fs::canonicalize(&workspace).expect("the workspace path must exist");
+        assert!(workspace_path.is_dir(), "the workspace path must be a directory");
 
         let mut graph = Graph::new();
+        graph.set_workspace_path(workspace_path);
+
+        if let Err(error) = graph.load_config(None) {
+            eprintln!("{error}");
+        }
+
+        let time = Instant::now();
+
+        let (file_paths, _) = listing::collect_file_paths(args.collect(), &graph.excluded_patterns());
+        println!("Listing {:.2}s", time.elapsed().as_secs_f64());
+
         let _ = indexing::index_files(&mut graph, file_paths, IndexerBackend::RubyIndexer);
+        println!("Indexing {:.2}s", time.elapsed().as_secs_f64());
+
         Resolver::new(&mut graph).resolve();
+        println!("Resolution {:.2}s", time.elapsed().as_secs_f64());
 
         // Compare the total memory used in the allocator before and after dropping the graph
         let before_drop = allocated_bytes();
