@@ -20,6 +20,9 @@ class Rubydex::ConstantReference < Rubydex::Reference
   sig { returns(Rubydex::Location) }
   def location; end
 
+  sig { returns(Rubydex::Document) }
+  def document; end
+
   class << self
     private
 
@@ -518,6 +521,9 @@ class Rubydex::MethodReference < Rubydex::Reference
 
   sig { returns(T.nilable(Rubydex::Declaration)) }
   def receiver; end
+
+  sig { returns(Rubydex::Document) }
+  def document; end
 end
 
 class Rubydex::Reference
