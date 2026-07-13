@@ -76,6 +76,10 @@ pub struct Resolver<'a> {
     unit_queue: VecDeque<Unit>,
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
+    /// Declarations whose ancestor chain this resolver (re-)wrote via `set_ancestors`. A fresh resolver is created for
+    /// every `resolve()`, so this only ever holds the declarations linearized by the current run. Used to update the
+    /// `descendants` relation from just these declarations instead of rebuilding it from scratch.
+    linearized_declarations: IdentityHashSet<DeclarationId>,
 }
 
 impl<'a> Resolver<'a> {
@@ -84,6 +88,7 @@ impl<'a> Resolver<'a> {
             graph,
             unit_queue: VecDeque::new(),
             made_progress: false,
+            linearized_declarations: IdentityHashSet::default(),
         }
     }
 
@@ -140,38 +145,36 @@ impl<'a> Resolver<'a> {
 
         self.handle_remaining_definitions(other_ids);
 
-        // Descendants are derived from the finalized ancestor chains, so they must be computed
-        // after all linearization has settled.
-        self.compute_descendants();
+        // Descendants are derived from the finalized ancestor chains, so they must be updated after
+        // all linearization has settled.
+        self.update_descendants();
     }
 
-    /// Recomputes the `descendants` relation as the inverse of the linearized ancestors.
+    /// Updates the `descendants` relation to match the finalized ancestor chains.
     ///
-    /// After resolution, `descendants(D)` must contain exactly the declarations `x` such that
-    /// `Ancestor::Complete(D)` appears in `x`'s linearized ancestors. Because a declaration is its
-    /// own ancestor (see [`Self::linearize_ancestors`]), this relation is reflexive.
+    /// `descendants(D)` must contain exactly the declarations `x` such that `Ancestor::Complete(D)`
+    /// appears in `x`'s linearized ancestors. Because a declaration is its own ancestor (see
+    /// [`Self::linearize_ancestors`]), this relation is reflexive.
     ///
-    /// Maintaining the relation while linearizing ancestors is error-prone: a declaration may be
+    /// Rather than rebuilding the whole relation, this only adds edges for the declarations this
+    /// resolver linearized (`linearized_declarations` — those whose chain was rewritten via
+    /// `set_ancestors`). Those are the only declarations whose ancestor membership can have changed,
+    /// and invalidation already removed each of them from its old ancestors' descendant sets (and
+    /// cleared its own) before resolution ran, so the edges left in place are still exact. Untouched
+    /// declarations keep their existing edges. On the first resolution every declaration is
+    /// linearized, so this add-only pass builds the entire relation from the empty initial state.
+    ///
+    /// Maintaining the relation eagerly while linearizing is error-prone: a declaration may be
     /// linearized under a tentative parent in one pass and a different parent in a later pass, and
-    /// the stale descendant edges from the abandoned parent are never cleared, which inflates the
-    /// relation. Computing it once here, by inverting the final ancestor chains, keeps it exact.
-    ///
-    /// This rebuilds the entire relation in one `O(total ancestors)` pass. That matches the
-    /// full-resolution path this code is optimized for and replaces the costlier per-linearization
-    /// descendant bookkeeping.
-    fn compute_descendants(&mut self) {
-        // Clear any previously recorded descendants.
-        for declaration in self.graph.declarations_mut().values_mut() {
-            if let Some(namespace) = declaration.as_namespace_mut() {
-                namespace.clear_descendants();
-            }
-        }
-
-        // Invert the ancestor chains: each `Complete(ancestor)` edge in `x`'s ancestors makes `x` a
-        // descendant of `ancestor`. We group descendants by ancestor first, rather than collecting
-        // flat `(ancestor, descendant)` pairs, so the insert phase can size each descendant set
-        // exactly and fill it in a single batch. This grouping happens against an immutable borrow
-        // of the declarations map, which we can't hold while mutating the same map below.
+    /// the stale edges from the abandoned parent would never be cleared, inflating the relation.
+    /// Deriving it here from the settled chains keeps it exact.
+    fn update_descendants(&mut self) {
+        // Invert the ancestor chains of the re-linearized declarations: each `Complete(ancestor)`
+        // edge in `x`'s ancestors makes `x` a descendant of `ancestor`. We group descendants by
+        // ancestor first, rather than collecting flat `(ancestor, descendant)` pairs, so the insert
+        // phase can size each descendant set and fill it in a single batch. This grouping happens
+        // against an immutable borrow of the declarations map, which we can't hold while mutating the
+        // same map below.
         //
         // `Ancestors::iter` walks the entries of every chain state, so declarations whose overall
         // chain is `Cyclic` or `Partial` still contribute their resolved entries here. We only skip
@@ -179,8 +182,13 @@ impl<'a> Resolver<'a> {
         // `NameId` rather than a `DeclarationId`, so there is no declaration to record the descendant
         // on.
         let mut grouped: IdentityHashMap<DeclarationId, Vec<DeclarationId>> = IdentityHashMap::default();
-        for (declaration_id, declaration) in self.graph.declarations() {
-            let Some(namespace) = declaration.as_namespace() else {
+        for declaration_id in &self.linearized_declarations {
+            let Some(namespace) = self
+                .graph
+                .declarations()
+                .get(declaration_id)
+                .and_then(Declaration::as_namespace)
+            else {
                 continue;
             };
 
@@ -191,9 +199,9 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // Fill each ancestor's descendant set in one batch. Because the whole set is cleared above
-        // and rebuilt here, a reserved bulk extend avoids the repeated growth/rehash that
-        // one-at-a-time insertion incurs for ancestors with many descendants.
+        // Extend each ancestor's descendant set in one batch. A reserved bulk extend avoids the
+        // repeated growth/rehash that one-at-a-time insertion incurs for ancestors with many
+        // descendants.
         for (ancestor_id, descendants) in grouped {
             if let Some(namespace) = self
                 .graph
@@ -1028,6 +1036,7 @@ impl<'a> Resolver<'a> {
                     .as_namespace_mut()
                     .unwrap()
                     .set_ancestors(estimated_ancestors.clone());
+                self.linearized_declarations.insert(declaration_id);
 
                 context.finalize(declaration_id);
                 return estimated_ancestors;
@@ -1100,6 +1109,8 @@ impl<'a> Resolver<'a> {
             .as_namespace_mut()
             .unwrap()
             .set_ancestors(result.clone());
+
+        self.linearized_declarations.insert(declaration_id);
 
         context.finalize(declaration_id);
         result

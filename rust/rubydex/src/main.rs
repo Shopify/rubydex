@@ -246,9 +246,6 @@ fn main() {
 /// re-indexes a rotating window of `files_per_cycle` files (parsing plus the same invalidation the
 /// LSP performs on save) and then re-runs resolution over the resulting pending work, reporting
 /// per-cycle and aggregate `resolve()` timings.
-///
-/// With `--stats`, the `compute_descendants` breakdown printed in the timing summary reflects the
-/// last incremental cycle, since it is recorded on every `resolve()`.
 fn run_incremental_resolution(
     graph: &mut Graph,
     paths: &[PathBuf],
