@@ -956,7 +956,7 @@ mod tests {
         });
         context.resolve();
 
-        // A rank-1 singleton is materialized for every class...
+        // Every declared class has its singleton class automatically populated...
         assert!(
             context
                 .graph()

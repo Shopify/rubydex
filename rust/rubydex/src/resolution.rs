@@ -145,10 +145,9 @@ impl<'a> Resolver<'a> {
 
         self.handle_remaining_definitions(other_ids);
 
-        // Materialize a rank-1 singleton class for every class/module declaration. This runs after
-        // every site that creates singletons organically (the convergence loop and
-        // `handle_remaining_definitions`), so future rank-N passes — which only build singletons for
-        // already-materialized ones — can be appended here and still observe the complete set.
+        // Materialize singleton classes for every class/module declaration. This runs after the
+        // main singleton creation paths (the convergence loop and `handle_remaining_definitions`)
+        // so it only fills gaps in existing singleton-class ancestor/descendant chains.
         self.materialize_singleton_classes();
 
         // Descendants are derived from the finalized ancestor chains, so they must be updated after
@@ -156,52 +155,62 @@ impl<'a> Resolver<'a> {
         self.update_descendants();
     }
 
-    /// Materializes the singleton class hierarchy so that it is complete after resolution.
+    /// Materializes singleton classes needed for complete ancestor/descendant chains.
     ///
     /// During the convergence loop and [`Self::handle_remaining_definitions`], singleton classes are
     /// only created on demand: when a self-method, an `extend`, a `class << self`, or a class-level
-    /// instance variable forces one into existence. Many class and module objects therefore never
-    /// get a singleton even though every Ruby object has one. This pass fills the gaps. Ancestors are
-    /// linearized eagerly because the convergence queue is already drained at this point.
+    /// instance variable forces one into existence. That lazy behavior is correct for Ruby, but it
+    /// leaves holes in graph queries that expect singleton-class ancestors and descendants to be
+    /// explicit declarations.
     ///
-    /// The pass runs in two stages:
+    /// For example, if source creates `Foo::<Foo>` and `Bar < Foo`, then `Bar::<Bar>` must also
+    /// exist so `Foo::<Foo>` can be recorded as an ancestor of `Bar::<Bar>`. The same rule applies
+    /// to nested singleton classes:
     ///
-    /// 1. **rank-1**: ensure `Foo::<Foo>` exists for every class and module `Foo`.
-    /// 2. **rank-N**: climb the singleton ranks. A nested `class << self` produces an explicit
-    ///    rank-`N` singleton (e.g. `Foo::<Foo>::<<Foo>>`). When that happens, every subclass of
-    ///    `Foo` must also gain a rank-`N` singleton so the hierarchy stays complete. We materialize
-    ///    only the ranks reachable from an explicit (source-backed) singleton, descending the class
-    ///    inheritance tree from it — materializing *all* ranks for *all* classes would never
-    ///    terminate.
+    /// ```rb
+    /// class Foo
+    ///   class << self        # Foo::<Foo>, the singleton class of Foo
+    ///     class << self      # Foo::<Foo>::<<Foo>>, the singleton class of Foo::<Foo>
+    ///     end
+    ///   end
+    /// end
     ///
-    /// The rank-`N` stage relies on the invariant that an explicit rank-`N` singleton always has an
-    /// existing rank-`(N-1)` owner (no gaps): every path that creates a singleton takes the rank
-    /// `(N-1)` declaration as input, and a nested `class << self` is indexed level by level, so each
-    /// intermediate rank is itself a definition.
+    /// class Bar < Foo
+    /// end
+    /// ```
+    ///
+    /// Because the source explicitly opens the singleton class of `Foo::<Foo>`, this pass also
+    /// creates `Bar::<Bar>::<<Bar>>`, the corresponding singleton class of `Bar::<Bar>`.
+    ///
+    /// The work is intentionally bounded. The first stage creates the singleton class of every class
+    /// and module. The second stage creates deeper singleton classes only when there is a
+    /// source-backed singleton class at that depth, then descends from that owner through the class
+    /// inheritance tree. It does not keep creating singleton classes for every possible singleton of
+    /// every class.
     fn materialize_singleton_classes(&mut self) {
         // Scan all declarations once to collect every input both stages need:
         //
-        // - `attached_ids`: every class and module, for which Stage 1 materializes a rank-1
-        //   singleton. Ids are collected up front because `get_or_create_singleton_class` borrows the
-        //   graph mutably.
+        // - `attached_ids`: every class and module whose singleton class should exist. Ids are
+        //   collected up front because `get_or_create_singleton_class` borrows the graph mutably.
         // - `class_parents`: each class paired with its resolved direct superclass. We resolve it here
         //   while the declaration is in hand; Stage 2 translates these edges to singleton ids (which
         //   do not exist until Stage 1 runs) to seed the `children` map.
-        // - `seed_owners_by_rank`: the owners of every source-backed rank-`>= 2` singleton, grouped by
-        //   the rank of that owner. An owner at rank `R` seeds materialization of rank-`(R + 1)`
-        //   singletons for all of its descendants in Stage 2. A rank-`>= 2` singleton is source-backed
-        //   when it has its own definition (a nested `class << self`) or members (e.g. a `def self.x`
-        //   written inside `class << self`). Singletons with neither are pure linearization artifacts:
-        //   linearizing an explicit singleton creates the singletons of its ancestors (e.g.
-        //   `Object::<Object>::<<Object>>`), and seeding on those would descend the whole class tree.
+        // - `seed_owners_by_depth`: the owners of every source-backed nested singleton class, grouped
+        //   by the singleton depth of that owner. `Foo::<Foo>::<<Foo>>` is source-backed when it has
+        //   its own definition (a nested `class << self`) or members (for example, a `def self.x`
+        //   written inside `class << self`). Its owner, `Foo::<Foo>`, seeds materialization of the
+        //   corresponding singleton class for each descendant of `Foo::<Foo>`. Singletons with no
+        //   definition or members are pure linearization artifacts: linearizing an explicit singleton
+        //   creates the singletons of its ancestors (for example, `Object::<Object>::<<Object>>`), and
+        //   seeding on those would descend the whole class tree.
         //
-        // The seed set is fixed before this pass: explicit rank-`>= 2` singletons are created
-        // organically during resolution, and Stage 1 only adds rank-1 singletons, so it never adds or
-        // removes a seed. That is why everything can be collected in this single scan.
+        // The seed set is fixed before this pass: source-backed nested singletons are created
+        // organically during resolution, and Stage 1 only adds the first singleton layer, so it never
+        // adds or removes a seed. That is why everything can be collected in this single scan.
         let mut attached_ids: Vec<DeclarationId> = Vec::new();
         let mut class_parents: Vec<(DeclarationId, DeclarationId)> = Vec::new();
-        let mut seed_owners_by_rank: HashMap<usize, IdentityHashSet<DeclarationId>> = HashMap::new();
-        let mut max_rank = 1;
+        let mut seed_owners_by_depth: HashMap<usize, IdentityHashSet<DeclarationId>> = HashMap::new();
+        let mut max_singleton_depth = 1;
         for (declaration_id, declaration) in self.graph.declarations() {
             match declaration.as_namespace() {
                 Some(Namespace::Module(_)) => attached_ids.push(*declaration_id),
@@ -215,34 +224,33 @@ impl<'a> Resolver<'a> {
                 Some(namespace @ Namespace::SingletonClass(_))
                     if !namespace.definitions().is_empty() || !namespace.members().is_empty() =>
                 {
-                    let rank = self.singleton_rank(*declaration_id);
-                    if rank >= 2 {
-                        seed_owners_by_rank
-                            .entry(rank - 1)
+                    let depth = self.singleton_depth(*declaration_id);
+                    if depth >= 2 {
+                        seed_owners_by_depth
+                            .entry(depth - 1)
                             .or_default()
                             .insert(*namespace.owner_id());
-                        max_rank = max_rank.max(rank);
+                        max_singleton_depth = max_singleton_depth.max(depth);
                     }
                 }
                 _ => {}
             }
         }
 
-        // --- Stage 1: rank-1 singleton for every class and module ---
+        // --- Stage 1: singleton class for every class and module ---
         for attached_id in &attached_ids {
             // Idempotent: returns the existing singleton when one was already created on demand.
             let _ = self.get_or_create_singleton_class(*attached_id, SingletonAncestors::Eager);
         }
 
-        // --- Stage 2: rank-N singletons for descendants of explicit singletons ---
+        // --- Stage 2: deeper singleton classes for descendants of source-backed singletons ---
         //
         // `children` maps a singleton to the singletons of the *direct* subclasses of its attached
-        // object: for `class B < A`, `A::<A>`'s children contain `B::<B>`. It starts as the rank-1
+        // object: for `class B < A`, `A::<A>`'s children contain `B::<B>`. It starts as the first
         // layer (translating the `class_parents` edges collected above, now that Stage 1 has
-        // materialized every rank-1 singleton) and grows one rank at a time as we climb: building
+        // materialized every class singleton) and grows one singleton layer at a time: building
         // `B::<B>::<<B>>` records it as a child of `A::<A>::<<A>>` for the next iteration. This is a
-        // local map; the global `descendants` relation is recomputed later by
-        // [`Self::compute_descendants`].
+        // local map; the global `descendants` relation is updated later by [`Self::update_descendants`].
         let mut children: IdentityHashMap<DeclarationId, IdentityHashSet<DeclarationId>> = IdentityHashMap::default();
         for (child_class, parent_class) in &class_parents {
             if let (Some(child_singleton), Some(parent_singleton)) =
@@ -252,13 +260,12 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // Climb the ranks: at rank `R`, descend the class inheritance tree from each seed owner,
-        // materializing the rank-`(R + 1)` singleton of every node reached, and record the new
-        // rank-`(R + 1)` edges so the next iteration can descend them. Ranks are contiguous (an
-        // explicit rank-`(R + 1)` singleton implies an explicit rank-`R` owner), so every rank in
-        // `1..max_rank` has seeds.
-        for rank in 1..max_rank {
-            let Some(seed_owners) = seed_owners_by_rank.get(&rank) else {
+        // Climb one singleton layer at a time. At owner depth `D`, descend the inheritance tree from
+        // each seed owner, materialize the singleton class of every node reached, and record those new
+        // child edges so depth `D + 1` can use them. Nested singleton definitions are contiguous: to
+        // create the singleton class of `Foo::<Foo>`, the graph must already contain `Foo::<Foo>`.
+        for owner_depth in 1..max_singleton_depth {
+            let Some(seed_owners) = seed_owners_by_depth.get(&owner_depth) else {
                 continue;
             };
 
@@ -294,20 +301,20 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Returns the rank of a singleton class: how many singleton wrappers separate it from its
-    /// non-singleton attached object. A class declaration has rank `0`, `Foo::<Foo>` has rank `1`,
-    /// `Foo::<Foo>::<<Foo>>` has rank `2`, and so on. Computed by walking the owner chain so it does
-    /// not depend on how the name is spelled.
-    fn singleton_rank(&self, mut id: DeclarationId) -> usize {
-        let mut rank = 0;
+    /// Returns how many singleton-class owners separate this declaration from its attached class or
+    /// module. A class declaration has depth `0`, `Foo::<Foo>` has depth `1`, and the singleton class
+    /// of `Foo::<Foo>` has depth `2`. Computed by walking the owner chain so it does not depend on
+    /// how the name is spelled.
+    fn singleton_depth(&self, mut id: DeclarationId) -> usize {
+        let mut depth = 0;
         while let Some(declaration) = self.graph.declarations().get(&id) {
             let Some(namespace @ Namespace::SingletonClass(_)) = declaration.as_namespace() else {
                 break;
             };
-            rank += 1;
+            depth += 1;
             id = *namespace.owner_id();
         }
-        rank
+        depth
     }
 
     /// Returns the id of the singleton class of the given declaration, if one has been materialized.
