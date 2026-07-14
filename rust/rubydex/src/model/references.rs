@@ -43,13 +43,12 @@ impl ConstantReference {
 
     #[must_use]
     pub fn id(&self) -> ConstantReferenceId {
-        ConstantReferenceId::from(&format!(
-            "{}:{}:{}-{}",
-            self.name_id,
-            self.uri_id,
-            self.offset.start(),
-            self.offset.end()
-        ))
+        ConstantReferenceId::from([
+            self.name_id.get().to_le_bytes().as_slice(),
+            self.uri_id.get().to_le_bytes().as_slice(),
+            self.offset.start().to_le_bytes().as_slice(),
+            self.offset.end().to_le_bytes().as_slice(),
+        ])
     }
 }
 
@@ -100,12 +99,11 @@ impl MethodRef {
 
     #[must_use]
     pub fn id(&self) -> MethodReferenceId {
-        MethodReferenceId::from(&format!(
-            "{}:{}:{}-{}",
-            self.str,
-            self.uri_id,
-            self.offset.start(),
-            self.offset.end()
-        ))
+        MethodReferenceId::from([
+            self.str.get().to_le_bytes().as_slice(),
+            self.uri_id.get().to_le_bytes().as_slice(),
+            self.offset.start().to_le_bytes().as_slice(),
+            self.offset.end().to_le_bytes().as_slice(),
+        ])
     }
 }
