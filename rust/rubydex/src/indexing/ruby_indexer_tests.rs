@@ -1772,11 +1772,48 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-private-constant: Private constant called at top level (1:1-1:30)",
-                "invalid-private-constant: Private constant called at top level (2:1-2:35)",
-                "invalid-private-constant: Dynamic receiver for private constant (3:1-3:34)",
-                "invalid-private-constant: Private constant called with non-symbol argument (6:20-6:31)",
-                "invalid-private-constant: Private constant called with non-symbol argument (6:33-6:44)",
+                "invalid-private-constant: `private_constant` called at top level (1:1-1:30)",
+                "invalid-private-constant: `private_constant` called at top level (2:1-2:35)",
+                "invalid-private-constant: Dynamic receiver for `private_constant` (3:1-3:34)",
+                "invalid-private-constant: `private_constant` called with a non-literal argument (6:20-6:31)",
+                "invalid-private-constant: `private_constant` called with a non-literal argument (6:33-6:44)",
+            ]
+        );
+
+        assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+    }
+
+    #[test]
+    fn index_public_constant_calls_diagnostics() {
+        let context = index_source({
+            "
+            public_constant :NOT_INDEXED
+            self.public_constant :NOT_INDEXED
+            foo.public_constant :NOT_INDEXED # not indexed, dynamic receiver
+
+            module Foo
+              public_constant NOT_INDEXED, not_indexed # not indexed, not a symbol
+              public_constant # not indexed, no arguments
+
+              def self.qux
+                public_constant :Bar # not indexed, dynamic
+              end
+
+              def foo
+                public_constant :Bar # not indexed, dynamic
+              end
+            end
+            "
+        });
+
+        assert_local_diagnostics_eq!(
+            &context,
+            vec![
+                "invalid-private-constant: `public_constant` called at top level (1:1-1:29)",
+                "invalid-private-constant: `public_constant` called at top level (2:1-2:34)",
+                "invalid-private-constant: Dynamic receiver for `public_constant` (3:1-3:33)",
+                "invalid-private-constant: `public_constant` called with a non-literal argument (6:19-6:30)",
+                "invalid-private-constant: `public_constant` called with a non-literal argument (6:32-6:43)",
             ]
         );
 

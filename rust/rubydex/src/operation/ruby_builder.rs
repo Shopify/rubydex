@@ -887,6 +887,7 @@ impl<'a> RubyOperationBuilder<'a> {
 
     fn handle_constant_visibility(&mut self, node: &ruby_prism::CallNode, visibility: Visibility) {
         let receiver = node.receiver();
+        let call_name = String::from_utf8_lossy(node.name().as_slice());
 
         let receiver_name_id = match receiver {
             Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
@@ -898,7 +899,7 @@ impl<'a> RubyOperationBuilder<'a> {
                     self.add_diagnostic(
                         Rule::InvalidPrivateConstant,
                         Offset::from_prism_location(&node.location()),
-                        "Private constant called at top level".to_string(),
+                        format!("`{call_name}` called at top level"),
                     );
                     return;
                 }
@@ -908,7 +909,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 self.add_diagnostic(
                     Rule::InvalidPrivateConstant,
                     Offset::from_prism_location(&node.location()),
-                    "Dynamic receiver for private constant".to_string(),
+                    format!("Dynamic receiver for `{call_name}`"),
                 );
                 return;
             }
@@ -923,7 +924,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 self.add_diagnostic(
                     Rule::InvalidPrivateConstant,
                     Offset::from_prism_location(&argument.location()),
-                    "Private constant called with non-symbol argument".to_string(),
+                    format!("`{call_name}` called with a non-literal argument"),
                 );
                 continue;
             };

@@ -1180,6 +1180,7 @@ impl<'a> RubyIndexer<'a> {
 
     fn handle_constant_visibility(&mut self, node: &ruby_prism::CallNode, visibility: Visibility) {
         let receiver = node.receiver();
+        let call_name = String::from_utf8_lossy(node.name().as_slice());
 
         let receiver_name_id = match receiver {
             Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
@@ -1194,7 +1195,7 @@ impl<'a> RubyIndexer<'a> {
                     self.local_graph.add_diagnostic(
                         Rule::InvalidPrivateConstant,
                         Offset::from_prism_location(&node.location()),
-                        "Private constant called at top level".to_string(),
+                        format!("`{call_name}` called at top level"),
                     );
                     self.visit_call_node_parts(node);
                     return;
@@ -1205,7 +1206,7 @@ impl<'a> RubyIndexer<'a> {
                 self.local_graph.add_diagnostic(
                     Rule::InvalidPrivateConstant,
                     Offset::from_prism_location(&node.location()),
-                    "Dynamic receiver for private constant".to_string(),
+                    format!("Dynamic receiver for `{call_name}`"),
                 );
                 self.visit_call_node_parts(node);
                 return;
@@ -1221,7 +1222,7 @@ impl<'a> RubyIndexer<'a> {
                 self.local_graph.add_diagnostic(
                     Rule::InvalidPrivateConstant,
                     Offset::from_prism_location(&argument.location()),
-                    "Private constant called with non-symbol argument".to_string(),
+                    format!("`{call_name}` called with a non-literal argument"),
                 );
                 self.visit(&argument);
                 continue;
