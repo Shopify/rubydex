@@ -179,10 +179,10 @@ class GraphTest < Minitest::Test
 
       enumerator = graph.declarations
 
-      # Object, Class, Module, BasicObject, Kernel + the indexed files
-      assert_equal(7, enumerator.size)
-      assert_equal(7, enumerator.count)
-      assert_equal(7, enumerator.to_a.size)
+      # Object, Class, Module, BasicObject, Kernel + the indexed files, plus their singleton classes.
+      assert_equal(14, enumerator.size)
+      assert_equal(14, enumerator.count)
+      assert_equal(14, enumerator.to_a.size)
     end
   end
 
@@ -200,7 +200,7 @@ class GraphTest < Minitest::Test
         declarations << declaration
       end
 
-      assert_equal(7, declarations.size)
+      assert_equal(14, declarations.size)
     end
   end
 

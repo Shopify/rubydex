@@ -43,7 +43,10 @@ pub fn declaration_search(graph: &Graph, queries: &[&str], match_mode: &MatchMod
     // directly. Since an empty query matches all, there's no point in checking the other queries or pay the price of
     // spawning threads.
     if queries.iter().any(|q| q.is_empty()) {
-        return declarations.keys().copied().collect();
+        return declarations
+            .iter()
+            .filter_map(|(id, declaration)| is_searchable_declaration(declaration).then_some(*id))
+            .collect();
     }
 
     let ids: Vec<DeclarationId> = declarations.keys().copied().collect();
@@ -61,7 +64,12 @@ pub fn declaration_search(graph: &Graph, queries: &[&str], match_mode: &MatchMod
                     chunk
                         .iter()
                         .filter(|id| {
-                            let name = declarations.get(id).unwrap().name();
+                            let declaration = declarations.get(id).unwrap();
+                            if !is_searchable_declaration(declaration) {
+                                return false;
+                            }
+
+                            let name = declaration.name();
                             queries.iter().any(|query| matches_query(query, name, match_mode))
                         })
                         .copied()
@@ -72,6 +80,12 @@ pub fn declaration_search(graph: &Graph, queries: &[&str], match_mode: &MatchMod
 
         handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
     })
+}
+
+/// Returns whether a declaration should be surfaced by user-facing declaration search.
+#[must_use]
+fn is_searchable_declaration(declaration: &Declaration) -> bool {
+    !matches!(declaration, Declaration::Namespace(Namespace::SingletonClass(_)))
 }
 
 /// Returns whether a single `query` matches `name` under the given [`MatchMode`].
@@ -932,6 +946,31 @@ mod tests {
     }
 
     #[test]
+    fn search_excludes_singleton_classes() {
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", {
+            r"
+            class Foo
+            end
+            "
+        });
+        context.resolve();
+
+        // Every declared class has its singleton class automatically populated...
+        assert!(
+            context
+                .graph()
+                .declarations()
+                .contains_key(&DeclarationId::from("Foo::<Foo>")),
+            "expected `Foo::<Foo>` to be materialized"
+        );
+        // ...but it is internal and must not surface in search results, even when the query
+        // matches the singleton's name directly.
+        assert_results_eq!(context, "<Foo>", &MatchMode::Exact, Vec::<&str>::new());
+        assert_results_eq!(context, "Foo", ["Foo"]);
+    }
+
+    #[test]
     fn exact_partial_match_search() {
         let mut context = GraphTest::new();
         context.index_uri("file:///foo.rb", {
@@ -962,8 +1001,17 @@ mod tests {
         let exact_results = declaration_search(context.graph(), &[""], &MatchMode::Exact);
         let fuzzy_results = declaration_search(context.graph(), &[""], &MatchMode::Fuzzy);
 
+        // An empty query returns every searchable declaration. Materialized singleton classes are
+        // excluded from search, so the expected count is all declarations minus the singletons.
+        let searchable = context
+            .graph()
+            .declarations()
+            .values()
+            .filter(|d| !matches!(d, Declaration::Namespace(Namespace::SingletonClass(_))))
+            .count();
+
         assert_eq!(exact_results.len(), fuzzy_results.len());
-        assert_eq!(context.graph().declarations().len(), exact_results.len());
+        assert_eq!(searchable, exact_results.len());
     }
 
     #[test]
