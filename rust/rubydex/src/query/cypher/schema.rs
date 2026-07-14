@@ -21,13 +21,15 @@
 //! - `HAS_ANCESTOR`: `Declaration` → `Declaration` (linearized ancestor chain, incl. modules)
 //! - `HAS_DESCENDANT`: `Declaration` → `Declaration` (reverse of `HAS_ANCESTOR`)
 //! - `REFERENCES`: `Document` → `Declaration` (constant references)
+//! - `CALLS`: `Document` → `Declaration` (a `Method`; a constant-receiver method call like `Foo.bar`
+//!   resolved to its method declaration)
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::model::declaration::Declaration;
+use crate::model::declaration::{Declaration, Namespace};
 use crate::model::definitions::{Definition, Mixin};
 use crate::model::graph::Graph;
-use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, UriId};
+use crate::model::ids::{ConstantReferenceId, DeclarationId, DefinitionId, NameId, StringId, UriId};
 
 use cypher_parser::{CypherValue, GraphProvider};
 
@@ -71,6 +73,11 @@ pub enum RelType {
     HasDescendant,
     /// `Document` → `Declaration`: a constant reference in the file resolves to a declaration.
     References,
+    /// `Document` → `Declaration` (a `Method`): a method call whose receiver *type* is statically
+    /// known — a constant receiver (`Foo.bar`, resolved via the receiver's singleton-class ancestry)
+    /// or an implicit `self` call in a known scope — resolved to the method declaration. Calls with
+    /// a dynamic/unknown receiver carry no receiver and are not represented.
+    Calls,
 }
 
 /// Catalog metadata for a relationship type: the type itself, its canonical name, endpoint labels,
@@ -163,6 +170,13 @@ const REL_SCHEMAS: &[RelSchema] = &[
         from: "Document",
         to: "Declaration",
         description: "A file references a constant declaration",
+    },
+    RelSchema {
+        rel: RelType::Calls,
+        name: "CALLS",
+        from: "Document",
+        to: "Method",
+        description: "A file calls a method whose receiver type is statically known",
     },
 ];
 
@@ -564,7 +578,9 @@ fn document_property(graph: &Graph, id: UriId, prop: &str) -> CypherValue {
 #[must_use]
 pub fn rel_source_nodes(graph: &Graph, rel: RelType) -> Vec<NodeRef> {
     match rel {
-        RelType::Defines | RelType::References => graph.documents().keys().map(|id| NodeRef::Document(*id)).collect(),
+        RelType::Defines | RelType::References | RelType::Calls => {
+            graph.documents().keys().map(|id| NodeRef::Document(*id)).collect()
+        }
         RelType::Declares | RelType::Contains => {
             graph.definitions().keys().map(|id| NodeRef::Definition(*id)).collect()
         }
@@ -598,6 +614,7 @@ pub fn expand_out(graph: &Graph, node: NodeRef, rel: RelType) -> Vec<NodeRef> {
             })
             .unwrap_or_default(),
         (NodeRef::Document(uri_id), RelType::References) => document_references(graph, uri_id),
+        (NodeRef::Document(uri_id), RelType::Calls) => document_method_calls(graph, uri_id),
         (NodeRef::Definition(def_id), RelType::Declares) => graph
             .definitions()
             .get(&def_id)
@@ -631,6 +648,80 @@ fn document_references(graph: &Graph, uri_id: UriId) -> Vec<NodeRef> {
         }
     }
     targets
+}
+
+/// The method declarations reached by the constant-receiver method calls in a document.
+///
+/// Only calls whose receiver is a constant (e.g. `Foo.bar`) are statically resolvable, so calls
+/// with an implicit or non-constant receiver are skipped.
+fn document_method_calls(graph: &Graph, uri_id: UriId) -> Vec<NodeRef> {
+    let Some(document) = graph.documents().get(&uri_id) else {
+        return Vec::new();
+    };
+
+    let mut seen = HashSet::new();
+    let mut targets = Vec::new();
+    for ref_id in document.method_references() {
+        let Some(method_ref) = graph.method_references().get(ref_id) else {
+            continue;
+        };
+        let Some(receiver) = method_ref.receiver() else {
+            continue;
+        };
+        if let Some(decl_id) = resolve_method_call(graph, receiver, *method_ref.str())
+            && seen.insert(decl_id)
+        {
+            targets.push(NodeRef::Declaration(decl_id));
+        }
+    }
+    targets
+}
+
+/// Resolves a method call to its method declaration. `receiver` is the receiver *type*'s name as
+/// recorded by the indexer — the singleton class for a constant receiver (`Foo.bar`) or the
+/// enclosing type for an implicit `self` call — so the method is looked up directly along that
+/// declaration's ancestry, returning the first (most-derived) match. Calls whose receiver type is
+/// not statically known carry no receiver and never reach here.
+fn resolve_method_call(graph: &Graph, receiver: NameId, method_str: StringId) -> Option<DeclarationId> {
+    use crate::model::declaration::Ancestor;
+
+    // Call sites record the bare message (`bar`), while method declarations are keyed by
+    // `name()` in a namespace's members, so we match on the base name rather than the `StringId`.
+    let call_name = graph.strings().get(&method_str)?.as_str();
+
+    let receiver_decl_id = *graph.name_id_to_declaration_id(receiver)?;
+    let receiver_decl_id = resolve_to_namespace(graph, receiver_decl_id)?;
+    let namespace = graph.declarations().get(&receiver_decl_id)?.as_namespace()?;
+
+    for ancestor in namespace.ancestors() {
+        let Ancestor::Complete(ancestor_id) = ancestor else {
+            continue;
+        };
+        let Some(members) = graph
+            .declarations()
+            .get(ancestor_id)
+            .and_then(Declaration::as_namespace)
+            .map(Namespace::members)
+        else {
+            continue;
+        };
+
+        for (key, member_id) in members {
+            if graph
+                .declarations()
+                .get(member_id)
+                .is_some_and(|d| d.as_method().is_some())
+                && graph
+                    .strings()
+                    .get(key)
+                    .and_then(|name| name.as_str().strip_suffix("()"))
+                    == Some(call_name)
+            {
+                return Some(*member_id);
+            }
+        }
+    }
+    None
 }
 
 fn definition_children(graph: &Graph, def_id: DefinitionId) -> Vec<NodeRef> {
