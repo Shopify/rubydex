@@ -4925,6 +4925,22 @@ mod rbs_tests {
                 "BasicObject"
             ]
         );
+        assert_ancestors_eq!(
+            context,
+            "Minitest::Test::<Test>",
+            [
+                "Minitest::Test::<Test>",
+                "Minitest::Guard",
+                "Minitest::Runnable::<Runnable>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
     }
 
     #[test]
