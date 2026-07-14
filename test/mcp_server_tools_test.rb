@@ -9,18 +9,18 @@ class MCPServerToolsTest < Minitest::Test
   include Test::Helpers::WithContext
 
   def test_search_declarations_tool
-    with_mcp_server do |server|
-      exact = call_tool(server, "search_declarations", query: "Dog", match_mode: "exact", kind: "Class")
+    with_graph do |graph|
+      exact = call_tool(graph, Rubydex::MCPServer::SearchDeclarationsTool, query: "Dog", match_mode: "exact", kind: "Class")
 
       assert_equal(1, exact.fetch("total"))
       assert_equal(["Dog"], exact.fetch("results").map { |entry| entry.fetch("name") })
 
-      paginated = call_tool(server, "search_declarations", query: "Dog", match_mode: "exact", limit: 1)
+      paginated = call_tool(graph, Rubydex::MCPServer::SearchDeclarationsTool, query: "Dog", match_mode: "exact", limit: 1)
 
       assert_equal(3, paginated.fetch("total"))
       assert_equal(1, paginated.fetch("results").length)
 
-      invalid = call_tool(server, "search_declarations", query: "Dog", match_mode: "contains")
+      invalid = call_tool(graph, Rubydex::MCPServer::SearchDeclarationsTool, query: "Dog", match_mode: "contains")
 
       assert_equal("invalid_match_mode", invalid.fetch("error"))
       assert_match(/Invalid match_mode/, invalid.fetch("message"))
@@ -28,8 +28,8 @@ class MCPServerToolsTest < Minitest::Test
   end
 
   def test_get_declaration_tool
-    with_mcp_server do |server|
-      declaration = call_tool(server, "get_declaration", name: "Dog")
+    with_graph do |graph|
+      declaration = call_tool(graph, Rubydex::MCPServer::GetDeclarationTool, name: "Dog")
 
       assert_equal("Dog", declaration.fetch("name"))
       assert_equal("Class", declaration.fetch("kind"))
@@ -38,7 +38,7 @@ class MCPServerToolsTest < Minitest::Test
       assert_has_value(declaration.fetch("members"), "Dog#speak()", "Dog members")
       assert_has_value(declaration.fetch("members"), "Dog::BREED", "Dog members")
 
-      not_found = call_tool(server, "get_declaration", name: "Missing")
+      not_found = call_tool(graph, Rubydex::MCPServer::GetDeclarationTool, name: "Missing")
 
       assert_equal("not_found", not_found.fetch("error"))
       assert_match(/search_declarations/, not_found.fetch("suggestion"))
@@ -46,8 +46,8 @@ class MCPServerToolsTest < Minitest::Test
   end
 
   def test_get_descendants_tool
-    with_mcp_server do |server|
-      descendants = call_tool(server, "get_descendants", name: "Animal")
+    with_graph do |graph|
+      descendants = call_tool(graph, Rubydex::MCPServer::GetDescendantsTool, name: "Animal")
 
       assert_equal("Animal", descendants.fetch("name"))
       assert_equal(3, descendants.fetch("total"))
@@ -55,20 +55,20 @@ class MCPServerToolsTest < Minitest::Test
       assert_has_value(descendants.fetch("descendants"), "Dog", "Animal descendants")
       assert_has_value(descendants.fetch("descendants"), "Cat", "Animal descendants")
 
-      page = call_tool(server, "get_descendants", name: "Animal", limit: 1, offset: 1)
+      page = call_tool(graph, Rubydex::MCPServer::GetDescendantsTool, name: "Animal", limit: 1, offset: 1)
 
       assert_equal(3, page.fetch("total"))
       assert_equal(1, page.fetch("descendants").length)
 
-      invalid = call_tool(server, "get_descendants", name: "Dog::BREED")
+      invalid = call_tool(graph, Rubydex::MCPServer::GetDescendantsTool, name: "Dog::BREED")
 
       assert_equal("invalid_kind", invalid.fetch("error"))
     end
   end
 
   def test_find_constant_references_tool
-    with_mcp_server do |server|
-      references = call_tool(server, "find_constant_references", name: "Animal")
+    with_graph do |graph|
+      references = call_tool(graph, Rubydex::MCPServer::FindConstantReferencesTool, name: "Animal")
 
       assert_equal("Animal", references.fetch("name"))
       assert_operator(references.fetch("total"), :>=, 3)
@@ -76,12 +76,12 @@ class MCPServerToolsTest < Minitest::Test
       assert(references.fetch("references").any? { |entry| entry.fetch("path") == "app.rb" })
       assert(references.fetch("references").any? { |entry| entry.fetch("path") == "cat.rb" })
 
-      page = call_tool(server, "find_constant_references", name: "Animal", limit: 1, offset: -10)
+      page = call_tool(graph, Rubydex::MCPServer::FindConstantReferencesTool, name: "Animal", limit: 1, offset: -10)
 
       assert_equal(references.fetch("total"), page.fetch("total"))
       assert_equal(1, page.fetch("references").length)
 
-      method_references = call_tool(server, "find_constant_references", name: "Dog#speak()")
+      method_references = call_tool(graph, Rubydex::MCPServer::FindConstantReferencesTool, name: "Dog#speak()")
 
       assert_equal("Dog#speak()", method_references.fetch("name"))
       assert_equal(0, method_references.fetch("total"))
@@ -90,8 +90,8 @@ class MCPServerToolsTest < Minitest::Test
   end
 
   def test_get_file_declarations_tool
-    with_mcp_server do |server|
-      file = call_tool(server, "get_file_declarations", file_path: "app.rb")
+    with_graph do |graph|
+      file = call_tool(graph, Rubydex::MCPServer::GetFileDeclarationsTool, file_path: "app.rb")
 
       assert_equal("app.rb", file.fetch("file"))
       assert_has_value(file.fetch("declarations"), "Animal", "app.rb declarations")
@@ -99,7 +99,7 @@ class MCPServerToolsTest < Minitest::Test
       assert_has_value(file.fetch("declarations"), "Dog", "app.rb declarations")
       assert_has_value(file.fetch("declarations"), "Dog#speak()", "app.rb declarations")
 
-      missing = call_tool(server, "get_file_declarations", file_path: "missing.rb")
+      missing = call_tool(graph, Rubydex::MCPServer::GetFileDeclarationsTool, file_path: "missing.rb")
 
       assert_equal("not_found", missing.fetch("error"))
     end
@@ -108,11 +108,11 @@ class MCPServerToolsTest < Minitest::Test
   def test_get_file_declarations_decodes_file_uri_paths
     with_context do |context|
       context.write!("my app.rb", "class SpacedFile; end")
-      server, errors = indexed_server(context.absolute_path, [context.absolute_path])
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
 
       assert_empty(errors)
 
-      file = call_tool(server, "get_file_declarations", file_path: "my app.rb")
+      file = call_tool(graph, Rubydex::MCPServer::GetFileDeclarationsTool, file_path: "my app.rb")
 
       assert_equal("my app.rb", file.fetch("file"))
       assert_has_value(file.fetch("declarations"), "SpacedFile", "my app.rb declarations")
@@ -120,9 +120,9 @@ class MCPServerToolsTest < Minitest::Test
   end
 
   def test_todo_declaration_uses_graph_kind_string
-    with_mcp_server do |server|
-      declaration = call_tool(server, "get_declaration", name: "MissingParent")
-      stats = call_tool(server, "codebase_stats")
+    with_graph do |graph|
+      declaration = call_tool(graph, Rubydex::MCPServer::GetDeclarationTool, name: "MissingParent")
+      stats = call_tool(graph, Rubydex::MCPServer::CodebaseStatsTool)
 
       assert_equal("<TODO>", declaration.fetch("kind"))
       assert_operator(stats.fetch("breakdown_by_kind").fetch("<TODO>"), :>=, 1)
@@ -130,8 +130,8 @@ class MCPServerToolsTest < Minitest::Test
   end
 
   def test_codebase_stats_tool
-    with_mcp_server do |server|
-      stats = call_tool(server, "codebase_stats")
+    with_graph do |graph|
+      stats = call_tool(graph, Rubydex::MCPServer::CodebaseStatsTool)
 
       assert_equal(3, stats.fetch("files"))
       assert_operator(stats.fetch("declarations"), :>, 0)
@@ -146,27 +146,23 @@ class MCPServerToolsTest < Minitest::Test
 
   private
 
-  def with_mcp_server
+  def with_graph
     with_context do |context|
       write_fixture(context)
-      server, errors = indexed_server(context.absolute_path, [context.absolute_path])
+      graph, errors = indexed_graph(context.absolute_path, [context.absolute_path])
 
       assert_empty(errors)
 
-      yield server
+      yield graph
     end
   end
 
-  def indexed_server(root_path, paths)
+  def indexed_graph(root_path, paths)
     graph = Rubydex::Graph.new(workspace_path: root_path)
     errors = graph.index_all(paths)
     graph.resolve
 
-    server = Rubydex::MCPServer::Server.new(root_path: root_path)
-    server.instance_variable_set(:@graph, graph)
-    server.instance_variable_set(:@index_finished, true)
-
-    [server, errors]
+    [graph, errors]
   end
 
   def write_fixture(context)
@@ -203,20 +199,9 @@ class MCPServerToolsTest < Minitest::Test
     RUBY
   end
 
-  def call_tool(server, tool_name, arguments = {})
-    response = server.handle(
-      {
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: tool_name,
-          arguments: arguments,
-        },
-      },
-    )
-
-    JSON.parse(response.fetch(:result).fetch(:content)[0].fetch(:text))
+  def call_tool(graph, tool_class, **arguments)
+    response = tool_class.new(graph).call(**arguments)
+    JSON.parse(response.content[0].fetch(:text))
   end
 
   def assert_has_value(entries, expected_value, context, key: "name")
