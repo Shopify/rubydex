@@ -611,20 +611,8 @@ impl<'a> RubyOperationBuilder<'a> {
     {
         if let Some(arguments) = node.arguments() {
             for argument in &arguments.arguments() {
-                match argument {
-                    ruby_prism::Node::SymbolNode { .. } => {
-                        let symbol = argument.as_symbol_node().unwrap();
-                        if let Some(value_loc) = symbol.value_loc() {
-                            let name = Self::location_to_string(&value_loc);
-                            f(name, value_loc);
-                        }
-                    }
-                    ruby_prism::Node::StringNode { .. } => {
-                        let string = argument.as_string_node().unwrap();
-                        let name = String::from_utf8_lossy(string.unescaped()).to_string();
-                        f(name, argument.location());
-                    }
-                    _ => {}
+                if let Some((name, location)) = Self::extract_literal_name(&argument) {
+                    f(name, location);
                 }
             }
         }
@@ -931,28 +919,13 @@ impl<'a> RubyOperationBuilder<'a> {
         };
 
         for argument in &arguments.arguments() {
-            let (name, location) = match argument {
-                ruby_prism::Node::SymbolNode { .. } => {
-                    let symbol = argument.as_symbol_node().unwrap();
-                    if let Some(value_loc) = symbol.value_loc() {
-                        (Self::location_to_string(&value_loc), value_loc)
-                    } else {
-                        continue;
-                    }
-                }
-                ruby_prism::Node::StringNode { .. } => {
-                    let string = argument.as_string_node().unwrap();
-                    let name = String::from_utf8_lossy(string.unescaped()).to_string();
-                    (name, argument.location())
-                }
-                _ => {
-                    self.add_diagnostic(
-                        Rule::InvalidPrivateConstant,
-                        Offset::from_prism_location(&argument.location()),
-                        "Private constant called with non-symbol argument".to_string(),
-                    );
-                    continue;
-                }
+            let Some((name, location)) = Self::extract_literal_name(&argument) else {
+                self.add_diagnostic(
+                    Rule::InvalidPrivateConstant,
+                    Offset::from_prism_location(&argument.location()),
+                    "Private constant called with non-symbol argument".to_string(),
+                );
+                continue;
             };
 
             let str_id = self.intern_string(name);
@@ -1067,6 +1040,22 @@ impl<'a> RubyOperationBuilder<'a> {
         Some(())
     }
 
+    fn extract_literal_name<'b>(arg: &ruby_prism::Node<'b>) -> Option<(String, ruby_prism::Location<'b>)> {
+        match arg {
+            ruby_prism::Node::SymbolNode { .. } => {
+                let symbol = arg.as_symbol_node().unwrap();
+                let value_loc = symbol.value_loc()?;
+                Some((Self::location_to_string(&value_loc), value_loc))
+            }
+            ruby_prism::Node::StringNode { .. } => {
+                let string = arg.as_string_node().unwrap();
+                let name = String::from_utf8_lossy(string.unescaped()).to_string();
+                Some((name, arg.location()))
+            }
+            _ => None,
+        }
+    }
+
     fn is_attr_call(arg: &ruby_prism::Node) -> bool {
         arg.as_call_node().is_some_and(|call| {
             let receiver = call.receiver();
@@ -1135,21 +1124,8 @@ impl<'a> RubyOperationBuilder<'a> {
         visibility: Visibility,
         flags: DefinitionFlags,
     ) {
-        let (name, location) = match arg {
-            ruby_prism::Node::SymbolNode { .. } => {
-                let symbol = arg.as_symbol_node().unwrap();
-                if let Some(value_loc) = symbol.value_loc() {
-                    (Self::location_to_string(&value_loc), value_loc)
-                } else {
-                    return;
-                }
-            }
-            ruby_prism::Node::StringNode { .. } => {
-                let string = arg.as_string_node().unwrap();
-                let name = String::from_utf8_lossy(string.unescaped()).to_string();
-                (name, arg.location())
-            }
-            _ => return,
+        let Some((name, location)) = Self::extract_literal_name(arg) else {
+            return;
         };
 
         let str_id = self.intern_string(format!("{name}()"));
