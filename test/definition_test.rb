@@ -148,6 +148,31 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_definition_comments_and_location_raise_when_definition_is_gone
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        # Class comment
+        class Foo
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      document = graph.documents.find { |doc| doc.uri == context.uri_to("file1.rb") }
+      definition = document.definitions.find { |defn| defn.name == "Foo" }
+      refute_nil(definition)
+
+      graph.delete_document(context.uri_to("file1.rb"))
+
+      error = assert_raises(RuntimeError) { definition.comments }
+      assert_equal("Definition must exist for a valid id", error.message)
+
+      error = assert_raises(RuntimeError) { definition.location }
+      assert_equal("Definition must exist for a valid id", error.message)
+    end
+  end
+
   def test_definition_comments
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

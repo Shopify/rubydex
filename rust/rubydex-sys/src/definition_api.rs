@@ -156,21 +156,22 @@ pub struct CommentArray {
     pub len: usize,
 }
 
-/// Returns a newly allocated array of comments (string and location) for the given definition id.
-/// Caller must free the returned pointer with `rdx_definition_comments_free` and each inner string with `free_c_string` if needed.
+/// Returns a newly allocated array of comments (string and location) for the given definition id, or NULL if the
+/// definition cannot be found. Caller must free the returned pointer and its contents with
+/// `rdx_definition_comments_free`.
 ///
 /// # Safety
 /// - `pointer` must be a valid pointer previously returned by `rdx_graph_new`.
 /// - `definition_id` must be a valid definition id.
 ///
 /// # Panics
-/// This function will panic if a definition or document cannot be found.
+/// This function will panic if the definition's document cannot be found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_definition_comments(pointer: GraphPointer, definition_id: u64) -> *mut CommentArray {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         let Some(defn) = graph.definitions().get(&def_id) else {
-            panic!("Definition not found: {definition_id:?}");
+            return ptr::null_mut();
         };
 
         let uri_id = *defn.uri_id();
@@ -229,7 +230,7 @@ pub unsafe extern "C" fn rdx_definition_comments_free(ptr: *mut CommentArray) {
     // arr is dropped here
 }
 
-/// Returns a newly allocated `Location` for the given definition id.
+/// Returns a newly allocated `Location` for the given definition id, or NULL if the definition cannot be found.
 /// Caller must free the returned pointer with `rdx_location_free`.
 ///
 /// # Safety
@@ -238,13 +239,13 @@ pub unsafe extern "C" fn rdx_definition_comments_free(ptr: *mut CommentArray) {
 ///
 /// # Panics
 ///
-/// This function will panic if a definition or document cannot be found.
+/// This function will panic if the definition's document cannot be found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_definition_location(pointer: GraphPointer, definition_id: u64) -> *mut Location {
     with_graph(pointer, |graph| {
         let def_id = DefinitionId::new(definition_id);
         let Some(defn) = graph.definitions().get(&def_id) else {
-            panic!("Definition not found: {definition_id:?}");
+            return ptr::null_mut();
         };
 
         let document = graph.documents().get(defn.uri_id()).expect("document should exist");

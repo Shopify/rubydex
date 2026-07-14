@@ -30,6 +30,9 @@ static VALUE rdxr_constant_reference_name(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     const char *name = rdx_constant_reference_name(graph, data->id);
+    if (name == NULL) {
+        rb_raise(rb_eRuntimeError, "Constant reference must exist for a valid id");
+    }
     return rdxi_owned_c_string_to_ruby(name);
 }
 
@@ -44,6 +47,9 @@ static VALUE rdxr_constant_reference_location(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     Location *loc = rdx_constant_reference_location(graph, data->id);
+    if (loc == NULL) {
+        rb_raise(rb_eRuntimeError, "Constant reference must exist for a valid id");
+    }
     VALUE location = rdxi_build_location_value(loc);
     rdx_location_free(loc);
     return location;
@@ -81,6 +87,9 @@ static VALUE rdxr_method_reference_name(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     const char *name = rdx_method_reference_name(graph, data->id);
+    if (name == NULL) {
+        rb_raise(rb_eRuntimeError, "Method reference must exist for a valid id");
+    }
     return rdxi_owned_c_string_to_ruby(name);
 }
 
@@ -95,6 +104,9 @@ static VALUE rdxr_method_reference_location(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     Location *loc = rdx_method_reference_location(graph, data->id);
+    if (loc == NULL) {
+        rb_raise(rb_eRuntimeError, "Method reference must exist for a valid id");
+    }
     VALUE location = rdxi_build_location_value(loc);
     rdx_location_free(loc);
     return location;

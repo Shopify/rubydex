@@ -236,7 +236,7 @@ static VALUE rdxr_declaration_owner(VALUE self) {
     const CDeclaration *decl = rdx_declaration_owner(graph, data->id);
 
     if (decl == NULL) {
-        rb_raise(rb_eRuntimeError, "owner can never be nil for any declarations");
+        rb_raise(rb_eRuntimeError, "Declaration must exist for a valid id");
     }
 
     VALUE decl_class = rdxi_declaration_class_for_kind(decl->kind);

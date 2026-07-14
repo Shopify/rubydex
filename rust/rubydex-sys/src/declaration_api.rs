@@ -291,7 +291,8 @@ pub unsafe extern "C" fn rdx_declaration_singleton_class(pointer: GraphPointer, 
     })
 }
 
-/// Returns the owner of the declaration (attached object in the case of singleton classes)
+/// Returns the owner of the declaration (attached object in the case of singleton classes), or NULL if the declaration
+/// cannot be found.
 ///
 /// # Safety
 ///
@@ -299,11 +300,13 @@ pub unsafe extern "C" fn rdx_declaration_singleton_class(pointer: GraphPointer, 
 ///
 /// # Panics
 ///
-/// Will panic if invoked on a non-existing or non-namespace declaration
+/// This function will panic if the owner declaration cannot be found.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_declaration_owner(pointer: GraphPointer, decl_id: u64) -> *const CDeclaration {
     with_graph(pointer, |graph| {
-        let declaration = graph.declarations().get(&DeclarationId::new(decl_id)).unwrap();
+        let Some(declaration) = graph.declarations().get(&DeclarationId::new(decl_id)) else {
+            return ptr::null();
+        };
         let owner_id = *declaration.owner_id();
         Box::into_raw(Box::new(CDeclaration::from_declaration(
             owner_id,

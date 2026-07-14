@@ -89,6 +89,9 @@ static VALUE rdxr_definition_location(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     Location *loc = rdx_definition_location(graph, data->id);
+    if (loc == NULL) {
+        rb_raise(rb_eRuntimeError, "Definition must exist for a valid id");
+    }
     VALUE location = rdxi_build_location_value(loc);
     rdx_location_free(loc);
 
@@ -106,10 +109,11 @@ static VALUE rdxr_definition_comments(VALUE self) {
     void *graph = rdxi_graph_from_handle(self, &data);
 
     CommentArray *arr = rdx_definition_comments(graph, data->id);
-    if (arr == NULL || arr->len == 0) {
-        if (arr != NULL) {
-            rdx_definition_comments_free(arr);
-        }
+    if (arr == NULL) {
+        rb_raise(rb_eRuntimeError, "Definition must exist for a valid id");
+    }
+    if (arr->len == 0) {
+        rdx_definition_comments_free(arr);
         return rb_ary_new();
     }
 
