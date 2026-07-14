@@ -1,13 +1,9 @@
 use clap::{Parser, ValueEnum};
-use std::{
-    fs, mem,
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
+use std::{fs, mem, path::PathBuf};
 
 use rubydex::{
     dot,
-    indexing::{self, IndexerBackend, LanguageId, build_local_graph},
+    indexing::{self, IndexerBackend},
     integrity, listing,
     model::graph::Graph,
     resolution::Resolver,
@@ -16,7 +12,6 @@ use rubydex::{
         timer::{Timer, time_it},
     },
 };
-use url::Url;
 
 #[derive(Parser, Debug)]
 #[command(name = "rubydex_cli", about = "A Static Analysis Toolkit for Ruby", version)]
@@ -61,21 +56,6 @@ struct Args {
         help = "Write orphan definitions report to specified file"
     )]
     report_orphans: Option<String>,
-
-    #[arg(
-        long = "incremental_cycle",
-        value_name = "N",
-        help = "After the initial build, run N incremental resolution cycles and report their timings"
-    )]
-    incremental_cycle: Option<usize>,
-
-    #[arg(
-        long = "incremental_files",
-        value_name = "N",
-        default_value_t = 1,
-        help = "Number of files to re-index per incremental cycle"
-    )]
-    incremental_files: usize,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -149,14 +129,6 @@ fn main() {
 
     let backend = IndexerBackend::from(&args.indexer);
 
-    // The incremental benchmark re-indexes files after the initial build, so keep a copy of the
-    // paths before `index_files` consumes them.
-    let incremental_paths = if args.incremental_cycle.is_some() {
-        file_paths.clone()
-    } else {
-        Vec::new()
-    };
-
     let errors = time_it!(indexing, { indexing::index_files(&mut graph, file_paths, backend) });
 
     for error in errors {
@@ -173,12 +145,6 @@ fn main() {
         let mut resolver = Resolver::new(&mut graph);
         resolver.resolve();
     });
-
-    // Incremental resolution benchmark. Runs before the stop-after check so it can be combined with
-    // `--stop-after=resolution`.
-    if let Some(cycles) = args.incremental_cycle {
-        run_incremental_resolution(&mut graph, &incremental_paths, cycles, args.incremental_files, backend);
-    }
 
     if let Some(StopAfter::Resolution) = args.stop_after {
         return exit(args.stats);
@@ -240,92 +206,4 @@ fn main() {
 
     // Forget the graph so we don't have to wait for deallocation and let the system reclaim the memory at exit
     mem::forget(graph);
-}
-
-/// Simulates incremental editing to measure incremental resolution cost. For each cycle it
-/// re-indexes a rotating window of `files_per_cycle` files (parsing plus the same invalidation the
-/// LSP performs on save) and then re-runs resolution over the resulting pending work, reporting
-/// per-cycle and aggregate `resolve()` timings.
-///
-/// With `--stats`, the `compute_descendants` breakdown printed in the timing summary reflects the
-/// last incremental cycle, since it is recorded on every `resolve()`.
-fn run_incremental_resolution(
-    graph: &mut Graph,
-    paths: &[PathBuf],
-    cycles: usize,
-    files_per_cycle: usize,
-    backend: IndexerBackend,
-) {
-    if paths.is_empty() || cycles == 0 || files_per_cycle == 0 {
-        eprintln!("Skipping incremental resolution: nothing to re-index");
-        return;
-    }
-
-    let files_per_cycle = files_per_cycle.min(paths.len());
-
-    let mut reindex_total = Duration::ZERO;
-    let mut resolve_total = Duration::ZERO;
-    let mut resolve_min = Duration::MAX;
-    let mut resolve_max = Duration::ZERO;
-
-    println!();
-    println!("Incremental resolution ({cycles} cycle(s), {files_per_cycle} file(s)/cycle)");
-    println!("  Scenario: no-op reindex; files are indexed again without changing their contents.");
-    println!("  This should be the fastest incremental resolution path.");
-    println!("  Add scenario-based benchmarks before optimizing incremental resolution.");
-
-    for cycle in 0..cycles {
-        // Re-index the window of files for this cycle. Rotating the window across cycles samples
-        // different parts of the codebase rather than measuring the same delta repeatedly.
-        let reindex_start = Instant::now();
-        for i in 0..files_per_cycle {
-            let path = &paths[(cycle * files_per_cycle + i) % paths.len()];
-            reindex_file(graph, path, backend);
-        }
-        reindex_total += reindex_start.elapsed();
-
-        let resolve_start = Instant::now();
-        Resolver::new(graph).resolve();
-        let elapsed = resolve_start.elapsed();
-
-        resolve_total += elapsed;
-        resolve_min = resolve_min.min(elapsed);
-        resolve_max = resolve_max.max(elapsed);
-
-        println!(
-            "  cycle {:>3}: resolve {:9.3}ms",
-            cycle + 1,
-            elapsed.as_secs_f64() * 1000.0
-        );
-    }
-
-    let avg = resolve_total / u32::try_from(cycles).expect("cycle count fits in u32");
-
-    println!(
-        "  resolve total {:.3}ms  avg {:.3}ms  min {:.3}ms  max {:.3}ms",
-        resolve_total.as_secs_f64() * 1000.0,
-        avg.as_secs_f64() * 1000.0,
-        resolve_min.as_secs_f64() * 1000.0,
-        resolve_max.as_secs_f64() * 1000.0,
-    );
-    println!(
-        "  reindex+invalidate total {:.3}ms (parse + document merge, excluded from resolve above)",
-        reindex_total.as_secs_f64() * 1000.0,
-    );
-}
-
-/// Re-indexes a single file into the graph, running the same invalidation the LSP performs on save.
-fn reindex_file(graph: &mut Graph, path: &Path, backend: IndexerBackend) {
-    let Ok(source) = fs::read_to_string(path) else {
-        eprintln!("Failed to read file `{}`", path.display());
-        return;
-    };
-    let Ok(url) = Url::from_file_path(path) else {
-        eprintln!("Couldn't build URI from path `{}`", path.display());
-        return;
-    };
-
-    let language = path.extension().map_or(LanguageId::Ruby, LanguageId::from);
-    let local_graph = build_local_graph(url.to_string(), &source, &language, backend);
-    graph.consume_document_changes(local_graph);
 }
