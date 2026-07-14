@@ -10,7 +10,6 @@ use crate::{
     assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
     diagnostic::Rule,
     model::{declaration::Ancestors, ids::DeclarationId, name::NameRef},
-    resolution::Resolver,
     test_utils::GraphTest,
 };
 
@@ -3097,13 +3096,14 @@ mod declaration_creation_tests {
     #[test]
     fn resolution_for_ambiguous_namespace_definitions() {
         // Like many examples of Ruby code that is ambiguous to static analysis, this example is ambiguous due to
-        // require order. If `foo.rb` is loaded first, then `Bar` doesn't exist, Ruby crashes and we should emit an
-        // error or warning for a non existing constant.
+        // require order. If `a_qualified.rb` is loaded first, then `Bar` doesn't exist, Ruby crashes and we should
+        // emit an error or warning for a non existing constant.
         //
-        // If `bar.rb` is loaded first, then `Bar` resolves to top level `Bar` and `Bar::Baz` is defined, completely
-        // escaping the `Foo` nesting.
+        // If `z_parent.rb` is loaded first, then `Bar` resolves to top level `Bar` and `Bar::Baz` is defined,
+        // completely escaping the `Foo` nesting. The URIs intentionally sort in the opposite order: name complexity
+        // must take precedence over URI so the top level `Bar` is resolved before the qualified `Bar::Baz` definition.
         let mut context = graph_test();
-        context.index_uri("file:///foo.rb", {
+        context.index_uri("file:///a_qualified.rb", {
             r"
             module Foo
               class Bar::Baz
@@ -3111,7 +3111,7 @@ mod declaration_creation_tests {
             end
             "
         });
-        context.index_uri("file:///bar.rb", {
+        context.index_uri("file:///z_parent.rb", {
             r"
             module Bar
             end
@@ -3123,61 +3123,10 @@ mod declaration_creation_tests {
 
         assert_no_members!(context, "Foo");
         assert_owner_eq!(context, "Foo", "Object");
+        assert_declaration_does_not_exist!(context, "Foo::Bar");
 
         assert_members_eq!(context, "Bar", ["Baz"]);
         assert_owner_eq!(context, "Bar", "Object");
-    }
-
-    #[test]
-    fn expected_name_depth_order() {
-        let mut context = graph_test();
-        context.index_uri("file:///foo.rb", {
-            r"
-            module Foo
-              module Bar
-                module Baz
-                end
-
-                module ::Top
-                  class AfterTop
-                  end
-                end
-              end
-
-              module Qux::Zip
-                module Zap
-                  class Zop::Boop
-                  end
-                end
-              end
-            end
-            "
-        });
-
-        let depths = Resolver::compute_name_depths(context.graph().names());
-        let mut names = context
-            .graph()
-            .names()
-            .iter()
-            .filter(|(_, n)| {
-                !["Kernel", "BasicObject", "Object", "Module", "Class"]
-                    .contains(&context.graph().strings().get(n.str()).unwrap().as_str())
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(10, names.len());
-
-        names.sort_by_key(|(id, _)| depths.get(id).unwrap());
-
-        assert_eq!(
-            [
-                "Top", "Foo", "Bar", "Qux", "AfterTop", "Baz", "Zip", "Zap", "Zop", "Boop"
-            ],
-            names
-                .iter()
-                .map(|(_, n)| context.graph().strings().get(n.str()).unwrap().as_str())
-                .collect::<Vec<_>>()
-                .as_slice()
-        );
     }
 }
 
