@@ -1884,21 +1884,6 @@ impl<'a> Resolver<'a> {
         depth
     }
 
-    /// Computes name depths for all names into a `NameId → depth` map via memoized recursion.
-    ///
-    /// `prepare_units` computes depths on demand for only the names it sorts; this eager variant exists so tests
-    /// can assert the depth of every name in a fixture.
-    #[cfg(test)]
-    pub(crate) fn compute_name_depths(names: &IdentityHashMap<NameId, NameRef>) -> IdentityHashMap<NameId, u32> {
-        let mut cache = IdentityHashMap::with_capacity_and_hasher(names.len(), IdentityHashBuilder);
-
-        for &name_id in names.keys() {
-            Self::name_depth(name_id, names, &mut cache);
-        }
-
-        cache
-    }
-
     /// Drains `pending_work` and classifies items into the resolution queue.
     /// Namespace definitions and constant references are sorted by name depth for deterministic
     /// resolution order. Non-namespace definitions (methods, attrs, variables) are returned
