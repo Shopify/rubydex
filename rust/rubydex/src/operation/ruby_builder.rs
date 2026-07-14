@@ -897,7 +897,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 Some(Nesting::Method { .. }) => return,
                 None => {
                     self.add_diagnostic(
-                        Rule::InvalidPrivateConstant,
+                        Rule::InvalidConstantVisibility,
                         Offset::from_prism_location(&node.location()),
                         format!("`{call_name}` called at top level"),
                     );
@@ -907,7 +907,7 @@ impl<'a> RubyOperationBuilder<'a> {
             },
             _ => {
                 self.add_diagnostic(
-                    Rule::InvalidPrivateConstant,
+                    Rule::InvalidConstantVisibility,
                     Offset::from_prism_location(&node.location()),
                     format!("Dynamic receiver for `{call_name}`"),
                 );
@@ -922,7 +922,7 @@ impl<'a> RubyOperationBuilder<'a> {
         for argument in &arguments.arguments() {
             let Some((name, location)) = Self::extract_literal_name(&argument) else {
                 self.add_diagnostic(
-                    Rule::InvalidPrivateConstant,
+                    Rule::InvalidConstantVisibility,
                     Offset::from_prism_location(&argument.location()),
                     format!("`{call_name}` called with a non-literal argument"),
                 );

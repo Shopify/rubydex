@@ -1193,7 +1193,7 @@ impl<'a> RubyIndexer<'a> {
                 }
                 None => {
                     self.local_graph.add_diagnostic(
-                        Rule::InvalidPrivateConstant,
+                        Rule::InvalidConstantVisibility,
                         Offset::from_prism_location(&node.location()),
                         format!("`{call_name}` called at top level"),
                     );
@@ -1204,7 +1204,7 @@ impl<'a> RubyIndexer<'a> {
             },
             _ => {
                 self.local_graph.add_diagnostic(
-                    Rule::InvalidPrivateConstant,
+                    Rule::InvalidConstantVisibility,
                     Offset::from_prism_location(&node.location()),
                     format!("Dynamic receiver for `{call_name}`"),
                 );
@@ -1220,7 +1220,7 @@ impl<'a> RubyIndexer<'a> {
         for argument in &arguments.arguments() {
             let Some((name, location)) = Self::extract_literal_name(&argument) else {
                 self.local_graph.add_diagnostic(
-                    Rule::InvalidPrivateConstant,
+                    Rule::InvalidConstantVisibility,
                     Offset::from_prism_location(&argument.location()),
                     format!("`{call_name}` called with a non-literal argument"),
                 );
