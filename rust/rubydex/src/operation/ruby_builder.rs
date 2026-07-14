@@ -889,9 +889,9 @@ impl<'a> RubyOperationBuilder<'a> {
         let receiver = node.receiver();
         let call_name = String::from_utf8_lossy(node.name().as_slice());
 
-        let receiver_name_id = match receiver {
+        let receiver_name_id = match &receiver {
             Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
-                self.index_constant_reference(&receiver.unwrap(), true)
+                self.index_constant_reference(receiver.as_ref().unwrap(), true)
             }
             Some(ruby_prism::Node::SelfNode { .. }) | None => match self.nesting_stack.last() {
                 Some(Nesting::Method { .. }) => return,
@@ -905,10 +905,10 @@ impl<'a> RubyOperationBuilder<'a> {
                 }
                 _ => None,
             },
-            _ => {
+            Some(other) => {
                 self.add_diagnostic(
                     Rule::InvalidConstantVisibility,
-                    Offset::from_prism_location(&node.location()),
+                    Offset::from_prism_location(&other.location()),
                     format!("Dynamic receiver for `{call_name}`"),
                 );
                 return;

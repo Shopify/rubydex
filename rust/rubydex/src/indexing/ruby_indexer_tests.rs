@@ -1774,7 +1774,7 @@ mod visibility_tests {
             vec![
                 "invalid-constant-visibility: `private_constant` called at top level (1:1-1:30)",
                 "invalid-constant-visibility: `private_constant` called at top level (2:1-2:35)",
-                "invalid-constant-visibility: Dynamic receiver for `private_constant` (3:1-3:34)",
+                "invalid-constant-visibility: Dynamic receiver for `private_constant` (3:1-3:4)",
                 "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:20-6:31)",
                 "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:33-6:44)",
             ]
@@ -1811,7 +1811,7 @@ mod visibility_tests {
             vec![
                 "invalid-constant-visibility: `public_constant` called at top level (1:1-1:29)",
                 "invalid-constant-visibility: `public_constant` called at top level (2:1-2:34)",
-                "invalid-constant-visibility: Dynamic receiver for `public_constant` (3:1-3:33)",
+                "invalid-constant-visibility: Dynamic receiver for `public_constant` (3:1-3:4)",
                 "invalid-constant-visibility: `public_constant` called with a non-literal argument (6:19-6:30)",
                 "invalid-constant-visibility: `public_constant` called with a non-literal argument (6:32-6:43)",
             ]
