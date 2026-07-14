@@ -80,7 +80,16 @@ impl<'a> RBSIndexer<'a> {
             let Node::Symbol(symbol) = path_node else {
                 continue;
             };
-            parent_scope = ParentScope::Some(self.intern_name(&symbol, parent_scope, nesting_name_id));
+            let name_id = self.intern_name(&symbol, parent_scope, nesting_name_id);
+
+            // Emit a constant reference for each parent-scope segment so it gets its own resolution
+            // unit, mirroring the Ruby indexer (see `index_constant_reference`). Otherwise the
+            // parent scope is an orphan name that never resolves, leaving qualified references stuck.
+            let offset = Offset::from_rbs_location(&symbol.location());
+            self.local_graph
+                .add_constant_reference(ConstantReference::new(name_id, self.uri_id, offset));
+
+            parent_scope = ParentScope::Some(name_id);
         }
 
         self.intern_name(&type_name.name(), parent_scope, nesting_name_id)

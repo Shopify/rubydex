@@ -4883,6 +4883,67 @@ mod rbs_tests {
     }
 
     #[test]
+    fn rbs_qualified_mixin_resolves_through_parent_scope() {
+        let mut context = graph_test();
+        context.index_rbs_uri("file:///minitest.rbs", {
+            r"
+            module Minitest
+              module Guard
+              end
+
+              module Assertions
+              end
+
+              class Runnable
+              end
+            end
+            "
+        });
+        context.index_rbs_uri("file:///minitest/test.rbs", {
+            r"
+            class Minitest::Test < ::Minitest::Runnable
+              include Minitest::Assertions
+              include Minitest::Guard
+              extend Minitest::Guard
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Minitest::Test",
+            [
+                "Minitest::Test",
+                "Minitest::Guard",
+                "Minitest::Assertions",
+                "Minitest::Runnable",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+        assert_ancestors_eq!(
+            context,
+            "Minitest::Test::<Test>",
+            [
+                "Minitest::Test::<Test>",
+                "Minitest::Guard",
+                "Minitest::Runnable::<Runnable>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
     fn rbs_qualified_name_inside_nested_module() {
         let mut context = graph_test();
         context.index_rbs_uri("file:///foo.rbs", {
