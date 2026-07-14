@@ -127,12 +127,27 @@ impl Name {
 
     #[must_use]
     pub fn id(&self) -> NameId {
-        NameId::from(&format!(
-            "{}{}{}",
-            self.str,
-            self.parent_scope,
-            self.nesting.map_or(String::from("None"), |id| id.to_string())
-        ))
+        let str_bytes = self.str.get().to_le_bytes();
+
+        // We need to include both the variant and the bytes of the parent scope when present
+        let (parent_tag, parent_bytes): (u8, [u8; 8]) = match self.parent_scope {
+            ParentScope::None => (0, [0; 8]),
+            ParentScope::TopLevel => (1, [0; 8]),
+            ParentScope::Some(id) => (2, id.get().to_le_bytes()),
+            ParentScope::Attached(id) => (3, id.get().to_le_bytes()),
+        };
+        let (nesting_tag, nesting_bytes): (u8, [u8; 8]) = match self.nesting {
+            None => (0, [0; 8]),
+            Some(id) => (1, id.get().to_le_bytes()),
+        };
+
+        NameId::from([
+            str_bytes.as_slice(),
+            [parent_tag].as_slice(),
+            parent_bytes.as_slice(),
+            [nesting_tag].as_slice(),
+            nesting_bytes.as_slice(),
+        ])
     }
 }
 
@@ -296,5 +311,23 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         );
         assert_eq!(name_7.id(), name_8.id());
+    }
+
+    #[test]
+    fn parent_scope_variants_are_distinct() {
+        let inner = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+
+        let ids = [
+            Name::new(StringId::from("Foo"), ParentScope::None, None).id(),
+            Name::new(StringId::from("Foo"), ParentScope::TopLevel, None).id(),
+            Name::new(StringId::from("Foo"), ParentScope::Some(inner), None).id(),
+            Name::new(StringId::from("Foo"), ParentScope::Attached(inner), None).id(),
+        ];
+
+        for (i, a) in ids.iter().enumerate() {
+            for b in &ids[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 }
