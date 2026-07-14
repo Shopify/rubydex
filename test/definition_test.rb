@@ -783,6 +783,45 @@ class DefinitionTest < Minitest::Test
     end
   end
 
+  def test_definition_source_name
+    with_context do |context|
+      context.write!("file1.rb", <<~RUBY)
+        class Foo
+          class Bar; end
+          class ::Baz; end
+          module Qux::Quux; end
+
+          CONST = 1
+          ::ROOT_CONST = 2
+          Foo::NESTED_CONST = 3
+          ALIAS_CONST = Baz
+
+          def foo; end
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+
+      definitions = graph.documents.find { |d| d.uri == context.uri_to("file1.rb") }.definitions.to_a
+      source_names = definitions
+        .select { |definition| definition.respond_to?(:source_name) }
+        .map { |definition| [definition.class, definition.name, definition.source_name] }
+
+      assert_includes(source_names, [Rubydex::ClassDefinition, "Foo", "Foo"])
+      assert_includes(source_names, [Rubydex::ClassDefinition, "Bar", "Bar"])
+      assert_includes(source_names, [Rubydex::ClassDefinition, "Baz", "::Baz"])
+      assert_includes(source_names, [Rubydex::ModuleDefinition, "Quux", "Qux::Quux"])
+      assert_includes(source_names, [Rubydex::ConstantDefinition, "CONST", "CONST"])
+      assert_includes(source_names, [Rubydex::ConstantDefinition, "ROOT_CONST", "::ROOT_CONST"])
+      assert_includes(source_names, [Rubydex::ConstantDefinition, "NESTED_CONST", "Foo::NESTED_CONST"])
+      assert_includes(source_names, [Rubydex::ConstantAliasDefinition, "ALIAS_CONST", "ALIAS_CONST"])
+
+      method_def = definitions.find { |definition| definition.is_a?(Rubydex::MethodDefinition) }
+      refute_respond_to(method_def, :source_name)
+    end
+  end
+
   def test_definition_declaration
     with_context do |context|
       context.write!("file1.rb", <<~RUBY)

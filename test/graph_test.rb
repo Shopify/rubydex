@@ -401,6 +401,37 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_graph_resolve_constant_with_top_level_nesting_frame
+    with_context do |context|
+      context.write!("foo.rb", <<~RUBY)
+        module Foo
+          module Bar
+            CONST = :foo_bar
+          end
+        end
+
+        module Bar
+          CONST = :bar
+        end
+      RUBY
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      # Equivalent to resolving from:
+      #
+      #   module Foo
+      #     module ::Bar
+      #       CONST
+      #     end
+      #   end
+      const = graph.resolve_constant("CONST", ["Foo", "::Bar"])
+
+      assert_equal("Bar::CONST", const.name)
+    end
+  end
+
   def test_graph_resolve_with_invalid_argument
     graph = Rubydex::Graph.new
 

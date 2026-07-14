@@ -186,4 +186,39 @@ mod tests {
         assert!(foo_name.parent_scope().is_none());
         assert!(foo_name.nesting().is_none());
     }
+
+    #[test]
+    fn rooted_fully_qualified_nesting_is_converted_to_name_id() {
+        let mut graph = Graph::new();
+
+        let (name_id, _) =
+            nesting_stack_to_name_id(&mut graph, "CONST", vec!["::Foo".into(), "::Foo::Bar".into()]).unwrap();
+
+        let const_name = graph.names().get(&name_id).unwrap();
+        assert_eq!(StringId::from("CONST"), *const_name.str());
+        assert!(const_name.parent_scope().is_none());
+
+        // Equivalent to resolving `CONST` from:
+        //
+        //     module ::Foo
+        //       module ::Foo::Bar
+        //         CONST
+        //       end
+        //     end
+        let bar_name = graph.names().get(&const_name.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("Bar"), *bar_name.str());
+
+        let bar_parent_foo_name = graph
+            .names()
+            .get(&bar_name.parent_scope().expect("Parent scope should exist"))
+            .unwrap();
+        assert_eq!(StringId::from("Foo"), *bar_parent_foo_name.str());
+        assert!(bar_parent_foo_name.parent_scope().is_top_level());
+        assert_eq!(bar_name.nesting(), bar_parent_foo_name.nesting());
+
+        let outer_foo_name = graph.names().get(&bar_name.nesting().unwrap()).unwrap();
+        assert_eq!(StringId::from("Foo"), *outer_foo_name.str());
+        assert!(outer_foo_name.parent_scope().is_top_level());
+        assert!(outer_foo_name.nesting().is_none());
+    }
 }
