@@ -70,6 +70,18 @@ impl<T> From<&String> for Id<T> {
     }
 }
 
+impl<T, const N: usize> From<[&[u8]; N]> for Id<T> {
+    fn from(parts: [&[u8]; N]) -> Self {
+        let mut hasher = xxh3::Xxh3Default::new();
+
+        for part in parts {
+            hasher.update(part);
+        }
+
+        Self::new(hasher.digest())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +89,25 @@ mod tests {
     #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
     pub struct Marker;
     pub type TestId = Id<Marker>;
+
+    #[test]
+    fn from_byte_slices_matches_concatenated_string() {
+        assert_eq!(
+            TestId::from("foobar"),
+            TestId::from([b"foo".as_slice(), b"bar".as_slice()]),
+        );
+    }
+
+    #[test]
+    fn from_byte_slices_is_deterministic() {
+        let parts: [&[u8]; 2] = [&[1, 2, 3], &[4, 5]];
+        assert_eq!(TestId::from(parts), TestId::from(parts));
+    }
+
+    #[test]
+    fn from_byte_slices_distinguishes_inputs() {
+        assert_ne!(TestId::from([b"foo".as_slice()]), TestId::from([b"bar".as_slice()]),);
+    }
 
     #[test]
     fn test_create_hash() {
