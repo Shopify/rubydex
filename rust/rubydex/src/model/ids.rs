@@ -27,7 +27,11 @@ assert_mem_size!(DefinitionId, 8);
 
 #[must_use]
 pub fn namespace_definition_id(uri_id: UriId, offset: &Offset, name_id: NameId) -> DefinitionId {
-    DefinitionId::from(&format!("{}{}{}", *uri_id, offset.start(), *name_id))
+    DefinitionId::from([
+        uri_id.get().to_le_bytes().as_slice(),
+        offset.start().to_le_bytes().as_slice(),
+        name_id.get().to_le_bytes().as_slice(),
+    ])
 }
 
 #[must_use]
@@ -37,14 +41,25 @@ pub fn method_definition_id(
     str_id: StringId,
     receiver: Option<&Receiver>,
 ) -> DefinitionId {
-    let mut formatted_id = format!("{}{}{}", *uri_id, offset.start(), *str_id);
-    if let Some(receiver) = receiver {
-        match receiver {
-            Receiver::SelfReceiver(def_id) => formatted_id.push_str(&def_id.to_string()),
-            Receiver::ConstantReceiver(name_id) => formatted_id.push_str(&name_id.to_string()),
-        }
+    let uri_bytes = uri_id.get().to_le_bytes();
+    let offset_bytes = offset.start().to_le_bytes();
+    let str_bytes = str_id.get().to_le_bytes();
+
+    match receiver {
+        Some(Receiver::SelfReceiver(def_id)) => DefinitionId::from([
+            uri_bytes.as_slice(),
+            offset_bytes.as_slice(),
+            str_bytes.as_slice(),
+            def_id.get().to_le_bytes().as_slice(),
+        ]),
+        Some(Receiver::ConstantReceiver(name_id)) => DefinitionId::from([
+            uri_bytes.as_slice(),
+            offset_bytes.as_slice(),
+            str_bytes.as_slice(),
+            name_id.get().to_le_bytes().as_slice(),
+        ]),
+        None => DefinitionId::from([uri_bytes.as_slice(), offset_bytes.as_slice(), str_bytes.as_slice()]),
     }
-    DefinitionId::from(&formatted_id)
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
