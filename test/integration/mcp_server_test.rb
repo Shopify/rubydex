@@ -92,7 +92,7 @@ class MCPServerIntegrationTest < Minitest::Test
         assert_operator(stats.fetch("declarations"), :>, 0)
 
         search_response = call_tool(stdin, stdout, request_id + 1, "search_declarations", { query: "Dog", match_mode: "exact" })
-        assert_equal(["Dog"], search_response.fetch("results").map { |result| result.fetch("name") })
+        assert_equal(["Dog", "Dog::<Dog>"], search_response.fetch("results").map { |result| result.fetch("name") })
 
         stdin.close
         Timeout.timeout(30) { wait_thr.value }

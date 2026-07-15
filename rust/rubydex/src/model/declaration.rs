@@ -30,6 +30,18 @@ pub enum Ancestors {
 assert_mem_size!(Ancestors, 32);
 
 impl Ancestors {
+    #[must_use]
+    pub fn contains(&self, declaration_id: DeclarationId) -> bool {
+        match self {
+            Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {
+                ancestors.iter().any(|ancestor| match ancestor {
+                    Ancestor::Complete(id) => *id == declaration_id,
+                    Ancestor::Partial(_) => false,
+                })
+            }
+        }
+    }
+
     pub fn iter(&self) -> std::slice::Iter<'_, Ancestor> {
         match self {
             Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {

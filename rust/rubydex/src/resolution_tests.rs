@@ -1185,6 +1185,292 @@ mod superclass_tests {
             Ancestors::Partial(_)
         ));
     }
+
+    #[test]
+    fn singleton_class_are_automatically_created_for_descendants() {
+        // We create singleton classes lazily, only when they are required by some usage, like defining a `def
+        // self.foo`. However, when we create one of these synthetic singletons, we must also create the singleton class
+        // for all descendants. Otherwise, the structure of the graph is inconsistent
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Bar
+              def self.foo; end
+            end
+
+            class Qux < Bar; end
+
+            class Foo < Qux
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>");
+        assert_declaration_exists!(context, "Qux::<Qux>");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        assert_declaration_does_not_exist!(context, "Bar::<Bar>::<<Bar>>");
+        assert_declaration_does_not_exist!(context, "Qux::<Qux>::<<Qux>>");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>::<<Foo>>");
+
+        assert_descendants!(context, "Bar::<Bar>", ["Qux::<Qux>", "Foo::<Foo>"]);
+        assert_descendants!(context, "Qux::<Qux>", ["Foo::<Foo>"]);
+
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Qux::<Qux>",
+                "Bar::<Bar>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn second_level_singleton_class_are_automatically_created_for_descendants() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class Bar
+              class << self
+                def self.foo; end
+              end
+            end
+
+            class Qux < Bar; end
+
+            class Foo < Qux
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>");
+        assert_declaration_exists!(context, "Qux::<Qux>");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        assert_declaration_exists!(context, "Bar::<Bar>::<<Bar>>");
+        assert_declaration_exists!(context, "Qux::<Qux>::<<Qux>>");
+        assert_declaration_exists!(context, "Foo::<Foo>::<<Foo>>");
+
+        assert_descendants!(context, "Bar::<Bar>", ["Qux::<Qux>", "Foo::<Foo>"]);
+        assert_descendants!(context, "Qux::<Qux>", ["Foo::<Foo>"]);
+
+        assert_descendants!(
+            context,
+            "Bar::<Bar>::<<Bar>>",
+            ["Qux::<Qux>::<<Qux>>", "Foo::<Foo>::<<Foo>>"]
+        );
+        assert_descendants!(context, "Qux::<Qux>::<<Qux>>", ["Foo::<Foo>::<<Foo>>"]);
+
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>::<<Foo>>",
+            [
+                "Foo::<Foo>::<<Foo>>",
+                "Qux::<Qux>::<<Qux>>",
+                "Bar::<Bar>::<<Bar>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn descendant_singleton_created_for_new_subclass_added_after_base_singleton_exists() {
+        // If a new class inherits from a parent that already has its singleton class created with linearized ancestors,
+        // we need to create its singleton class too
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///base.rb",
+            "
+            class Bar
+              def self.foo; end
+            end
+            class Qux < Bar; end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>");
+        assert_declaration_exists!(context, "Qux::<Qux>");
+
+        context.index_uri("file:///sub.rb", "class NewSub < Bar; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "NewSub::<NewSub>");
+        assert_descendants!(context, "Bar::<Bar>", ["NewSub::<NewSub>"]);
+    }
+
+    #[test]
+    fn descendant_singletons_created_when_singleton_appears_on_reopened_base() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///hierarchy.rb",
+            "
+            class Bar; end
+            class Qux < Bar; end
+            class Foo < Qux; end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Bar::<Bar>");
+        assert_declaration_does_not_exist!(context, "Qux::<Qux>");
+        assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+
+        context.index_uri(
+            "file:///singleton.rb",
+            "
+            class Bar
+              def self.foo; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>");
+        assert_declaration_exists!(context, "Qux::<Qux>");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        assert_descendants!(context, "Bar::<Bar>", ["Qux::<Qux>", "Foo::<Foo>"]);
+        assert_descendants!(context, "Qux::<Qux>", ["Foo::<Foo>"]);
+    }
+
+    #[test]
+    fn descendant_singletons_created_when_singleton_class_block_appears_on_base() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///hierarchy.rb",
+            "
+            class Bar; end
+            class Qux < Bar; end
+            class Foo < Qux; end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_does_not_exist!(context, "Bar::<Bar>");
+
+        context.index_uri(
+            "file:///singleton.rb",
+            "
+            class << Bar
+              def foo; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>");
+        assert_declaration_exists!(context, "Qux::<Qux>");
+        assert_declaration_exists!(context, "Foo::<Foo>");
+
+        assert_descendants!(context, "Bar::<Bar>", ["Qux::<Qux>", "Foo::<Foo>"]);
+        assert_descendants!(context, "Qux::<Qux>", ["Foo::<Foo>"]);
+    }
+
+    #[test]
+    fn class_with_approximated_object_parent_gets_automatic_singleton() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class A; def self.x; end; end
+            class B < Nonexistent; end
+            ",
+        );
+        context.resolve();
+
+        // We don't know B's parent, so we approximate it to `Object`. When `A` is being linearized, it triggers the
+        // creation of singleton classes for all descendants of `Object::<Object>`, which includes `B` as well
+        assert_declaration_exists!(context, "A::<A>");
+        assert_declaration_exists!(context, "B::<B>");
+    }
+
+    #[test]
+    fn second_level_descendant_singleton_created_for_incrementally_added_subclass() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///base.rb",
+            "
+            class Bar
+              class << self
+                def self.foo; end
+              end
+            end
+            class Qux < Bar; end
+            ",
+        );
+        context.resolve();
+
+        assert_declaration_exists!(context, "Bar::<Bar>");
+        assert_declaration_exists!(context, "Bar::<Bar>::<<Bar>>");
+        assert_declaration_exists!(context, "Qux::<Qux>");
+        assert_declaration_exists!(context, "Qux::<Qux>::<<Qux>>");
+
+        context.index_uri("file:///sub.rb", "class NewSub < Bar; end");
+        context.resolve();
+
+        assert_declaration_exists!(context, "NewSub::<NewSub>");
+        assert_declaration_exists!(context, "NewSub::<NewSub>::<<NewSub>>");
+
+        assert_ancestors_eq!(
+            context,
+            "NewSub::<NewSub>",
+            [
+                "NewSub::<NewSub>",
+                "Bar::<Bar>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+
+        assert_ancestors_eq!(
+            context,
+            "NewSub::<NewSub>::<<NewSub>>",
+            [
+                "NewSub::<NewSub>::<<NewSub>>",
+                "Bar::<Bar>::<<Bar>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
 }
 
 mod include_tests {
