@@ -1945,7 +1945,7 @@ mod object_ancestors_tests {
     use super::*;
 
     #[test]
-    fn core_class_parent_hierarchy() {
+    fn core_superclass_hierarchy() {
         let mut context = graph_test();
         context.index_uri(
             "file:///foo.rb",
