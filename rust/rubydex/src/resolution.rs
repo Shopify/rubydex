@@ -1067,27 +1067,25 @@ impl<'a> Resolver<'a> {
         declaration_id: DeclarationId,
         context: &mut LinearizationContext,
     ) -> Option<Vec<Ancestor>> {
-        if declaration_id == *BASIC_OBJECT_ID {
-            return None;
-        }
-
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
 
         match declaration {
             Declaration::Namespace(Namespace::Class(_)) => {
                 let definition_ids = declaration.definitions().to_vec();
 
-                Some(match self.linearize_parent_class(&definition_ids, context) {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        context.partial = true;
-                        ids
-                    }
-                })
+                Some(
+                    match self.linearize_parent_class(declaration_id, &definition_ids, context)? {
+                        Ancestors::Complete(ids) => ids,
+                        Ancestors::Cyclic(ids) => {
+                            context.cyclic = true;
+                            ids
+                        }
+                        Ancestors::Partial(ids) => {
+                            context.partial = true;
+                            ids
+                        }
+                    },
+                )
             }
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
@@ -2020,11 +2018,6 @@ impl<'a> Resolver<'a> {
     /// - Class: parent is the singleton class of the original parent class
     /// - Singleton class: recurse as many times as necessary to wrap the original attached object's parent class
     fn singleton_parent_id(&mut self, attached_id: DeclarationId) -> (DeclarationId, bool) {
-        // Base case: if we reached `BasicObject`, then the parent is `Class`
-        if attached_id == *BASIC_OBJECT_ID {
-            return (*CLASS_ID, false);
-        }
-
         let decl = self.graph.declarations().get(&attached_id).unwrap();
 
         match decl {
@@ -2045,7 +2038,11 @@ impl<'a> Resolver<'a> {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
 
-                let (picked_parent, unresolved_parent) = self.get_parent_class(&definition_ids);
+                let Some((picked_parent, unresolved_parent)) = self.get_parent_class(attached_id, &definition_ids)
+                else {
+                    // BasicObject has no ordinary parent, but its singleton class inherits from Class
+                    return (*CLASS_ID, false);
+                };
                 (
                     self.get_or_create_singleton_class(picked_parent, SingletonAncestors::Deferred)
                         .expect("parent class should always be a namespace"),
@@ -2060,7 +2057,17 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn get_parent_class(&self, definition_ids: &[DefinitionId]) -> (DeclarationId, Option<NameId>) {
+    /// Returns the selected parent class and any unresolved explicit parent. The top-level `BasicObject` declaration is
+    /// Ruby's root class and is the only class without a parent.
+    fn get_parent_class(
+        &self,
+        declaration_id: DeclarationId,
+        definition_ids: &[DefinitionId],
+    ) -> Option<(DeclarationId, Option<NameId>)> {
+        if declaration_id == *BASIC_OBJECT_ID {
+            return None;
+        }
+
         let mut explicit_parents = Vec::new();
         let mut unresolved_parent = None;
 
@@ -2088,18 +2095,19 @@ impl<'a> Resolver<'a> {
 
         // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
         // mismatch error. TODO: We should add a diagnostic here
-        (
+        Some((
             explicit_parents.first().copied().unwrap_or(*OBJECT_ID),
             unresolved_parent,
-        )
+        ))
     }
 
     fn linearize_parent_class(
         &mut self,
+        declaration_id: DeclarationId,
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
-    ) -> Ancestors {
-        let (picked_parent, unresolved_parent) = self.get_parent_class(definition_ids);
+    ) -> Option<Ancestors> {
+        let (picked_parent, unresolved_parent) = self.get_parent_class(declaration_id, definition_ids)?;
         let mut result = self.linearize_ancestors(picked_parent, context);
 
         if let Some(name_id) = unresolved_parent {
@@ -2112,10 +2120,10 @@ impl<'a> Resolver<'a> {
             };
             ancestors.insert(0, Ancestor::Partial(name_id));
 
-            result.to_partial()
-        } else {
-            result
+            result = result.to_partial();
         }
+
+        Some(result)
     }
 
     fn mixins_of(&self, definition_id: DefinitionId) -> Option<Vec<Mixin>> {
