@@ -1071,21 +1071,17 @@ impl<'a> Resolver<'a> {
 
         match declaration {
             Declaration::Namespace(Namespace::Class(_)) => {
-                let definition_ids = declaration.definitions().to_vec();
-
-                Some(
-                    match self.linearize_parent_class(declaration_id, &definition_ids, context)? {
-                        Ancestors::Complete(ids) => ids,
-                        Ancestors::Cyclic(ids) => {
-                            context.cyclic = true;
-                            ids
-                        }
-                        Ancestors::Partial(ids) => {
-                            context.partial = true;
-                            ids
-                        }
-                    },
-                )
+                Some(match self.linearize_superclass(declaration_id, context)? {
+                    Ancestors::Complete(ids) => ids,
+                    Ancestors::Cyclic(ids) => {
+                        context.cyclic = true;
+                        ids
+                    }
+                    Ancestors::Partial(ids) => {
+                        context.partial = true;
+                        ids
+                    }
+                })
             }
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
@@ -2035,18 +2031,15 @@ impl<'a> Resolver<'a> {
                 )
             }
             Declaration::Namespace(Namespace::Class(_)) => {
-                // For classes (the regular case), we need to return the singleton class of its parent
-                let definition_ids = decl.definitions().to_vec();
-
-                let Some((picked_parent, unresolved_parent)) = self.get_parent_class(attached_id, &definition_ids)
-                else {
-                    // BasicObject has no ordinary parent, but its singleton class inherits from Class
+                // For classes (the regular case), we need to return the singleton class of its superclass
+                let Some((superclass_id, unresolved_superclass)) = self.get_superclass(attached_id) else {
+                    // BasicObject has no superclass, but its singleton class inherits from Class
                     return (*CLASS_ID, false);
                 };
                 (
-                    self.get_or_create_singleton_class(picked_parent, SingletonAncestors::Deferred)
-                        .expect("parent class should always be a namespace"),
-                    unresolved_parent.is_some(),
+                    self.get_or_create_singleton_class(superclass_id, SingletonAncestors::Deferred)
+                        .expect("superclass should always be a namespace"),
+                    unresolved_superclass.is_some(),
                 )
             }
             _ => {
@@ -2057,21 +2050,18 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Returns the selected parent class and any unresolved explicit parent. The top-level `BasicObject` declaration is
-    /// Ruby's root class and is the only class without a parent.
-    fn get_parent_class(
-        &self,
-        declaration_id: DeclarationId,
-        definition_ids: &[DefinitionId],
-    ) -> Option<(DeclarationId, Option<NameId>)> {
+    /// Returns the selected superclass and any unresolved explicit superclass. The top-level `BasicObject` declaration
+    /// is Ruby's root class and is the only class without a superclass.
+    fn get_superclass(&self, declaration_id: DeclarationId) -> Option<(DeclarationId, Option<NameId>)> {
         if declaration_id == *BASIC_OBJECT_ID {
             return None;
         }
 
-        let mut explicit_parents = Vec::new();
-        let mut unresolved_parent = None;
+        let declaration = self.graph.declarations().get(&declaration_id).unwrap();
+        let mut explicit_superclasses = Vec::new();
+        let mut unresolved_superclass = None;
 
-        for definition_id in definition_ids {
+        for definition_id in declaration.definitions() {
             let definition = self.graph.definitions().get(definition_id).unwrap();
 
             if let Definition::Class(class) = definition
@@ -2082,38 +2072,37 @@ impl<'a> Resolver<'a> {
 
                 match name {
                     NameRef::Resolved(resolved) => {
-                        if let Some(parent_id) = self.resolve_to_namespace(*resolved.declaration_id()) {
-                            explicit_parents.push(parent_id);
+                        if let Some(superclass_id) = self.resolve_to_namespace(*resolved.declaration_id()) {
+                            explicit_superclasses.push(superclass_id);
                         }
                     }
                     NameRef::Unresolved(_) => {
-                        unresolved_parent = Some(*constant_reference.name_id());
+                        unresolved_superclass = Some(*constant_reference.name_id());
                     }
                 }
             }
         }
 
-        // If there's more than one parent class that isn't `Object` and they are different, then there's a superclass
+        // If there's more than one superclass that isn't `Object` and they are different, then there's a superclass
         // mismatch error. TODO: We should add a diagnostic here
         Some((
-            explicit_parents.first().copied().unwrap_or(*OBJECT_ID),
-            unresolved_parent,
+            explicit_superclasses.first().copied().unwrap_or(*OBJECT_ID),
+            unresolved_superclass,
         ))
     }
 
-    fn linearize_parent_class(
+    fn linearize_superclass(
         &mut self,
         declaration_id: DeclarationId,
-        definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Option<Ancestors> {
-        let (picked_parent, unresolved_parent) = self.get_parent_class(declaration_id, definition_ids)?;
-        let mut result = self.linearize_ancestors(picked_parent, context);
+        let (superclass_id, unresolved_superclass) = self.get_superclass(declaration_id)?;
+        let mut result = self.linearize_ancestors(superclass_id, context);
 
-        if let Some(name_id) = unresolved_parent {
+        if let Some(name_id) = unresolved_superclass {
             context.partial = true;
 
-            // Insert the unresolved parent as a Partial ancestor at the front of the chain, so it
+            // Insert the unresolved superclass as a Partial ancestor at the front of the chain, so it
             // appears before the default Object ancestors
             let ancestors = match &mut result {
                 Ancestors::Complete(ids) | Ancestors::Cyclic(ids) | Ancestors::Partial(ids) => ids,
