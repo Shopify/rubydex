@@ -1,0 +1,114 @@
+#!/bin/bash
+
+# Benchmark incremental resolution against a real workspace without changing its files.
+#
+# Usage:
+#   utils/bench-incremental-resolution --candidates [workspace]
+#   utils/bench-incremental-resolution --resolution-stats [workspace]
+#   utils/bench-incremental-resolution --target Foo [--target Bar] [workspace]
+#
+# If workspace is omitted, DEFAULT_BENCH_WORKSPACE is used.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+RUST_DIR="$PROJECT_ROOT/rust"
+
+TARGET=""
+BENCH_ARGS=()
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --candidates)
+            BENCH_ARGS+=(--list-candidates)
+            shift
+            ;;
+        --resolution-stats)
+            BENCH_ARGS+=(--resolution-stats)
+            shift
+            ;;
+        --target|--cycles|--warmup)
+            if [ "$#" -lt 2 ]; then
+                echo "Error: $1 requires a value" >&2
+                exit 1
+            fi
+            BENCH_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        -h|--help)
+            cat <<'USAGE'
+Usage:
+  utils/bench-incremental-resolution --candidates [workspace]
+  utils/bench-incremental-resolution --resolution-stats [workspace]
+  utils/bench-incremental-resolution --target CLASS [--target CLASS] [options] [workspace]
+
+Options:
+  --candidates       Print class candidates by transitive descendant count
+  --resolution-stats Print unresolved graph state after initial resolution
+  --target CLASS     Benchmark this top-level class (repeatable)
+  --cycles N         Measured A -> B -> A cycles (default: 30)
+  --warmup N         Unmeasured warmup cycles (default: 5)
+
+The workspace files are never modified. The benchmark reopens the target class in a
+virtual document and switches between two empty included modules.
+USAGE
+            exit 0
+            ;;
+        --*)
+            echo "Error: unknown option $1" >&2
+            exit 1
+            ;;
+        *)
+            if [ -n "$TARGET" ]; then
+                echo "Error: multiple workspace paths provided" >&2
+                exit 1
+            fi
+            TARGET="$1"
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$TARGET" ]; then
+    TARGET="${DEFAULT_BENCH_WORKSPACE:-}"
+fi
+
+if [ -z "$TARGET" ]; then
+    echo "Error: workspace is required and DEFAULT_BENCH_WORKSPACE is not set" >&2
+    exit 1
+fi
+
+if [ ! -d "$TARGET" ]; then
+    echo "Error: workspace directory does not exist: $TARGET" >&2
+    exit 1
+fi
+
+TARGET="$(cd "$TARGET" && pwd)"
+
+if ! /bin/bash -lc 'cd "$1" && bundle check 2>/dev/null' bash "$TARGET"; then
+    echo "Error: dependencies are not installed for the workspace at $TARGET" >&2
+    echo "Please run 'bundle install' there and try again." >&2
+    exit 1
+fi
+
+INDEX_PATHS=()
+while IFS= read -r line; do
+    [ -e "$line" ] && INDEX_PATHS+=("$line")
+done < <(/bin/bash -lc 'cd "$1" && bundle exec ruby -e "require \"rubydex\"; puts Rubydex::Graph.new.workspace_paths" 2>/dev/null' bash "$TARGET")
+
+if [ "${#INDEX_PATHS[@]}" -eq 0 ]; then
+    echo "Error: no workspace or dependency paths were discovered" >&2
+    exit 1
+fi
+
+echo "Benchmarking workspace with ${#INDEX_PATHS[@]} index paths"
+
+COMMAND=(cargo bench --bench incremental_resolution -- "$TARGET")
+for path in "${INDEX_PATHS[@]}"; do
+    COMMAND+=(--index-path "$path")
+done
+COMMAND+=("${BENCH_ARGS[@]}")
+
+cd "$RUST_DIR"
+"${COMMAND[@]}"
