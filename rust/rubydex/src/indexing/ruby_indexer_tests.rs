@@ -1750,20 +1750,20 @@ mod visibility_tests {
     fn index_private_constant_calls_diagnostics() {
         let context = index_source({
             "
-            private_constant :NOT_INDEXED
-            self.private_constant :NOT_INDEXED
-            foo.private_constant :NOT_INDEXED # not indexed, dynamic receiver
+            private_constant :BAR # not indexed, called at top level
+            self.private_constant :BAR # not indexed, self receiver at top level
+            foo.private_constant :BAR # not indexed, dynamic receiver
 
             module Foo
-              private_constant NOT_INDEXED, not_indexed # not indexed, not a symbol
+              private_constant SomeConst, some_method # not indexed, non-literal arguments
               private_constant # not indexed, no arguments
 
               def self.qux
-                private_constant :Bar # not indexed, dynamic
+                private_constant :BAR # not indexed, inside a method
               end
 
               def foo
-                private_constant :Bar # not indexed, dynamic
+                private_constant :BAR # not indexed, inside a method
               end
             end
             "
@@ -1772,35 +1772,35 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-constant-visibility: `private_constant` called at top level (1:1-1:30)",
-                "invalid-constant-visibility: `private_constant` called at top level (2:1-2:35)",
+                "invalid-constant-visibility: `private_constant` called at top level (1:1-1:22)",
+                "invalid-constant-visibility: `private_constant` called at top level (2:1-2:27)",
                 "invalid-constant-visibility: Dynamic receiver for `private_constant` (3:1-3:4)",
-                "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:20-6:31)",
-                "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:33-6:44)",
+                "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:20-6:29)",
+                "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:31-6:42)",
             ]
         );
 
-        assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+        assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo.qux, Foo#foo
     }
 
     #[test]
     fn index_public_constant_calls_diagnostics() {
         let context = index_source({
             "
-            public_constant :NOT_INDEXED
-            self.public_constant :NOT_INDEXED
-            foo.public_constant :NOT_INDEXED # not indexed, dynamic receiver
+            public_constant :BAR # not indexed, called at top level
+            self.public_constant :BAR # not indexed, self receiver at top level
+            foo.public_constant :BAR # not indexed, dynamic receiver
 
             module Foo
-              public_constant NOT_INDEXED, not_indexed # not indexed, not a symbol
+              public_constant SomeConst, some_method # not indexed, non-literal arguments
               public_constant # not indexed, no arguments
 
               def self.qux
-                public_constant :Bar # not indexed, dynamic
+                public_constant :BAR # not indexed, inside a method
               end
 
               def foo
-                public_constant :Bar # not indexed, dynamic
+                public_constant :BAR # not indexed, inside a method
               end
             end
             "
@@ -1809,15 +1809,15 @@ mod visibility_tests {
         assert_local_diagnostics_eq!(
             &context,
             vec![
-                "invalid-constant-visibility: `public_constant` called at top level (1:1-1:29)",
-                "invalid-constant-visibility: `public_constant` called at top level (2:1-2:34)",
+                "invalid-constant-visibility: `public_constant` called at top level (1:1-1:21)",
+                "invalid-constant-visibility: `public_constant` called at top level (2:1-2:26)",
                 "invalid-constant-visibility: Dynamic receiver for `public_constant` (3:1-3:4)",
-                "invalid-constant-visibility: `public_constant` called with a non-literal argument (6:19-6:30)",
-                "invalid-constant-visibility: `public_constant` called with a non-literal argument (6:32-6:43)",
+                "invalid-constant-visibility: `public_constant` called with a non-literal argument (6:19-6:28)",
+                "invalid-constant-visibility: `public_constant` called with a non-literal argument (6:30-6:41)",
             ]
         );
 
-        assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo::Qux, Foo#foo
+        assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo.qux, Foo#foo
     }
 
     #[test]
