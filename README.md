@@ -77,6 +77,35 @@ diagnostic.message
 diagnostic.location
 ```
 
+## Ractor Safety
+
+A resolved `Rubydex::Graph` can be shared across Ractors without copying:
+
+```ruby
+graph = Rubydex::Graph.new
+graph.index_workspace
+graph.resolve
+Ractor.make_shareable(graph)
+
+# Worker Ractors can now read the graph in parallel
+ractor = Ractor.new(graph) { |g| g["Foo"]&.name }
+ractor.value
+```
+
+Thread safety comes from an `RwLock` on the Rust side, **not** from Ruby's
+`freeze`. This is a deliberate, but potentially surprising, choice:
+
+- A frozen (or `make_shareable`'d) graph **can still be mutated** — methods like
+  `index_source`, `resolve`, `exclude_patterns`, and `encoding=` work on a frozen
+  graph. This supports interactive use cases (LSP/MCP) that need incremental
+  edits while worker Ractors read concurrently.
+- Because the same underlying allocation is shared, callers are responsible for
+  ordering concurrent writes and reads, as with any shared mutable state across
+  Ractors.
+- Graphs cannot be `dup`'d or `clone`'d; both raise `RuntimeError` to avoid
+  aliasing the Rust allocation (which would double-free on GC) or ballooning
+  memory with a deep copy.
+
 ## Querying with Cypher
 
 Rubydex exposes the indexed graph through a read-only subset of the

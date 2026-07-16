@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
 
-use crate::assert_mem_size;
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::errors::Errors;
@@ -21,6 +20,7 @@ use crate::model::name::{Name, NameRef, ParentScope, ResolvedName};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::model::visibility::Visibility;
+use crate::{assert_mem_size, assert_send_sync};
 use crate::{query, stats};
 
 /// An entity whose validity depends on a particular `NameId`.
@@ -94,6 +94,7 @@ pub struct Graph {
     config: Config,
 }
 assert_mem_size!(Graph, 352);
+assert_send_sync!(Graph);
 
 impl Graph {
     #[must_use]

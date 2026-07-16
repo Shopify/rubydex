@@ -63,14 +63,23 @@ const rb_data_type_t graph_type = {
     },
     .parent = NULL,
     .data = NULL,
-    .flags = RUBY_TYPED_FREE_IMMEDIATELY,
+    .flags = RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_FROZEN_SHAREABLE,
 };
 
-// Custom allocator for the Graph class. Calls into Rust to create a new `Arc<Mutex<Graph>>` that gets stored internally
-// as a void pointer
+// Custom allocator for the Graph class. Calls into Rust to create a new Box<RwLock<Graph>> that gets stored
+// internally as an opaque void pointer. The RwLock provides thread-safe concurrent access across Ractors.
 static VALUE rdxr_graph_alloc(VALUE klass) {
     void *graph = rdx_graph_new();
     return TypedData_Wrap_Struct(klass, &graph_type, graph);
+}
+
+// Graph is intentionally non-copyable. A dup/clone of the TypedData wrapper would alias the
+// same underlying Rust allocation (double-free on GC) or, if deep-copied, balloon memory use.
+// Block both paths: `dup` dispatches to `initialize_copy`, `clone` to `initialize_clone`.
+static VALUE rdxr_graph_initialize_copy(VALUE self, VALUE other) {
+    (void)self;
+    (void)other;
+    rb_raise(rb_eRuntimeError, "Rubydex::Graph cannot be duplicated or cloned");
 }
 
 /*
@@ -943,6 +952,8 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     id_self_receiver = rb_intern("self_receiver");
 
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
+    rb_define_method(cGraph, "initialize_copy", rdxr_graph_initialize_copy, 1);
+    rb_define_method(cGraph, "initialize_clone", rdxr_graph_initialize_copy, 1);
     rb_define_method(cGraph, "index_all", rdxr_graph_index_all, 1);
     rb_define_method(cGraph, "index_source", rdxr_graph_index_source, 3);
     rb_define_method(cGraph, "document", rdxr_graph_document, 1);
