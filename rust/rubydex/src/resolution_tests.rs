@@ -4484,6 +4484,7 @@ mod promotability_tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Qux", "<TODO>");
         assert_declaration_exists!(context, "Qux::<Qux>");
     }
 
@@ -4519,9 +4520,8 @@ mod promotability_tests {
 
     #[test]
     fn promoted_constant_has_correct_ancestors() {
-        // When a promotable constant is auto-promoted via singleton class access, we conservatively
-        // promote to a module (not a class) since we don't know what the call returns.
-        // Modules don't inherit from Object.
+        // When a promotable constant is auto-promoted via singleton class access, its kind remains unknown.
+        // Todos do not inherit from Object.
         let mut context = graph_test();
         context.index_uri("file:///foo.rb", {
             r"
@@ -4532,6 +4532,7 @@ mod promotability_tests {
 
         context.resolve();
         assert_no_diagnostics!(&context);
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
         assert_ancestors_eq!(context, "Foo", ["Foo"]);
     }
 
@@ -4582,8 +4583,8 @@ mod promotability_tests {
         });
 
         context.resolve();
-        assert_declaration_kind_eq!(context, "Foo", "Module");
-        assert_declaration_kind_eq!(context, "Foo::Bar", "Module");
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+        assert_declaration_kind_eq!(context, "Foo::Bar", "<TODO>");
         assert_declaration_kind_eq!(context, "Foo::Bar::Baz", "Constant");
     }
 
@@ -4601,7 +4602,7 @@ mod promotability_tests {
         });
 
         context.resolve();
-        assert_declaration_kind_eq!(context, "Foo", "Module");
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
         assert_declaration_exists!(context, "Foo::<Foo>#bar()");
     }
 
