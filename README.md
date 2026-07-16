@@ -3,6 +3,8 @@
 This project is a high-performance static analysis toolkit for the Ruby language. The goal is to be a solid
 foundation to power a variety of tools, such as type checkers, linters, language servers and more.
 
+[Ruby API Documentation](https://shopify.github.io/rubydex/)
+
 ## Usage
 
 Both Ruby and Rust APIs are made available through a gem and a crate, respectively. Here's a simple example
