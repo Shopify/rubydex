@@ -206,7 +206,15 @@ impl Graph {
                 if should_promote {
                     let mut new_declaration = constructor(fully_qualified_name);
                     let removed_declaration = occupied_entry.remove();
-                    new_declaration.as_namespace_mut().unwrap().extend(removed_declaration);
+                    let singleton_class_id = removed_declaration
+                        .as_namespace()
+                        .and_then(Namespace::singleton_class)
+                        .copied();
+                    let new_namespace = new_declaration.as_namespace_mut().unwrap();
+                    new_namespace.extend(removed_declaration);
+                    if let Some(singleton_class_id) = singleton_class_id {
+                        new_namespace.set_singleton_class_id(singleton_class_id);
+                    }
                     new_declaration.add_definition(definition_id);
                     self.declarations.insert(declaration_id, new_declaration);
                 } else {

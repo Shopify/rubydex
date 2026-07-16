@@ -228,10 +228,36 @@ impl<'a> Resolver<'a> {
             Outcome::Resolved(id) => {
                 if needs_linearization {
                     self.unit_queue.push_back(Unit::Ancestors(id));
+                    self.relinearize_singleton_hierarchy(id);
                 }
                 self.made_progress = true;
             }
         }
+    }
+
+    /// Clears and re-enqueues the ancestors of a declaration's singleton class and all of its higher-order singleton
+    /// classes. A later class or module definition can change their parent hierarchy.
+    fn relinearize_singleton_hierarchy(&mut self, declaration_id: DeclarationId) {
+        let Some(singleton_id) = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .and_then(|declaration| declaration.as_namespace())
+            .and_then(|namespace| namespace.singleton_class())
+            .copied()
+        else {
+            return;
+        };
+
+        self.graph
+            .declarations_mut()
+            .get_mut(&singleton_id)
+            .unwrap()
+            .as_namespace_mut()
+            .unwrap()
+            .clear_ancestors();
+        self.unit_queue.push_back(Unit::Ancestors(singleton_id));
+        self.relinearize_singleton_hierarchy(singleton_id);
     }
 
     /// Handles a unit of work for resolving a constant reference
