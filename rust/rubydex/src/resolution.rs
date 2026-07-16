@@ -1077,22 +1077,24 @@ impl<'a> Resolver<'a> {
             Declaration::Namespace(Namespace::Class(_)) => {
                 let definition_ids = declaration.definitions().to_vec();
 
-                Some(match self.linearize_parent_class(&definition_ids, context) {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        context.partial = true;
-                        ids
-                    }
-                })
+                Some(
+                    match self.linearize_parent_class(declaration_id, &definition_ids, context) {
+                        Ancestors::Complete(ids) => ids,
+                        Ancestors::Cyclic(ids) => {
+                            context.cyclic = true;
+                            ids
+                        }
+                        Ancestors::Partial(ids) => {
+                            context.partial = true;
+                            ids
+                        }
+                    },
+                )
             }
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
 
-                let (singleton_parent_id, partial_singleton) = self.singleton_parent_id(owner_id);
+                let (singleton_parent_id, partial_singleton) = self.singleton_parent_id(owner_id, 1);
                 if partial_singleton {
                     context.partial = true;
                 }
@@ -2019,7 +2021,7 @@ impl<'a> Resolver<'a> {
     /// - Module: parent is the `Module` class
     /// - Class: parent is the singleton class of the original parent class
     /// - Singleton class: recurse as many times as necessary to wrap the original attached object's parent class
-    fn singleton_parent_id(&mut self, attached_id: DeclarationId) -> (DeclarationId, bool) {
+    fn singleton_parent_id(&mut self, attached_id: DeclarationId, depth: u16) -> (DeclarationId, bool) {
         // Base case: if we reached `BasicObject`, then the parent is `Class`
         if attached_id == *BASIC_OBJECT_ID {
             return (*CLASS_ID, false);
@@ -2034,7 +2036,7 @@ impl<'a> Resolver<'a> {
                 // object
                 let owner_id = *decl.owner_id();
 
-                let (inner_parent, partial) = self.singleton_parent_id(owner_id);
+                let (inner_parent, partial) = self.singleton_parent_id(owner_id, depth + 1);
                 (
                     self.get_or_create_singleton_class(inner_parent, SingletonAncestors::Deferred)
                         .expect("singleton parent should always be a namespace"),
@@ -2044,6 +2046,51 @@ impl<'a> Resolver<'a> {
             Declaration::Namespace(Namespace::Class(_)) => {
                 // For classes (the regular case), we need to return the singleton class of its parent
                 let definition_ids = decl.definitions().to_vec();
+
+                let class_ancestors = self
+                    .graph
+                    .declarations()
+                    .get(&*CLASS_ID)
+                    .unwrap()
+                    .as_namespace()
+                    .unwrap()
+                    .ancestors();
+
+                // When creating a new singleton class, we need to ensure that all descendants also get a singleton
+                // class, otherwise we end up with broken chains. Because we also enqueue ancestor linearization for
+                // them, we land here again (making this process recursive). The stop condition is finding any ancestors
+                // of `Class`, which is the default parent for singletons.
+                //
+                // All singleton classes inherit from `Class` and its ancestors, so without this, the algorithm goes
+                // into infinite recursion:
+                //
+                // 1. Create a singleton class for a descendant
+                // 2. Enqueue ancestor linearization for the descendant's singleton class
+                // 3. Eventually, we reach this exact spot with `Class`. Since the singleton we just created is a
+                // descendant of `Class`, we create a new singleton one level deeper, taking us back to 1
+                if !class_ancestors.contains(attached_id) {
+                    let descendants = decl
+                        .as_namespace()
+                        .unwrap()
+                        .descendants()
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>();
+
+                    for descendant in descendants {
+                        if descendant == attached_id {
+                            continue;
+                        }
+
+                        let mut needs_singleton_id = descendant;
+
+                        for _ in 0..depth {
+                            needs_singleton_id = self
+                                .get_or_create_singleton_class(needs_singleton_id, SingletonAncestors::Enqueue)
+                                .expect("descendants are always namespaces");
+                        }
+                    }
+                }
 
                 let (picked_parent, unresolved_parent) = self.get_parent_class(&definition_ids);
                 (
@@ -2096,11 +2143,14 @@ impl<'a> Resolver<'a> {
 
     fn linearize_parent_class(
         &mut self,
+        declaration_id: DeclarationId,
         definition_ids: &[DefinitionId],
         context: &mut LinearizationContext,
     ) -> Ancestors {
         let (picked_parent, unresolved_parent) = self.get_parent_class(definition_ids);
         let mut result = self.linearize_ancestors(picked_parent, context);
+
+        self.ensure_matching_singleton_class_depth(declaration_id, picked_parent);
 
         if let Some(name_id) = unresolved_parent {
             context.partial = true;
@@ -2115,6 +2165,37 @@ impl<'a> Resolver<'a> {
             result.to_partial()
         } else {
             result
+        }
+    }
+
+    fn ensure_matching_singleton_class_depth(&mut self, declaration_id: DeclarationId, parent_id: DeclarationId) {
+        // Incremental resolution scenario: if a new class is created inheriting from a parent that already has a
+        // singleton class, we need to create its own singleton to avoid broken descendants
+        let mut parent_singleton = self
+            .graph
+            .declarations()
+            .get(&parent_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .singleton_class()
+            .copied();
+        let mut attached = declaration_id;
+
+        while let Some(parent_singleton_id) = parent_singleton {
+            attached = self
+                .get_or_create_singleton_class(attached, SingletonAncestors::Enqueue)
+                .expect("the declaration being linearized is always a namespace");
+
+            parent_singleton = self
+                .graph
+                .declarations()
+                .get(&parent_singleton_id)
+                .unwrap()
+                .as_namespace()
+                .unwrap()
+                .singleton_class()
+                .copied();
         }
     }
 

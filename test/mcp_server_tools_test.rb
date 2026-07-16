@@ -17,7 +17,7 @@ class MCPServerToolsTest < Minitest::Test
 
       paginated = call_tool(graph, Rubydex::MCPServer::SearchDeclarationsTool, query: "Dog", match_mode: "exact", limit: 1)
 
-      assert_equal(3, paginated.fetch("total"))
+      assert_equal(4, paginated.fetch("total"))
       assert_equal(1, paginated.fetch("results").length)
 
       invalid = call_tool(graph, Rubydex::MCPServer::SearchDeclarationsTool, query: "Dog", match_mode: "contains")
