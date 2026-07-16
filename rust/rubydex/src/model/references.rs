@@ -1,6 +1,9 @@
 use crate::{
     assert_mem_size,
-    model::ids::{ConstantReferenceId, MethodReferenceId, NameId, StringId, UriId},
+    model::{
+        id::id_from_parts,
+        ids::{ConstantReferenceId, MethodReferenceId, NameId, StringId, UriId},
+    },
     offset::Offset,
 };
 
@@ -43,12 +46,13 @@ impl ConstantReference {
 
     #[must_use]
     pub fn id(&self) -> ConstantReferenceId {
-        ConstantReferenceId::from([
-            self.name_id.get().to_le_bytes().as_slice(),
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.offset.end().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(
+            ConstantReferenceId;
+            self.name_id.get(),
+            self.uri_id.get(),
+            self.offset.start(),
+            self.offset.end(),
+        )
     }
 }
 
@@ -99,11 +103,12 @@ impl MethodRef {
 
     #[must_use]
     pub fn id(&self) -> MethodReferenceId {
-        MethodReferenceId::from([
-            self.str.get().to_le_bytes().as_slice(),
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.offset.end().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(
+            MethodReferenceId;
+            self.str.get(),
+            self.uri_id.get(),
+            self.offset.start(),
+            self.offset.end(),
+        )
     }
 }

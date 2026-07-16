@@ -1,6 +1,9 @@
 use crate::{
     assert_mem_size,
-    model::{definitions::Receiver, id::Id},
+    model::{
+        definitions::Receiver,
+        id::{Id, id_from_parts},
+    },
     offset::Offset,
 };
 
@@ -27,11 +30,7 @@ assert_mem_size!(DefinitionId, 8);
 
 #[must_use]
 pub fn namespace_definition_id(uri_id: UriId, offset: &Offset, name_id: NameId) -> DefinitionId {
-    DefinitionId::from([
-        uri_id.get().to_le_bytes().as_slice(),
-        offset.start().to_le_bytes().as_slice(),
-        name_id.get().to_le_bytes().as_slice(),
-    ])
+    id_from_parts!(DefinitionId; uri_id.get(), offset.start(), name_id.get())
 }
 
 #[must_use]
@@ -41,24 +40,22 @@ pub fn method_definition_id(
     str_id: StringId,
     receiver: Option<&Receiver>,
 ) -> DefinitionId {
-    let uri_bytes = uri_id.get().to_le_bytes();
-    let offset_bytes = offset.start().to_le_bytes();
-    let str_bytes = str_id.get().to_le_bytes();
-
     match receiver {
-        Some(Receiver::SelfReceiver(def_id)) => DefinitionId::from([
-            uri_bytes.as_slice(),
-            offset_bytes.as_slice(),
-            str_bytes.as_slice(),
-            def_id.get().to_le_bytes().as_slice(),
-        ]),
-        Some(Receiver::ConstantReceiver(name_id)) => DefinitionId::from([
-            uri_bytes.as_slice(),
-            offset_bytes.as_slice(),
-            str_bytes.as_slice(),
-            name_id.get().to_le_bytes().as_slice(),
-        ]),
-        None => DefinitionId::from([uri_bytes.as_slice(), offset_bytes.as_slice(), str_bytes.as_slice()]),
+        Some(Receiver::SelfReceiver(def_id)) => id_from_parts!(
+            DefinitionId;
+            uri_id.get(),
+            offset.start(),
+            str_id.get(),
+            def_id.get(),
+        ),
+        Some(Receiver::ConstantReceiver(name_id)) => id_from_parts!(
+            DefinitionId;
+            uri_id.get(),
+            offset.start(),
+            str_id.get(),
+            name_id.get(),
+        ),
+        None => id_from_parts!(DefinitionId; uri_id.get(), offset.start(), str_id.get()),
     }
 }
 

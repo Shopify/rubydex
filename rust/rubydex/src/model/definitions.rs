@@ -29,6 +29,7 @@ use crate::{
     assert_mem_size,
     model::{
         comment::Comment,
+        id::id_from_parts,
         ids::{self, ConstantReferenceId, DefinitionId, NameId, StringId, UriId},
         visibility::Visibility,
     },
@@ -673,12 +674,13 @@ impl ConstantAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.alias_constant.uri_id().get().to_le_bytes().as_slice(),
-            self.alias_constant.offset().start().to_le_bytes().as_slice(),
-            self.alias_constant.name_id().get().to_le_bytes().as_slice(),
-            self.target_name_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(
+            DefinitionId;
+            self.alias_constant.uri_id().get(),
+            self.alias_constant.offset().start(),
+            self.alias_constant.name_id().get(),
+            self.target_name_id.get(),
+        )
     }
 
     #[must_use]
@@ -756,11 +758,7 @@ impl ConstantVisibilityDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.target.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.target.get())
     }
 
     #[must_use]
@@ -840,12 +838,7 @@ impl MethodVisibilityDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.str_id.get().to_le_bytes().as_slice(),
-            self.flags.bits().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get(), self.flags.bits())
     }
 
     #[must_use]
@@ -1131,11 +1124,7 @@ impl AttrAccessorDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.str_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1216,11 +1205,7 @@ impl AttrReaderDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.str_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1301,11 +1286,7 @@ impl AttrWriterDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.str_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1383,11 +1364,7 @@ impl GlobalVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.str_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1460,11 +1437,7 @@ impl InstanceVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.str_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1537,11 +1510,7 @@ impl ClassVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.str_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1615,12 +1584,13 @@ impl MethodAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.new_name_str_id.get().to_le_bytes().as_slice(),
-            self.old_name_str_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(
+            DefinitionId;
+            self.uri_id.get(),
+            self.offset.start(),
+            self.new_name_str_id.get(),
+            self.old_name_str_id.get(),
+        )
     }
 
     #[must_use]
@@ -1700,12 +1670,13 @@ impl GlobalVariableAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from([
-            self.uri_id.get().to_le_bytes().as_slice(),
-            self.offset.start().to_le_bytes().as_slice(),
-            self.new_name_str_id.get().to_le_bytes().as_slice(),
-            self.old_name_str_id.get().to_le_bytes().as_slice(),
-        ])
+        id_from_parts!(
+            DefinitionId;
+            self.uri_id.get(),
+            self.offset.start(),
+            self.new_name_str_id.get(),
+            self.old_name_str_id.get(),
+        )
     }
 
     #[must_use]
