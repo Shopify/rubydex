@@ -73,7 +73,7 @@ struct Candidate {
 
 #[derive(Clone, Copy)]
 struct Sample {
-    build: Duration,
+    index: Duration,
     merge: Duration,
     resolve: Duration,
     total: Duration,
@@ -551,10 +551,10 @@ fn benchmark_target(graph: &mut Graph, target: &str, index: usize, warmup: usize
 fn apply_source(graph: &mut Graph, uri: &str, source: &str) -> Sample {
     let total_started = Instant::now();
 
-    let build_started = Instant::now();
+    let index_started = Instant::now();
     let local_graph =
         indexing::build_local_graph(uri.to_string(), source, &LanguageId::Ruby, IndexerBackend::RubyIndexer);
-    let build = build_started.elapsed();
+    let index = index_started.elapsed();
 
     let merge_started = Instant::now();
     graph.consume_document_changes(local_graph);
@@ -565,7 +565,7 @@ fn apply_source(graph: &mut Graph, uri: &str, source: &str) -> Sample {
     let resolve = resolve_started.elapsed();
 
     Sample {
-        build,
+        index,
         merge,
         resolve,
         total: total_started.elapsed(),
@@ -611,7 +611,7 @@ fn assert_mixin(graph: &Graph, target: &str, target_id: DeclarationId, expected:
 
 fn print_samples(direction: &str, samples: &[Sample]) {
     for (phase, durations) in [
-        ("build", samples.iter().map(|sample| sample.build).collect()),
+        ("index", samples.iter().map(|sample| sample.index).collect()),
         ("merge", samples.iter().map(|sample| sample.merge).collect()),
         ("resolve", samples.iter().map(|sample| sample.resolve).collect()),
         ("total", samples.iter().map(|sample| sample.total).collect()),
