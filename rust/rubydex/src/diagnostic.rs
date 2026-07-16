@@ -103,7 +103,7 @@ rules! {
     DynamicSingletonDefinition;
     DynamicAncestor;
     TopLevelMixinSelf;
-    InvalidPrivateConstant;
+    InvalidConstantVisibility;
     InvalidMethodVisibility;
 
     // Resolution

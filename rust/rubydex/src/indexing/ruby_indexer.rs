@@ -1180,10 +1180,11 @@ impl<'a> RubyIndexer<'a> {
 
     fn handle_constant_visibility(&mut self, node: &ruby_prism::CallNode, visibility: Visibility) {
         let receiver = node.receiver();
+        let call_name = String::from_utf8_lossy(node.name().as_slice());
 
-        let receiver_name_id = match receiver {
+        let receiver_name_id = match &receiver {
             Some(ruby_prism::Node::ConstantPathNode { .. } | ruby_prism::Node::ConstantReadNode { .. }) => {
-                self.index_constant_reference(&receiver.unwrap(), true)
+                self.index_constant_reference(receiver.as_ref().unwrap(), true)
             }
             Some(ruby_prism::Node::SelfNode { .. }) | None => match self.nesting_stack.last() {
                 Some(Nesting::Method(_)) => {
@@ -1192,20 +1193,20 @@ impl<'a> RubyIndexer<'a> {
                 }
                 None => {
                     self.local_graph.add_diagnostic(
-                        Rule::InvalidPrivateConstant,
+                        Rule::InvalidConstantVisibility,
                         Offset::from_prism_location(&node.location()),
-                        "Private constant called at top level".to_string(),
+                        format!("`{call_name}` called at top level"),
                     );
                     self.visit_call_node_parts(node);
                     return;
                 }
                 _ => None,
             },
-            _ => {
+            Some(other) => {
                 self.local_graph.add_diagnostic(
-                    Rule::InvalidPrivateConstant,
-                    Offset::from_prism_location(&node.location()),
-                    "Dynamic receiver for private constant".to_string(),
+                    Rule::InvalidConstantVisibility,
+                    Offset::from_prism_location(&other.location()),
+                    format!("Dynamic receiver for `{call_name}`"),
                 );
                 self.visit_call_node_parts(node);
                 return;
@@ -1219,9 +1220,9 @@ impl<'a> RubyIndexer<'a> {
         for argument in &arguments.arguments() {
             let Some((name, location)) = Self::extract_literal_name(&argument) else {
                 self.local_graph.add_diagnostic(
-                    Rule::InvalidPrivateConstant,
+                    Rule::InvalidConstantVisibility,
                     Offset::from_prism_location(&argument.location()),
-                    "Private constant called with non-symbol argument".to_string(),
+                    format!("`{call_name}` called with a non-literal argument"),
                 );
                 self.visit(&argument);
                 continue;
