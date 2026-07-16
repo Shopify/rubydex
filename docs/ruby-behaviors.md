@@ -1267,6 +1267,25 @@ Ruby builds ancestors through the following steps recursively:
 
 And then it continues up the inheritance chain.
 
+A class without an explicit superclass inherits from `Object`. Exceptions are:
+
+- `Object` itself inherits from `BasicObject`
+- `BasicObject` does NOT have any superclass.
+
+```ruby
+class Foo; end
+
+Foo.superclass          # => Object
+Object.superclass       # => BasicObject
+BasicObject.superclass  # => nil
+
+Foo.ancestors          # => [Foo, Object, Kernel, BasicObject]
+Object.ancestors       # => [Object, Kernel, BasicObject]
+BasicObject.ancestors  # => [BasicObject]
+```
+
+Singleton classes use a separate root rule: `BasicObject.singleton_class.superclass` is `Class`.
+
 ```rb
 module PrependedInPrepended
 end
