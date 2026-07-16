@@ -499,7 +499,7 @@ fn benchmark_target(graph: &mut Graph, target: &str, index: usize, warmup: usize
     debug_assert_eq!(source_a.len(), source_b.len());
 
     apply_source(graph, &uri, &source_a);
-    assert_mixin(graph, target, target_id, MIXIN_A, MIXIN_B)?;
+    assert_mixin(graph, target, target_id, &original_descendants, MIXIN_A, MIXIN_B)?;
 
     for _ in 0..warmup {
         apply_source(graph, &uri, &source_b);
@@ -513,7 +513,12 @@ fn benchmark_target(graph: &mut Graph, target: &str, index: usize, warmup: usize
         b_to_a.push(apply_source(graph, &uri, &source_a));
     }
 
-    assert_mixin(graph, target, target_id, MIXIN_A, MIXIN_B)?;
+    assert_mixin(graph, target, target_id, &original_descendants, MIXIN_A, MIXIN_B)?;
+    // Validate both directions outside the measured samples so the checks do not affect timings.
+    apply_source(graph, &uri, &source_b);
+    assert_mixin(graph, target, target_id, &original_descendants, MIXIN_B, MIXIN_A)?;
+    apply_source(graph, &uri, &source_a);
+    assert_mixin(graph, target, target_id, &original_descendants, MIXIN_A, MIXIN_B)?;
 
     println!();
     println!("Target: {target}");
@@ -572,38 +577,59 @@ fn apply_source(graph: &mut Graph, uri: &str, source: &str) -> Sample {
     }
 }
 
-fn assert_mixin(graph: &Graph, target: &str, target_id: DeclarationId, expected: &str, absent: &str) -> Result<()> {
+fn assert_mixin(
+    graph: &Graph,
+    target: &str,
+    target_id: DeclarationId,
+    expected_descendants: &HashSet<DeclarationId>,
+    expected: &str,
+    absent: &str,
+) -> Result<()> {
     let expected_id = DeclarationId::from(expected);
     let absent_id = DeclarationId::from(absent);
-    let namespace = graph
+    let target_namespace = graph
         .declarations()
         .get(&target_id)
         .and_then(|declaration| declaration.as_namespace())
         .ok_or_else(|| input_error("target class disappeared while applying synthetic mixin"))?;
-    let ancestor_ids: HashSet<DeclarationId> = namespace
-        .ancestors()
-        .iter()
-        .filter_map(|ancestor| match ancestor {
-            Ancestor::Complete(id) => Some(*id),
-            Ancestor::Partial(_) => None,
-        })
-        .collect();
 
-    if !ancestor_ids.contains(&expected_id) || ancestor_ids.contains(&absent_id) {
-        let mut ancestor_names: Vec<&str> = ancestor_ids
+    let descendants_rebuilt = target_namespace.descendants().len() == expected_descendants.len()
+        && target_namespace
+            .descendants()
             .iter()
-            .filter_map(|id| {
-                graph
-                    .declarations()
-                    .get(id)
-                    .map(rubydex::model::declaration::Declaration::name)
-            })
-            .collect();
-        ancestor_names.sort_unstable();
+            .all(|id| expected_descendants.contains(id));
+    if !descendants_rebuilt {
         return Err(input_error(format!(
-            "target {target} ancestor chain did not switch from {absent} to {expected}; ancestors: {}",
-            ancestor_names.join(", "),
+            "target {target} descendants were not rebuilt after switching from {absent} to {expected}"
         )));
+    }
+
+    for affected_id in std::iter::once(target_id).chain(expected_descendants.iter().copied()) {
+        let declaration = graph
+            .declarations()
+            .get(&affected_id)
+            .ok_or_else(|| input_error(format!("affected declaration disappeared: {affected_id:?}")))?;
+        let namespace = declaration.as_namespace().ok_or_else(|| {
+            input_error(format!(
+                "affected declaration is not a namespace: {}",
+                declaration.name()
+            ))
+        })?;
+        let has_expected = namespace
+            .ancestors()
+            .iter()
+            .any(|ancestor| matches!(ancestor, Ancestor::Complete(id) if *id == expected_id));
+        let has_absent = namespace
+            .ancestors()
+            .iter()
+            .any(|ancestor| matches!(ancestor, Ancestor::Complete(id) if *id == absent_id));
+
+        if !has_expected || has_absent {
+            return Err(input_error(format!(
+                "affected namespace {} did not switch ancestors from {absent} to {expected}",
+                declaration.name(),
+            )));
+        }
     }
 
     Ok(())
