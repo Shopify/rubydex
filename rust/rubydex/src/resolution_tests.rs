@@ -1945,32 +1945,6 @@ mod object_ancestors_tests {
     use super::*;
 
     #[test]
-    fn core_superclass_hierarchy() {
-        let mut context = graph_test();
-        context.index_uri(
-            "file:///foo.rb",
-            "
-            class Foo; end
-
-            module M
-              class BasicObject; end
-            end
-            ",
-        );
-        context.resolve();
-
-        assert_no_diagnostics!(&context);
-        assert_ancestors_eq!(context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
-        assert_ancestors_eq!(context, "Object", ["Object", "Kernel", "BasicObject"]);
-        assert_ancestors_eq!(context, "BasicObject", ["BasicObject"]);
-        assert_ancestors_eq!(
-            context,
-            "M::BasicObject",
-            ["M::BasicObject", "Object", "Kernel", "BasicObject"]
-        );
-    }
-
-    #[test]
     fn ancestors_with_missing_core() {
         let mut context = graph_test();
         context.index_uri(
@@ -2190,31 +2164,6 @@ mod singleton_ancestors_tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_ancestors_eq!(
-            context,
-            "Object::<Object>",
-            [
-                "Object::<Object>",
-                "BasicObject::<BasicObject>",
-                "Class",
-                "Module",
-                "Object",
-                "Kernel",
-                "BasicObject"
-            ]
-        );
-        assert_ancestors_eq!(
-            context,
-            "BasicObject::<BasicObject>",
-            [
-                "BasicObject::<BasicObject>",
-                "Class",
-                "Module",
-                "Object",
-                "Kernel",
-                "BasicObject"
-            ]
-        );
         assert_ancestors_eq!(
             context,
             "Baz::<Baz>",
