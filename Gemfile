@@ -5,7 +5,7 @@ source "https://rubygems.org"
 # Specify your gem's dependencies in rubydex.gemspec
 gemspec
 
-gem "rake", "~> 13.3"
+gem "rake", "~> 13.4"
 gem "rake-compiler"
 gem "minitest"
 gem "rdoc"
