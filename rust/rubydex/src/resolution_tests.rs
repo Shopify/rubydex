@@ -4625,6 +4625,33 @@ mod promotability_tests {
     }
 
     #[test]
+    fn rbs_constant_is_promotable_for_singleton_call() {
+        let mut context = graph_test();
+        context.index_rbs_uri("file:///env.rbs", "ENV: untyped");
+        context.index_uri("file:///env.rb", {
+            r#"
+            ENV.fetch("FEATURE")
+            "#
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_declaration_exists!(context, "ENV::<ENV>");
+
+        let fetch = context
+            .graph()
+            .method_references()
+            .values()
+            .find(|method| *method.str() == "fetch".into())
+            .expect("ENV.fetch should be indexed");
+        let receiver_name_id = fetch.receiver().expect("ENV.fetch should have a receiver");
+        let NameRef::Resolved(receiver) = context.graph().names().get(&receiver_name_id).unwrap() else {
+            panic!("ENV.fetch receiver should resolve");
+        };
+        assert_eq!(*receiver.declaration_id(), DeclarationId::from("ENV::<ENV>"));
+    }
+
+    #[test]
     fn ivar_defined_inside_of_undefined_alias_namespace() {
         let mut context = graph_test();
         context.index_uri("file:///alias.rb", {
