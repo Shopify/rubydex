@@ -28,7 +28,7 @@ while [ "$#" -gt 0 ]; do
             BENCH_ARGS+=(--resolution-stats)
             shift
             ;;
-        --target|--cycles|--warmup)
+        --target|--cycles)
             if [ "$#" -lt 2 ]; then
                 echo "Error: $1 requires a value" >&2
                 exit 1
@@ -48,7 +48,6 @@ Options:
   --resolution-stats Print unresolved graph state after initial resolution
   --target CLASS     Benchmark this top-level class (repeatable)
   --cycles N         Measured A -> B -> A cycles (default: 30)
-  --warmup N         Unmeasured warmup cycles (default: 5)
 
 The workspace files are never modified. The benchmark reopens the target class in a
 virtual document and switches between two empty included modules.

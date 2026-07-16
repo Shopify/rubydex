@@ -52,10 +52,6 @@ struct Args {
     #[arg(long)]
     resolution_stats: bool,
 
-    /// Number of unmeasured A -> B -> A warmup cycles.
-    #[arg(long, default_value_t = 5)]
-    warmup: usize,
-
     /// Number of measured A -> B -> A cycles.
     #[arg(long, default_value_t = 30)]
     cycles: usize,
@@ -187,13 +183,13 @@ fn run() -> Result<()> {
     let baseline_declaration_count = graph.declarations().len();
     let baseline_integrity = integrity_messages(&graph);
 
-    benchmark_noop(&mut graph, args.warmup, args.cycles);
+    benchmark_noop(&mut graph, args.cycles);
 
     let mixin_source = format!("module {MIXIN_A}\nend\nmodule {MIXIN_B}\nend\n");
     apply_source(&mut graph, MIXIN_URI, &mixin_source);
 
     for (index, target) in args.targets.iter().enumerate() {
-        benchmark_target(&mut graph, target, index, args.warmup, args.cycles)?;
+        benchmark_target(&mut graph, target, index, args.cycles)?;
     }
 
     if graph.delete_document(MIXIN_URI).is_none() {
@@ -457,11 +453,7 @@ fn subtree_reference_count(graph: &Graph, candidate: &Candidate) -> usize {
         .sum()
 }
 
-fn benchmark_noop(graph: &mut Graph, warmup: usize, cycles: usize) {
-    for _ in 0..warmup {
-        Resolver::new(graph).resolve();
-    }
-
+fn benchmark_noop(graph: &mut Graph, cycles: usize) {
     let mut durations = Vec::with_capacity(cycles);
     for _ in 0..cycles {
         let started = Instant::now();
@@ -471,11 +463,11 @@ fn benchmark_noop(graph: &mut Graph, warmup: usize, cycles: usize) {
 
     println!();
     println!("No-op resolve baseline");
-    println!("Warmup cycles: {warmup}, measured cycles: {cycles}");
+    println!("Measured cycles: {cycles}");
     print_duration_summary("noop", "resolve", durations);
 }
 
-fn benchmark_target(graph: &mut Graph, target: &str, index: usize, warmup: usize, cycles: usize) -> Result<()> {
+fn benchmark_target(graph: &mut Graph, target: &str, index: usize, cycles: usize) -> Result<()> {
     let target_id = DeclarationId::from(target);
     let (original_ancestors, original_descendants, descendant_count) = {
         let declaration = graph
@@ -501,11 +493,6 @@ fn benchmark_target(graph: &mut Graph, target: &str, index: usize, warmup: usize
     apply_source(graph, &uri, &source_a);
     assert_mixin(graph, target, target_id, &original_descendants, MIXIN_A, MIXIN_B)?;
 
-    for _ in 0..warmup {
-        apply_source(graph, &uri, &source_b);
-        apply_source(graph, &uri, &source_a);
-    }
-
     let mut a_to_b = Vec::with_capacity(cycles);
     let mut b_to_a = Vec::with_capacity(cycles);
     for _ in 0..cycles {
@@ -523,7 +510,7 @@ fn benchmark_target(graph: &mut Graph, target: &str, index: usize, warmup: usize
     println!();
     println!("Target: {target}");
     println!("Transitive descendants: {descendant_count}");
-    println!("Warmup cycles: {warmup}, measured cycles: {cycles}");
+    println!("Measured cycles: {cycles}");
     print_samples("A_to_B", &a_to_b);
     print_samples("B_to_A", &b_to_a);
 
