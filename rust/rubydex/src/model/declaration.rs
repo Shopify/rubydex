@@ -59,23 +59,6 @@ impl<'a> IntoIterator for &'a Ancestors {
     }
 }
 
-macro_rules! all_declarations {
-    ($value:expr, $var:ident => $expr:expr) => {
-        match $value {
-            Declaration::Namespace(Namespace::Class($var)) => $expr,
-            Declaration::Namespace(Namespace::Module($var)) => $expr,
-            Declaration::Namespace(Namespace::SingletonClass($var)) => $expr,
-            Declaration::Namespace(Namespace::Todo($var)) => $expr,
-            Declaration::Constant($var) => $expr,
-            Declaration::ConstantAlias($var) => $expr,
-            Declaration::Method($var) => $expr,
-            Declaration::GlobalVariable($var) => $expr,
-            Declaration::InstanceVariable($var) => $expr,
-            Declaration::ClassVariable($var) => $expr,
-        }
-    };
-}
-
 macro_rules! all_namespaces {
     ($value:expr, $var:ident => $expr:expr) => {
         match $value {
@@ -92,56 +75,29 @@ macro_rules! namespace_declaration {
     ($variant:ident, $name:ident) => {
         #[derive(Debug)]
         pub struct $name {
-            /// The fully qualified name of this declaration
-            name: Box<str>,
-            /// The list of definition IDs that compose this declaration
-            definition_ids: Vec<DefinitionId>,
-            /// The set of references that are made to this declaration
-            references: IdentityHashSet<ConstantReferenceId>,
-            /// The ID of the owner of this declaration. For singleton classes, this is the ID of the attached object
-            owner_id: DeclarationId,
-            /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
-            /// the namespace. Note that this is a hashmap of unqualified name IDs to declaration IDs. That assists the
-            /// traversal of the graph when trying to resolve constant references or trying to discover which methods exist in a
-            /// class
-            members: IdentityHashMap<StringId, DeclarationId>,
-            /// The linearized ancestor chain for this declaration. These are the other declarations that this
-            /// declaration inherits from
-            ancestors: Ancestors,
-            /// The set of declarations that inherit from this declaration
-            descendants: IdentityHashSet<DeclarationId>,
-            /// The singleton class associated with this declaration
-            singleton_class_id: Option<DeclarationId>,
+            core: DeclarationCore<ConstantReferenceId>,
+            namespace_store: NamespaceStore,
         }
 
         impl $name {
             #[must_use]
             pub fn new(name: String, owner_id: DeclarationId) -> Self {
                 Self {
-                    name: name.into_boxed_str(),
-                    definition_ids: Vec::new(),
-                    members: IdentityHashMap::default(),
-                    references: IdentityHashSet::default(),
-                    owner_id,
-                    ancestors: Ancestors::Partial(Vec::new()),
-                    descendants: IdentityHashSet::default(),
-                    singleton_class_id: None,
+                    core: DeclarationCore::new(name, owner_id),
+                    namespace_store: NamespaceStore::new(),
                 }
             }
 
             pub fn extend(&mut self, other: Declaration) {
-                self.definition_ids.extend(other.definitions());
+                self.core.definition_ids.extend(other.definitions());
 
                 match other {
                     Declaration::Namespace(namespace) => {
-                        self.members.extend(namespace.members());
-                        self.references.extend(namespace.references());
+                        self.namespace_store.members.extend(namespace.members());
+                        self.core.references.extend(namespace.references());
                     }
-                    Declaration::Constant(constant) => {
-                        self.references.extend(constant.references());
-                    }
-                    Declaration::ConstantAlias(constant_alias) => {
-                        self.references.extend(constant_alias.references());
+                    Declaration::Constant(it) | Declaration::ConstantAlias(it) => {
+                        self.core.references.extend(it.references());
                     }
                     Declaration::Method(_)
                     | Declaration::GlobalVariable(_)
@@ -150,78 +106,6 @@ macro_rules! namespace_declaration {
                         panic!("Cannot extend a namespace declaration with a non-namespace declaration");
                     }
                 }
-            }
-
-            pub fn add_reference(&mut self, reference_id: ConstantReferenceId) {
-                self.references.insert(reference_id);
-            }
-
-            pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
-                self.singleton_class_id = Some(declaration_id);
-            }
-
-            pub fn clear_singleton_class_id(&mut self) {
-                self.singleton_class_id = None;
-            }
-
-            pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
-                self.singleton_class_id.as_ref()
-            }
-
-            #[must_use]
-            pub fn members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
-                &self.members
-            }
-
-            pub fn add_member(&mut self, string_id: StringId, declaration_id: DeclarationId) {
-                self.members.insert(string_id, declaration_id);
-            }
-
-            pub fn remove_member(&mut self, string_id: &StringId) -> Option<DeclarationId> {
-                self.members.remove(string_id)
-            }
-
-            #[must_use]
-            pub fn member(&self, string_id: &StringId) -> Option<&DeclarationId> {
-                self.members.get(string_id)
-            }
-
-            pub fn set_ancestors(&mut self, ancestors: Ancestors) {
-                self.ancestors = ancestors;
-            }
-
-            pub fn ancestors(&self) -> &Ancestors {
-                &self.ancestors
-            }
-
-            pub fn ancestors_mut(&mut self) -> &mut Ancestors {
-                &mut self.ancestors
-            }
-
-            #[must_use]
-            pub fn clone_ancestors(&self) -> Ancestors {
-                self.ancestors.clone()
-            }
-
-            #[must_use]
-            pub fn has_complete_ancestors(&self) -> bool {
-                matches!(&self.ancestors, Ancestors::Complete(_) | Ancestors::Cyclic(_))
-            }
-
-            pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
-                self.descendants.insert(descendant_id);
-            }
-
-            fn remove_descendant(&mut self, descendant_id: &DeclarationId) {
-                self.descendants.remove(descendant_id);
-            }
-
-            pub fn clear_descendants(&mut self) {
-                self.descendants.clear();
-            }
-
-            pub fn descendants(&self) -> &IdentityHashSet<DeclarationId> {
-                &self.descendants
             }
         }
     };
@@ -252,6 +136,22 @@ impl<T: Eq + Hash> DeclarationCore<T> {
     }
 
     #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn unqualified_name(&self) -> String {
+        let after_colons = self.name.rsplit("::").next().unwrap_or(&self.name);
+        after_colons.rsplit('#').next().unwrap_or(after_colons).to_string()
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        self.definition_ids.extend(other.definition_ids);
+        self.references.extend(other.references);
+    }
+
+    #[must_use]
     pub fn references(&self) -> &IdentityHashSet<T> {
         &self.references
     }
@@ -265,8 +165,139 @@ impl<T: Eq + Hash> DeclarationCore<T> {
     }
 
     #[must_use]
+    pub fn has_no_definitions(&self) -> bool {
+        self.definition_ids.is_empty()
+    }
+
+    #[must_use]
     pub fn definitions(&self) -> &[DefinitionId] {
         &self.definition_ids
+    }
+
+    pub fn add_definition(&mut self, definition_id: DefinitionId) {
+        debug_assert!(
+            !self.definition_ids.contains(&definition_id),
+            "Cannot add the same exact definition to a declaration twice. Duplicate definition IDs"
+        );
+
+        self.definition_ids.push(definition_id);
+    }
+
+    pub fn remove_definition(&mut self, definition_id: &DefinitionId) -> bool {
+        if let Some(pos) = self.definition_ids.iter().position(|id| id == definition_id) {
+            self.definition_ids.swap_remove(pos);
+            self.definition_ids.shrink_to_fit();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Storage for namespace data, like ancestors, descendants, members and singleton class
+#[derive(Debug)]
+pub struct NamespaceStore {
+    /// The entities that are owned by this declaration. For example, constants and methods that are defined inside of
+    /// the namespace. Note that this is a hashmap of unqualified name IDs to declaration IDs. That assists the
+    /// traversal of the graph when trying to resolve constant references or trying to discover which methods exist in a
+    /// class
+    members: IdentityHashMap<StringId, DeclarationId>,
+    /// The linearized ancestor chain for this declaration. These are the other declarations that this
+    /// declaration inherits from
+    ancestors: Ancestors,
+    /// The set of declarations that inherit from this declaration
+    descendants: IdentityHashSet<DeclarationId>,
+    /// The singleton class associated with this declaration
+    singleton_class_id: Option<DeclarationId>,
+}
+
+impl NamespaceStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            members: IdentityHashMap::default(),
+            ancestors: Ancestors::Partial(Vec::new()),
+            descendants: IdentityHashSet::default(),
+            singleton_class_id: None,
+        }
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        self.members.extend(other.members);
+        self.descendants.extend(other.descendants);
+    }
+
+    pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
+        self.singleton_class_id = Some(declaration_id);
+    }
+
+    pub fn clear_singleton_class_id(&mut self) {
+        self.singleton_class_id = None;
+    }
+
+    #[must_use]
+    pub fn singleton_class_id(&self) -> Option<&DeclarationId> {
+        self.singleton_class_id.as_ref()
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
+        &self.members
+    }
+
+    pub fn add_member(&mut self, string_id: StringId, declaration_id: DeclarationId) {
+        self.members.insert(string_id, declaration_id);
+    }
+
+    pub fn remove_member(&mut self, string_id: &StringId) -> Option<DeclarationId> {
+        self.members.remove(string_id)
+    }
+
+    #[must_use]
+    pub fn member(&self, string_id: &StringId) -> Option<&DeclarationId> {
+        self.members.get(string_id)
+    }
+
+    pub fn set_ancestors(&mut self, ancestors: Ancestors) {
+        self.ancestors = ancestors;
+    }
+
+    #[must_use]
+    pub fn ancestors(&self) -> &Ancestors {
+        &self.ancestors
+    }
+
+    #[must_use]
+    pub fn clone_ancestors(&self) -> Ancestors {
+        self.ancestors.clone()
+    }
+
+    #[must_use]
+    pub fn has_complete_ancestors(&self) -> bool {
+        matches!(&self.ancestors, Ancestors::Complete(_) | Ancestors::Cyclic(_))
+    }
+
+    pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
+        self.descendants.insert(descendant_id);
+    }
+
+    fn remove_descendant(&mut self, descendant_id: DeclarationId) {
+        self.descendants.remove(&descendant_id);
+    }
+
+    pub fn clear_descendants(&mut self) {
+        self.descendants.clear();
+    }
+
+    #[must_use]
+    pub fn descendants(&self) -> &IdentityHashSet<DeclarationId> {
+        &self.descendants
+    }
+}
+
+impl Default for NamespaceStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -288,7 +319,14 @@ assert_mem_size!(Declaration, 16);
 impl Declaration {
     #[must_use]
     pub fn name(&self) -> &str {
-        all_declarations!(self, it => &it.name)
+        match self {
+            Self::Namespace(namespace) => namespace.core().name(),
+            Self::ConstantAlias(it) | Self::Constant(it) => it.name(),
+            Self::Method(it) => it.name(),
+            Self::GlobalVariable(it) => it.name(),
+            Self::InstanceVariable(it) => it.name(),
+            Self::ClassVariable(it) => it.name(),
+        }
     }
 
     #[must_use]
@@ -370,55 +408,86 @@ impl Declaration {
 
     #[must_use]
     pub fn definitions(&self) -> &[DefinitionId] {
-        all_declarations!(self, it => &it.definition_ids)
+        match self {
+            Self::Namespace(namespace) => namespace.core().definitions(),
+            Self::Constant(it) | Self::ConstantAlias(it) => it.definitions(),
+            Self::Method(it) => it.definitions(),
+            Self::GlobalVariable(it) => it.definitions(),
+            Self::InstanceVariable(it) => it.definitions(),
+            Self::ClassVariable(it) => it.definitions(),
+        }
     }
 
     #[must_use]
     pub fn has_no_definitions(&self) -> bool {
-        all_declarations!(self, it => it.definition_ids.is_empty())
+        match self {
+            Self::Namespace(namespace) => namespace.core().has_no_definitions(),
+            Self::Constant(it) | Self::ConstantAlias(it) => it.has_no_definitions(),
+            Self::Method(it) => it.has_no_definitions(),
+            Self::GlobalVariable(it) => it.has_no_definitions(),
+            Self::InstanceVariable(it) => it.has_no_definitions(),
+            Self::ClassVariable(it) => it.has_no_definitions(),
+        }
     }
 
     pub fn add_definition(&mut self, definition_id: DefinitionId) {
-        all_declarations!(self, it => {
-            debug_assert!(
-                !it.definition_ids.contains(&definition_id),
-                "Cannot add the same exact definition to a declaration twice. Duplicate definition IDs"
-            );
-
-            it.definition_ids.push(definition_id);
-        });
+        match self {
+            Self::Namespace(namespace) => namespace.core_mut().add_definition(definition_id),
+            Self::Constant(it) | Self::ConstantAlias(it) => it.add_definition(definition_id),
+            Self::Method(it) => it.add_definition(definition_id),
+            Self::GlobalVariable(it) => it.add_definition(definition_id),
+            Self::InstanceVariable(it) => it.add_definition(definition_id),
+            Self::ClassVariable(it) => it.add_definition(definition_id),
+        }
     }
 
     // Deletes a definition from this declaration
     pub fn remove_definition(&mut self, definition_id: &DefinitionId) -> bool {
-        all_declarations!(self, it => {
-            if let Some(pos) = it.definition_ids.iter().position(|id| id == definition_id) {
-                it.definition_ids.swap_remove(pos);
-                it.definition_ids.shrink_to_fit();
-                true
-            } else {
-                false
-            }
-        })
+        match self {
+            Self::Namespace(namespace) => namespace.core_mut().remove_definition(definition_id),
+            Self::Constant(it) | Self::ConstantAlias(it) => it.remove_definition(definition_id),
+            Self::Method(it) => it.remove_definition(definition_id),
+            Self::GlobalVariable(it) => it.remove_definition(definition_id),
+            Self::InstanceVariable(it) => it.remove_definition(definition_id),
+            Self::ClassVariable(it) => it.remove_definition(definition_id),
+        }
     }
 
     #[must_use]
     pub fn owner_id(&self) -> &DeclarationId {
-        all_declarations!(self, it => &it.owner_id)
+        match self {
+            Self::Namespace(namespace) => &namespace.core().owner_id,
+            Self::Constant(it) | Self::ConstantAlias(it) => &it.owner_id,
+            Self::Method(it) => &it.owner_id,
+            Self::GlobalVariable(it) => &it.owner_id,
+            Self::InstanceVariable(it) => &it.owner_id,
+            Self::ClassVariable(it) => &it.owner_id,
+        }
     }
 
     // Splits the fully qualified name either in the last `::` or the `#` to return the simple name of this declaration
     #[must_use]
     pub fn unqualified_name(&self) -> String {
-        all_declarations!(self, it => {
-            let after_colons = it.name.rsplit("::").next().unwrap_or(&it.name);
-            after_colons.rsplit('#').next().unwrap_or(after_colons).to_string()
-        })
+        match self {
+            Self::Namespace(namespace) => namespace.core().unqualified_name(),
+            Self::Constant(it) | Self::ConstantAlias(it) => it.unqualified_name(),
+            Self::Method(it) => it.unqualified_name(),
+            Self::GlobalVariable(it) => it.unqualified_name(),
+            Self::InstanceVariable(it) => it.unqualified_name(),
+            Self::ClassVariable(it) => it.unqualified_name(),
+        }
     }
 
     #[must_use]
     pub fn reference_count(&self) -> usize {
-        all_declarations!(self, it => it.references.len())
+        match self {
+            Self::Namespace(namespace) => namespace.core().references.len(),
+            Self::Constant(it) | Self::ConstantAlias(it) => it.references.len(),
+            Self::Method(it) => it.references.len(),
+            Self::GlobalVariable(it) => it.references.len(),
+            Self::InstanceVariable(it) => it.references.len(),
+            Self::ClassVariable(it) => it.references.len(),
+        }
     }
 
     /// Returns the constant reference IDs for declarations that track constant references (`Namespace`, `Constant`,
@@ -470,6 +539,16 @@ assert_mem_size!(Namespace, 16);
 
 impl Namespace {
     #[must_use]
+    pub fn core(&self) -> &DeclarationCore<ConstantReferenceId> {
+        all_namespaces!(self, it => &it.core)
+    }
+
+    #[must_use]
+    pub fn core_mut(&mut self) -> &mut DeclarationCore<ConstantReferenceId> {
+        all_namespaces!(self, it => &mut it.core)
+    }
+
+    #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
             Namespace::Class(_) => "Class",
@@ -481,29 +560,29 @@ impl Namespace {
 
     #[must_use]
     pub fn references(&self) -> &IdentityHashSet<ConstantReferenceId> {
-        all_namespaces!(self, it => &it.references)
+        all_namespaces!(self, it => &it.core.references)
     }
 
     pub fn remove_reference(&mut self, reference_id: &ConstantReferenceId) {
         all_namespaces!(self, it => {
-            it.references.remove(reference_id);
+            it.core.remove_reference(reference_id);
         });
     }
 
     pub fn add_reference(&mut self, reference_id: ConstantReferenceId) {
         all_namespaces!(self, it => {
-            it.references.insert(reference_id);
+            it.core.add_reference(reference_id);
         });
     }
 
     #[must_use]
     pub fn definitions(&self) -> &[DefinitionId] {
-        all_namespaces!(self, it => &it.definition_ids)
+        all_namespaces!(self, it => &it.core.definitions())
     }
 
     #[must_use]
     pub fn members(&self) -> &IdentityHashMap<StringId, DeclarationId> {
-        all_namespaces!(self, it => &it.members)
+        all_namespaces!(self, it => &it.namespace_store.members)
     }
 
     pub fn extend(&mut self, other: Declaration) {
@@ -512,88 +591,92 @@ impl Namespace {
 
     #[must_use]
     pub fn ancestors(&self) -> &Ancestors {
-        all_namespaces!(self, it => it.ancestors())
+        all_namespaces!(self, it => it.namespace_store.ancestors())
     }
 
     #[must_use]
     pub fn clone_ancestors(&self) -> Ancestors {
-        all_namespaces!(self, it => it.clone_ancestors())
+        all_namespaces!(self, it => it.namespace_store.clone_ancestors())
     }
 
     pub fn set_ancestors(&mut self, ancestors: Ancestors) {
-        all_namespaces!(self, it => it.set_ancestors(ancestors));
+        all_namespaces!(self, it => it.namespace_store.set_ancestors(ancestors));
     }
 
     #[must_use]
     pub fn has_complete_ancestors(&self) -> bool {
-        all_namespaces!(self, it => it.has_complete_ancestors())
+        all_namespaces!(self, it => it.namespace_store.has_complete_ancestors())
     }
 
     #[must_use]
     pub fn descendants(&self) -> &IdentityHashSet<DeclarationId> {
-        all_namespaces!(self, it => it.descendants())
+        all_namespaces!(self, it => it.namespace_store.descendants())
     }
 
     pub fn add_descendant(&mut self, descendant_id: DeclarationId) {
-        all_namespaces!(self, it => it.add_descendant(descendant_id));
+        all_namespaces!(self, it => it.namespace_store.add_descendant(descendant_id));
     }
 
-    pub fn remove_descendant(&mut self, descendant_id: &DeclarationId) {
-        all_namespaces!(self, it => it.remove_descendant(descendant_id));
+    pub fn remove_descendant(&mut self, descendant_id: DeclarationId) {
+        all_namespaces!(self, it => it.namespace_store.remove_descendant(descendant_id));
     }
 
     pub fn for_each_ancestor<F>(&self, mut f: F)
     where
         F: FnMut(&Ancestor),
     {
-        all_namespaces!(self, it => it.ancestors().iter().for_each(&mut f));
+        all_namespaces!(self, it => it.namespace_store.ancestors().iter().for_each(&mut f));
     }
 
     pub fn for_each_descendant<F>(&self, mut f: F)
     where
         F: FnMut(&DeclarationId),
     {
-        all_namespaces!(self, it => it.descendants().iter().for_each(&mut f));
+        all_namespaces!(self, it => it.namespace_store.descendants().iter().for_each(&mut f));
     }
 
     pub fn clear_ancestors(&mut self) {
-        all_namespaces!(self, it => it.set_ancestors(Ancestors::Partial(vec![])));
+        all_namespaces!(self, it => it.namespace_store.set_ancestors(Ancestors::Partial(vec![])));
     }
 
     pub fn clear_descendants(&mut self) {
-        all_namespaces!(self, it => it.clear_descendants());
+        all_namespaces!(self, it => it.namespace_store.clear_descendants());
     }
 
     #[must_use]
     pub fn member(&self, str_id: &StringId) -> Option<&DeclarationId> {
-        all_namespaces!(self, it => it.member(str_id))
+        all_namespaces!(self, it => it.namespace_store.member(str_id))
+    }
+
+    pub fn add_member(&mut self, string_id: StringId, declaration_id: DeclarationId) {
+        all_namespaces!(self, it => it.namespace_store.add_member(string_id, declaration_id));
     }
 
     pub fn remove_member(&mut self, str_id: &StringId) -> Option<DeclarationId> {
-        all_namespaces!(self, it => it.remove_member(str_id))
+        all_namespaces!(self, it => it.namespace_store.remove_member(str_id))
     }
 
     #[must_use]
     pub fn singleton_class(&self) -> Option<&DeclarationId> {
-        all_namespaces!(self, it => it.singleton_class_id())
+        all_namespaces!(self, it => it.namespace_store.singleton_class_id())
     }
 
     pub fn set_singleton_class_id(&mut self, declaration_id: DeclarationId) {
-        all_namespaces!(self, it => it.set_singleton_class_id(declaration_id));
+        all_namespaces!(self, it => it.namespace_store.set_singleton_class_id(declaration_id));
     }
 
     pub fn clear_singleton_class_id(&mut self) {
-        all_namespaces!(self, it => it.clear_singleton_class_id());
+        all_namespaces!(self, it => it.namespace_store.clear_singleton_class_id());
     }
 
     #[must_use]
     pub fn owner_id(&self) -> &DeclarationId {
-        all_namespaces!(self, it => &it.owner_id)
+        all_namespaces!(self, it => &it.core.owner_id)
     }
 
     #[must_use]
     pub fn name(&self) -> &str {
-        all_namespaces!(self, it => &it.name)
+        all_namespaces!(self, it => &it.core.name())
     }
 }
 
@@ -651,15 +734,15 @@ mod tests {
         let member_name_id = StringId::from("Bar");
         let member_decl_id = DeclarationId::from("Foo::Bar");
 
-        let Declaration::Namespace(Namespace::Class(mut class)) = decl else {
-            panic!("Expected a class declaration");
+        let Declaration::Namespace(mut namespace) = decl else {
+            panic!("Expected a namespace declaration");
         };
-        class.add_member(member_name_id, member_decl_id);
-        assert_eq!(class.members.len(), 1);
+        namespace.add_member(member_name_id, member_decl_id);
+        assert_eq!(namespace.members().len(), 1);
 
-        let removed = class.remove_member(&member_name_id);
+        let removed = namespace.remove_member(&member_name_id);
         assert_eq!(removed, Some(member_decl_id));
-        assert_eq!(class.members.len(), 0);
+        assert_eq!(namespace.members().len(), 0);
     }
 
     #[test]

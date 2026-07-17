@@ -540,18 +540,13 @@ macro_rules! assert_descendants {
             .declarations()
             .get(&$crate::model::ids::DeclarationId::from($parent))
             .unwrap();
-        let actual = match parent {
-            $crate::model::declaration::Declaration::Namespace($crate::model::declaration::Namespace::Class(class)) => {
-                class.descendants().iter().cloned().collect::<Vec<_>>()
-            }
-            $crate::model::declaration::Declaration::Namespace($crate::model::declaration::Namespace::Module(
-                module,
-            )) => module.descendants().iter().cloned().collect::<Vec<_>>(),
-            $crate::model::declaration::Declaration::Namespace(
-                $crate::model::declaration::Namespace::SingletonClass(singleton),
-            ) => singleton.descendants().iter().cloned().collect::<Vec<_>>(),
-            _ => panic!("Tried to get descendants for a declaration that isn't a namespace"),
-        };
+        let actual = parent
+            .as_namespace()
+            .expect("Tried to get descendants for a declaration that isn't a namespace")
+            .descendants()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
 
         for descendant in &$descendants {
             let descendant_id = $crate::model::ids::DeclarationId::from(*descendant);
