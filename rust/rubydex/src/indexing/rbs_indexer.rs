@@ -495,7 +495,10 @@ impl Visit for RBSIndexer<'_> {
             self.uri_id,
             offset,
             comments,
-            Self::flags(&constant_node.annotations()),
+            // RBS establishes that the constant exists, but its value type is intentionally not
+            // represented in the graph. Treat it like a dynamic Ruby assignment so resolution
+            // may promote it when a namespace or singleton receiver is required.
+            Self::flags(&constant_node.annotations()) | DefinitionFlags::PROMOTABLE,
             lexical_nesting_id,
         )));
 
