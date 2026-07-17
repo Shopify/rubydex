@@ -47,6 +47,15 @@ module Rubydex
       path
     end
 
+    # Returns the relative path for a file URI or the opaque for an untitled URI.
+    #
+    #: () -> String
+    def short_path
+      Pathname.new(to_file_path).relative_path_from(Dir.pwd).to_s
+    rescue Rubydex::Location::NotFileUriError
+      URI(@uri).opaque #: as !nil
+    end
+
     #: (other: BasicObject) -> Integer
     def <=>(other)
       return -1 unless other.is_a?(Location)

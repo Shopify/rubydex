@@ -94,6 +94,26 @@ class LocationTest < Minitest::Test
     assert_equal("#{loc.to_file_path}:1:4-6:11", loc.to_s)
   end
 
+  def test_short_path_returns_relative_path_for_file_uri
+    absolute_path = File.join(Dir.pwd, "some", "nested", "file.rb")
+    uri = Gem.win_platform? ? "file:///#{absolute_path}" : "file://#{absolute_path}"
+    loc = Rubydex::Location.new(uri: uri, start_line: 0, end_line: 0, start_column: 0, end_column: 0)
+
+    assert_equal("some/nested/file.rb", loc.short_path)
+  end
+
+  def test_short_path_returns_opaque_for_non_file_uri
+    loc = Rubydex::Location.new(
+      uri: "untitled:Untitled-1",
+      start_line: 0,
+      end_line: 0,
+      start_column: 0,
+      end_column: 0,
+    )
+
+    assert_equal("Untitled-1", loc.short_path)
+  end
+
   def test_display_location_equality
     a = Rubydex::DisplayLocation.new(uri: "file:///foo.rb", start_line: 1, end_line: 1, start_column: 1, end_column: 6)
     b = Rubydex::DisplayLocation.new(uri: "file:///foo.rb", start_line: 1, end_line: 1, start_column: 1, end_column: 6)
