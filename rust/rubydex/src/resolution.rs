@@ -850,7 +850,7 @@ impl<'a> Resolver<'a> {
     /// Gets or creates a singleton class declaration for a given class/module declaration.  For class `Foo`, this
     /// returns the declaration for `Foo::<Foo>`.
     ///
-    /// If the declaration is a `Constant` with all-promotable definitions, it is automatically promoted to a `Class`
+    /// If the declaration is a `Constant` with all-promotable definitions, it is automatically promoted to an unknown
     /// namespace before creating the singleton. Returns `None` if the declaration is not a namespace and cannot be
     /// promoted (e.g., `FOO = 42`).
     /// `ancestors` controls how the singleton's ancestor chain is scheduled for linearization —
@@ -874,7 +874,7 @@ impl<'a> Resolver<'a> {
         if matches!(attached_decl, Declaration::Constant(_)) {
             if self.graph.all_definitions_promotable(attached_decl) {
                 self.graph.promote_constant_to_namespace(attached_id, |name, owner_id| {
-                    Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
+                    Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(name, owner_id))))
                 });
 
                 self.schedule_singleton_ancestors(attached_id, mode);
@@ -1276,8 +1276,8 @@ impl<'a> Resolver<'a> {
             Outcome::Resolved(owner_id) => {
                 let mut fully_qualified_name = self.graph.strings().get(&str_id).unwrap().to_string();
 
-                // If the owner is a promotable constant and something is being defined inside it, promote it to a
-                // module
+                // If the owner is a promotable constant and something is being defined inside it, promote it to an
+                // unknown namespace. A later explicit class or module definition selects the concrete kind.
                 {
                     let owner = self.graph.declarations().get(&owner_id).unwrap();
                     let is_promotable_constant =
@@ -1285,7 +1285,7 @@ impl<'a> Resolver<'a> {
 
                     if is_promotable_constant {
                         self.graph.promote_constant_to_namespace(owner_id, |name, owner_id| {
-                            Declaration::Namespace(Namespace::Module(Box::new(ModuleDeclaration::new(name, owner_id))))
+                            Declaration::Namespace(Namespace::Todo(Box::new(TodoDeclaration::new(name, owner_id))))
                         });
                         self.unit_queue.push_back(Unit::Ancestors(owner_id));
                     }
@@ -2017,7 +2017,8 @@ impl<'a> Resolver<'a> {
         let decl = self.graph.declarations().get(&attached_id).unwrap();
 
         match decl {
-            Declaration::Namespace(Namespace::Module(_)) => (*MODULE_ID, false),
+            // Todo may later become a class or module. Until then, use Module as the singleton-parent fallback.
+            Declaration::Namespace(Namespace::Module(_) | Namespace::Todo(_)) => (*MODULE_ID, false),
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 // For singleton classes, we keep recursively wrapping parents until we can reach the original attached
                 // object
