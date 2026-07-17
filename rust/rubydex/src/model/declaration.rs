@@ -192,10 +192,6 @@ macro_rules! namespace_declaration {
                 &self.ancestors
             }
 
-            pub fn ancestors_mut(&mut self) -> &mut Ancestors {
-                &mut self.ancestors
-            }
-
             #[must_use]
             pub fn clone_ancestors(&self) -> Ancestors {
                 self.ancestors.clone()
@@ -550,13 +546,6 @@ impl Namespace {
 
     pub fn remove_descendant(&mut self, descendant_id: &DeclarationId) {
         all_namespaces!(self, it => it.remove_descendant(descendant_id));
-    }
-
-    pub fn for_each_ancestor<F>(&self, mut f: F)
-    where
-        F: FnMut(&Ancestor),
-    {
-        all_namespaces!(self, it => it.ancestors().iter().for_each(&mut f));
     }
 
     pub fn for_each_descendant<F>(&self, mut f: F)
