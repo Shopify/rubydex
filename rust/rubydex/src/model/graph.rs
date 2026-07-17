@@ -877,12 +877,7 @@ impl Graph {
     ) {
         if let Some(declaration) = self.declarations.get_mut(owner_id) {
             match declaration {
-                Declaration::Namespace(Namespace::Class(it)) => it.add_member(member_str_id, member_declaration_id),
-                Declaration::Namespace(Namespace::Module(it)) => it.add_member(member_str_id, member_declaration_id),
-                Declaration::Namespace(Namespace::SingletonClass(it)) => {
-                    it.add_member(member_str_id, member_declaration_id);
-                }
-                Declaration::Namespace(Namespace::Todo(it)) => it.add_member(member_str_id, member_declaration_id),
+                Declaration::Namespace(namespace) => namespace.add_member(member_str_id, member_declaration_id),
                 Declaration::Constant(_) => {
                     // TODO: temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
                 }
@@ -1277,7 +1272,7 @@ impl Graph {
                         && let Some(anc_decl) = self.declarations.get_mut(&ancestor_id)
                         && let Some(ns) = anc_decl.as_namespace_mut()
                     {
-                        ns.remove_descendant(&decl_id);
+                        ns.remove_descendant(decl_id);
                     }
                 }
             }
@@ -1301,7 +1296,7 @@ impl Graph {
                     && let Some(anc_decl) = self.declarations.get_mut(ancestor_id)
                     && let Some(ns) = anc_decl.as_namespace_mut()
                 {
-                    ns.remove_descendant(&decl_id);
+                    ns.remove_descendant(decl_id);
                 }
             }
 
@@ -1795,7 +1790,7 @@ mod tests {
         context.index_uri("file:///a.rb", "");
 
         {
-            let Declaration::Namespace(Namespace::Class(foo)) =
+            let Declaration::Namespace(foo @ Namespace::Class(_)) =
                 context.graph().declarations().get(&DeclarationId::from("Foo")).unwrap()
             else {
                 panic!("Expected Foo to be a class");
@@ -1803,7 +1798,7 @@ mod tests {
             assert!(matches!(foo.ancestors(), Ancestors::Partial(a) if a.is_empty()));
             assert!(foo.descendants().is_empty());
 
-            let Declaration::Namespace(Namespace::Class(baz)) =
+            let Declaration::Namespace(baz @ Namespace::Class(_)) =
                 context.graph().declarations().get(&DeclarationId::from("Baz")).unwrap()
             else {
                 panic!("Expected Baz to be a class");
@@ -1811,7 +1806,7 @@ mod tests {
             assert!(matches!(baz.ancestors(), Ancestors::Partial(a) if a.is_empty()));
             assert!(baz.descendants().is_empty());
 
-            let Declaration::Namespace(Namespace::Module(bar)) =
+            let Declaration::Namespace(bar @ Namespace::Module(_)) =
                 context.graph().declarations().get(&DeclarationId::from("Bar")).unwrap()
             else {
                 panic!("Expected Bar to be a module");
