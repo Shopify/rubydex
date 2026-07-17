@@ -220,6 +220,7 @@ pub struct SetConstantVisibility {
 pub struct Mixin {
     pub kind: MixinKind,
     pub target: Target,
+    pub offset: Offset,
 }
 
 #[derive(Debug)]

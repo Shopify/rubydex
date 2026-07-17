@@ -212,8 +212,11 @@ class Rubydex::Mixin
   sig { returns(Rubydex::ConstantReference) }
   attr_reader :constant_reference
 
-  sig { params(constant_reference: Rubydex::ConstantReference).void }
-  def initialize(constant_reference); end
+  sig { returns(Rubydex::Location) }
+  attr_reader :location
+
+  sig { params(constant_reference: Rubydex::ConstantReference, location: Rubydex::Location).void }
+  def initialize(constant_reference, location); end
 end
 
 class Rubydex::Include < Rubydex::Mixin; end
