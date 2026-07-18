@@ -877,6 +877,10 @@ impl<'a> Resolver<'a> {
     ) -> Option<DeclarationId> {
         let attached_decl = self.graph.declarations().get(&attached_id).unwrap();
 
+        if let Some(singleton_id) = attached_decl.as_namespace().and_then(|d| d.singleton_class()) {
+            return Some(*singleton_id);
+        }
+
         // If the attached object is a constant alias, follow the alias chain to find the actual namespace
         if matches!(attached_decl, Declaration::ConstantAlias(_)) {
             return match self.resolve_to_namespace(attached_id) {
@@ -903,10 +907,6 @@ impl<'a> Resolver<'a> {
         let namespace_decl = attached_decl
             .as_namespace_mut()
             .expect("constants are handled above; all other callers pass namespace declarations");
-
-        if let Some(singleton_id) = namespace_decl.singleton_class() {
-            return Some(*singleton_id);
-        }
 
         let decl_id = DeclarationId::from(&fully_qualified_name);
         namespace_decl.set_singleton_class_id(decl_id);
