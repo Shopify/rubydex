@@ -2,6 +2,7 @@
 
 require "bundler"
 require "uri"
+require "pathname"
 require "rubydex/version"
 require "rubydex/mixin"
 

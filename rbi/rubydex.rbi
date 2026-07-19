@@ -494,6 +494,9 @@ class Rubydex::Location
   sig { returns(String) }
   def to_file_path; end
 
+  sig { returns(String) }
+  def short_path; end
+
   sig { returns(Integer) }
   def start_column; end
 
