@@ -1706,7 +1706,118 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_frozen_graph_allows_mutating_methods
+    with_context do |context|
+      context.write!("file.rb", "class Foo; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+      graph.freeze
+
+      graph.index_source("test.rb", "class Bar; end", "ruby")
+      graph.resolve
+      refute_nil(graph["Bar"])
+
+      graph.encoding = "utf16"
+      graph.exclude_patterns(["vendor"])
+    end
+  end
+
+  def test_ractor_can_mutate_shared_graph
+    with_context do |context|
+      context.write!("file.rb", "class Foo; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+      Ractor.make_shareable(graph)
+
+      ractor = Ractor.new(graph) do |g|
+        g.index_source("test.rb", "class Bar; end", "ruby")
+        g.resolve
+        g["Bar"]&.name
+      end
+
+      assert_equal("Bar", ractor_result(ractor))
+      refute_nil(graph["Bar"])
+    end
+  end
+
+  def test_frozen_graph_allows_read_operations
+    with_context do |context|
+      context.write!("file.rb", "class Foo; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+      graph.freeze
+
+      refute_nil(graph["Foo"])
+      assert_nil(graph["Bar"])
+      assert_equal(6, graph.declarations.size)
+      refute_empty(graph.documents.to_a)
+      refute_empty(graph.search("Foo").to_a)
+      refute_empty(graph.fuzzy_search("Foo").to_a)
+      assert_empty(graph.check_integrity)
+      assert_empty(graph.diagnostics)
+      refute_nil(graph.excluded_patterns)
+    end
+  end
+
+  def test_frozen_graph_is_ractor_shareable
+    with_context do |context|
+      context.write!("file.rb", "class Foo; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+      Ractor.make_shareable(graph)
+
+      ractor = Ractor.new(graph) do |g|
+        g["Foo"]&.name
+      end
+
+      assert_equal("Foo", ractor_result(ractor))
+    end
+  end
+
+  def test_frozen_graph_concurrent_reads_from_multiple_ractors
+    with_context do |context|
+      context.write!("a.rb", "class A; end")
+      context.write!("b.rb", "class B; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+      Ractor.make_shareable(graph)
+
+      ractors = 4.times.map do
+        Ractor.new(graph) do |g|
+          names = []
+          g.declarations { |d| names << d.name }
+          names.sort
+        end
+      end
+
+      results = ractors.map { |r| ractor_result(r) }
+      assert_equal(results.uniq.size, 1)
+      assert_includes(results.first, "A")
+      assert_includes(results.first, "B")
+    end
+  end
+
+  def test_graph_cannot_be_duplicated_or_cloned
+    graph = Rubydex::Graph.new
+    assert_raises(RuntimeError) { graph.dup }
+    assert_raises(RuntimeError) { graph.clone }
+  end
+
   private
+
+  def ractor_result(ractor)
+    ractor.respond_to?(:value) ? ractor.value : ractor.take
+  end
 
   def assert_diagnostics(expected, actual)
     assert_equal(

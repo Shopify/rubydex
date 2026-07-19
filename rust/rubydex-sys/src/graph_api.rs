@@ -21,42 +21,45 @@ use rubydex::resolution::Resolver;
 use rubydex::{indexing, integrity, listing, query};
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
-use std::{mem, ptr};
+use std::{mem, ptr, sync::RwLock};
 
 pub type GraphPointer = *mut c_void;
 
-/// Creates a new graph within a mutex. This is meant to be used when creating new Graph objects in Ruby
+/// Creates a new graph wrapped in a `Box<RwLock<Graph>>` for thread-safe shared access across Ractors.
 #[unsafe(no_mangle)]
 pub extern "C" fn rdx_graph_new() -> GraphPointer {
-    Box::into_raw(Box::new(Graph::new())) as GraphPointer
+    Box::into_raw(Box::new(RwLock::new(Graph::new()))) as GraphPointer
 }
 
 /// Frees a Graph through its pointer
 #[unsafe(no_mangle)]
 pub extern "C" fn rdx_graph_free(pointer: GraphPointer) {
     unsafe {
-        let _ = Box::from_raw(pointer.cast::<Graph>());
+        let _ = Box::from_raw(pointer.cast::<RwLock<Graph>>());
     }
 }
 
+/// Runs `action` against the graph referenced by `pointer` under a read lock.
+///
+/// # Panics
+///
+/// Panics if the `RwLock` is poisoned (a writer panicked while holding the lock).
 pub fn with_graph<F, T>(pointer: GraphPointer, action: F) -> T
 where
     F: FnOnce(&Graph) -> T,
 {
-    let mut graph = unsafe { Box::from_raw(pointer.cast::<Graph>()) };
-    let result = action(&mut graph);
-    mem::forget(graph);
-    result
+    let rwlock = unsafe { &*pointer.cast::<RwLock<Graph>>() };
+    let guard = rwlock.read().unwrap();
+    action(&guard)
 }
 
 fn with_mut_graph<F, T>(pointer: GraphPointer, action: F) -> T
 where
     F: FnOnce(&mut Graph) -> T,
 {
-    let mut graph = unsafe { Box::from_raw(pointer.cast::<Graph>()) };
-    let result = action(&mut graph);
-    mem::forget(graph);
-    result
+    let rwlock = unsafe { &*pointer.cast::<RwLock<Graph>>() };
+    let mut guard = rwlock.write().unwrap();
+    action(&mut guard)
 }
 
 /// Searches the graph using exact substring matching, returning every declaration whose name matches any of the
@@ -1310,7 +1313,7 @@ mod tests {
                 .ref_count()
         );
 
-        let graph_ptr = Box::into_raw(Box::new(graph)) as GraphPointer;
+        let graph_ptr = Box::into_raw(Box::new(RwLock::new(graph))) as GraphPointer;
 
         // Build the nesting array: ["Foo"] since BAR is inside class Foo
         let nesting_strings = [CString::new("Foo").unwrap()];
@@ -1326,7 +1329,8 @@ mod tests {
             assert_eq!((*decl).id(), *DeclarationId::from("Foo::BAR"));
         };
 
-        let graph = unsafe { Box::from_raw(graph_ptr.cast::<Graph>()) };
+        let graph = unsafe { Box::from_raw(graph_ptr.cast::<RwLock<Graph>>()) };
+        let graph = graph.read().unwrap();
 
         assert_eq!(
             1,
