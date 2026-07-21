@@ -1091,6 +1091,7 @@ impl ParameterStruct {
 #[derive(Debug)]
 pub struct AttrAccessorDefinition {
     str_id: StringId,
+    writer_str_id: StringId,
     uri_id: UriId,
     offset: Offset,
     flags: DefinitionFlags,
@@ -1098,12 +1099,14 @@ pub struct AttrAccessorDefinition {
     lexical_nesting_id: Option<DefinitionId>,
     visibility: Visibility,
 }
-assert_mem_size!(AttrAccessorDefinition, 56);
+assert_mem_size!(AttrAccessorDefinition, 64);
 
 impl AttrAccessorDefinition {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         str_id: StringId,
+        writer_str_id: StringId,
         uri_id: UriId,
         offset: Offset,
         comments: Box<[Comment]>,
@@ -1113,6 +1116,7 @@ impl AttrAccessorDefinition {
     ) -> Self {
         Self {
             str_id,
+            writer_str_id,
             uri_id,
             offset,
             flags,
@@ -1130,6 +1134,12 @@ impl AttrAccessorDefinition {
     #[must_use]
     pub fn str_id(&self) -> &StringId {
         &self.str_id
+    }
+
+    /// The interned name of the synthesized writer method (`foo=()`).
+    #[must_use]
+    pub fn writer_str_id(&self) -> &StringId {
+        &self.writer_str_id
     }
 
     #[must_use]

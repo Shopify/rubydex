@@ -354,6 +354,8 @@ impl OperationApplier {
             AttrKind::Accessor => {
                 let def = AttrAccessorDefinition::new(
                     op.str_id,
+                    op.writer_str_id
+                        .expect("accessor operation must carry a writer string id"),
                     op.uri_id,
                     op.offset,
                     op.comments,

@@ -1785,13 +1785,21 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 .unwrap_or_else(|| offset_for_comments.start());
 
             Self::each_string_or_symbol_arg(call, |name, location| {
-                let str_id = builder.intern_string(format!("{name}()"));
+                let (str_id, writer_str_id) = match kind {
+                    AttrKind::Writer => (builder.intern_string(format!("{name}=()")), None),
+                    AttrKind::Reader => (builder.intern_string(format!("{name}()")), None),
+                    AttrKind::Accessor => (
+                        builder.intern_string(format!("{name}()")),
+                        Some(builder.intern_string(format!("{name}=()"))),
+                    ),
+                };
                 let offset = Offset::from_prism_location(&location);
                 let (comments, flags) = builder.find_comments_for(comment_offset);
 
                 builder.operations.push(Operation::DefineAttribute(op::DefineAttribute {
                     kind,
                     str_id,
+                    writer_str_id,
                     uri_id: builder.uri_id,
                     offset,
                     comments,
@@ -2605,9 +2613,9 @@ mod tests {
             ",
             "
             EnterClass(Foo)
-              DefineAttribute(accessor bar())
+              DefineAttribute(accessor bar() bar=())
               DefineAttribute(reader baz())
-              DefineAttribute(writer qux())
+              DefineAttribute(writer qux=())
             ExitScope
             ",
         );
@@ -2623,8 +2631,8 @@ mod tests {
             ",
             "
             EnterClass(Foo)
-              DefineAttribute(accessor bar())
-              DefineAttribute(accessor baz())
+              DefineAttribute(accessor bar() bar=())
+              DefineAttribute(accessor baz() baz=())
             ExitScope
             ",
         );

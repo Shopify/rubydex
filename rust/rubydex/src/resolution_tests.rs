@@ -2613,7 +2613,11 @@ mod method_tests {
         assert_members_eq!(context, "Foo::<Foo>", ["setup()"]);
 
         // All attr_* should be owned by Foo, not by setup
-        assert_members_eq!(context, "Foo", ["accessor_attr()", "reader_attr()", "writer_attr()"]);
+        assert_members_eq!(
+            context,
+            "Foo",
+            ["accessor_attr()", "accessor_attr=()", "reader_attr()", "writer_attr=()"]
+        );
     }
 }
 
@@ -3599,11 +3603,9 @@ mod fqn_and_naming_tests {
         assert_declaration_exists!(context, "Foo::Bar::CONST");
         assert_declaration_exists!(context, "Foo::Bar::<Bar>#@class_ivar");
         assert_declaration_exists!(context, "Foo::Bar#baz()");
-        // TODO: needs the fix for attributes
-        // assert_declaration_exists!(context, "Foo::Bar#qux=()");
+        assert_declaration_exists!(context, "Foo::Bar#qux=()");
         assert_declaration_exists!(context, "Foo::Bar#zip()");
-        // TODO: needs the fix for attributes
-        // assert_declaration_exists!(context, "Foo::Bar#zip=()");
+        assert_declaration_exists!(context, "Foo::Bar#zip=()");
         assert_declaration_exists!(context, "Foo::Bar#instance_m()");
         assert_declaration_exists!(context, "Foo::Bar#@@class_var");
         assert_declaration_exists!(context, "Foo::Bar::<Bar>#singleton_m()");
@@ -5160,7 +5162,7 @@ mod visibility_resolution_tests {
               private :reader_method
 
               attr_writer :writer_method
-              protected :writer_method
+              protected :writer_method=
 
               attr_accessor :accessor_method
               private :accessor_method
@@ -5171,7 +5173,7 @@ mod visibility_resolution_tests {
 
         assert_no_diagnostics!(&context);
         assert_visibility_eq!(context, "Foo#reader_method()", Visibility::Private);
-        assert_visibility_eq!(context, "Foo#writer_method()", Visibility::Protected);
+        assert_visibility_eq!(context, "Foo#writer_method=()", Visibility::Protected);
         assert_visibility_eq!(context, "Foo#accessor_method()", Visibility::Private);
     }
 

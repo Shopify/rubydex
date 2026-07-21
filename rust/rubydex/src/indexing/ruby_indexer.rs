@@ -1939,7 +1939,6 @@ impl Visit<'_> for RubyIndexer<'_> {
                 .unwrap_or_else(|| offset_for_comments.start());
 
             Self::each_string_or_symbol_arg(call, |name, location| {
-                let str_id = self.local_graph.intern_string(format!("{name}()"));
                 let parent_nesting_id = self.parent_nesting_id();
                 let offset = Offset::from_prism_location(&location);
 
@@ -1953,7 +1952,8 @@ impl Visit<'_> for RubyIndexer<'_> {
 
                 let definition = match kind {
                     AttrKind::Accessor => Definition::AttrAccessor(Box::new(AttrAccessorDefinition::new(
-                        str_id,
+                        self.local_graph.intern_string(format!("{name}()")),
+                        self.local_graph.intern_string(format!("{name}=()")),
                         self.uri_id,
                         offset,
                         comments,
@@ -1962,7 +1962,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         visibility,
                     ))),
                     AttrKind::Reader => Definition::AttrReader(Box::new(AttrReaderDefinition::new(
-                        str_id,
+                        self.local_graph.intern_string(format!("{name}()")),
                         self.uri_id,
                         offset,
                         comments,
@@ -1971,7 +1971,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                         visibility,
                     ))),
                     AttrKind::Writer => Definition::AttrWriter(Box::new(AttrWriterDefinition::new(
-                        str_id,
+                        self.local_graph.intern_string(format!("{name}=()")),
                         self.uri_id,
                         offset,
                         comments,

@@ -191,7 +191,12 @@ impl OperationPrinter<'_> {
             AttrKind::Writer => "writer",
         };
         let name = self.string_value(op.str_id);
-        writeln!(self.out, "{indent}DefineAttribute({kind_str} {name})").unwrap();
+        if let Some(writer_str_id) = op.writer_str_id {
+            let writer_name = self.string_value(writer_str_id);
+            writeln!(self.out, "{indent}DefineAttribute({kind_str} {name} {writer_name})").unwrap();
+        } else {
+            writeln!(self.out, "{indent}DefineAttribute({kind_str} {name})").unwrap();
+        }
     }
 
     fn print_define_global_variable(&mut self, op: &DefineGlobalVariable) {

@@ -226,6 +226,7 @@ pub struct Mixin {
 pub struct DefineAttribute {
     pub kind: AttrKind,
     pub str_id: StringId,
+    pub writer_str_id: Option<StringId>,
     pub uri_id: UriId,
     pub offset: Offset,
     pub comments: Box<[Comment]>,

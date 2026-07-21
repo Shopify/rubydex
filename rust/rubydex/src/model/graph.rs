@@ -826,7 +826,10 @@ impl Graph {
             | Definition::ConstantVisibility(_) => {}
             Definition::MethodVisibility(d) => self.untrack_string(*d.str_id()),
             Definition::Method(d) => self.untrack_string(*d.str_id()),
-            Definition::AttrAccessor(d) => self.untrack_string(*d.str_id()),
+            Definition::AttrAccessor(d) => {
+                self.untrack_string(*d.str_id());
+                self.untrack_string(*d.writer_str_id());
+            }
             Definition::AttrReader(d) => self.untrack_string(*d.str_id()),
             Definition::AttrWriter(d) => self.untrack_string(*d.str_id()),
             Definition::GlobalVariable(d) => self.untrack_string(*d.str_id()),
@@ -1896,8 +1899,9 @@ mod tests {
         let strings = context.graph().strings();
         assert_eq!(strings.get(&StringId::from("method_name()")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("accessor_name()")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("accessor_name=()")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("reader_name()")).unwrap().ref_count(), 1);
-        assert_eq!(strings.get(&StringId::from("writer_name()")).unwrap().ref_count(), 1);
+        assert_eq!(strings.get(&StringId::from("writer_name=()")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("$global_var")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("@@class_var")).unwrap().ref_count(), 1);
         assert_eq!(strings.get(&StringId::from("@instance_var")).unwrap().ref_count(), 1);
@@ -2442,14 +2446,14 @@ mod tests {
         assert_eq!(2, context.graph().method_references.len());
         assert_eq!(2, context.graph().documents.len());
         assert_eq!(20, context.graph().names.len());
-        assert_eq!(47, context.graph().strings.len());
+        assert_eq!(49, context.graph().strings.len());
         context.index_uri("file:///foo.rb", source);
         assert_eq!(49, context.graph().definitions.len());
         assert_eq!(13, context.graph().constant_references.len());
         assert_eq!(2, context.graph().method_references.len());
         assert_eq!(2, context.graph().documents.len());
         assert_eq!(20, context.graph().names.len());
-        assert_eq!(47, context.graph().strings.len());
+        assert_eq!(49, context.graph().strings.len());
     }
 
     #[test]

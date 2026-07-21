@@ -2625,12 +2625,12 @@ mod attr_accessor_tests {
         assert_eq!(context.graph().definitions().len(), 4);
 
         assert_definition_at!(&context, "1:14-1:17", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "foo()");
+            assert_def_str_eq!(&context, def, "foo=()");
             assert!(def.lexical_nesting_id().is_none());
         });
 
         assert_definition_at!(&context, "4:16-4:19", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "bar()");
+            assert_def_str_eq!(&context, def, "bar=()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2639,7 +2639,7 @@ mod attr_accessor_tests {
         });
 
         assert_definition_at!(&context, "4:22-4:25", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "baz()");
+            assert_def_str_eq!(&context, def, "baz=()");
 
             assert_definition_at!(&context, "3:1-5:4", Class, |parent_nesting| {
                 assert_eq!(parent_nesting.id(), def.lexical_nesting_id().unwrap());
@@ -2729,7 +2729,7 @@ mod attr_accessor_tests {
         });
 
         assert_definition_at!(&context, "7:14-7:17", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "baz()");
+            assert_def_str_eq!(&context, def, "baz=()");
             assert_eq!(def.visibility(), &Visibility::Public);
         });
     }
@@ -2778,7 +2778,7 @@ mod attr_accessor_tests {
         });
 
         assert_definition_at!(&context, "18:16-18:19", AttrWriter, |def| {
-            assert_def_str_eq!(&context, def, "qux()");
+            assert_def_str_eq!(&context, def, "qux=()");
             assert_eq!(def.visibility(), &Visibility::Private);
         });
     }
