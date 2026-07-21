@@ -32,6 +32,15 @@ impl Visibility {
     }
 }
 
+/// These methods are implicitly private except when there is an inline modifier.
+#[must_use]
+pub fn is_implicitly_private_instance_method(name: &str) -> bool {
+    matches!(
+        name,
+        "initialize" | "initialize_copy" | "initialize_clone" | "initialize_dup" | "respond_to_missing?"
+    )
+}
+
 impl Display for Visibility {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

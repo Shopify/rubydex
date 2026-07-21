@@ -13,7 +13,7 @@ use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{NameId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ParentScope};
 use crate::model::string_ref::StringRef;
-use crate::model::visibility::Visibility;
+use crate::model::visibility::{Visibility, is_implicitly_private_instance_method};
 use crate::offset::Offset;
 use crate::operation::{self as op, AttrKind, MixinKind, Operation, Target};
 
@@ -1531,6 +1531,9 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
             offset.clone()
         };
 
+        let implicitly_private =
+            !is_singleton && !current_visibility.is_inline && is_implicitly_private_instance_method(&name);
+
         let comment_offset = self
             .take_decorator_offset(offset_for_comments.start())
             .unwrap_or_else(|| offset_for_comments.start());
@@ -1566,7 +1569,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
             (None, None)
         };
 
-        if receiver.is_none() && visibility == Visibility::ModuleFunction {
+        if receiver.is_none() && visibility == Visibility::ModuleFunction && !implicitly_private {
             // module_function: emit two EnterMethod/ExitScope pairs (singleton + instance),
             // each visiting the body so ivars are associated with both methods.
             let singleton_receiver = Some(Target::ExplicitSelf);
@@ -1612,12 +1615,18 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         } else {
             // Singleton methods at top level have receiver=None (no class to point self to).
             // Bracket with SetDefaultVisibility(Public) so the applier assigns the correct visibility.
-            let needs_singleton_visibility_bracket = is_singleton && receiver.is_none();
-            let previous_visibility = if needs_singleton_visibility_bracket {
+            let bracket_visibility = if is_singleton && receiver.is_none() {
+                Some(Visibility::Public)
+            } else if implicitly_private {
+                Some(Visibility::Private)
+            } else {
+                None
+            };
+            let previous_visibility = if let Some(bracket_visibility) = bracket_visibility {
                 let prev = self.current_visibility().visibility;
                 self.operations
                     .push(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
-                        visibility: Visibility::Public,
+                        visibility: bracket_visibility,
                         uri_id: self.uri_id,
                         offset: offset.clone(),
                     }));
@@ -2731,9 +2740,11 @@ mod tests {
             ",
             "
             EnterClass(Foo)
+              SetDefaultVisibility(private)
               EnterMethod(initialize())
                 DefineInstanceVariable(@bar)
               ExitScope
+              SetDefaultVisibility(public)
             ExitScope
             ",
         );

@@ -14,7 +14,7 @@ use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
 use crate::model::name::{Name, ParentScope};
 use crate::model::references::{ConstantReference, MethodRef};
-use crate::model::visibility::Visibility;
+use crate::model::visibility::{Visibility, is_implicitly_private_instance_method};
 use crate::offset::Offset;
 
 use ruby_prism::{ParseResult, Visit};
@@ -1813,6 +1813,8 @@ impl Visit<'_> for RubyIndexer<'_> {
         } else if current_visibility.is_inline() {
             // If the visibility is inline, we use its offset for the comments
             (*current_visibility.visibility(), current_visibility.offset().clone())
+        } else if is_implicitly_private_instance_method(&name) {
+            (Visibility::Private, offset.clone())
         } else {
             (*current_visibility.visibility(), offset.clone())
         };
