@@ -1,5 +1,6 @@
 pub mod built_in;
 pub mod comment;
+pub mod db;
 pub mod declaration;
 pub mod definitions;
 pub mod document;
