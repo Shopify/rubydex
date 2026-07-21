@@ -790,6 +790,25 @@ class Foo
 end
 ```
 
+### Implicitly private methods
+
+Ruby forces some instance methods to be private when they are defined, even when the default visibility of the scope is `public`. The methods are `initialize`, `initialize_copy`, `initialize_clone`, `initialize_dup`, and `respond_to_missing?`.
+
+```ruby
+class Foo
+  public
+
+  def initialize; end  # private despite the public default
+end
+```
+
+There are exceptions:
+
+- An inline modifier wins: `public def initialize; end` defines a public method.
+- A retroactive modifier wins: `public :initialize` after the definition makes the method public.
+- Singleton methods are not affected: `def self.initialize` and methods defined inside `class << self` are public.
+- `module_function` still defines a public singleton method and a private instance method.
+
 ### Access Rules
 
 - **`public`**: No restrictions — callable from anywhere with any receiver.

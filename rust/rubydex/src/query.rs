@@ -2064,7 +2064,7 @@ mod tests {
                 self_decl_id: None,
                 receiver_decl_id: DeclarationId::from("Foo")
             },
-            ["Foo#initialize()", "Foo#bar()"]
+            ["Foo#bar()"]
         );
     }
 

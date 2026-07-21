@@ -13,7 +13,7 @@ use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{NameId, StringId, UriId};
 use crate::model::name::{Name, NameRef, ParentScope};
 use crate::model::string_ref::StringRef;
-use crate::model::visibility::Visibility;
+use crate::model::visibility::{Visibility, is_implicitly_private_instance_method};
 use crate::offset::Offset;
 use crate::operation::{self as op, AttrKind, MixinKind, Operation, Target};
 
@@ -35,7 +35,11 @@ pub struct OperationBuilderResult {
 #[derive(Clone, Copy)]
 enum Nesting {
     /// A lexical scope (class/module keyword) that produces a new constant resolution scope.
-    LexicalScope { name_id: NameId, is_module: bool },
+    LexicalScope {
+        name_id: NameId,
+        is_module: bool,
+        is_singleton: bool,
+    },
     /// An owner that doesn't produce a lexical scope (Class.new/Module.new).
     Owner { name_id: NameId, is_module: bool },
     /// A method entry, used for instance variable ownership.
@@ -186,6 +190,18 @@ impl<'a> RubyOperationBuilder<'a> {
             .rev()
             .find_map(|nesting| match nesting {
                 Nesting::LexicalScope { is_module, .. } | Nesting::Owner { is_module, .. } => Some(*is_module),
+                Nesting::Method { .. } => None,
+            })
+            .unwrap_or(false)
+    }
+
+    fn current_nesting_is_singleton_class(&self) -> bool {
+        self.nesting_stack
+            .iter()
+            .rev()
+            .find_map(|nesting| match nesting {
+                Nesting::LexicalScope { is_singleton, .. } => Some(*is_singleton),
+                Nesting::Owner { .. } => Some(false),
                 Nesting::Method { .. } => None,
             })
             .unwrap_or(false)
@@ -709,6 +725,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 Nesting::LexicalScope {
                     name_id,
                     is_module: false,
+                    is_singleton: false,
                 }
             } else {
                 Nesting::Owner {
@@ -770,6 +787,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 Nesting::LexicalScope {
                     name_id,
                     is_module: true,
+                    is_singleton: false,
                 }
             } else {
                 Nesting::Owner {
@@ -1514,6 +1532,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         self.nesting_stack.push(Nesting::LexicalScope {
             name_id,
             is_module: false,
+            is_singleton: true,
         });
         self.visibility_stack
             .push(VisibilityModifier::new(Visibility::Public, false, offset));
@@ -1547,6 +1566,12 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         } else {
             offset.clone()
         };
+
+        let owner_is_singleton_class = is_singleton || self.current_nesting_is_singleton_class();
+        let implicitly_private = is_implicitly_private_instance_method(&name)
+            && !owner_is_singleton_class
+            && !current_visibility.is_inline
+            && visibility != Visibility::ModuleFunction;
 
         let comment_offset = self
             .take_decorator_offset(offset_for_comments.start())
@@ -1619,12 +1644,18 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         } else {
             // Singleton methods at top level have receiver=None (no class to point self to).
             // Bracket with SetDefaultVisibility(Public) so the applier assigns the correct visibility.
-            let needs_singleton_visibility_bracket = is_singleton && receiver.is_none();
-            let previous_visibility = if needs_singleton_visibility_bracket {
+            let bracket_visibility = if is_singleton && receiver.is_none() {
+                Some(Visibility::Public)
+            } else if implicitly_private {
+                Some(Visibility::Private)
+            } else {
+                None
+            };
+            let previous_visibility = if let Some(bracket_visibility) = bracket_visibility {
                 let prev = self.current_visibility().visibility;
                 self.operations
                     .push(Operation::SetDefaultVisibility(op::SetDefaultVisibility {
-                        visibility: Visibility::Public,
+                        visibility: bracket_visibility,
                         uri_id: self.uri_id,
                         offset: offset.clone(),
                     }));
@@ -2737,9 +2768,11 @@ mod tests {
             ",
             "
             EnterClass(Foo)
+              SetDefaultVisibility(private)
               EnterMethod(initialize())
                 DefineInstanceVariable(@bar)
               ExitScope
+              SetDefaultVisibility(public)
             ExitScope
             ",
         );

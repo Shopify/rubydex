@@ -14,7 +14,7 @@ use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
 use crate::model::name::ParentScope;
 use crate::model::references::{ConstantReference, MethodRef};
-use crate::model::visibility::Visibility;
+use crate::model::visibility::{Visibility, is_implicitly_private_instance_method};
 use crate::offset::Offset;
 
 use ruby_prism::{ParseResult, Visit};
@@ -830,6 +830,15 @@ impl<'a> RubyIndexer<'a> {
                 .definitions()
                 .get(&id)
                 .is_some_and(|def| matches!(def, Definition::Module(_)))
+        })
+    }
+
+    fn current_nesting_is_singleton_class(&self) -> bool {
+        self.current_nesting_definition_id().is_some_and(|id| {
+            self.local_graph
+                .definitions()
+                .get(&id)
+                .is_some_and(|def| matches!(def, Definition::SingletonClass(_)))
         })
     }
 
@@ -1829,6 +1838,11 @@ impl Visit<'_> for RubyIndexer<'_> {
         } else if current_visibility.is_inline() {
             // If the visibility is inline, we use its offset for the comments
             (*current_visibility.visibility(), current_visibility.offset().clone())
+        } else if is_implicitly_private_instance_method(&name)
+            && *current_visibility.visibility() != Visibility::ModuleFunction
+            && !self.current_nesting_is_singleton_class()
+        {
+            (Visibility::Private, offset.clone())
         } else {
             (*current_visibility.visibility(), offset.clone())
         };
