@@ -5105,6 +5105,84 @@ mod visibility_resolution_tests {
     }
 
     #[test]
+    fn initialize_is_implicitly_private() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def initialize; end
+              def initialize_copy(other); end
+              def initialize_clone(other); end
+              def initialize_dup(other); end
+              def respond_to_missing?(name, include_private); end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#initialize()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#initialize_copy()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#initialize_clone()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#initialize_dup()", Visibility::Private);
+        assert_visibility_eq!(context, "Foo#respond_to_missing?()", Visibility::Private);
+    }
+
+    #[test]
+    fn initialize_stays_private_under_public_scope_default() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              public
+
+              def initialize; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#initialize()", Visibility::Private);
+    }
+
+    #[test]
+    fn inline_public_overrides_implicit_private_initialize() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              public def initialize; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo#initialize()", Visibility::Public);
+    }
+
+    #[test]
+    fn singleton_initialize_is_public() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Foo
+              def self.initialize; end
+            end
+            ",
+        );
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        assert_visibility_eq!(context, "Foo::<Foo>#initialize()", Visibility::Public);
+    }
+
+    #[test]
     fn retroactive_visibility_override_applies_in_source_order() {
         let mut context = graph_test();
         context.index_uri(
