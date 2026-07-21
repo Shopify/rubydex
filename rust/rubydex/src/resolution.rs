@@ -315,11 +315,16 @@ impl<'a> Resolver<'a> {
                 Definition::AttrAccessor(attr) => {
                     let lexical = *attr.lexical_nesting_id();
                     let str_id = *attr.str_id();
+                    let writer_str_id = *attr.writer_str_id();
                     let Some(owner_id) = self.resolve_lexical_owner(lexical, id) else {
                         continue;
                     };
 
+                    // attr_accessor synthesizes both a reader (`foo`) and a writer (`foo=`).
                     self.create_declaration(str_id, id, owner_id, |name| {
+                        Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
+                    });
+                    self.create_declaration(writer_str_id, id, owner_id, |name| {
                         Declaration::Method(Box::new(MethodDeclaration::new(name, owner_id)))
                     });
                 }
