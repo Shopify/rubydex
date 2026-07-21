@@ -29,6 +29,7 @@ use crate::{
     assert_mem_size,
     model::{
         comment::Comment,
+        id::id_from_parts,
         ids::{self, ConstantReferenceId, DefinitionId, NameId, StringId, UriId},
         visibility::Visibility,
     },
@@ -673,13 +674,13 @@ impl ConstantAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!(
-            "{}{}{}{}",
-            *self.alias_constant.uri_id(),
+        id_from_parts!(
+            DefinitionId;
+            self.alias_constant.uri_id().get(),
             self.alias_constant.offset().start(),
-            *self.alias_constant.name_id(),
-            *self.target_name_id,
-        ))
+            self.alias_constant.name_id().get(),
+            self.target_name_id.get(),
+        )
     }
 
     #[must_use]
@@ -757,7 +758,7 @@ impl ConstantVisibilityDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.target))
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.target.get())
     }
 
     #[must_use]
@@ -837,16 +838,7 @@ impl MethodVisibilityDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        // Flags are part of the hash because `module_function :bar` emits two
-        // `MethodVisibility` defs at the same source location, differing only
-        // in their `SINGLETON_METHOD_VISIBILITY` flag.
-        DefinitionId::from(&format!(
-            "{}{}{}{}",
-            *self.uri_id,
-            self.offset.start(),
-            *self.str_id,
-            self.flags.bits()
-        ))
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get(), self.flags.bits())
     }
 
     #[must_use]
@@ -1132,7 +1124,7 @@ impl AttrAccessorDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1213,7 +1205,7 @@ impl AttrReaderDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1294,7 +1286,7 @@ impl AttrWriterDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1372,7 +1364,7 @@ impl GlobalVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1445,7 +1437,7 @@ impl InstanceVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1518,7 +1510,7 @@ impl ClassVariableDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!("{}{}{}", *self.uri_id, self.offset.start(), *self.str_id))
+        id_from_parts!(DefinitionId; self.uri_id.get(), self.offset.start(), self.str_id.get())
     }
 
     #[must_use]
@@ -1592,13 +1584,13 @@ impl MethodAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!(
-            "{}{}{}{}",
-            *self.uri_id,
+        id_from_parts!(
+            DefinitionId;
+            self.uri_id.get(),
             self.offset.start(),
-            *self.new_name_str_id,
-            *self.old_name_str_id,
-        ))
+            self.new_name_str_id.get(),
+            self.old_name_str_id.get(),
+        )
     }
 
     #[must_use]
@@ -1678,13 +1670,13 @@ impl GlobalVariableAliasDefinition {
 
     #[must_use]
     pub fn id(&self) -> DefinitionId {
-        DefinitionId::from(&format!(
-            "{}{}{}{}",
-            *self.uri_id,
+        id_from_parts!(
+            DefinitionId;
+            self.uri_id.get(),
             self.offset.start(),
-            *self.new_name_str_id,
-            *self.old_name_str_id,
-        ))
+            self.new_name_str_id.get(),
+            self.old_name_str_id.get(),
+        )
     }
 
     #[must_use]

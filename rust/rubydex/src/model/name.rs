@@ -2,7 +2,10 @@ use std::fmt::Display;
 
 use crate::{
     assert_mem_size,
-    model::ids::{DeclarationId, NameId, StringId},
+    model::{
+        id::id_from_parts,
+        ids::{DeclarationId, NameId, StringId},
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,12 +130,19 @@ impl Name {
 
     #[must_use]
     pub fn id(&self) -> NameId {
-        NameId::from(&format!(
-            "{}{}{}",
-            self.str,
-            self.parent_scope,
-            self.nesting.map_or(String::from("None"), |id| id.to_string())
-        ))
+        // We need to include both the variant and the bytes of the parent scope when present
+        let (parent_tag, parent_id): (u8, u64) = match self.parent_scope {
+            ParentScope::None => (0, 0),
+            ParentScope::TopLevel => (1, 0),
+            ParentScope::Some(id) => (2, id.get()),
+            ParentScope::Attached(id) => (3, id.get()),
+        };
+        let (nesting_tag, nesting_id): (u8, u64) = match self.nesting {
+            None => (0, 0),
+            Some(id) => (1, id.get()),
+        };
+
+        id_from_parts!(NameId; self.str.get(), parent_tag, parent_id, nesting_tag, nesting_id)
     }
 }
 
@@ -296,5 +306,23 @@ mod tests {
             Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
         );
         assert_eq!(name_7.id(), name_8.id());
+    }
+
+    #[test]
+    fn parent_scope_variants_are_distinct() {
+        let inner = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+
+        let ids = [
+            Name::new(StringId::from("Foo"), ParentScope::None, None).id(),
+            Name::new(StringId::from("Foo"), ParentScope::TopLevel, None).id(),
+            Name::new(StringId::from("Foo"), ParentScope::Some(inner), None).id(),
+            Name::new(StringId::from("Foo"), ParentScope::Attached(inner), None).id(),
+        ];
+
+        for (i, a) in ids.iter().enumerate() {
+            for b in &ids[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 }

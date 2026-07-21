@@ -1,6 +1,9 @@
 use crate::{
     assert_mem_size,
-    model::{definitions::Receiver, id::Id},
+    model::{
+        definitions::Receiver,
+        id::{Id, id_from_parts},
+    },
     offset::Offset,
 };
 
@@ -27,7 +30,7 @@ assert_mem_size!(DefinitionId, 8);
 
 #[must_use]
 pub fn namespace_definition_id(uri_id: UriId, offset: &Offset, name_id: NameId) -> DefinitionId {
-    DefinitionId::from(&format!("{}{}{}", *uri_id, offset.start(), *name_id))
+    id_from_parts!(DefinitionId; uri_id.get(), offset.start(), name_id.get())
 }
 
 #[must_use]
@@ -37,14 +40,23 @@ pub fn method_definition_id(
     str_id: StringId,
     receiver: Option<&Receiver>,
 ) -> DefinitionId {
-    let mut formatted_id = format!("{}{}{}", *uri_id, offset.start(), *str_id);
-    if let Some(receiver) = receiver {
-        match receiver {
-            Receiver::SelfReceiver(def_id) => formatted_id.push_str(&def_id.to_string()),
-            Receiver::ConstantReceiver(name_id) => formatted_id.push_str(&name_id.to_string()),
-        }
+    match receiver {
+        Some(Receiver::SelfReceiver(def_id)) => id_from_parts!(
+            DefinitionId;
+            uri_id.get(),
+            offset.start(),
+            str_id.get(),
+            def_id.get(),
+        ),
+        Some(Receiver::ConstantReceiver(name_id)) => id_from_parts!(
+            DefinitionId;
+            uri_id.get(),
+            offset.start(),
+            str_id.get(),
+            name_id.get(),
+        ),
+        None => id_from_parts!(DefinitionId; uri_id.get(), offset.start(), str_id.get()),
     }
-    DefinitionId::from(&formatted_id)
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]

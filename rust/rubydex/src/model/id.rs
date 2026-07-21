@@ -1,6 +1,14 @@
 use std::{marker::PhantomData, num::NonZeroU64, ops::Deref};
 use xxhash_rust::xxh3;
 
+/// Creates an ID by hashing fixed-width integer components in little-endian order.
+macro_rules! id_from_parts {
+    ($id:ty; $($part:expr),+ $(,)?) => {
+        <$id>::from([$(($part).to_le_bytes().as_slice()),+])
+    };
+}
+pub(crate) use id_from_parts;
+
 /// Maps a u64 hash to a `NonZeroU64` by replacing 0 with `u64::MAX`.
 /// The probability of a 64-bit hash being exactly 0 is 2^-64 (~5.4e-20),
 /// and remapping 0 → MAX just means those two inputs collide — the same
@@ -70,6 +78,18 @@ impl<T> From<&String> for Id<T> {
     }
 }
 
+impl<T, const N: usize> From<[&[u8]; N]> for Id<T> {
+    fn from(parts: [&[u8]; N]) -> Self {
+        let mut hasher = xxh3::Xxh3Default::new();
+
+        for part in parts {
+            hasher.update(part);
+        }
+
+        Self::new(hasher.digest())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +97,41 @@ mod tests {
     #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
     pub struct Marker;
     pub type TestId = Id<Marker>;
+
+    #[test]
+    fn from_byte_slices_matches_concatenated_string() {
+        assert_eq!(
+            TestId::from("foobar"),
+            TestId::from([b"foo".as_slice(), b"bar".as_slice()]),
+        );
+    }
+
+    #[test]
+    fn from_parts_matches_mixed_width_byte_slices() {
+        let id = 42_u64;
+        let offset = 7_u32;
+        let tag = 2_u8;
+
+        assert_eq!(
+            TestId::from([
+                id.to_le_bytes().as_slice(),
+                offset.to_le_bytes().as_slice(),
+                tag.to_le_bytes().as_slice(),
+            ]),
+            id_from_parts!(TestId; id, offset, tag),
+        );
+    }
+
+    #[test]
+    fn from_byte_slices_is_deterministic() {
+        let parts: [&[u8]; 2] = [&[1, 2, 3], &[4, 5]];
+        assert_eq!(TestId::from(parts), TestId::from(parts));
+    }
+
+    #[test]
+    fn from_byte_slices_distinguishes_inputs() {
+        assert_ne!(TestId::from([b"foo".as_slice()]), TestId::from([b"bar".as_slice()]),);
+    }
 
     #[test]
     fn test_create_hash() {
