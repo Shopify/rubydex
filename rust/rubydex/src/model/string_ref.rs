@@ -7,7 +7,7 @@ use std::ops::Deref;
 /// the string is used across the graph. When a document is removed, we decrement
 /// the reference count for each string it uses, and remove the string from the
 /// graph when its count reaches zero.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct StringRef {
     value: Box<str>,
     ref_count: u32,

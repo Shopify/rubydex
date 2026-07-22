@@ -20,6 +20,21 @@ pub static OBJECT_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::
 pub static MODULE_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Module"));
 pub static CLASS_ID: LazyLock<DeclarationId> = LazyLock::new(|| DeclarationId::from("Class"));
 
+/// The declaration ids that [`add_built_in_data`] unconditionally inserts into every graph, and thus
+/// are guaranteed to already exist in a fresh graph.
+///
+/// This is the set the `SQLite` cache excludes from serialized closures: a fresh graph already has
+/// them, so they are never stored or merged. `Kernel` is deliberately **absent** — although it is
+/// declared in the built-in source below, its declaration is materialized by *resolution*, not by
+/// this seeding, so a fresh (unresolved) graph does not contain it and it must be serialized like
+/// any other declaration.
+///
+/// Must stay in sync with the explicit `declarations.insert(...)` calls in [`add_built_in_data`].
+#[must_use]
+pub fn seeded_declaration_ids() -> [DeclarationId; 4] {
+    [*BASIC_OBJECT_ID, *OBJECT_ID, *MODULE_ID, *CLASS_ID]
+}
+
 /// Adds core classes and modules data to the graph so that resolution can provide correct results even when not
 /// indexing the complete RBS core definitions
 ///

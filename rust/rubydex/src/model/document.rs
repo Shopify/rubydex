@@ -36,6 +36,33 @@ impl Document {
         }
     }
 
+    /// Reconstructs a document from cached data restored by the `SQLite` cache
+    /// (`Graph::merge_cached_document`), bypassing re-indexing.
+    ///
+    /// The line index is a placeholder empty index: the cache does not persist source text or line
+    /// offsets, so position-dependent queries are unavailable on cache-loaded documents until this
+    /// is addressed.
+    // TODO(cache): persist/restore source line data so positions survive a cache load. The FFI
+    // position path lives in `rubydex-sys/src/location_api.rs`.
+    #[must_use]
+    pub fn from_cache(
+        uri: String,
+        content_hash: u64,
+        definition_ids: Vec<DefinitionId>,
+        method_reference_ids: Vec<MethodReferenceId>,
+        constant_reference_ids: Vec<ConstantReferenceId>,
+    ) -> Self {
+        Self {
+            uri,
+            line_index: LineIndex::new(""),
+            definition_ids,
+            method_reference_ids,
+            constant_reference_ids,
+            diagnostics: Vec::new(),
+            content_hash,
+        }
+    }
+
     #[must_use]
     pub fn uri(&self) -> &str {
         &self.uri

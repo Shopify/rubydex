@@ -46,6 +46,18 @@ impl<T> Id<T> {
     }
 }
 
+impl<T> serde::Serialize for Id<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.value.get())
+    }
+}
+
+impl<'de, T> serde::Deserialize<'de> for Id<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::new(<u64 as serde::Deserialize>::deserialize(deserializer)?))
+    }
+}
+
 impl<T> Deref for Id<T> {
     type Target = u64;
 

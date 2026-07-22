@@ -36,6 +36,13 @@ impl GraphTest {
         &self.graph
     }
 
+    /// Mutable access to the underlying graph, for tests that drive it through APIs outside
+    /// `GraphTest` (e.g. the `SQLite` cache loading straight into the graph).
+    #[must_use]
+    pub fn graph_mut(&mut self) -> &mut Graph {
+        &mut self.graph
+    }
+
     #[must_use]
     pub fn into_graph(self) -> Graph {
         self.graph

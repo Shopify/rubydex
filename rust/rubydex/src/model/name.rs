@@ -8,7 +8,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ParentScope {
     /// There's no parent scope in this reference (e.g.: `Foo`)
     None,
@@ -77,7 +77,7 @@ impl Display for ParentScope {
     }
 }
 
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Name {
     /// The unqualified name of the constant
     str: StringId,
@@ -146,7 +146,7 @@ impl Name {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedName {
     name: Name,
     declaration_id: DeclarationId,
@@ -176,7 +176,7 @@ impl ResolvedName {
 }
 
 /// A usage of a constant name. This could be a constant reference or a definition like a class or module
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum NameRef {
     /// This name has not yet been resolved. We don't yet know what this name refers to or if it refers to an existing
     /// declaration

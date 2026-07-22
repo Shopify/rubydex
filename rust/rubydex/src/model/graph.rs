@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::errors::Errors;
 use crate::indexing::local_graph::LocalGraph;
-use crate::model::built_in::{OBJECT_ID, add_built_in_data};
+use crate::model::built_in::{BUILT_IN_URI_ID, OBJECT_ID, add_built_in_data, seeded_declaration_ids};
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, MethodVisibilityDefinition, Receiver};
 use crate::model::document::Document;
@@ -25,7 +25,7 @@ use crate::{query, stats};
 
 /// An entity whose validity depends on a particular `NameId`.
 /// Used as the value type in the `name_dependents` reverse index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NameDependent {
     Definition(DefinitionId),
     Reference(ConstantReferenceId),
@@ -95,6 +95,138 @@ pub struct Graph {
 }
 assert_mem_size!(Graph, 352);
 assert_send_sync!(Graph);
+
+/// An owned, deserializable snapshot of a single document and the resolved declarations reachable
+/// from it, used by the `SQLite` cache. Produced on disk from a [`CachedDocumentRef`] and restored
+/// with [`Graph::merge_cached_document`].
+///
+/// The two shapes are wire-compatible under postcard (which is not self-describing): `&T`, `&[T]`,
+/// and `&str` serialize identically to `T`, `Vec<T>`, and `Box<str>`/`String`. Splitting the
+/// borrowed save path from the owned load path lets us serialize straight out of the graph without
+/// cloning the (non-`Clone`) model types.
+///
+/// Ref-counts are intentionally NOT stored: strings carry only their content and the per-document
+/// contribution is rebuilt from usage on merge (see [`Graph::merge_cached_document`]).
+#[derive(serde::Deserialize)]
+pub struct CachedDocument {
+    uri: String,
+    content_hash: u64,
+    definition_ids: Vec<DefinitionId>,
+    method_reference_ids: Vec<MethodReferenceId>,
+    constant_reference_ids: Vec<ConstantReferenceId>,
+    definitions: Vec<(DefinitionId, Definition)>,
+    constant_references: Vec<(ConstantReferenceId, ConstantReference)>,
+    method_references: Vec<(MethodReferenceId, MethodRef)>,
+    names: Vec<(NameId, NameRef)>,
+    strings: Vec<(StringId, Box<str>)>,
+    declarations: Vec<(DeclarationId, Declaration)>,
+}
+
+/// A borrowed, serializable view of a document for the `SQLite` cache — the save-side counterpart of
+/// [`CachedDocument`]. See that type for the wire-compatibility contract.
+#[derive(serde::Serialize)]
+pub struct CachedDocumentRef<'a> {
+    uri: &'a str,
+    content_hash: u64,
+    definition_ids: &'a [DefinitionId],
+    method_reference_ids: &'a [MethodReferenceId],
+    constant_reference_ids: &'a [ConstantReferenceId],
+    definitions: Vec<(DefinitionId, &'a Definition)>,
+    constant_references: Vec<(ConstantReferenceId, &'a ConstantReference)>,
+    method_references: Vec<(MethodReferenceId, &'a MethodRef)>,
+    names: Vec<(NameId, &'a NameRef)>,
+    strings: Vec<(StringId, &'a str)>,
+    declarations: Vec<(DeclarationId, &'a Declaration)>,
+}
+
+impl CachedDocumentRef<'_> {
+    /// The content hash of the snapshotted document, so callers can persist it without re-fetching
+    /// the document from the graph.
+    #[must_use]
+    pub fn content_hash(&self) -> u64 {
+        self.content_hash
+    }
+}
+
+/// Tallies the string and name ref-count contributions of one document's owned entities. This is
+/// the exact inverse of [`Graph::remove_document_data`]'s decrements, expressed as increments, so
+/// that saving and restoring stay symmetric with deletion. `name_str` resolves a name to its
+/// interned string (a name contributes both to its own count and to its string's count, matching
+/// `untrack_name`).
+fn tally_document_ref_counts<'a>(
+    definitions: impl Iterator<Item = &'a Definition>,
+    constant_references: impl Iterator<Item = &'a ConstantReference>,
+    method_references: impl Iterator<Item = &'a MethodRef>,
+    name_str: impl Fn(&NameId) -> Option<StringId>,
+) -> (IdentityHashMap<StringId, u32>, IdentityHashMap<NameId, u32>) {
+    let mut strings: IdentityHashMap<StringId, u32> = IdentityHashMap::default();
+    let mut names: IdentityHashMap<NameId, u32> = IdentityHashMap::default();
+
+    // A name contributes both to its own count and to its interned string's count (matching
+    // `untrack_name`).
+    let bump_name = |name_id: NameId,
+                     names: &mut IdentityHashMap<NameId, u32>,
+                     strings: &mut IdentityHashMap<StringId, u32>| {
+        *names.entry(name_id).or_insert(0) += 1;
+        if let Some(string_id) = name_str(&name_id) {
+            *strings.entry(string_id).or_insert(0) += 1;
+        }
+    };
+
+    for method_reference in method_references {
+        *strings.entry(*method_reference.str()).or_insert(0) += 1;
+    }
+    for constant_reference in constant_references {
+        bump_name(*constant_reference.name_id(), &mut names, &mut strings);
+    }
+    for definition in definitions {
+        if let Some(name_id) = definition.name_id() {
+            bump_name(*name_id, &mut names, &mut strings);
+        }
+        // Mirror `untrack_definition_strings`: only non-namespace, non-constant definitions carry a
+        // string of their own.
+        match definition {
+            Definition::Class(_)
+            | Definition::SingletonClass(_)
+            | Definition::Module(_)
+            | Definition::Constant(_)
+            | Definition::ConstantAlias(_)
+            | Definition::ConstantVisibility(_) => {}
+            Definition::MethodVisibility(d) => *strings.entry(*d.str_id()).or_insert(0) += 1,
+            Definition::Method(d) => *strings.entry(*d.str_id()).or_insert(0) += 1,
+            Definition::AttrAccessor(d) => *strings.entry(*d.str_id()).or_insert(0) += 1,
+            Definition::AttrReader(d) => *strings.entry(*d.str_id()).or_insert(0) += 1,
+            Definition::AttrWriter(d) => *strings.entry(*d.str_id()).or_insert(0) += 1,
+            Definition::GlobalVariable(d) => *strings.entry(*d.str_id()).or_insert(0) += 1,
+            Definition::InstanceVariable(d) => *strings.entry(*d.str_id()).or_insert(0) += 1,
+            Definition::ClassVariable(d) => *strings.entry(*d.str_id()).or_insert(0) += 1,
+            Definition::MethodAlias(d) => {
+                *strings.entry(*d.new_name_str_id()).or_insert(0) += 1;
+                *strings.entry(*d.old_name_str_id()).or_insert(0) += 1;
+            }
+            Definition::GlobalVariableAlias(d) => {
+                *strings.entry(*d.new_name_str_id()).or_insert(0) += 1;
+                *strings.entry(*d.old_name_str_id()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    (strings, names)
+}
+
+/// Rebuilds a [`NameRef`] from a cached one, preserving its resolution state and structural fields
+/// but setting the ref-count to the supplied per-document contribution (`Name::new` starts at 1).
+fn rebuild_name_ref(source: &NameRef, count: u32) -> NameRef {
+    let name = Name::new(*source.str(), *source.parent_scope(), *source.nesting());
+    let mut name_ref = match source {
+        NameRef::Unresolved(_) => NameRef::Unresolved(Box::new(name)),
+        NameRef::Resolved(resolved) => NameRef::Resolved(Box::new(ResolvedName::new(name, *resolved.declaration_id()))),
+    };
+    if count > 1 {
+        name_ref.increment_ref_count(count - 1);
+    }
+    name_ref
+}
 
 impl Graph {
     #[must_use]
@@ -1017,6 +1149,285 @@ impl Graph {
         }
     }
 
+    /// Builds a serializable, borrowed snapshot of the document `uri_id` for the `SQLite` cache: its
+    /// owned definitions/references and the names/strings they use, plus every `Declaration`
+    /// reachable from those definitions (by `owner_id`, `members`, `singleton_class`, and complete
+    /// ancestors). Also returns the set of *other* documents that must be loaded alongside it — any
+    /// document that owns data one of the reachable declarations depends on (co-declarations,
+    /// members contributed from other files, resolved references).
+    ///
+    /// Returns `None` for the synthetic built-in document (re-seeded by [`Graph::new`], never
+    /// cached) or an unknown URI. The built-in document is excluded from the dependent set for the
+    /// same reason: a fresh graph already has it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the graph is internally inconsistent — i.e. a definition, reference, name, string,
+    /// or declaration id reachable from the document is not present in the corresponding map. This
+    /// is an invariant of a well-formed graph and should never happen.
+    #[must_use]
+    pub fn build_cached_document(&self, uri_id: UriId) -> Option<(CachedDocumentRef<'_>, Vec<UriId>)> {
+        if uri_id == *BUILT_IN_URI_ID {
+            return None;
+        }
+        let document = self.documents.get(&uri_id)?;
+
+        let reachable = self.reachable_declarations(document);
+        let (string_ids, name_ids) = self.owned_string_and_name_ids(document);
+
+        // Dependents: any document (other than this one and the built-in) that owns a definition or
+        // constant reference held by a reachable declaration.
+        let mut dependents: IdentityHashSet<UriId> = IdentityHashSet::default();
+        for declaration_id in &reachable {
+            let declaration = self.declarations.get(declaration_id).unwrap();
+            for definition_id in declaration.definitions() {
+                let owner = *self.definitions.get(definition_id).unwrap().uri_id();
+                if owner != uri_id && owner != *BUILT_IN_URI_ID {
+                    dependents.insert(owner);
+                }
+            }
+            if let Some(references) = declaration.constant_references() {
+                for reference_id in references {
+                    let owner = self.constant_references.get(reference_id).unwrap().uri_id();
+                    if owner != uri_id && owner != *BUILT_IN_URI_ID {
+                        dependents.insert(owner);
+                    }
+                }
+            }
+        }
+
+        let cached = CachedDocumentRef {
+            uri: document.uri(),
+            content_hash: document.content_hash(),
+            definition_ids: document.definitions(),
+            method_reference_ids: document.method_references(),
+            constant_reference_ids: document.constant_references(),
+            definitions: document
+                .definitions()
+                .iter()
+                .map(|id| (*id, self.definitions.get(id).unwrap()))
+                .collect(),
+            constant_references: document
+                .constant_references()
+                .iter()
+                .map(|id| (*id, self.constant_references.get(id).unwrap()))
+                .collect(),
+            method_references: document
+                .method_references()
+                .iter()
+                .map(|id| (*id, self.method_references.get(id).unwrap()))
+                .collect(),
+            names: name_ids
+                .iter()
+                .map(|id| (*id, self.names.get(id).unwrap()))
+                .collect(),
+            strings: string_ids
+                .iter()
+                .map(|id| (*id, self.strings.get(id).unwrap().as_str()))
+                .collect(),
+            declarations: reachable
+                .iter()
+                .map(|id| (*id, self.declarations.get(id).unwrap()))
+                .collect(),
+        };
+
+        Some((cached, dependents.into_iter().collect()))
+    }
+
+    /// The set of declarations reachable from `document`'s definitions and resolved constant
+    /// references, following ownership, membership, singleton-class, and complete-ancestor edges.
+    /// This is the closure that must be serialized so the document restores with a consistent
+    /// resolved view.
+    ///
+    /// The walk stops at built-in (seeded) declarations: a fresh graph already has them via
+    /// [`Graph::new`], and — critically — `Object` owns *every* top-level declaration, so descending
+    /// into its member map would drag the whole graph into a single document's cache entry.
+    /// Serialized declarations still keep their `Ancestor::Complete(built_in_id)` edges; those ids
+    /// re-link against the seeded built-ins on load.
+    fn reachable_declarations(&self, document: &Document) -> IdentityHashSet<DeclarationId> {
+        // Declarations a fresh graph already seeds; excluded from the closure. See
+        // `seeded_declaration_ids` for why `Kernel` is not among them.
+        let built_ins: IdentityHashSet<DeclarationId> = seeded_declaration_ids().into_iter().collect();
+
+        // `visited` breaks cycles over the whole traversal (including built-in and dangling ids so
+        // they are examined at most once); `result` is what we return and contains only existing,
+        // non-built-in declarations.
+        let mut visited: IdentityHashSet<DeclarationId> = IdentityHashSet::default();
+        let mut result: IdentityHashSet<DeclarationId> = IdentityHashSet::default();
+        let mut stack: Vec<DeclarationId> = Vec::new();
+
+        for definition_id in document.definitions() {
+            if let Some(declaration_id) = self.definition_id_to_declaration_id(*definition_id) {
+                stack.push(*declaration_id);
+            }
+        }
+        for reference_id in document.constant_references() {
+            if let Some(reference) = self.constant_references.get(reference_id)
+                && let Some(NameRef::Resolved(resolved)) = self.names.get(reference.name_id())
+            {
+                stack.push(*resolved.declaration_id());
+            }
+        }
+
+        while let Some(declaration_id) = stack.pop() {
+            if !visited.insert(declaration_id) {
+                continue;
+            }
+            // Skip dangling ids (do not record them: `build_cached_document` looks every returned id
+            // up unconditionally) and built-ins (re-seeded on load, and the source of the explosion).
+            let Some(declaration) = self.declarations.get(&declaration_id) else {
+                continue;
+            };
+            if built_ins.contains(&declaration_id) {
+                continue;
+            }
+            result.insert(declaration_id);
+
+            stack.push(*declaration.owner_id());
+
+            if let Some(namespace) = declaration.as_namespace() {
+                stack.extend(namespace.members().values().copied());
+                if let Some(singleton_class_id) = namespace.singleton_class() {
+                    stack.push(*singleton_class_id);
+                }
+                for ancestor in namespace.ancestors() {
+                    if let Ancestor::Complete(ancestor_id) = ancestor {
+                        stack.push(*ancestor_id);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// The strings and names owned by `document`, i.e. exactly the ref-count contributions
+    /// `remove_document_data` would decrement for it. Used at save time to decide which
+    /// string/name content to store; the counts themselves are rebuilt on merge.
+    fn owned_string_and_name_ids(&self, document: &Document) -> (Vec<StringId>, Vec<NameId>) {
+        let (strings, names) = tally_document_ref_counts(
+            document
+                .definitions()
+                .iter()
+                .map(|id| self.definitions.get(id).unwrap()),
+            document
+                .constant_references()
+                .iter()
+                .map(|id| self.constant_references.get(id).unwrap()),
+            document
+                .method_references()
+                .iter()
+                .map(|id| self.method_references.get(id).unwrap()),
+            |name_id| self.names.get(name_id).map(|name| *name.str()),
+        );
+        (strings.into_keys().collect(), names.into_keys().collect())
+    }
+
+    /// Bulk-restores a cached document (produced by [`Graph::build_cached_document`]) into this
+    /// graph. This is a sibling of [`Graph::extend`] but explicitly NOT an incremental-update path:
+    /// the data is already resolved, so it does not push `pending_work` and must never trigger
+    /// `resolve()`. Everything is inserted content-addressed and insert-if-absent (co-declared or
+    /// shared entities serialize identically from every participating document, so first-writer
+    /// wins). Per-document string/name ref-counts are rebuilt from usage and summed across loaded
+    /// documents, mirroring `remove_document_data`.
+    pub fn merge_cached_document(&mut self, cached: CachedDocument) {
+        let CachedDocument {
+            uri,
+            content_hash,
+            definition_ids,
+            method_reference_ids,
+            constant_reference_ids,
+            definitions,
+            constant_references,
+            method_references,
+            names,
+            strings,
+            declarations,
+        } = cached;
+
+        let uri_id = UriId::from(uri.as_str());
+
+        // Rebuild this document's ref-count contribution before the vectors are consumed. The name
+        // lookup comes from the cached names (which carry the same str ids as the live graph).
+        let cached_name_str: IdentityHashMap<NameId, StringId> =
+            names.iter().map(|(id, name_ref)| (*id, *name_ref.str())).collect();
+        let (string_counts, name_counts) = tally_document_ref_counts(
+            definitions.iter().map(|(_, definition)| definition),
+            constant_references.iter().map(|(_, reference)| reference),
+            method_references.iter().map(|(_, reference)| reference),
+            |name_id| cached_name_str.get(name_id).copied(),
+        );
+
+        // Rebuild the `name_dependents` reverse index (dedup), mirroring what indexing records for
+        // names, definitions, and constant references.
+        for (name_id, name_ref) in &names {
+            if let Some(parent_scope_id) = name_ref.parent_scope().as_ref() {
+                self.add_name_dependent(*parent_scope_id, NameDependent::ChildName(*name_id));
+            }
+            if let &Some(nesting_id) = name_ref.nesting() {
+                self.add_name_dependent(nesting_id, NameDependent::NestedName(*name_id));
+            }
+        }
+        for (definition_id, definition) in &definitions {
+            if let Some(name_id) = definition.name_id() {
+                self.add_name_dependent(*name_id, NameDependent::Definition(*definition_id));
+            }
+        }
+        for (reference_id, reference) in &constant_references {
+            self.add_name_dependent(*reference.name_id(), NameDependent::Reference(*reference_id));
+        }
+
+        // Names and strings: insert-if-absent with a freshly rebuilt count, else add this
+        // document's contribution to the existing count.
+        for (name_id, name_ref) in &names {
+            let count = name_counts.get(name_id).copied().unwrap_or(1);
+            match self.names.entry(*name_id) {
+                Entry::Occupied(mut entry) => entry.get_mut().increment_ref_count(count),
+                Entry::Vacant(entry) => {
+                    entry.insert(rebuild_name_ref(name_ref, count));
+                }
+            }
+        }
+        for (string_id, content) in &strings {
+            let count = string_counts.get(string_id).copied().unwrap_or(1);
+            match self.strings.entry(*string_id) {
+                Entry::Occupied(mut entry) => entry.get_mut().increment_ref_count(count),
+                Entry::Vacant(entry) => {
+                    let mut string_ref = StringRef::new(content.to_string());
+                    if count > 1 {
+                        string_ref.increment_ref_count(count - 1);
+                    }
+                    entry.insert(string_ref);
+                }
+            }
+        }
+
+        // Definitions, references, declarations, and the document itself: insert-if-absent.
+        for (definition_id, definition) in definitions {
+            self.definitions.entry(definition_id).or_insert(definition);
+        }
+        for (reference_id, reference) in constant_references {
+            self.constant_references.entry(reference_id).or_insert(reference);
+        }
+        for (reference_id, reference) in method_references {
+            self.method_references.entry(reference_id).or_insert(reference);
+        }
+        for (declaration_id, declaration) in declarations {
+            self.declarations.entry(declaration_id).or_insert(declaration);
+        }
+        self.documents.entry(uri_id).or_insert_with(|| {
+            Document::from_cache(uri, content_hash, definition_ids, method_reference_ids, constant_reference_ids)
+        });
+    }
+
+    /// Appends `dependent` to the `name_dependents` entry for `name_id`, skipping duplicates.
+    fn add_name_dependent(&mut self, name_id: NameId, dependent: NameDependent) {
+        let dependents = self.name_dependents.entry(name_id).or_default();
+        if !dependents.contains(&dependent) {
+            dependents.push(dependent);
+        }
+    }
+
     /// Updates the global representation with the information contained in `other`, handling deletions, insertions and
     /// updates to existing entries.
     ///
@@ -1584,6 +1995,44 @@ mod tests {
 
     fn definition_ids(definitions: Vec<&Definition>) -> Vec<DefinitionId> {
         definitions.into_iter().map(Definition::id).collect()
+    }
+
+    #[test]
+    fn cached_document_closure_excludes_built_ins_and_unrelated_siblings() {
+        // Regression (C1/C3): the reachable-declaration closure must stop at built-ins. Every
+        // top-level declaration is a member of `Object`, so if the walk descended into `Object`'s
+        // members it would drag every unrelated top-level declaration (and every file that owns
+        // one) into a single document's cache entry, and it would pointlessly serialize `Object`'s
+        // whole member map only for the merge to drop it (a fresh graph already seeds `Object`).
+        let mut context = GraphTest::new();
+        context.index_uri("file:///foo.rb", "class Foo; def a; end; end");
+        context.index_uri("file:///bar.rb", "class Bar; def b; end; end");
+        context.resolve();
+
+        let (cached, dependents) = context
+            .graph()
+            .build_cached_document(UriId::from("file:///foo.rb"))
+            .expect("expected a cached document for foo.rb");
+
+        let declaration_ids: Vec<DeclarationId> = cached.declarations.iter().map(|(id, _)| *id).collect();
+
+        // `Object` is a seeded built-in: never serialize it.
+        assert!(
+            !declaration_ids.contains(&OBJECT_ID),
+            "closure must exclude the built-in `Object` declaration, got {declaration_ids:?}"
+        );
+        // The unrelated sibling `Bar` (and its file) must be unreachable from `foo.rb`.
+        assert!(
+            !declaration_ids.contains(&DeclarationId::from("Bar")),
+            "closure must not reach unrelated top-level siblings via `Object`"
+        );
+        assert!(
+            !dependents.contains(&UriId::from("file:///bar.rb")),
+            "an unrelated file must not become a dependent"
+        );
+
+        // The document's own declarations are still present.
+        assert!(declaration_ids.contains(&DeclarationId::from("Foo")));
     }
 
     #[test]

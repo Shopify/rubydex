@@ -8,7 +8,7 @@ use crate::model::{
 };
 
 /// A single ancestor in the linearized ancestor chain
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Ancestor {
     /// A complete ancestor that we have fully linearized
     Complete(DeclarationId),
@@ -18,7 +18,7 @@ pub enum Ancestor {
 assert_mem_size!(Ancestor, 16);
 
 /// The ancestor chain and its current state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Ancestors {
     /// A complete linearization of ancestors with all parts resolved
     Complete(Vec<Ancestor>),
@@ -88,7 +88,7 @@ macro_rules! all_namespaces {
 /// Macro to generate a new struct for namespace-like declarations such as classes and modules
 macro_rules! namespace_declaration {
     ($variant:ident, $name:ident) => {
-        #[derive(Debug)]
+        #[derive(Debug, serde::Serialize, serde::Deserialize)]
         pub struct $name {
             /// The fully qualified name of this declaration
             name: Box<str>,
@@ -224,7 +224,7 @@ macro_rules! namespace_declaration {
 /// Macro to generate a new struct for simple declarations like variables and methods
 macro_rules! simple_declaration {
     ($name:ident, $reference_type:ty) => {
-        #[derive(Debug)]
+        #[derive(Debug, serde::Serialize, serde::Deserialize)]
         pub struct $name {
             /// The fully qualified name of this declaration
             name: Box<str>,
@@ -276,7 +276,7 @@ macro_rules! simple_declaration {
 /// A `Declaration` represents the global concept of an entity in Ruby. For example, the class `Foo` may be defined 3
 /// times in different files and the `Foo` declaration is the combination of all of those definitions that contribute to
 /// the same fully qualified name
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum Declaration {
     Namespace(Namespace),
     Constant(Box<ConstantDeclaration>),
@@ -465,7 +465,7 @@ impl Declaration {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum Namespace {
     Class(Box<ClassDeclaration>),
     SingletonClass(Box<SingletonClassDeclaration>),

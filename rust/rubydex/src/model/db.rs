@@ -1,7 +1,10 @@
 use rusqlite::Connection;
-use std::{error::Error, fs, path::PathBuf};
+use std::{collections::HashSet, error::Error, fs, path::PathBuf};
 
-use crate::model::{graph::Graph, ids::UriId};
+use crate::model::{
+    graph::{CachedDocument, Graph},
+    ids::UriId,
+};
 
 #[derive(Debug)]
 pub struct Db {
@@ -61,10 +64,31 @@ impl Db {
         let connection = self.connection.as_mut().ok_or("No connection established")?;
         let tx = connection.transaction()?;
 
-        // TODO: Serialize the document + all data that can be reached through it (declarations, names, strings,
-        // definitions) and save it to the database. In the process of serializing the data, we also need to track which
-        // documents depend on which other documents, which is used to determine all of the data that needs to be loaded
-        // together
+        {
+            let mut statement = tx.prepare_cached(
+                "INSERT OR REPLACE INTO documents (id, content_hash, dependent_documents, data) VALUES (?, ?, ?, ?)",
+            )?;
+
+            for uri_id in modified_documents {
+                // The built-in document is re-seeded by `Graph::new`, so it is never cached (and
+                // `build_cached_document` returns `None` for it).
+                let Some((cached_document, dependent_documents)) = graph.build_cached_document(*uri_id) else {
+                    continue;
+                };
+
+                let content_hash = cached_document.content_hash();
+                let data = postcard::to_stdvec(&cached_document)?;
+                let dependent_documents = postcard::to_stdvec(&dependent_documents)?;
+
+                statement.execute(rusqlite::params![
+                    uri_id.get().to_string(),
+                    // SQLite integers are signed; store the hash's bit pattern losslessly.
+                    i64::from_le_bytes(content_hash.to_le_bytes()),
+                    dependent_documents,
+                    data,
+                ])?;
+            }
+        }
 
         let transaction_result = tx.commit();
 
@@ -86,7 +110,53 @@ impl Db {
     ///
     /// Will return an Error if we fail to establish or set a connection, or if we fail to load the documents from the
     /// database.
-    pub fn load_documents(&mut self, graph: &mut Graph, id: &[UriId]) -> Result<(), Box<dyn Error>> {}
+    pub fn load_documents(&mut self, graph: &mut Graph, ids: &[UriId]) -> Result<(), Box<dyn Error>> {
+        let connection = self.connection.as_ref().ok_or("No connection established")?;
+
+        // Breadth-first traversal of the dependent closure. A document and its dependents must be
+        // loaded together so the restored graph is internally consistent (co-declarations, members
+        // contributed from other files, resolved references). `seen` is keyed by the numeric row id
+        // (`UriId::get`) and marks entries when they are enqueued so a document is loaded once even
+        // if several others depend on it (the graph is cyclic).
+        let mut seen: HashSet<u64> = HashSet::new();
+        let mut frontier: Vec<u64> = Vec::new();
+        for id in ids {
+            if seen.insert(id.get()) {
+                frontier.push(id.get());
+            }
+        }
+
+        while !frontier.is_empty() {
+            let placeholders = vec!["?"; frontier.len()].join(",");
+            let mut statement =
+                connection.prepare(&format!("SELECT dependent_documents, data FROM documents WHERE id IN ({placeholders})"))?;
+
+            let parameters = frontier.iter().map(u64::to_string).collect::<Vec<_>>();
+            let rows = statement.query_map(rusqlite::params_from_iter(&parameters), |row| {
+                let dependent_documents: Vec<u8> = row.get(0)?;
+                let data: Vec<u8> = row.get(1)?;
+                Ok((dependent_documents, data))
+            })?;
+
+            let mut next_frontier: Vec<u64> = Vec::new();
+            for row in rows {
+                let (dependent_documents, data) = row?;
+
+                let cached_document: CachedDocument = postcard::from_bytes(&data)?;
+                graph.merge_cached_document(cached_document);
+
+                for dependent in postcard::from_bytes::<Vec<UriId>>(&dependent_documents)? {
+                    if seen.insert(dependent.get()) {
+                        next_frontier.push(dependent.get());
+                    }
+                }
+            }
+
+            frontier = next_frontier;
+        }
+
+        Ok(())
+    }
 
     /// Creates a fresh file database file
     fn setup_database(&mut self) -> Result<(), Box<dyn Error>> {
@@ -106,14 +176,12 @@ impl Db {
             ",
         )?;
 
-        let schema = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src")
-                .join("db")
-                .join("schema.sql"),
-        )?;
+        // Embed the schema in the binary: reading it from the source tree at runtime
+        // (`env!("CARGO_MANIFEST_DIR")`) would fail on any machine that only has the compiled
+        // artifact, e.g. the shipped gem.
+        let schema = include_str!("db/schema.sql");
         let tx = connection.transaction()?;
-        tx.execute_batch(&schema)?;
+        tx.execute_batch(schema)?;
         tx.execute(&format!("PRAGMA user_version = {}", Self::SCHEMA_VERSION), [])?;
         tx.commit()?;
         Ok(())
@@ -147,7 +215,8 @@ mod tests {
         });
         context.resolve();
 
-        let mut db = Db::new(std::env::temp_dir().join("test.db"));
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut db = Db::new(temp_dir.path().join("cache.db"));
         db.connect().expect("Failed to connect to database");
         db.save_modifications(
             context.graph(),
@@ -174,7 +243,8 @@ mod tests {
             "
         });
         context.resolve();
-        let mut db = Db::new(std::env::temp_dir().join("test.db"));
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut db = Db::new(temp_dir.path().join("cache.db"));
         db.connect().expect("Failed to connect to database");
         db.save_modifications(
             context.graph(),
@@ -217,7 +287,8 @@ mod tests {
             "
         });
         context.resolve();
-        let mut db = Db::new(std::env::temp_dir().join("test.db"));
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let mut db = Db::new(temp_dir.path().join("cache.db"));
         db.connect().expect("Failed to connect to database");
         db.save_modifications(
             context.graph(),
@@ -225,17 +296,21 @@ mod tests {
         )
         .expect("Failed to save modifications");
 
-        let mut fresh_graph = Graph::new();
+        // Load into a brand-new graph (only built-ins seeded) to prove the cache restores the
+        // resolved state without re-running resolution.
+        let mut fresh_context = GraphTest::new();
 
-        db.load_documents(&mut fresh_graph, &[UriId::from("file:///foo2.rb")])
+        db.load_documents(fresh_context.graph_mut(), &[UriId::from("file:///foo2.rb")])
             .expect("Failed to load documents");
 
-        assert_declaration_exists!(fresh_graph, "Foo");
-        assert_declaration_exists!(fresh_graph, "Foo::<Foo>");
-        assert_declaration_exists!(fresh_graph, "Foo::<Foo>#bar()");
-        assert_declaration_exists!(fresh_graph, "Foo#baz()");
-        assert_ancestors_eq!(fresh_graph, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
-        assert_members_eq!(fresh_graph, "Foo", ["bar", "baz"]);
-        assert_declaration_references_count_eq!(fresh_graph, "Foo", 1);
+        assert_declaration_exists!(fresh_context, "Foo");
+        assert_declaration_exists!(fresh_context, "Foo::<Foo>");
+        assert_declaration_exists!(fresh_context, "Foo::<Foo>#bar()");
+        assert_declaration_exists!(fresh_context, "Foo#baz()");
+        assert_ancestors_eq!(fresh_context, "Foo", ["Foo", "Object", "Kernel", "BasicObject"]);
+        // `bar` is a singleton method (`def self.bar`), so it is a member of `Foo::<Foo>`, not `Foo`.
+        assert_members_eq!(fresh_context, "Foo", ["baz()"]);
+        assert_members_eq!(fresh_context, "Foo::<Foo>", ["bar()"]);
+        assert_declaration_references_count_eq!(fresh_context, "Foo", 1);
     }
 }

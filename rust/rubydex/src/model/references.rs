@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// A reference to a constant
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ConstantReference {
     /// The name ID of this reference
     name_id: NameId,
@@ -57,7 +57,7 @@ impl ConstantReference {
 }
 
 /// A reference to a method
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct MethodRef {
     /// The unqualified name of the method
     str: StringId,
