@@ -4,6 +4,7 @@ use crate::{
     assert_mem_size,
     model::{
         id::id_from_parts,
+        identity_maps::IdentityHashMap,
         ids::{DeclarationId, NameId, StringId},
     },
 };
@@ -93,29 +94,55 @@ pub struct Name {
     /// list of names to represent the nesting
     nesting: Option<NameId>,
     ref_count: u32,
+    /// The depth of the name, which combines the depths of the parent scope and nesting
+    depth: u16,
 }
+assert_mem_size!(Name, 40);
 
 impl PartialEq for Name {
     fn eq(&self, other: &Self) -> bool {
         self.str == other.str && self.parent_scope == other.parent_scope && self.nesting == other.nesting
     }
 }
-assert_mem_size!(Name, 40);
 
 impl Name {
     #[must_use]
-    pub fn new(str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> Self {
+    pub fn new(str: StringId, parent_scope: ParentScope, nesting: Option<NameId>, depth: u16) -> Self {
         Self {
             str,
             parent_scope,
             nesting,
             ref_count: 1,
+            depth,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn name_depth(
+        names: &IdentityHashMap<NameId, NameRef>,
+        parent_scope: ParentScope,
+        nesting: Option<NameId>,
+    ) -> u16 {
+        if parent_scope.is_top_level() {
+            return 1;
+        }
+
+        let parent_depth = parent_scope
+            .as_ref()
+            .map_or(0, |id| names.get(id).map_or(0, NameRef::depth));
+        let nesting_depth = nesting.map_or(0, |id| names.get(&id).map_or(0, NameRef::depth));
+
+        parent_depth.saturating_add(nesting_depth).saturating_add(1)
     }
 
     #[must_use]
     pub fn str(&self) -> &StringId {
         &self.str
+    }
+
+    #[must_use]
+    pub fn depth(&self) -> u16 {
+        self.depth
     }
 
     #[must_use]
@@ -227,6 +254,14 @@ impl NameRef {
         }
     }
 
+    #[must_use]
+    pub fn depth(&self) -> u16 {
+        match self {
+            NameRef::Unresolved(name) => name.depth(),
+            NameRef::Resolved(resolved_name) => resolved_name.name.depth(),
+        }
+    }
+
     /// # Panics
     ///
     /// Panics if we exceed the maximum size of the reference count
@@ -281,42 +316,44 @@ mod tests {
 
     #[test]
     fn same_parent_scope_and_nesting() {
-        let name_1 = Name::new(StringId::from("Foo"), ParentScope::None, None);
-        let name_2 = Name::new(StringId::from("Foo"), ParentScope::None, None);
+        let name_1 = Name::new(StringId::from("Foo"), ParentScope::None, None, 0);
+        let name_2 = Name::new(StringId::from("Foo"), ParentScope::None, None, 0);
         assert_eq!(name_1.id(), name_2.id());
 
-        let name_3 = Name::new(StringId::from("Foo"), ParentScope::Some(name_1.id()), None);
-        let name_4 = Name::new(StringId::from("Foo"), ParentScope::Some(name_2.id()), None);
+        let name_3 = Name::new(StringId::from("Foo"), ParentScope::Some(name_1.id()), None, 0);
+        let name_4 = Name::new(StringId::from("Foo"), ParentScope::Some(name_2.id()), None, 0);
         assert_eq!(name_3.id(), name_4.id());
 
-        let name_5 = Name::new(StringId::from("Foo"), ParentScope::None, Some(name_1.id()));
-        let name_6 = Name::new(StringId::from("Foo"), ParentScope::None, Some(name_2.id()));
+        let name_5 = Name::new(StringId::from("Foo"), ParentScope::None, Some(name_1.id()), 0);
+        let name_6 = Name::new(StringId::from("Foo"), ParentScope::None, Some(name_2.id()), 0);
         assert_eq!(name_5.id(), name_6.id());
         assert_ne!(name_3.id(), name_5.id());
         assert_ne!(name_4.id(), name_6.id());
 
         let name_7 = Name::new(
             StringId::from("Foo"),
-            ParentScope::Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
-            Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
+            ParentScope::Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
+            Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
+            0,
         );
         let name_8 = Name::new(
             StringId::from("Foo"),
-            ParentScope::Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
-            Some(Name::new(StringId::from("Foo"), ParentScope::None, None).id()),
+            ParentScope::Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
+            Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
+            0,
         );
         assert_eq!(name_7.id(), name_8.id());
     }
 
     #[test]
     fn parent_scope_variants_are_distinct() {
-        let inner = Name::new(StringId::from("Foo"), ParentScope::None, None).id();
+        let inner = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
 
         let ids = [
-            Name::new(StringId::from("Foo"), ParentScope::None, None).id(),
-            Name::new(StringId::from("Foo"), ParentScope::TopLevel, None).id(),
-            Name::new(StringId::from("Foo"), ParentScope::Some(inner), None).id(),
-            Name::new(StringId::from("Foo"), ParentScope::Attached(inner), None).id(),
+            Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id(),
+            Name::new(StringId::from("Foo"), ParentScope::TopLevel, None, 0).id(),
+            Name::new(StringId::from("Foo"), ParentScope::Some(inner), None, 0).id(),
+            Name::new(StringId::from("Foo"), ParentScope::Attached(inner), None, 0).id(),
         ];
 
         for (i, a) in ids.iter().enumerate() {

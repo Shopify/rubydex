@@ -12,7 +12,7 @@ use crate::model::definitions::{
 };
 use crate::model::document::Document;
 use crate::model::ids::{DefinitionId, NameId, StringId, UriId};
-use crate::model::name::{Name, ParentScope};
+use crate::model::name::ParentScope;
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::visibility::Visibility;
 use crate::offset::Offset;
@@ -482,11 +482,9 @@ impl<'a> RubyIndexer<'a> {
         let offset = Offset::from_prism_location(&location);
         let name = Self::location_to_string(&location);
         let string_id = self.local_graph.intern_string(name);
-        let name_id = self.local_graph.add_name(Name::new(
-            string_id,
-            parent_scope_id,
-            self.current_lexical_scope_name_id(),
-        ));
+        let name_id = self
+            .local_graph
+            .add_name(string_id, parent_scope_id, self.current_lexical_scope_name_id());
 
         if push_final_reference {
             self.local_graph
@@ -687,7 +685,7 @@ impl<'a> RubyIndexer<'a> {
                 .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
 
             (
-                Some(self.local_graph.add_name(Name::new(string_id, ParentScope::None, None))),
+                Some(self.local_graph.add_name(string_id, ParentScope::None, None)),
                 offset.clone(),
             )
         };
@@ -748,7 +746,7 @@ impl<'a> RubyIndexer<'a> {
                 .intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
 
             (
-                Some(self.local_graph.add_name(Name::new(string_id, ParentScope::None, None))),
+                Some(self.local_graph.add_name(string_id, ParentScope::None, None)),
                 offset.clone(),
             )
         };
@@ -1125,7 +1123,7 @@ impl<'a> RubyIndexer<'a> {
                     }
                     None => {
                         let str_id = self.local_graph.intern_string("Object".into());
-                        Some(self.local_graph.add_name(Name::new(str_id, ParentScope::None, None)))
+                        Some(self.local_graph.add_name(str_id, ParentScope::None, None))
                     }
                 }
             }
@@ -1169,7 +1167,7 @@ impl<'a> RubyIndexer<'a> {
         let string_id = self.local_graph.intern_string(singleton_class_name);
         let new_name_id = self
             .local_graph
-            .add_name(Name::new(string_id, ParentScope::Attached(name_id), None));
+            .add_name(string_id, ParentScope::Attached(name_id), None);
 
         let location = receiver.map_or(fallback_location, ruby_prism::Node::location);
         let offset = Offset::from_prism_location(&location);
@@ -1650,7 +1648,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let nesting = self.current_lexical_scope_name_id();
         let name_id = self
             .local_graph
-            .add_name(Name::new(string_id, ParentScope::Attached(attached_target), nesting));
+            .add_name(string_id, ParentScope::Attached(attached_target), nesting);
 
         let definition = Definition::SingletonClass(Box::new(SingletonClassDefinition::new(
             name_id,
