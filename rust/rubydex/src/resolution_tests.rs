@@ -1285,8 +1285,7 @@ mod include_tests {
         assert_no_diagnostics!(&context);
 
         assert_ancestors_eq!(context, "B", ["B"]);
-        // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
-        //assert_ancestors_eq!(context, "A", Vec::<&str>::new());
+        assert_ancestors_eq!(context, "A", ["A", "B", "Object", "Kernel", "BasicObject"]);
         assert_ancestors_eq!(context, "C", ["C", "B", "Object", "Kernel", "BasicObject"]);
         assert_ancestors_eq!(context, "D", ["D", "B"]);
     }
@@ -1600,8 +1599,7 @@ mod prepend_tests {
         assert_no_diagnostics!(&context);
 
         assert_ancestors_eq!(context, "B", ["B"]);
-        // TODO: this is a temporary hack to avoid crashing on `Struct.new`, `Class.new` and `Module.new`
-        //assert_ancestors_eq!(context, "A", Vec::<&str>::new());
+        assert_ancestors_eq!(context, "A", ["B", "A", "Object", "Kernel", "BasicObject"]);
         assert_ancestors_eq!(context, "C", ["B", "C", "Object", "Kernel", "BasicObject"]);
         assert_ancestors_eq!(context, "D", ["B", "D"]);
     }
@@ -3773,6 +3771,70 @@ mod todo_tests {
         );
         assert_members_eq!(context, "Foo", vec!["Bar", "foo()"]);
         assert_members_eq!(context, "Foo::Bar", vec!["bar()"]);
+    }
+
+    #[test]
+    fn struct_new_defines_a_class() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Point = Struct.new(:x, :y) do
+              def distance; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // `Struct.new` yields a class, and block methods are owned by it, not the enclosing scope.
+        assert_declaration_kind_eq!(context, "Point", "Class");
+        assert_members_eq!(context, "Point", vec!["distance()"]);
+        assert_owner_eq!(context, "Point#distance()", "Point");
+    }
+
+    #[test]
+    fn data_define_defines_a_class() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            Measure = Data.define(:amount, :unit) do
+              def to_s; end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_declaration_kind_eq!(context, "Measure", "Class");
+        assert_members_eq!(context, "Measure", vec!["to_s()"]);
+        assert_owner_eq!(context, "Measure#to_s()", "Measure");
+    }
+
+    #[test]
+    fn struct_new_block_does_not_open_a_lexical_scope() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Container
+              Point = Struct.new(:x) do
+                CONST = 1
+                def distance; end
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        // The block runs in the struct's context, so its methods are owned by the struct...
+        assert_members_eq!(context, "Container::Point", vec!["distance()"]);
+        // ...but `Struct.new` does not open a lexical scope, so a constant assigned in
+        // the block belongs to the enclosing namespace, not the struct.
+        assert_members_eq!(context, "Container", vec!["CONST", "Point"]);
+        assert_owner_eq!(context, "Container::CONST", "Container");
     }
 
     #[test]

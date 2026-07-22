@@ -799,28 +799,29 @@ impl<'a> RubyOperationBuilder<'a> {
             return false;
         };
 
-        if call_node.name().as_slice() != b"new" {
-            return false;
-        }
-
         let Some(receiver) = call_node.receiver() else {
             return false;
         };
 
         let receiver_name = receiver.location().as_slice();
 
-        if matches!(receiver_name, b"Module" | b"::Module") {
-            self.handle_module_definition(&node.location(), Some(node), call_node.block(), false);
-        } else if matches!(receiver_name, b"Class" | b"::Class") {
-            self.handle_class_definition(
-                &node.location(),
-                Some(node),
-                call_node.block(),
-                call_node.arguments().and_then(|args| args.arguments().iter().next()),
-                false,
-            );
-        } else {
-            return false;
+        match (receiver_name, call_node.name().as_slice()) {
+            (b"Module" | b"::Module", b"new") => {
+                self.handle_module_definition(&node.location(), Some(node), call_node.block(), false);
+            }
+            (b"Class" | b"::Class", b"new") => {
+                self.handle_class_definition(
+                    &node.location(),
+                    Some(node),
+                    call_node.block(),
+                    call_node.arguments().and_then(|args| args.arguments().iter().next()),
+                    false,
+                );
+            }
+            (b"Struct" | b"::Struct", b"new") | (b"Data" | b"::Data", b"define") => {
+                self.handle_class_definition(&node.location(), Some(node), call_node.block(), None, false);
+            }
+            _ => return false,
         }
 
         self.index_method_reference_for_call(&call_node);
