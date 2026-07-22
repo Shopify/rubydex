@@ -38,6 +38,17 @@ impl Outcome {
     }
 }
 
+macro_rules! mixins_of {
+    ($self:expr, $definition_id:expr) => {
+        match $self.graph.definitions().get(&$definition_id).unwrap() {
+            Definition::Class(class) => class.mixins(),
+            Definition::SingletonClass(class) => class.mixins(),
+            Definition::Module(module) => module.mixins(),
+            _ => &[],
+        }
+    };
+}
+
 /// Controls how `get_or_create_singleton_class` schedules linearization of the singleton it touches.
 #[derive(Clone, Copy)]
 enum SingletonAncestors {
@@ -1019,9 +1030,9 @@ impl<'a> Resolver<'a> {
                 attached_decl
                     .definitions()
                     .iter()
-                    .filter_map(|definition_id| self.mixins_of(*definition_id))
-                    .flatten()
-                    .filter(|mixin| matches!(mixin, Mixin::Extend(_))),
+                    .flat_map(|definition_id| mixins_of!(self, definition_id))
+                    .filter(|mixin| matches!(mixin, Mixin::Extend(_)))
+                    .cloned(),
             );
         }
 
@@ -1029,23 +1040,21 @@ impl<'a> Resolver<'a> {
         let mut has_extends = false;
 
         for definition_id in declaration.definitions() {
-            if let Some(def_mixins) = self.mixins_of(*definition_id) {
-                for mixin in def_mixins {
-                    match mixin {
-                        Mixin::Prepend(_) | Mixin::Include(_) => mixins.push(mixin),
-                        Mixin::Extend(_) => has_extends = true,
-                    }
+            for mixin in mixins_of!(self, definition_id) {
+                match mixin {
+                    Mixin::Prepend(_) | Mixin::Include(_) => mixins.push(mixin.clone()),
+                    Mixin::Extend(_) => has_extends = true,
                 }
             }
         }
+
+        let (linearized_prepends, linearized_includes) =
+            self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
 
         // Ensure that we create the singleton and enqueue it for linearization if we see an extend
         if has_extends && !is_singleton_class {
             self.get_or_create_singleton_class(declaration_id, SingletonAncestors::Enqueue);
         }
-
-        let (linearized_prepends, linearized_includes) =
-            self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
 
         // Build the final list
         let mut ancestors = Vec::new();
@@ -2088,17 +2097,6 @@ impl<'a> Resolver<'a> {
         }
 
         Some(result)
-    }
-
-    fn mixins_of(&self, definition_id: DefinitionId) -> Option<Vec<Mixin>> {
-        let definition = self.graph.definitions().get(&definition_id).unwrap();
-
-        match definition {
-            Definition::Class(class) => Some(class.mixins().to_vec()),
-            Definition::SingletonClass(class) => Some(class.mixins().to_vec()),
-            Definition::Module(module) => Some(module.mixins().to_vec()),
-            _ => None,
-        }
     }
 }
 
