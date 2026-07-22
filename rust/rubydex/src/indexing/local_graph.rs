@@ -6,7 +6,7 @@ use crate::model::document::Document;
 use crate::model::graph::NameDependent;
 use crate::model::identity_maps::IdentityHashMap;
 use crate::model::ids::{ConstantReferenceId, DefinitionId, MethodReferenceId, NameId, StringId, UriId};
-use crate::model::name::{Name, NameRef};
+use crate::model::name::{Name, NameRef, ParentScope};
 use crate::model::references::{ConstantReference, MethodRef};
 use crate::model::string_ref::StringRef;
 use crate::offset::Offset;
@@ -119,7 +119,13 @@ impl LocalGraph {
         &self.names
     }
 
-    pub fn add_name(&mut self, name: Name) -> NameId {
+    pub fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
+        let name = Name::new(
+            str,
+            parent_scope,
+            nesting,
+            Name::name_depth(&self.names, parent_scope, nesting),
+        );
         let name_id = name.id();
 
         match self.names.entry(name_id) {
@@ -128,13 +134,13 @@ impl LocalGraph {
                 entry.get_mut().increment_ref_count(1);
             }
             Entry::Vacant(entry) => {
-                if let Some(&parent_scope) = name.parent_scope().as_ref() {
+                if let Some(&parent_scope_id) = parent_scope.as_ref() {
                     self.name_dependents
-                        .entry(parent_scope)
+                        .entry(parent_scope_id)
                         .or_default()
                         .push(NameDependent::ChildName(name_id));
                 }
-                if let Some(&nesting_id) = name.nesting().as_ref() {
+                if let Some(nesting_id) = nesting {
                     self.name_dependents
                         .entry(nesting_id)
                         .or_default()
