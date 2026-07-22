@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use crate::assert_mem_size;
 use crate::model::ids::{
     ClassVariableReferenceId, GlobalVariableReferenceId, InstanceVariableReferenceId, MethodReferenceId,
@@ -221,56 +223,47 @@ macro_rules! namespace_declaration {
     };
 }
 
-/// Macro to generate a new struct for simple declarations like variables and methods
-macro_rules! simple_declaration {
-    ($name:ident, $reference_type:ty) => {
-        #[derive(Debug)]
-        pub struct $name {
-            /// The fully qualified name of this declaration
-            name: Box<str>,
-            /// The list of definition IDs that compose this declaration
-            definition_ids: Vec<DefinitionId>,
-            /// The set of references that are made to this declaration
-            references: IdentityHashSet<$reference_type>,
-            /// The ID of the owner of this declaration
-            owner_id: DeclarationId,
+/// The core data of a declaration, shared across all of them
+#[derive(Debug)]
+pub struct DeclarationCore<T> {
+    /// The fully qualified name of this declaration
+    name: Box<str>,
+    /// The list of definition IDs that compose this declaration
+    definition_ids: Vec<DefinitionId>,
+    /// The set of references that are made to this declaration
+    references: IdentityHashSet<T>,
+    /// The ID of the owner of this declaration
+    owner_id: DeclarationId,
+}
+
+impl<T: Eq + Hash> DeclarationCore<T> {
+    #[must_use]
+    pub fn new(name: String, owner_id: DeclarationId) -> Self {
+        Self {
+            name: name.into_boxed_str(),
+            definition_ids: Vec::new(),
+            references: IdentityHashSet::default(),
+            owner_id,
         }
+    }
 
-        impl $name {
-            #[must_use]
-            pub fn new(name: String, owner_id: DeclarationId) -> Self {
-                Self {
-                    name: name.into_boxed_str(),
-                    definition_ids: Vec::new(),
-                    references: IdentityHashSet::default(),
-                    owner_id,
-                }
-            }
+    #[must_use]
+    pub fn references(&self) -> &IdentityHashSet<T> {
+        &self.references
+    }
 
-            pub fn extend(&mut self, other: $name) {
-                self.definition_ids.extend(other.definitions());
-                self.references.extend(other.references());
-            }
+    pub fn add_reference(&mut self, reference_id: T) {
+        self.references.insert(reference_id);
+    }
 
-            #[must_use]
-            pub fn references(&self) -> &IdentityHashSet<$reference_type> {
-                &self.references
-            }
+    pub fn remove_reference(&mut self, reference_id: &T) {
+        self.references.remove(reference_id);
+    }
 
-            pub fn add_reference(&mut self, reference_id: $reference_type) {
-                self.references.insert(reference_id);
-            }
-
-            pub fn remove_reference(&mut self, reference_id: &$reference_type) {
-                self.references.remove(reference_id);
-            }
-
-            #[must_use]
-            pub fn definitions(&self) -> &[DefinitionId] {
-                &self.definition_ids
-            }
-        }
-    };
+    #[must_use]
+    pub fn definitions(&self) -> &[DefinitionId] {
+        &self.definition_ids
+    }
 }
 
 /// A `Declaration` represents the global concept of an entity in Ruby. For example, the class `Foo` may be defined 3
@@ -430,8 +423,7 @@ impl Declaration {
     pub fn constant_references(&self) -> Option<&IdentityHashSet<ConstantReferenceId>> {
         match self {
             Declaration::Namespace(it) => Some(it.references()),
-            Declaration::Constant(it) => Some(it.references()),
-            Declaration::ConstantAlias(it) => Some(it.references()),
+            Declaration::Constant(it) | Declaration::ConstantAlias(it) => Some(it.references()),
             _ => None,
         }
     }
@@ -444,8 +436,7 @@ impl Declaration {
     pub fn add_constant_reference(&mut self, reference_id: ConstantReferenceId) {
         match self {
             Declaration::Namespace(it) => it.add_reference(reference_id),
-            Declaration::Constant(it) => it.add_reference(reference_id),
-            Declaration::ConstantAlias(it) => it.add_reference(reference_id),
+            Declaration::Constant(it) | Declaration::ConstantAlias(it) => it.add_reference(reference_id),
             _ => unreachable!("Cannot add constant reference to {} declaration", self.kind()),
         }
     }
@@ -458,8 +449,7 @@ impl Declaration {
     pub fn remove_constant_reference(&mut self, reference_id: &ConstantReferenceId) {
         match self {
             Declaration::Namespace(it) => it.remove_reference(reference_id),
-            Declaration::Constant(it) => it.remove_reference(reference_id),
-            Declaration::ConstantAlias(it) => it.remove_reference(reference_id),
+            Declaration::Constant(it) | Declaration::ConstantAlias(it) => it.remove_reference(reference_id),
             _ => unreachable!("Cannot remove constant reference from {} declaration", self.kind()),
         }
     }
@@ -604,17 +594,23 @@ namespace_declaration!(SingletonClass, SingletonClassDeclaration);
 assert_mem_size!(SingletonClassDeclaration, 184);
 namespace_declaration!(Todo, TodoDeclaration);
 assert_mem_size!(TodoDeclaration, 184);
-simple_declaration!(ConstantDeclaration, ConstantReferenceId);
+
+pub type ConstantDeclaration = DeclarationCore<ConstantReferenceId>;
 assert_mem_size!(ConstantDeclaration, 80);
-simple_declaration!(MethodDeclaration, MethodReferenceId);
+
+pub type MethodDeclaration = DeclarationCore<MethodReferenceId>;
 assert_mem_size!(MethodDeclaration, 80);
-simple_declaration!(GlobalVariableDeclaration, GlobalVariableReferenceId);
+
+pub type GlobalVariableDeclaration = DeclarationCore<GlobalVariableReferenceId>;
 assert_mem_size!(GlobalVariableDeclaration, 80);
-simple_declaration!(InstanceVariableDeclaration, InstanceVariableReferenceId);
+
+pub type InstanceVariableDeclaration = DeclarationCore<InstanceVariableReferenceId>;
 assert_mem_size!(InstanceVariableDeclaration, 80);
-simple_declaration!(ClassVariableDeclaration, ClassVariableReferenceId);
+
+pub type ClassVariableDeclaration = DeclarationCore<ClassVariableReferenceId>;
 assert_mem_size!(ClassVariableDeclaration, 80);
-simple_declaration!(ConstantAliasDeclaration, ConstantReferenceId);
+
+pub type ConstantAliasDeclaration = DeclarationCore<ConstantReferenceId>;
 assert_mem_size!(ConstantAliasDeclaration, 80);
 
 #[cfg(test)]
