@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "rubydex": {
-      "command": "${HOME}/.cargo/bin/rubydex_mcp"
-    }
-  }
-}
