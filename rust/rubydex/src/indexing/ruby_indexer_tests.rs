@@ -3893,6 +3893,48 @@ mod mixin_tests {
 
         assert_eq!(context.graph().definitions().len(), 0);
     }
+
+    #[test]
+    fn does_not_attribute_class_eval_block_mixins_to_hook_owner() {
+        // `self` is `base` inside the block, so the include must not land on Concern.
+        let context = index_source({
+            "
+            module Concern
+              def self.included(base)
+                base.class_eval do
+                  include Extra
+                end
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-7:4", Module, |def| {
+            assert_def_mixins_eq!(&context, def, Include, [] as [&str; 0]);
+        });
+    }
+
+    #[test]
+    fn attributes_bare_include_in_singleton_hook_to_owner() {
+        // Without a receiver, `self` is Concern, so the include lands on it.
+        let context = index_source({
+            "
+            module Concern
+              def self.included(base)
+                include Extra
+              end
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+
+        assert_definition_at!(&context, "1:1-5:4", Module, |def| {
+            assert_def_mixins_eq!(&context, def, Include, ["Extra"]);
+        });
+    }
 }
 
 mod alias_tests {

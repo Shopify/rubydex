@@ -2200,6 +2200,16 @@ impl Visit<'_> for RubyIndexer<'_> {
             "public_class_method" => {
                 self.handle_singleton_method_visibility(node, Visibility::Public, "public_class_method");
             }
+            "class_eval" | "module_eval" | "instance_eval" | "class_exec" | "module_exec" | "instance_exec"
+                if node.receiver().is_some_and(|r| r.as_self_node().is_none()) =>
+            {
+                // The block runs with `self` rebound to the receiver, which we can't model, so skip it.
+                if let Some(arguments) = node.arguments() {
+                    self.visit_arguments_node(&arguments);
+                }
+
+                self.index_method_reference_for_call(node);
+            }
             _ => {
                 // For method calls that we don't explicitly handle each part, we continue visiting their parts as we
                 // may discover something inside
