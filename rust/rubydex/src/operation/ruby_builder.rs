@@ -154,7 +154,13 @@ impl<'a> RubyOperationBuilder<'a> {
         string_id
     }
 
-    fn add_name(&mut self, name: Name) -> NameId {
+    fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
+        let name = Name::new(
+            str,
+            parent_scope,
+            nesting,
+            Name::name_depth(&self.names, parent_scope, nesting),
+        );
         let name_id = name.id();
 
         match self.names.entry(name_id) {
@@ -360,11 +366,7 @@ impl<'a> RubyOperationBuilder<'a> {
         let offset = Offset::from_prism_location(&location);
         let name = Self::location_to_string(&location);
         let string_id = self.intern_string(name);
-        let name_id = self.add_name(Name::new(
-            string_id,
-            parent_scope_id,
-            self.current_lexical_scope_name_id(),
-        ));
+        let name_id = self.add_name(string_id, parent_scope_id, self.current_lexical_scope_name_id());
 
         if push_final_reference {
             self.operations
@@ -443,7 +445,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 }
                 None => {
                     let str_id = self.intern_string("Object".into());
-                    Some(self.add_name(Name::new(str_id, ParentScope::None, None)))
+                    Some(self.add_name(str_id, ParentScope::None, None))
                 }
             },
             Some(ruby_prism::Node::CallNode { .. }) => {
@@ -477,7 +479,7 @@ impl<'a> RubyOperationBuilder<'a> {
         };
 
         let string_id = self.intern_string(singleton_class_name);
-        let new_name_id = self.add_name(Name::new(string_id, ParentScope::Attached(name_id), None));
+        let new_name_id = self.add_name(string_id, ParentScope::Attached(name_id), None);
 
         let location = receiver.map_or(fallback_location, ruby_prism::Node::location);
         let offset = Offset::from_prism_location(&location);
@@ -689,10 +691,7 @@ impl<'a> RubyOperationBuilder<'a> {
             )
         } else {
             let string_id = self.intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
-            (
-                Some(self.add_name(Name::new(string_id, ParentScope::None, None))),
-                offset.clone(),
-            )
+            (Some(self.add_name(string_id, ParentScope::None, None)), offset.clone())
         };
 
         if let Some(name_id) = name_id {
@@ -754,10 +753,7 @@ impl<'a> RubyOperationBuilder<'a> {
             )
         } else {
             let string_id = self.intern_string(format!("{}:{}<anonymous>", self.uri_id, offset.start()));
-            (
-                Some(self.add_name(Name::new(string_id, ParentScope::None, None))),
-                offset.clone(),
-            )
+            (Some(self.add_name(string_id, ParentScope::None, None)), offset.clone())
         };
 
         if let Some(name_id) = name_id {
@@ -1483,7 +1479,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
 
         let string_id = self.intern_string(singleton_class_name);
         let nesting = self.current_lexical_scope_name_id();
-        let name_id = self.add_name(Name::new(string_id, ParentScope::Attached(attached_target), nesting));
+        let name_id = self.add_name(string_id, ParentScope::Attached(attached_target), nesting);
         self.operations
             .push(Operation::EnterSingletonClass(op::EnterSingletonClass {
                 name_id,

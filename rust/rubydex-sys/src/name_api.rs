@@ -1,8 +1,4 @@
-use rubydex::model::{
-    graph::Graph,
-    ids::NameId,
-    name::{Name, ParentScope},
-};
+use rubydex::model::{graph::Graph, ids::NameId, name::ParentScope};
 
 /// Takes a constant name and a nesting stack (e.g.: `["Foo", "Bar::Baz", "Qux"]`) and transforms it into a `NameId`,
 /// registering each required part in the graph. Returns the `NameId` and a list of name ids that need to be untracked
@@ -74,7 +70,7 @@ fn process_qualified_name(
         };
 
         let str_id = graph.intern_string(part.to_owned());
-        let name_id = graph.add_name(Name::new(str_id, parent_scope, nesting_for_part));
+        let name_id = graph.add_name(str_id, parent_scope, nesting_for_part);
         names_to_untrack.push(name_id);
         *current_name = ParentScope::Some(name_id);
     }

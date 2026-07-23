@@ -540,7 +540,13 @@ impl Graph {
     /// Registers a name in the graph unless already registered. In regular indexing, this only happens in the local
     /// graph. This method is only used to back the `Graph#resolve_constant` Ruby API because every name must be
     /// registered in the graph to properly resolve
-    pub fn add_name(&mut self, name: Name) -> NameId {
+    pub fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
+        let name = Name::new(
+            str,
+            parent_scope,
+            nesting,
+            Name::name_depth(&self.names, parent_scope, nesting),
+        );
         let name_id = name.id();
 
         match self.names.entry(name_id) {
@@ -2522,7 +2528,7 @@ mod tests {
         );
 
         // Delete bar.rb — the Bar name should be fully removed
-        let bar_name_id = Name::new(StringId::from("Bar"), ParentScope::None, None).id();
+        let bar_name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
         context.index_uri("file:///bar.rb", "");
         context.resolve();
 
