@@ -63,5 +63,9 @@ tikv-jemalloc-ctl = { version = "0.7.0", features = ["stats"] }
 name = "graph_memory"
 harness = false
 
+[[bench]]
+name = "incremental_resolution"
+harness = false
+
 [lints]
 workspace = true

@@ -11,6 +11,11 @@ lto = true
 opt-level = 3
 codegen-units = 1
 
+[profile.bench]
+lto = true
+opt-level = 3
+codegen-units = 1
+
 [profile.profiling]
 inherits = "release"
 debug = true
