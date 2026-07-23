@@ -2132,6 +2132,30 @@ mod object_ancestors_tests {
         assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:11:3-11:11");
         assert_constant_reference_unresolved!(context, "FOUND_ME", "file:///foo.rb:14:6-14:14");
     }
+
+    #[test]
+    fn object_inherited_constant_inside_module_reordered() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module Foo
+              # Accessible via Object inheritance
+              FOUND_ME
+            end
+
+            module Kernel
+              FOUND_ME = true
+            end
+
+            class Object
+              include Kernel
+            end
+            "
+        });
+        context.resolve();
+
+        assert_constant_reference_to!(context, "Kernel::FOUND_ME", "file:///foo.rb:3:3-3:11");
+    }
 }
 
 mod singleton_ancestors_tests {
