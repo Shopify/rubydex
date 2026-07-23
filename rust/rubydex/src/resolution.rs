@@ -1744,8 +1744,13 @@ impl<'a> Resolver<'a> {
             if is_module || chain_incomplete {
                 let object_outcome = self.search_ancestors(*OBJECT_ID, str_id);
 
-                if let Outcome::Resolved(decl_id) = object_outcome {
-                    return Outcome::Resolved(decl_id);
+                match object_outcome {
+                    // Found the constant through Object's ancestors.
+                    Outcome::Resolved(decl_id) => return Outcome::Resolved(decl_id),
+                    // Object's ancestor chain is still partial, so we need to retry later.
+                    Outcome::Retry { .. } => return object_outcome,
+                    // Object's chain is complete, so we indeed can't resolve this constant.
+                    Outcome::Unresolved => {}
                 }
             }
 
