@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashSet, VecDeque, hash_map::Entry},
-    hash::BuildHasher,
-};
+use std::collections::{HashSet, VecDeque, hash_map::Entry};
 
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::model::{
@@ -85,6 +82,8 @@ impl LinearizationContext {
     fn finalize(&mut self, declaration_id: DeclarationId) {
         self.descendants.remove(&declaration_id);
         self.seen_ids.remove(&declaration_id);
+        self.cyclic = false;
+        self.partial = false;
     }
 }
 
@@ -94,6 +93,8 @@ pub struct Resolver<'a> {
     unit_queue: VecDeque<Unit>,
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
+    /// The linearization context carried across recursion
+    context: LinearizationContext,
 }
 
 impl<'a> Resolver<'a> {
@@ -102,6 +103,7 @@ impl<'a> Resolver<'a> {
             graph,
             unit_queue: VecDeque::new(),
             made_progress: false,
+            context: LinearizationContext::new(),
         }
     }
 
@@ -268,7 +270,7 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for linearizing ancestors of a declaration
     fn handle_ancestor_unit(&mut self, id: DeclarationId) {
-        match self.ancestors_of(id) {
+        match self.linearize_ancestors(id) {
             Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
                 // We succeeded in some capacity this time
                 self.made_progress = true;
@@ -939,7 +941,7 @@ impl<'a> Resolver<'a> {
     fn schedule_singleton_ancestors(&mut self, id: DeclarationId, mode: SingletonAncestors) {
         match mode {
             SingletonAncestors::Eager => {
-                let _ = self.ancestors_of(id);
+                let _ = self.linearize_ancestors(id);
             }
             SingletonAncestors::Enqueue => {
                 self.unit_queue.push_back(Unit::Ancestors(id));
@@ -956,35 +958,24 @@ impl<'a> Resolver<'a> {
     ///
     /// Can panic if there's inconsistent data in the graph
     #[must_use]
-    fn ancestors_of(&mut self, declaration_id: DeclarationId) -> Ancestors {
-        let mut context = LinearizationContext::new();
-        self.linearize_ancestors(declaration_id, &mut context)
-    }
-
-    /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
-    ///
-    /// # Panics
-    ///
-    /// Can panic if there's inconsistent data in the graph
-    #[must_use]
-    fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
+    fn linearize_ancestors(&mut self, declaration_id: DeclarationId) -> Ancestors {
         {
             let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
 
             // Add this declaration to the descendants so that we capture transitive descendant relationships
-            context.descendants.insert(declaration_id);
+            self.context.descendants.insert(declaration_id);
 
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
             // again
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().clone_ancestors();
-                self.propagate_descendants(&mut context.descendants, &cached);
+                self.propagate_descendants(&cached);
 
-                context.finalize(declaration_id);
+                self.context.finalize(declaration_id);
                 return cached;
             }
 
-            if !context.seen_ids.insert(declaration_id) {
+            if !self.context.seen_ids.insert(declaration_id) {
                 // If we find a cycle when linearizing ancestors, it's an error that the programmer must fix. However, we try to
                 // still approximate features by assuming that it must inherit from `Object` at some point (which is what most
                 // classes/modules inherit from). This is not 100% correct, but it allows us to provide a bit better IDE support
@@ -999,19 +990,19 @@ impl<'a> Resolver<'a> {
                     .unwrap()
                     .set_ancestors(estimated_ancestors.clone());
 
-                context.finalize(declaration_id);
+                self.context.finalize(declaration_id);
                 return estimated_ancestors;
             }
 
             // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
             // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
             let namespace = declaration.as_namespace_mut().unwrap();
-            for descendant in &context.descendants {
+            for descendant in &self.context.descendants {
                 namespace.add_descendant(*descendant);
             }
         }
 
-        let parent_ancestors = self.linearize_parent_ancestors(declaration_id, context);
+        let parent_ancestors = self.linearize_parent_ancestors(declaration_id);
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
         let mut mixins = Vec::new();
 
@@ -1043,8 +1034,7 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        let (linearized_prepends, linearized_includes) =
-            self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
+        let (linearized_prepends, linearized_includes) = self.linearize_mixins(mixins, parent_ancestors.as_ref());
 
         // Ensure that we create the singleton and enqueue it for linearization if we see an extend
         if has_extends && !is_singleton_class {
@@ -1060,9 +1050,9 @@ impl<'a> Resolver<'a> {
             ancestors.extend(parents);
         }
 
-        let result = if context.cyclic {
+        let result = if self.context.cyclic {
             Ancestors::Cyclic(ancestors)
-        } else if context.partial {
+        } else if self.context.partial {
             Ancestors::Partial(ancestors)
         } else {
             Ancestors::Complete(ancestors)
@@ -1076,47 +1066,41 @@ impl<'a> Resolver<'a> {
             .unwrap()
             .set_ancestors(result.clone());
 
-        context.finalize(declaration_id);
+        self.context.finalize(declaration_id);
         result
     }
 
-    fn linearize_parent_ancestors(
-        &mut self,
-        declaration_id: DeclarationId,
-        context: &mut LinearizationContext,
-    ) -> Option<Vec<Ancestor>> {
+    fn linearize_parent_ancestors(&mut self, declaration_id: DeclarationId) -> Option<Vec<Ancestor>> {
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
 
         match declaration {
-            Declaration::Namespace(Namespace::Class(_)) => {
-                Some(match self.linearize_superclass(declaration_id, context)? {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        context.partial = true;
-                        ids
-                    }
-                })
-            }
+            Declaration::Namespace(Namespace::Class(_)) => Some(match self.linearize_superclass(declaration_id)? {
+                Ancestors::Complete(ids) => ids,
+                Ancestors::Cyclic(ids) => {
+                    self.context.cyclic = true;
+                    ids
+                }
+                Ancestors::Partial(ids) => {
+                    self.context.partial = true;
+                    ids
+                }
+            }),
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
 
                 let (singleton_parent_id, partial_singleton) = self.singleton_parent_id(owner_id);
                 if partial_singleton {
-                    context.partial = true;
+                    self.context.partial = true;
                 }
 
-                Some(match self.linearize_ancestors(singleton_parent_id, context) {
+                Some(match self.linearize_ancestors(singleton_parent_id) {
                     Ancestors::Complete(ids) => ids,
                     Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
+                        self.context.cyclic = true;
                         ids
                     }
                     Ancestors::Partial(ids) => {
-                        context.partial = true;
+                        self.context.partial = true;
                         ids
                     }
                 })
@@ -1129,7 +1113,6 @@ impl<'a> Resolver<'a> {
     /// modules are deduplicated against them
     fn linearize_mixins(
         &mut self,
-        context: &mut LinearizationContext,
         mixins: Vec<Mixin>,
         parent_ancestors: Option<&Vec<Ancestor>>,
     ) -> (VecDeque<Ancestor>, VecDeque<Ancestor>) {
@@ -1154,14 +1137,14 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
-                            let ids = match self.linearize_ancestors(module_id, context) {
+                            let ids = match self.linearize_ancestors(module_id) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
-                                    context.cyclic = true;
+                                    self.context.cyclic = true;
                                     ids
                                 }
                                 Ancestors::Partial(ids) => {
-                                    context.partial = true;
+                                    self.context.partial = true;
                                     ids
                                 }
                             };
@@ -1181,7 +1164,7 @@ impl<'a> Resolver<'a> {
                         NameRef::Unresolved(_) => {
                             // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
                             // later
-                            context.partial = true;
+                            self.context.partial = true;
                             linearized_prepends.push_front(Ancestor::Partial(*constant_reference.name_id()));
                         }
                     }
@@ -1193,14 +1176,14 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
-                            let mut ids = match self.linearize_ancestors(module_id, context) {
+                            let mut ids = match self.linearize_ancestors(module_id) {
                                 Ancestors::Complete(ids) => ids,
                                 Ancestors::Cyclic(ids) => {
-                                    context.cyclic = true;
+                                    self.context.cyclic = true;
                                     ids
                                 }
                                 Ancestors::Partial(ids) => {
-                                    context.partial = true;
+                                    self.context.partial = true;
                                     ids
                                 }
                             };
@@ -1221,7 +1204,7 @@ impl<'a> Resolver<'a> {
                         NameRef::Unresolved(_) => {
                             // We haven't been able to resolve this name yet, so we push it as a partial linearization to finish
                             // later
-                            context.partial = true;
+                            self.context.partial = true;
                             linearized_includes.push_front(Ancestor::Partial(*constant_reference.name_id()));
                         }
                     }
@@ -1233,11 +1216,9 @@ impl<'a> Resolver<'a> {
     }
 
     /// Propagate descendants to all cached ancestors
-    fn propagate_descendants<S: BuildHasher>(
-        &mut self,
-        descendants: &mut HashSet<DeclarationId, S>,
-        cached: &Ancestors,
-    ) {
+    fn propagate_descendants(&mut self, cached: &Ancestors) {
+        let descendants = &self.context.descendants;
+
         if !descendants.is_empty() {
             for ancestor in cached {
                 if let Ancestor::Complete(ancestor_id) = ancestor {
@@ -1249,7 +1230,7 @@ impl<'a> Resolver<'a> {
                         .as_namespace_mut()
                         .unwrap();
 
-                    for descendant in descendants.iter() {
+                    for descendant in descendants {
                         namespace.add_descendant(*descendant);
                     }
                 }
@@ -1760,7 +1741,7 @@ impl<'a> Resolver<'a> {
 
     /// Search for a member in a declaration's ancestor chain.
     fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
-        match self.ancestors_of(declaration_id) {
+        match self.linearize_ancestors(declaration_id) {
             Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
                 .iter()
                 .find_map(|ancestor_id| {
@@ -2075,16 +2056,12 @@ impl<'a> Resolver<'a> {
         ))
     }
 
-    fn linearize_superclass(
-        &mut self,
-        declaration_id: DeclarationId,
-        context: &mut LinearizationContext,
-    ) -> Option<Ancestors> {
+    fn linearize_superclass(&mut self, declaration_id: DeclarationId) -> Option<Ancestors> {
         let (superclass_id, unresolved_superclass) = self.get_superclass(declaration_id)?;
-        let mut result = self.linearize_ancestors(superclass_id, context);
+        let mut result = self.linearize_ancestors(superclass_id);
 
         if let Some(name_id) = unresolved_superclass {
-            context.partial = true;
+            self.context.partial = true;
 
             // Insert the unresolved superclass as a Partial ancestor at the front of the chain, so it
             // appears before the default Object ancestors
