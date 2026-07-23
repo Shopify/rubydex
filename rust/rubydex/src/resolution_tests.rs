@@ -1494,6 +1494,43 @@ mod include_tests {
         assert_descendants!(context, "Bar", ["Baz"]);
         assert_descendants!(context, "Foo", ["Bar", "Baz"]);
     }
+
+    #[test]
+    fn unresolved_include_followed_by_resolved_include_stays_partial() {
+        let mut context = graph_test();
+        context.index_uri("file:///foo.rb", {
+            r"
+            module M
+            end
+
+            class C
+              include Missing
+              include M
+            end
+            "
+        });
+        context.resolve();
+
+        assert_ancestors_eq!(
+            context,
+            "C",
+            ["C", "M", Partial("Missing"), "Object", "Kernel", "BasicObject"]
+        );
+        assert!(
+            matches!(
+                context
+                    .graph()
+                    .declarations()
+                    .get(&DeclarationId::from("C"))
+                    .unwrap()
+                    .as_namespace()
+                    .unwrap()
+                    .ancestors(),
+                Ancestors::Partial(_)
+            ),
+            "C should have a partial chain: the `Missing` include never resolves"
+        );
+    }
 }
 
 mod prepend_tests {
