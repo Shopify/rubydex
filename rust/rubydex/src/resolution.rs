@@ -1005,14 +1005,9 @@ impl<'a> Resolver<'a> {
 
             // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
             // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
+            let namespace = declaration.as_namespace_mut().unwrap();
             for descendant in &context.descendants {
-                self.graph
-                    .declarations_mut()
-                    .get_mut(&declaration_id)
-                    .unwrap()
-                    .as_namespace_mut()
-                    .unwrap()
-                    .add_descendant(*descendant);
+                namespace.add_descendant(*descendant);
             }
         }
 
