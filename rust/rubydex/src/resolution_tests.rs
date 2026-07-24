@@ -4653,6 +4653,104 @@ mod promotability_tests {
     }
 
     #[test]
+    fn singleton_on_todo_is_preserved_and_relinearized_when_promoted_to_class() {
+        let mut context = graph_test();
+        context.index_uri("file:///placeholder.rb", "class Foo::Placeholder; end");
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "Foo", "<TODO>");
+
+        context.index_uri("file:///value.rb", "Foo.call");
+        context.resolve();
+
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
+
+        context.index_uri("file:///class.rb", "class Foo; end");
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "Foo", "Class");
+        assert_singleton_class_eq!(context, "Foo", "Foo::<Foo>");
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>",
+            [
+                "Foo::<Foo>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
+    fn singleton_on_todo_is_preserved_when_promoted_to_module() {
+        let mut context = graph_test();
+        context.index_uri("file:///placeholder.rb", "class Bar::Placeholder; end");
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "Bar", "<TODO>");
+
+        context.index_uri("file:///value.rb", "Bar.call");
+        context.resolve();
+
+        assert_singleton_class_eq!(context, "Bar", "Bar::<Bar>");
+
+        context.index_uri("file:///module.rb", "module Bar; end");
+        context.resolve();
+
+        assert_declaration_kind_eq!(context, "Bar", "Module");
+        assert_singleton_class_eq!(context, "Bar", "Bar::<Bar>");
+        assert_ancestors_eq!(
+            context,
+            "Bar::<Bar>",
+            ["Bar::<Bar>", "Module", "Object", "Kernel", "BasicObject"]
+        );
+    }
+
+    #[test]
+    fn higher_order_singleton_on_todo_is_relinearized_when_promoted_to_class() {
+        let mut context = graph_test();
+        context.index_uri("file:///placeholder.rb", "class Foo::Placeholder; end");
+        context.resolve();
+
+        context.index_uri("file:///value.rb", {
+            r"
+            class << Foo
+              class << self
+              end
+            end
+            "
+        });
+        context.resolve();
+
+        context.index_uri("file:///class.rb", "class Foo; end");
+        context.resolve();
+
+        assert_ancestors_eq!(
+            context,
+            "Foo::<Foo>::<<Foo>>",
+            [
+                "Foo::<Foo>::<<Foo>>",
+                "Object::<Object>::<<Object>>",
+                "BasicObject::<BasicObject>::<<BasicObject>>",
+                "Class::<Class>",
+                "Module::<Module>",
+                "Object::<Object>",
+                "BasicObject::<BasicObject>",
+                "Class",
+                "Module",
+                "Object",
+                "Kernel",
+                "BasicObject"
+            ]
+        );
+    }
+
+    #[test]
     fn ivar_defined_inside_of_undefined_alias_namespace() {
         let mut context = graph_test();
         context.index_uri("file:///alias.rb", {
