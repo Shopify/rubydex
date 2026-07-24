@@ -182,11 +182,91 @@ class Rubydex::GlobalVariableDefinition < Rubydex::Definition; end
 class Rubydex::InstanceVariableDefinition < Rubydex::Definition; end
 
 class Rubydex::MethodAliasDefinition < Rubydex::Definition
+  sig { returns(T::Array[Rubydex::Signature]) }
+  def signatures; end
+
   sig { returns(T.nilable(Rubydex::Method)) }
   def target; end
 end
 
-class Rubydex::MethodDefinition < Rubydex::Definition; end
+class Rubydex::MethodDefinition < Rubydex::Definition
+  sig { returns(T::Array[Rubydex::Signature]) }
+  def signatures; end
+end
+
+class Rubydex::Signature
+  sig { params(parameters: T::Array[Rubydex::Signature::Parameter]).void }
+  def initialize(parameters); end
+
+  sig { returns(T::Array[Rubydex::Signature::Parameter]) }
+  def parameters; end
+
+  sig do
+    returns([
+      T::Array[Rubydex::Signature::PositionalParameter],
+      T::Array[Rubydex::Signature::OptionalPositionalParameter],
+      T.nilable(Rubydex::Signature::RestPositionalParameter),
+      T::Array[Rubydex::Signature::PostParameter],
+      T::Array[Rubydex::Signature::KeywordParameter],
+      T::Array[Rubydex::Signature::OptionalKeywordParameter],
+      T.nilable(Rubydex::Signature::RestKeywordParameter),
+      T.nilable(Rubydex::Signature::ForwardParameter),
+      T.nilable(Rubydex::Signature::BlockParameter),
+    ])
+  end
+  def deconstruct; end
+
+  sig { params(keys: T.nilable(T::Array[Symbol])).returns(T::Hash[Symbol, T.untyped]) }
+  def deconstruct_keys(keys); end
+
+  sig { returns(T::Array[Rubydex::Signature::PositionalParameter]) }
+  def positional_parameters; end
+
+  sig { returns(T::Array[Rubydex::Signature::OptionalPositionalParameter]) }
+  def optional_positional_parameters; end
+
+  sig { returns(T.nilable(Rubydex::Signature::RestPositionalParameter)) }
+  def rest_positional_parameter; end
+
+  sig { returns(T::Array[Rubydex::Signature::PostParameter]) }
+  def post_parameters; end
+
+  sig { returns(T::Array[Rubydex::Signature::KeywordParameter]) }
+  def keyword_parameters; end
+
+  sig { returns(T::Array[Rubydex::Signature::OptionalKeywordParameter]) }
+  def optional_keyword_parameters; end
+
+  sig { returns(T.nilable(Rubydex::Signature::RestKeywordParameter)) }
+  def rest_keyword_parameter; end
+
+  sig { returns(T.nilable(Rubydex::Signature::ForwardParameter)) }
+  def forward_parameter; end
+
+  sig { returns(T.nilable(Rubydex::Signature::BlockParameter)) }
+  def block_parameter; end
+end
+
+class Rubydex::Signature::Parameter
+  sig { returns(Symbol) }
+  def name; end
+
+  sig { returns(Rubydex::Location) }
+  def location; end
+
+  sig { params(name: Symbol, location: Rubydex::Location).void }
+  def initialize(name, location); end
+end
+
+class Rubydex::Signature::PositionalParameter < Rubydex::Signature::Parameter; end
+class Rubydex::Signature::OptionalPositionalParameter < Rubydex::Signature::Parameter; end
+class Rubydex::Signature::RestPositionalParameter < Rubydex::Signature::Parameter; end
+class Rubydex::Signature::PostParameter < Rubydex::Signature::Parameter; end
+class Rubydex::Signature::KeywordParameter < Rubydex::Signature::Parameter; end
+class Rubydex::Signature::OptionalKeywordParameter < Rubydex::Signature::Parameter; end
+class Rubydex::Signature::RestKeywordParameter < Rubydex::Signature::Parameter; end
+class Rubydex::Signature::ForwardParameter < Rubydex::Signature::Parameter; end
+class Rubydex::Signature::BlockParameter < Rubydex::Signature::Parameter; end
 
 class Rubydex::ModuleDefinition < Rubydex::Definition
   sig { returns(T::Array[Rubydex::Mixin]) }
@@ -331,6 +411,10 @@ class Rubydex::Graph
   # Index all files and dependencies of the workspace that exists in `workspace_path`
   sig { returns(T::Array[String]) }
   def index_workspace; end
+
+  # Returns the keyword object for the name, or `nil` if it is not a Ruby keyword
+  sig { params(name: String).returns(T.nilable(Rubydex::Keyword)) }
+  def keyword(name); end
 
   # Loads configuration, merging its exclusion patterns into the graph's configuration (the workspace path is never
   # overridden). With `config_path` (resolved relative to the workspace path), an explicitly named file that does not
