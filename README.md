@@ -143,6 +143,113 @@ puts query.render(graph, "json")
 puts Rubydex::Query.schema("table")
 ```
 
+## Code Complexity
+
+Rubydex computes ABC complexity scores (assignments, branches, calls) over Ruby
+source, with Ruby-aware weights and compounding nesting penalties.
+
+Thanks to [Ryan Davis](https://github.com/zenspider) for [flog](https://github.com/seattlerb/flog),
+which the scoring rules and report shape here are modeled on.
+
+A score is reported per method as `sqrt(a² + b² + c²)`, where `a`, `b`, and `c`
+accumulate assignment, branch, and call weight respectively (each scaled by the
+current nesting multiplier). The report totals all method scores and reports the
+per-method average. `.rbs` files are excluded; everything else the indexer treats
+as Ruby (`.rb`, `.rake`, `.ru`, …) is scored.
+
+Exclusions are configured in `rubydex.toml` and are **decoupled from indexing**: the
+top-level `exclude` key affects indexing only, while a separate `[complexity]` table
+controls what `rdx complexity` skips. This lets you keep a file in the graph but out of
+the complexity report. Both share the default skipped directories (`.git`, `node_modules`,
+`tmp`, …).
+
+```toml
+# rubydex.toml
+exclude = ["vendor/**"]              # indexing only; complexity still scores these
+
+[complexity]
+exclude = ["app/assets/**", "**/*_spec.rb"]   # complexity only; still indexed
+```
+
+From the command line:
+
+```bash
+# Compute a report for the current directory (top 25 methods by default)
+bundle exec rdx complexity
+
+# Scope to specific paths and show more entries
+bundle exec rdx complexity app/models lib/services --top 50
+
+# Render the full report as JSON (use --top 0 for every method)
+bundle exec rdx complexity app/models --format json --top 0 > report.json
+
+# Diff a fresh report against a baseline JSON report to track drift
+bundle exec rdx complexity app/models --diff baseline.json
+
+# Show what drives each method's score: per-construct contributions
+bundle exec rdx complexity app/models --details --top 10
+
+# Skip code outside methods: drops top-level `#none` noise
+bundle exec rdx complexity app/models --methods-only
+
+# Group entries by class with per-class subtotals
+bundle exec rdx complexity app/models --group
+```
+
+This is the default text report for a small codebase:
+
+```
+    17.2: total complexity
+     5.7: average complexity
+
+    10.3: Rubydex::Complexity.analyze              /path/to/repo/lib/rubydex/complexity.rb:8-12
+     5.0: Rubydex::Complexity#none                 /path/to/repo/lib/rubydex/complexity.rb:5-19
+     1.9: Rubydex::Complexity.diff                 /path/to/repo/lib/rubydex/complexity.rb:15-17
+```
+
+The JSON report (`schema_version: 1`) carries `total`, `average`,
+`methods_count`, and a `methods` array of entries with per-bucket breakdowns and
+`start_line`/`end_line` locations. With `--details`, each entry also includes a
+`details` array of per-construct contributions (`assignment`,
+`branch`, `block_pass`, `magic_number`, or the called method's name) so you can see
+what drives a score; the field is omitted when detail collection is off. Diff output
+splits changes into regressions, improvements, added, and removed methods, each capped
+at `--top` rows. `--details` works for both text and JSON reports; `--group` is
+text-only (rejected with `--format json`). Neither `--details` nor `--group` applies
+to `--diff` (both are rejected with it), and `--diff` requires the baseline to have
+been generated with the same `--methods-only` setting.
+
+`--details` adds a per-method breakdown:
+
+```
+    10.3: Rubydex::Complexity.analyze              /path/to/repo/lib/rubydex/complexity.rb:8-12
+     1.8:   class
+     1.7:   block_pass
+     1.7:   map
+     1.6:   raise
+     1.5:   branch
+     0.4:   magic_number
+```
+
+From Ruby:
+
+```ruby
+# Compute a report: returns the text or JSON string ready to print
+puts Rubydex::Complexity.analyze(["app/models"], format: :text, top: 25)
+json = Rubydex::Complexity.analyze(["app/models"], format: :json, top: 0)
+
+# Per-construct breakdown, methods-only, and grouping
+puts Rubydex::Complexity.analyze(["app/models"], details: true, top: 10)
+puts Rubydex::Complexity.analyze(["app/models"], methods_only: true)
+puts Rubydex::Complexity.analyze(["app/models"], group: true)
+
+# Diff two JSON reports (e.g. a committed baseline against a fresh run).
+# Both reports must share the same `methods_only` setting or diff raises ArgumentError.
+puts Rubydex::Complexity.diff(baseline_json, json, format: :text, top: 25)
+```
+
+Run `rdx complexity --help` for the full set of options.
+
 ## MCP Server (Experimental)
 
 Rubydex can run as an MCP (Model Context Protocol) server, enabling AI assistants

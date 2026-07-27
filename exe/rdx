@@ -14,7 +14,8 @@ USAGE = <<~TEXT
                      relationships, properties) without indexing the workspace.
     console          Open an interactive session with a populated graph for the current workspace
     mcp [PATH]       Run the MCP server for AI assistants (workspace defaults to the current dir)
-    help             Show this help message
+    complexity [PATH ...]
+                     Compute a complexity report (defaults to the current dir)
 
   Run `rdx <command> --help` for command-specific options.
 TEXT
@@ -144,6 +145,54 @@ operation =
     # instead of falling through to the shared graph build below.
     require "rubydex/mcp_server"
     Rubydex::MCPServer.run(path)
+    exit
+  when "complexity"
+    format = "text"
+    top = 25
+    diff_file = nil
+    methods_only = false
+    details = false
+    group = false
+    OptionParser.new do |parser|
+      parser.banner = "Usage: rdx complexity [PATH ...] [options]"
+      parser.on("--format FORMAT", ["text", "json"], "Output format (text or json)") { |value| format = value }
+      parser.on("--top N", Integer, "Max entries in text output, 0 = all (default 25)") { |value| top = value }
+      parser.on("--diff FILE", "Diff against a baseline JSON report") { |value| diff_file = value }
+      parser.on("--methods-only", "Skip code outside methods") { methods_only = true }
+      parser.on("--details", "Show per-construct score breakdown under each method") { details = true }
+      parser.on("--group", "Group and sort by class with subtotals") { group = true }
+      parser.on("-h", "--help", "Show this help") do
+        puts parser
+        exit
+      end
+    end.parse!
+
+    if diff_file && details
+      abort("`--details` does not apply to diff output; remove it or drop `--diff`")
+    end
+    if diff_file && group
+      abort("`--group` does not apply to diff output; remove it or drop `--diff`")
+    end
+    if group && format == "json"
+      abort("`--group` only affects text output; use `--format text` or drop `--group`")
+    end
+    paths = ARGV.empty? ? [Dir.pwd] : ARGV.dup
+    if diff_file
+      baseline = begin
+        File.read(diff_file)
+      rescue Errno::ENOENT
+        abort("baseline report `#{diff_file}` does not exist")
+      end
+      # Details aren't part of the diff output; avoid the wasted collection pass.
+      current = Rubydex::Complexity.analyze(paths, format: :json, top: 0, methods_only: methods_only)
+      begin
+        print(Rubydex::Complexity.diff(baseline, current, format: format, top: top))
+      rescue ArgumentError => e
+        abort(e.message)
+      end
+    else
+      print(Rubydex::Complexity.analyze(paths, format: format, top: top, methods_only: methods_only, details: details, group: group))
+    end
     exit
   else
     abort_with_usage("unknown command: #{command}")

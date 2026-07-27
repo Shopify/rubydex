@@ -11,6 +11,17 @@ use std::{
     sync::Arc,
 };
 
+/// Returns the workspace root for the given paths: the first path, when it resolves to an
+/// absolute directory. Uses [`std::path::absolute`] (not [`std::fs::canonicalize`]) so the root
+/// matches the resolution used by [`collect_file_paths`]; on Windows `canonicalize` would add a
+/// `\\?\` verbatim prefix that breaks glob matching against the walked file paths. Used to
+/// locate `rubydex.toml` and resolve exclusion patterns relative to the root.
+#[must_use]
+pub fn workspace_path_for(paths: &[String]) -> Option<PathBuf> {
+    let first_path = paths.first()?;
+    std::path::absolute(first_path).ok().filter(|path| path.is_dir())
+}
+
 pub struct FileDiscoveryJob {
     path: PathBuf,
     queue: Arc<JobQueue>,
@@ -319,6 +330,23 @@ mod tests {
         assert!(
             files.iter().all(|path| path.is_absolute()),
             "expected only absolute paths, got {files:?}"
+        );
+    }
+
+    #[test]
+    fn workspace_path_for_matches_collect_file_paths_resolution() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let input = dir.path().to_string_lossy().into_owned();
+        let resolved =
+            workspace_path_for(std::slice::from_ref(&input)).expect("a directory should resolve to a workspace root");
+        // `collect_file_paths` resolves roots with `std::path::absolute`; the workspace root must
+        // use the same resolution so exclusion patterns joined to it match walked file paths.
+        // `fs::canonicalize` would diverge here (Windows `\\?\` prefix; symlink resolution on
+        // macOS where `/var/folders` -> `/private/var/folders`).
+        let expected = std::path::absolute(&input).expect("absolute path");
+        assert_eq!(
+            resolved, expected,
+            "workspace root resolution diverges from collect_file_paths"
         );
     }
 

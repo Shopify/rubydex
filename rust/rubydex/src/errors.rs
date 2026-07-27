@@ -27,4 +27,5 @@ errors!(
     FileError;
     ConfigError;
     ConfigNotFound;
+    ReportError;
 );
