@@ -1780,6 +1780,8 @@ class GraphTest < Minitest::Test
   end
 
   def test_ractor_can_mutate_shared_graph
+    skip_unstable_windows_ractor
+
     with_context do |context|
       context.write!("file.rb", "class Foo; end")
 
@@ -1821,6 +1823,8 @@ class GraphTest < Minitest::Test
   end
 
   def test_frozen_graph_is_ractor_shareable
+    skip_unstable_windows_ractor
+
     with_context do |context|
       context.write!("file.rb", "class Foo; end")
 
@@ -1838,6 +1842,8 @@ class GraphTest < Minitest::Test
   end
 
   def test_frozen_graph_concurrent_reads_from_multiple_ractors
+    skip_unstable_windows_ractor
+
     with_context do |context|
       context.write!("a.rb", "class A; end")
       context.write!("b.rb", "class B; end")
@@ -1869,6 +1875,12 @@ class GraphTest < Minitest::Test
   end
 
   private
+
+  def skip_unstable_windows_ractor
+    return unless Gem.win_platform? && Gem::Version.new(RUBY_VERSION) < Gem::Version.new("4.1")
+
+    skip("Ractor before 4.1 is unstable on Windows. So skipping related tests on Windows builds")
+  end
 
   def ractor_result(ractor)
     ractor.respond_to?(:value) ? ractor.value : ractor.take
