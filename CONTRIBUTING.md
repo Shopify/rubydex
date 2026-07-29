@@ -41,3 +41,58 @@ We try to be on the latest version of Rust and CI always runs against the latest
 - Testing: `bundle exec rake ruby_test`
 - Linting: `bundle exec rubocop`
 - Formatting: `bundle exec rubocop -a`
+
+## Releasing
+
+Releases are cut by maintainers from `main`. The repository uses
+`shopify/cibuildgem` to build and publish precompiled gems, so do not run
+`rake release` locally.
+
+To cut a new release:
+
+1. Check out `main` and make sure it is current:
+
+   ```sh
+   git checkout main
+   git pull --ff-only
+   ```
+
+2. Bump the gem version in `lib/rubydex/version.rb`.
+
+3. Refresh `Gemfile.lock` so the local `rubydex` spec version matches:
+
+   ```sh
+   bundle lock --local
+   ```
+
+4. Run the local validation suite:
+
+   ```sh
+   bundle exec rake check
+   bundle exec rake compile_release
+   ```
+
+   `compile_release` builds with `RELEASE=true`, which verifies the packaging
+   path for the precompiled native extension, the `rubydex_mcp` binary, and
+   bundled third-party license output.
+
+5. Commit the version bump directly on `main`:
+
+   ```sh
+   git add lib/rubydex/version.rb Gemfile.lock
+   git commit -m "Bump version to vX.Y.Z"
+   git push origin main
+   ```
+
+6. Tag the same commit and push the tag:
+
+   ```sh
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+Pushing a tag matching `vX.Y.Z` or `vX.Y.Z.betaN` triggers the release workflow
+in `.github/workflows/cibuildgem.yaml`. That workflow cross-compiles the
+precompiled gems, runs install verification, publishes to RubyGems, and creates
+the GitHub release. Workflow dispatch can be used for a dry run; only tag pushes
+publish a release.
