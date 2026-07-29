@@ -68,3 +68,14 @@ pub unsafe extern "C" fn free_c_string_array(ptr: *const *const c_char, count: u
         .map(|arg| unsafe { CString::from_raw((*arg).cast_mut()) })
         .collect();
 }
+
+/// Converts a Rust `&str` to an owned C string (`*const c_char`), suitable for returning across the
+/// FFI boundary. The caller is responsible for freeing it with `free_c_string`.
+///
+/// # Panics
+///
+/// Panics if `value` contains an interior null byte, which should never occur in rubydex data.
+#[must_use]
+pub fn cstring_raw(value: &str) -> *const c_char {
+    CString::new(value).unwrap().into_raw().cast_const()
+}

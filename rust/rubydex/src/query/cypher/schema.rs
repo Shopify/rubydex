@@ -39,6 +39,22 @@ pub enum NodeRef {
     Document(UriId),
 }
 
+impl NodeRef {
+    /// Decodes the opaque id produced by [`GraphProvider::node_id`] back into a `NodeRef`. Returns
+    /// `None` if the string is not a recognized `tag:id` form.
+    #[must_use]
+    pub fn decode(encoded: &str) -> Option<NodeRef> {
+        let (tag, rest) = encoded.split_once(':')?;
+        let value: u64 = rest.parse().ok()?;
+        match tag {
+            "decl" => Some(NodeRef::Declaration(DeclarationId::new(value))),
+            "def" => Some(NodeRef::Definition(DefinitionId::new(value))),
+            "doc" => Some(NodeRef::Document(UriId::new(value))),
+            _ => None,
+        }
+    }
+}
+
 /// A relationship type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelType {
@@ -377,6 +393,10 @@ impl GraphProvider for Graph {
         RelType::parse(rel_type).map_or_else(Vec::new, |rel| rel_source_nodes(self, rel))
     }
 
+    fn expand_in(&self, node: NodeRef, rel_type: &str) -> Option<Vec<NodeRef>> {
+        RelType::parse(rel_type).and_then(|rel| expand_in(self, node, rel))
+    }
+
     fn property(&self, node: NodeRef, prop: &str) -> CypherValue {
         property(self, node, prop)
     }
@@ -387,6 +407,17 @@ impl GraphProvider for Graph {
 
     fn name(&self, node: NodeRef) -> String {
         node_name(self, node)
+    }
+
+    fn node_id(&self, node: NodeRef) -> String {
+        // Encode the node category plus the underlying hashed id so a consumer can decode it back to
+        // the right handle. The category tag is required because labels alone are ambiguous
+        // (a class declaration and a class definition both have the label "Class").
+        match node {
+            NodeRef::Declaration(id) => format!("decl:{}", *id),
+            NodeRef::Definition(id) => format!("def:{}", *id),
+            NodeRef::Document(id) => format!("doc:{}", *id),
+        }
     }
 }
 
@@ -579,6 +610,38 @@ pub fn rel_source_nodes(graph: &Graph, rel: RelType) -> Vec<NodeRef> {
             .keys()
             .map(|id| NodeRef::Declaration(*id))
             .collect(),
+    }
+}
+
+/// Expands the *incoming* edges of `node` for the given relationship type — the targeted reverse of
+/// [`expand_out`], returning `Some` only when the graph stores the reverse cheaply and exactly.
+/// Returning `None` lets the executor fall back to `rel_sources` + `expand` (always correct, but an
+/// O(all sources) whole-graph build).
+///
+/// Only the Document → Definition → Declaration spine is answered directly:
+/// - reverse `DEFINES`: a definition's document (each definition belongs to exactly one).
+/// - reverse `DECLARES`: the per-file definitions composing a declaration.
+///
+/// The remaining edges either have no stored reverse (e.g. direct subclasses of `HAS_PARENT`) or a
+/// reverse that isn't an exact set match (the `HAS_DESCENDANT` set is self-inclusive, unlike the
+/// `HAS_ANCESTOR` walk), so they fall through to the default.
+#[must_use]
+pub fn expand_in(graph: &Graph, node: NodeRef, rel: RelType) -> Option<Vec<NodeRef>> {
+    match (node, rel) {
+        (NodeRef::Definition(def_id), RelType::Defines) => {
+            let uri_id = *graph.definitions().get(&def_id)?.uri_id();
+            Some(vec![NodeRef::Document(uri_id)])
+        }
+        (NodeRef::Declaration(decl_id), RelType::Declares) => Some(
+            graph
+                .declarations()
+                .get(&decl_id)?
+                .definitions()
+                .iter()
+                .map(|id| NodeRef::Definition(*id))
+                .collect(),
+        ),
+        _ => None,
     }
 }
 
