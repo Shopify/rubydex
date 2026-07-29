@@ -1019,9 +1019,9 @@ impl<'a> Resolver<'a> {
                 attached_decl
                     .definitions()
                     .iter()
-                    .filter_map(|definition_id| self.mixins_of(*definition_id))
-                    .flatten()
-                    .filter(|mixin| matches!(mixin, Mixin::Extend(_))),
+                    .flat_map(|definition_id| self.mixins_of(*definition_id))
+                    .filter(|mixin| matches!(mixin, Mixin::Extend(_)))
+                    .cloned(),
             );
         }
 
@@ -1029,12 +1029,10 @@ impl<'a> Resolver<'a> {
         let mut has_extends = false;
 
         for definition_id in declaration.definitions() {
-            if let Some(def_mixins) = self.mixins_of(*definition_id) {
-                for mixin in def_mixins {
-                    match mixin {
-                        Mixin::Prepend(_) | Mixin::Include(_) => mixins.push(mixin),
-                        Mixin::Extend(_) => has_extends = true,
-                    }
+            for mixin in self.mixins_of(*definition_id) {
+                match mixin {
+                    Mixin::Prepend(_) | Mixin::Include(_) => mixins.push(mixin.clone()),
+                    Mixin::Extend(_) => has_extends = true,
                 }
             }
         }
@@ -2090,14 +2088,12 @@ impl<'a> Resolver<'a> {
         Some(result)
     }
 
-    fn mixins_of(&self, definition_id: DefinitionId) -> Option<Vec<Mixin>> {
-        let definition = self.graph.definitions().get(&definition_id).unwrap();
-
-        match definition {
-            Definition::Class(class) => Some(class.mixins().to_vec()),
-            Definition::SingletonClass(class) => Some(class.mixins().to_vec()),
-            Definition::Module(module) => Some(module.mixins().to_vec()),
-            _ => None,
+    fn mixins_of(&self, definition_id: DefinitionId) -> &[Mixin] {
+        match self.graph.definitions().get(&definition_id).unwrap() {
+            Definition::Class(class) => class.mixins(),
+            Definition::SingletonClass(class) => class.mixins(),
+            Definition::Module(module) => module.mixins(),
+            _ => &[],
         }
     }
 }
