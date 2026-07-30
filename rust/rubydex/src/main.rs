@@ -2,6 +2,7 @@ use clap::{Parser, ValueEnum};
 use std::{fs, mem, path::PathBuf};
 
 use rubydex::{
+    config::Config,
     dot,
     indexing::{self, IndexerBackend},
     integrity, listing,
@@ -104,10 +105,12 @@ fn main() {
     let mut graph = Graph::new();
 
     if let Some(workspace_path) = workspace_path_for(&args.paths) {
-        graph.set_workspace_path(workspace_path);
-        if let Err(error) = graph.load_config(None) {
-            eprintln!("{error}");
-            std::process::exit(1);
+        match Config::load(&workspace_path) {
+            Ok(config) => graph.load_config(&config),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
         }
     }
 

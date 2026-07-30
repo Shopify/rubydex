@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
-use crate::errors::Errors;
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::built_in::{OBJECT_ID, add_built_in_data};
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
@@ -110,7 +109,7 @@ impl Graph {
             position_encoding: Encoding::default(),
             name_dependents: IdentityHashMap::default(),
             pending_work: Vec::default(),
-            config: Config::new(),
+            config: Config::default(),
         };
 
         add_built_in_data(&mut graph);
@@ -147,25 +146,9 @@ impl Graph {
         self.config.workspace_path()
     }
 
-    /// Sets the root directory of the workspace being indexed.
-    pub fn set_workspace_path(&mut self, workspace_path: PathBuf) {
-        self.config.set_workspace_path(workspace_path);
-    }
-
-    /// Loads a configuration file. Pass `None` to load the default `rubydex.toml` configuration file if it exists
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`Errors::ConfigNotFound`] if an explicitly requested file does not exist or an
-    /// [`Errors::ConfigError`] if a file cannot otherwise be read or its contents are malformed.
-    pub fn load_config(&mut self, config_path: Option<&Path>) -> Result<(), Errors> {
-        match config_path {
-            Some(path) => {
-                let path = self.config.workspace_path().join(path);
-                self.config.load_file(&path)
-            }
-            None => self.config.load_default(),
-        }
+    /// Loads a config for the graph
+    pub fn load_config(&mut self, config: &Config) {
+        self.config = config.clone();
     }
 
     /// # Panics
