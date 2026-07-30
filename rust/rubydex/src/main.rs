@@ -2,7 +2,6 @@ use clap::{Parser, ValueEnum};
 use std::{fs, mem, path::PathBuf};
 
 use rubydex::{
-    dot,
     indexing::{self, IndexerBackend},
     integrity, listing,
     model::graph::Graph,
@@ -26,12 +25,6 @@ struct Args {
 
     #[arg(long = "stop-after", help = "Stop after the given stage")]
     stop_after: Option<StopAfter>,
-
-    #[arg(long = "dot", help = "Output a DOT graph visualization")]
-    dot: bool,
-
-    #[arg(long = "show-builtins", help = "Include built-in declarations in DOT output")]
-    show_builtins: bool,
 
     #[arg(long = "stats", help = "Show detailed performance statistics")]
     stats: bool,
@@ -194,15 +187,11 @@ fn main() {
         }
     }
 
-    // Generate visualization or print statistics
-    if args.dot {
-        println!("{}", dot::DotBuilder::generate(&graph, args.show_builtins));
-    } else {
-        println!("Indexed {} files", graph.documents().len());
-        println!("Found {} names", graph.declarations().len());
-        println!("Found {} definitions", graph.definitions().len());
-        println!("Found {} URIs", graph.documents().len());
-    }
+    // Print indexing metrics
+    println!("Indexed {} files", graph.documents().len());
+    println!("Found {} names", graph.declarations().len());
+    println!("Found {} definitions", graph.definitions().len());
+    println!("Found {} URIs", graph.documents().len());
 
     // Forget the graph so we don't have to wait for deallocation and let the system reclaim the memory at exit
     mem::forget(graph);
