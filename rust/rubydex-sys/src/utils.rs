@@ -1,5 +1,6 @@
 use libc::{c_char, size_t};
 use std::ffi::{CStr, CString};
+use std::path::Path;
 use std::slice;
 use std::str::Utf8Error;
 
@@ -78,4 +79,29 @@ pub unsafe extern "C" fn free_c_string_array(ptr: *const *const c_char, count: u
 #[must_use]
 pub fn cstring_raw(value: &str) -> *const c_char {
     CString::new(value).unwrap().into_raw().cast_const()
+}
+
+/// Rust uses backslashes as separators on Windows, but Ruby prefers forward slashes everywhere. We need to make sure
+/// we're maintaining the right separators at the boundary.
+#[must_use]
+pub fn interop_path(path: &Path) -> String {
+    path.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn interop_path_leaves_a_unix_path_untouched() {
+        // A backslash is an ordinary character in a Unix file name, so rewriting it would name a different file.
+        assert_eq!(interop_path(Path::new(r"/tmp/we\ird")), r"/tmp/we\ird");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn interop_path_separates_a_windows_path_with_forward_slashes() {
+        assert_eq!(interop_path(Path::new(r"D:\a\_temp\project")), "D:/a/_temp/project");
+    }
 }

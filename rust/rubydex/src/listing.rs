@@ -1,6 +1,7 @@
 use crate::{
     errors::Errors,
     job_queue::{Job, JobQueue},
+    path_helpers,
 };
 use crossbeam_channel::{Sender, unbounded};
 use glob::Pattern;
@@ -129,7 +130,7 @@ pub fn collect_file_paths<S: BuildHasher>(
         Arc::new(excluded.iter().filter_map(|entry| Pattern::new(entry).ok()).collect());
 
     for path in paths {
-        let Ok(path) = std::path::absolute(&path) else {
+        let Ok(path) = std::path::absolute(&path).map(path_helpers::simplified) else {
             errors_tx
                 .send(Errors::FileError(format!("Failed to resolve path `{path}`")))
                 .expect("errors receiver dropped before run completion");
@@ -418,6 +419,30 @@ mod tests {
         // The requested root is traversed; files are indexed under the requested (symlink) path.
         let foo = PathBuf::from("link").join("foo.rb");
         assert_eq!(files, [foo.to_str().unwrap().to_string()]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn collect_files_excludes_a_directory_below_a_verbatim_root() {
+        // Exclusions are joined onto the workspace path the configuration resolved, which is spelled plainly. A root
+        // given verbatim only matches them once it is spelled that way too.
+        let context = Context::new();
+        context.touch(&PathBuf::from("excluded").join("skipped.rb"));
+
+        let mut excluded = HashSet::new();
+        excluded.insert(
+            context
+                .absolute_path_to("excluded")
+                .to_string_lossy()
+                .replace('\\', "/")
+                .into_boxed_str(),
+        );
+
+        let (files, errors) =
+            collect_file_paths(vec![format!(r"\\?\{}", context.absolute_path().display())], &excluded);
+
+        assert!(errors.is_empty());
+        assert!(files.is_empty(), "expected the exclusion to apply: {files:?}");
     }
 
     #[test]

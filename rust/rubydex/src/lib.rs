@@ -16,6 +16,7 @@ pub mod listing;
 pub mod model;
 pub mod offset;
 pub mod operation;
+pub(crate) mod path_helpers;
 pub mod position;
 pub mod query;
 pub mod resolution;

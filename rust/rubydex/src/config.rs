@@ -1,9 +1,10 @@
 use crate::assert_mem_size;
 use crate::errors::Errors;
+use crate::path_helpers;
 use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use toml::{Table, Value};
 
 const DEFAULT_EXCLUDED_DIRECTORIES: &[&str] = &[
@@ -104,7 +105,7 @@ impl Config {
     /// Returns [`Errors::ConfigError`] if `workspace_path` is not a directory, or if the configuration file exists but
     /// cannot be read or is invalid.
     pub fn load(workspace_path: &Path) -> Result<Self, Errors> {
-        let workspace_path = fs::canonicalize(workspace_path).map_err(|error| {
+        let workspace_path = path_helpers::resolved(workspace_path).map_err(|error| {
             Errors::ConfigError(format!(
                 "Failed to resolve workspace path `{}`: {error}",
                 workspace_path.display()
@@ -158,10 +159,11 @@ impl Config {
         self.graph
             .excluded_patterns()
             .map(|pattern| {
+                // We must replace the separator on Windows for forward slash to use in glob patterns.
                 self.workspace_path
                     .join(pattern)
                     .to_string_lossy()
-                    .into_owned()
+                    .replace(MAIN_SEPARATOR, "/")
                     .into_boxed_str()
             })
             .collect()
@@ -209,9 +211,13 @@ impl Config {
 mod tests {
     use super::*;
 
-    /// The path the exclusion pattern `entry` resolves to under `workspace_path`
+    /// The pattern the exclusion `entry` resolves to under `workspace_path`, spelled the way exclusions are
     fn exclusion(workspace_path: impl AsRef<Path>, entry: &str) -> String {
-        workspace_path.as_ref().join(entry).to_string_lossy().into_owned()
+        workspace_path
+            .as_ref()
+            .join(entry)
+            .to_string_lossy()
+            .replace(MAIN_SEPARATOR, "/")
     }
 
     fn workspace_exclusion(entry: &str) -> String {
@@ -247,6 +253,23 @@ mod tests {
     }
 
     #[test]
+    fn excluded_patterns_are_separated_by_forward_slashes() {
+        // Exclusions are glob patterns, and a glob pattern is written with forward slashes whatever the platform's own
+        // separator is. Joining them against the workspace path is what would otherwise introduce a backslash, so the
+        // invariant is asserted on the joined result. Vacuous where the separator already is a forward slash.
+        let mut config = parse("").expect("an empty config is valid");
+        config.exclude_patterns([Box::from("vendor/bundle")]);
+
+        let excluded = config.excluded_patterns();
+
+        assert!(!excluded.is_empty(), "expected the defaults at least");
+        assert!(
+            excluded.iter().all(|pattern| !pattern.contains('\\')),
+            "unexpected backslash in {excluded:?}"
+        );
+    }
+
+    #[test]
     fn parse_rejects_an_unknown_section() {
         let error = parse("[lintr]\n").expect_err("every section must be backed by typed settings structs");
         assert!(error.contains("unknown section `lintr`"), "unexpected error: {error}");
@@ -257,7 +280,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let config = Config::load(dir.path()).expect("a missing rubydex.toml must not be an error");
 
-        assert_eq!(config.workspace_path(), fs::canonicalize(dir.path()).unwrap());
+        assert_eq!(config.workspace_path(), path_helpers::resolved(dir.path()).unwrap());
         assert_eq!(config.excluded_patterns().len(), DEFAULT_EXCLUDED_DIRECTORIES.len());
     }
 
@@ -269,7 +292,7 @@ mod tests {
         let config = Config::load(dir.path()).expect("expected rubydex.toml to load");
         let excluded = config.excluded_patterns();
 
-        let path = fs::canonicalize(dir.path()).unwrap();
+        let path = path_helpers::resolved(dir.path()).unwrap();
         assert_eq!(config.workspace_path(), path);
         assert!(excluded.contains(exclusion(&path, "vendor").as_str()));
         assert!(excluded.contains(exclusion(&path, ".git").as_str()));
@@ -284,7 +307,7 @@ mod tests {
 
         for workspace_path in [missing.as_path(), file.as_path()] {
             let error = Config::load(workspace_path).expect_err("a workspace must be a directory");
-            let named = fs::canonicalize(workspace_path).unwrap_or_else(|_| workspace_path.to_path_buf());
+            let named = path_helpers::resolved(workspace_path).unwrap_or_else(|_| workspace_path.to_path_buf());
 
             assert!(matches!(error, Errors::ConfigError(_)), "unexpected error: {error:?}");
             assert!(

@@ -218,14 +218,8 @@ pub unsafe extern "C" fn rdx_graph_excluded_patterns(
 
         let c_strings: Vec<*const c_char> = excluded
             .iter()
-            .filter_map(|path| {
-                // Normalize all paths to use forward slashes. Otherwise, you get mixed backslashes and forward slashes
-                // on Windows if a configuration file is using forward slashes. For example:
-                //
-                // C:\project/vendor/bundle
-                let normalized = path.replace(std::path::MAIN_SEPARATOR, "/");
-
-                CString::new(normalized)
+            .filter_map(|pattern| {
+                CString::new(pattern.as_ref())
                     .ok()
                     .map(|c_string| c_string.into_raw().cast_const())
             })
@@ -246,7 +240,7 @@ pub unsafe extern "C" fn rdx_graph_excluded_patterns(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_workspace_path(pointer: GraphPointer) -> *const c_char {
     with_graph(pointer, |graph| {
-        CString::new(graph.workspace_path().to_string_lossy().as_ref())
+        CString::new(utils::interop_path(graph.workspace_path()))
             .map_or(ptr::null(), |c_string| c_string.into_raw().cast_const())
     })
 }

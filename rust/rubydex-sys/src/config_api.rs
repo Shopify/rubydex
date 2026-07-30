@@ -69,7 +69,7 @@ pub unsafe extern "C" fn rdx_config_load(workspace_path: *const c_char) -> CConf
 pub unsafe extern "C" fn rdx_config_workspace_path(config: ConfigPointer) -> *const c_char {
     let config = unsafe { &*config.cast::<Config>() };
 
-    CString::new(config.workspace_path().to_string_lossy().as_ref())
+    CString::new(utils::interop_path(config.workspace_path()))
         .map_or(ptr::null(), |c_string| c_string.into_raw().cast_const())
 }
 
