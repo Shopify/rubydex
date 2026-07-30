@@ -143,6 +143,32 @@ puts query.render(graph, "json")
 puts Rubydex::Query.schema("table")
 ```
 
+## Visualizing the graph
+
+`rdx dot` renders the complete resolved graph as Graphviz DOT. It includes documents,
+definitions, declarations, nesting, inheritance, and mixin relationships. Built-in
+declarations are hidden by default.
+
+```bash
+# Index the current workspace and write its graph
+bundle exec rdx dot > graph.dot
+
+# Index another workspace and include Rubydex's built-in declarations
+bundle exec rdx dot --show-builtins path/to/workspace > graph.dot
+
+# Render the DOT file with Graphviz
+dot -Tsvg graph.dot -o graph.svg
+```
+
+The same output is available from a resolved graph:
+
+```ruby
+File.write("graph.dot", graph.to_dot)
+File.write("graph-with-builtins.dot", graph.to_dot(show_builtins: true))
+```
+
+DOT is a whole-graph visualization, not a `rdx query --format` option.
+
 ## MCP Server (Experimental)
 
 Rubydex can run as an MCP (Model Context Protocol) server, enabling AI assistants

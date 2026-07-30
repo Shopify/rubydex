@@ -54,6 +54,7 @@ When necessary, commands can be executed for the Ruby code.
 - `bundle exec rake test`: runs the Ruby and Rust test suites
 - `bundle exec rake ruby_test`: runs all automated Ruby tests
 - `bundle exec ruby -Itest test/specific_test.rb`: runs a specific test file
+- `bundle exec rdx dot [PATH]`: generates a DOT visualization from the Ruby CLI
 
 ## Rust workspace
 
@@ -84,7 +85,6 @@ When necessary, commands can be executed for the Rust code.
 - `cargo run -- <directory>`: runs the indexer on the specified directory (must use absolute paths or $HOME, not ~)
 - `cargo run -- <directory> --stats`: runs the indexer with detailed performance breakdown
 - `cargo run -- <directory> --stop-after <stage>`: stops after the specified stage (Listing, Indexing, or Resolution)
-- `cargo run -- <directory> --visualize`: generates a DOT visualization of the graph
 - `cargo test`: runs Rust tests (all workspace crates)
 - `cargo test test_name`: runs a specific tests example
 - `cargo fmt`: auto formats the Rust code
