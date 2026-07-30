@@ -354,6 +354,21 @@ class Rubydex::Error < StandardError; end
 class Rubydex::AliasCycleError < Rubydex::Error; end
 class Rubydex::ConfigError < Rubydex::Error; end
 
+# The configuration of a workspace, parsed from its `rubydex.toml`. It carries both the settings that are global to
+# every built-in tool, such as the workspace being analyzed, and the typed settings of each tool's own section (e.g.
+# `[graph]`, `[linter]`).
+class Rubydex::Config
+  class << self
+    # Loads the configuration file for `workspace_path/rubydex.toml` if it exists or uses the defaults.
+    sig { params(workspace_path: String).returns(Rubydex::Config) }
+    def load(workspace_path); end
+  end
+
+  # The configured workspace path, which is usually PWD, except for editors that spawn language servers outside of pwd.
+  sig { returns(String) }
+  def workspace_path; end
+end
+
 class Rubydex::Failure
   sig { params(message: String).void }
   def initialize(message); end
@@ -381,8 +396,12 @@ class Rubydex::Query
 end
 
 class Rubydex::Graph
-  sig { params(workspace_path: T.nilable(String)).void }
-  def initialize(workspace_path: nil); end
+  class << self
+    # Creates a new graph with the loaded configuration. For use cases where the graph must be shared between
+    # different tools, do not use this. Create and own a `Config` object instead.
+    sig { params(workspace_path: String).returns(T.attached_class) }
+    def configure_for_workspace(workspace_path); end
+  end
 
   sig { params(fully_qualified_name: String).returns(T.nilable(Rubydex::Declaration)) }
   def [](fully_qualified_name); end
@@ -419,12 +438,9 @@ class Rubydex::Graph
   sig { params(name: String).returns(T.nilable(Rubydex::Keyword)) }
   def keyword(name); end
 
-  # Loads configuration, merging its exclusion patterns into the graph's configuration (the workspace path is never
-  # overridden). With `config_path` (resolved relative to the workspace path), an explicitly named file that does not
-  # exist raises `Rubydex::ConfigError`. With no argument, the default `.rubydex` is loaded if present and ignored if
-  # missing. Raises `Rubydex::ConfigError` if a file cannot be read or is malformed.
-  sig { params(config_path: T.nilable(String)).void }
-  def load_config(config_path = nil); end
+  # Loads the configuration in the graph.
+  sig { params(config: Rubydex::Config).void }
+  def load_config(config); end
 
   sig { returns(T::Enumerable[Rubydex::MethodReference]) }
   def method_references; end
@@ -450,11 +466,9 @@ class Rubydex::Graph
   sig { params(encoding: String).void }
   def encoding=(encoding); end
 
+  # The root directory of the workspace being analyzed, which comes from the loaded `Rubydex::Config`
   sig { returns(String) }
   def workspace_path; end
-
-  sig { params(workspace_path: String).returns(String) }
-  def workspace_path=(workspace_path); end
 
   sig { returns(T::Array[String]) }
   def workspace_paths; end

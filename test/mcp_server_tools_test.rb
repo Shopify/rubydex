@@ -158,7 +158,7 @@ class MCPServerToolsTest < Minitest::Test
   end
 
   def indexed_graph(root_path, paths)
-    graph = Rubydex::Graph.new(workspace_path: root_path)
+    graph = Rubydex::Graph.configure_for_workspace(root_path)
     errors = graph.index_all(paths)
     graph.resolve
 

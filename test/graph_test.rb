@@ -51,12 +51,11 @@ class GraphTest < Minitest::Test
     assert_match(/FileError: Path `.*not_found.rb` does not exist/, errors.first)
   end
 
-  def test_load_config_from_explicit_path_adds_exclusions
+  def test_load_config_adds_exclusions_resolved_against_the_workspace_path
     with_context do |context|
-      context.write!(".rubydex_custom", "exclude = [\"vendor\", \"generated\"]\n")
+      context.write!("rubydex.toml", "[graph]\nexclude = [\"vendor\", \"generated\"]\n")
 
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
-      graph.load_config(".rubydex_custom")
+      graph = graph_for(context)
 
       # Excluded paths are resolved against the workspace path.
       assert_includes(graph.excluded_patterns, context.absolute_path_to("vendor"))
@@ -65,37 +64,19 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_load_config_without_argument_loads_the_default_rubydex
+  def test_load_config_with_an_empty_config_leaves_the_defaults_in_place
     with_context do |context|
-      context.write!("rubydex.toml", "exclude = [\"vendor\", \"generated\"]\n")
+      # A workspace with no `rubydex.toml` carries no exclusions of its own; the defaults remain in place.
+      graph = graph_for(context)
 
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
-      graph.load_config
-
-      assert_includes(graph.excluded_patterns, context.absolute_path_to("vendor"))
-      assert_includes(graph.excluded_patterns, context.absolute_path_to("generated"))
       assert_includes(graph.excluded_patterns, context.absolute_path_to("node_modules"))
     end
   end
 
-  def test_load_config_without_argument_ignores_a_missing_default_rubydex
-    with_context do |context|
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
-
-      # A missing default `rubydex.toml` is not an error; defaults remain in place.
-      graph.load_config
-      assert_includes(graph.excluded_patterns, context.absolute_path_to("node_modules"))
-    end
-  end
-
-  def test_load_config_raises_when_file_is_missing
-    graph = Rubydex::Graph.new
-    assert_raises(Rubydex::ConfigError) { graph.load_config(".rubydex_missing") }
-  end
-
-  def test_load_config_fails_if_argument_is_not_string
+  def test_load_config_fails_if_argument_is_not_a_config
     graph = Rubydex::Graph.new
     assert_raises(TypeError) { graph.load_config(123) }
+    assert_raises(TypeError) { graph.load_config("rubydex.toml") }
   end
 
   def test_indexing_with_parse_errors
@@ -309,18 +290,11 @@ class GraphTest < Minitest::Test
     assert_equal(Dir.pwd, File.expand_path(graph.workspace_path))
   end
 
-  def test_workspace_path_can_be_passed_to_initialize
+  def test_workspace_path_comes_from_the_loaded_configuration
     with_context do |context|
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph = graph_for(context)
       assert_equal(context.absolute_path, graph.workspace_path)
     end
-  end
-
-  def test_workspace_path_setter
-    graph = Rubydex::Graph.new
-    graph.workspace_path = "/some/workspace"
-
-    assert_equal("/some/workspace", graph.workspace_path)
   end
 
   def test_graph_encoding_setter
@@ -741,7 +715,7 @@ class GraphTest < Minitest::Test
       context.write!("top_level.rbs", "class TopLevelRbs; end")
       context.write!("config.ru", "class ConfigRu; end")
 
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph = graph_for(context)
       paths = graph.workspace_paths
 
       # Includes workspace directories
@@ -791,7 +765,7 @@ class GraphTest < Minitest::Test
         end
       RBS
 
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph = graph_for(context)
       graph.index_workspace
       graph.resolve
 
@@ -1473,7 +1447,7 @@ class GraphTest < Minitest::Test
       context.write!("vendor/gems/foo.rb", "class Foo; end")
       context.write!("vendor/bundle/bar.rb", "class Bar; end")
 
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph = graph_for(context)
       graph.exclude_patterns(["vendor/bundle"])
 
       assert_includes(graph.excluded_patterns, context.absolute_path_to("vendor/bundle"))
@@ -1509,7 +1483,7 @@ class GraphTest < Minitest::Test
       context.write!("tmp/in_tmp.rb", "class InTmp; end")
       context.write!("lib/foo.rb", "class Foo; end")
 
-      graph = Rubydex::Graph.new(workspace_path: context.absolute_path)
+      graph = graph_for(context)
       graph.index_all(graph.workspace_paths)
       graph.resolve
 
@@ -1874,6 +1848,15 @@ class GraphTest < Minitest::Test
     assert_raises(RuntimeError) { graph.clone }
   end
 
+  def test_configure_for_workspace_creates_graph_with_config_file
+    with_context do |context|
+      context.write!("rubydex.toml", "[graph]\nexclude = [\"vendor\"]\n")
+
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path)
+      assert_includes(graph.excluded_patterns, context.absolute_path_to("vendor"))
+    end
+  end
+
   private
 
   def skip_unstable_windows_ractor
@@ -1892,5 +1875,9 @@ class GraphTest < Minitest::Test
       actual.sort_by { |d| [d.location, d.message] }
         .map { |d| { rule: d.rule, path: File.basename(d.location.to_file_path), message: d.message } },
     )
+  end
+
+  def graph_for(context)
+    Rubydex::Graph.configure_for_workspace(context.absolute_path)
   end
 end
