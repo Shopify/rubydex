@@ -3,17 +3,54 @@
 #include "reference.h"
 #include "rustbindings.h"
 
+struct StrArrayConversion {
+    VALUE array;
+    char **result;
+    size_t length;
+    size_t converted_count;
+};
+
+static VALUE str_array_conversion_body(VALUE opaque_conversion) {
+    struct StrArrayConversion *conversion = (struct StrArrayConversion *)(uintptr_t)opaque_conversion;
+
+    for (size_t i = 0; i < conversion->length; i++) {
+        VALUE item = rb_ary_entry(conversion->array, i);
+        const char *string = StringValueCStr(item);
+        size_t string_length = (size_t)RSTRING_LEN(item) + 1;
+
+        conversion->result[i] = malloc(string_length);
+        if (conversion->result[i] == NULL) {
+            rb_memerror();
+        }
+
+        memcpy(conversion->result[i], string, string_length);
+        conversion->converted_count++;
+    }
+
+    return Qnil;
+}
+
 // Convert a Ruby array of strings into a double char pointer so that we can pass that to Rust.
 // This copies the data so it must be freed
 char **rdxi_str_array_to_char(VALUE array, size_t length) {
-    char **converted_array = malloc(length * sizeof(char *));
+    size_t allocation_length = length > 0 ? length : 1;
+    char **converted_array = malloc(allocation_length * sizeof(char *));
+    if (converted_array == NULL) {
+        rb_memerror();
+    }
 
-    for (size_t i = 0; i < length; i++) {
-        VALUE item = rb_ary_entry(array, i);
-        const char *string = StringValueCStr(item);
+    struct StrArrayConversion conversion = {
+        .array = array,
+        .result = converted_array,
+        .length = length,
+        .converted_count = 0,
+    };
 
-        converted_array[i] = malloc(strlen(string) + 1);
-        strcpy(converted_array[i], string);
+    int state = 0;
+    rb_protect(str_array_conversion_body, (VALUE)(uintptr_t)&conversion, &state);
+    if (state != 0) {
+        rdxi_free_str_array(converted_array, conversion.converted_count);
+        rb_jump_tag(state);
     }
 
     return converted_array;

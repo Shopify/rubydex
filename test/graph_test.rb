@@ -415,6 +415,10 @@ class GraphTest < Minitest::Test
     assert_raises(TypeError) do
       graph.resolve_constant("CONST", "Not an array")
     end
+
+    assert_raises(ArgumentError) do
+      graph.resolve_constant("CONST", ["Foo", "Bar\0Baz"])
+    end
   end
 
   def test_graph_resolve_non_existing_constant
