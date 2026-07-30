@@ -903,6 +903,9 @@ class Rubydex::Graph
   sig { params(queries: String).returns(T::Enumerable[Rubydex::Declaration]) }
   def fuzzy_search(*queries); end
 
+  sig { returns(T::Enumerable[Rubydex::Declaration]) }
+  def dead_code_candidates; end
+
   sig { params(encoding: String).void }
   def encoding=(encoding); end
 

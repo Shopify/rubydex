@@ -833,6 +833,52 @@ pub fn follow_method_alias(graph: &Graph, alias_id: DefinitionId) -> Result<Decl
     }
 }
 
+/// Returns every constant-like declaration (namespace, constant or constant alias) with zero resolved constant
+/// references. Methods and variables are never included, they cannot be the target of a constant reference.
+///
+/// Expects a resolved graph, and covers everything indexed, including dependencies.
+///
+/// The result is a working set, not an inventory. Deleting a reported declaration can leave its container
+/// unreferenced, so re-index and call again until the result comes back empty. Accuracy follows the graph's reference
+/// data, so whatever the indexer cannot see (metaprogramming, autoloading) goes uncounted.
+///
+/// # Panics
+///
+/// Will panic if any of the threads panic
+pub fn dead_code_candidates(graph: &Graph) -> Vec<DeclarationId> {
+    let num_threads = thread::available_parallelism().map_or(4, std::num::NonZero::get);
+    let declarations = graph.declarations();
+
+    let ids: Vec<DeclarationId> = declarations.keys().copied().collect();
+    let chunk_size = ids.len().div_ceil(num_threads);
+
+    if chunk_size == 0 {
+        return Vec::new();
+    }
+
+    thread::scope(|s| {
+        let handles: Vec<_> = ids
+            .chunks(chunk_size)
+            .map(|chunk| {
+                s.spawn(|| {
+                    chunk
+                        .iter()
+                        .filter(|id| {
+                            let decl = declarations.get(id).unwrap();
+                            // Methods and variables are excluded here: rubydex cannot attribute method
+                            // calls to declarations, so called and uncalled both report zero references.
+                            decl.constant_references().is_some_and(HashSet::is_empty)
+                        })
+                        .copied()
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -3980,6 +4026,129 @@ mod tests {
                 false,
             ),
             Err(FindMemberError::DeclarationNotFound),
+        );
+    }
+
+    fn candidate_names(context: &GraphTest) -> Vec<String> {
+        let mut names: Vec<String> = dead_code_candidates(context.graph())
+            .iter()
+            .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn dead_code_candidates_returns_unreferenced_constants() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class UnusedClass; end
+            module UnusedModule; end
+            UNUSED_CONSTANT = 1
+            ",
+        );
+        context.resolve();
+
+        let names = candidate_names(&context);
+        for expected in ["UnusedClass", "UnusedModule", "UNUSED_CONSTANT"] {
+            assert!(
+                names.contains(&expected.to_string()),
+                "{expected} missing from {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dead_code_candidates_excludes_referenced_constants() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class UsedClass; end
+            USED_CONSTANT = 1
+            ",
+        );
+        context.index_uri(
+            "file:///bar.rb",
+            r"
+            UsedClass
+            USED_CONSTANT
+            ",
+        );
+        context.resolve();
+
+        let names = candidate_names(&context);
+        for unexpected in ["UsedClass", "USED_CONSTANT"] {
+            assert!(
+                !names.contains(&unexpected.to_string()),
+                "{unexpected} unexpectedly present in {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dead_code_candidates_excludes_methods_and_variables() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            $global_var = 1
+
+            class Holder
+              @@class_var = 1
+
+              def initialize
+                @instance_var = 1
+              end
+
+              def never_called; end
+            end
+            ",
+        );
+        context.resolve();
+
+        let unexpected: Vec<&str> = dead_code_candidates(context.graph())
+            .iter()
+            .map(|id| context.graph().declarations().get(id).unwrap())
+            .filter(|decl| {
+                !matches!(
+                    decl,
+                    Declaration::Namespace(_) | Declaration::Constant(_) | Declaration::ConstantAlias(_)
+                )
+            })
+            .map(Declaration::name)
+            .collect();
+
+        assert!(
+            unexpected.is_empty(),
+            "candidates that are not constant-like: {unexpected:?}"
+        );
+    }
+
+    #[test]
+    fn dead_code_candidates_counts_references_rather_than_reachability() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Target; end
+            AliasName = Target
+            ",
+        );
+        context.resolve();
+
+        // `AliasName` is itself dead, but it still references `Target`, giving `Target` a non-zero count.
+        // A single pass only peels the outermost layer of a dead subgraph.
+        let names = candidate_names(&context);
+        assert!(
+            names.contains(&"AliasName".to_string()),
+            "AliasName missing from {names:?}"
+        );
+        assert!(
+            !names.contains(&"Target".to_string()),
+            "Target unexpectedly present in {names:?}"
         );
     }
 }
