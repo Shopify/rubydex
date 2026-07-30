@@ -492,6 +492,7 @@ static VALUE rdxr_graph_set_encoding(VALUE self, VALUE encoding) {
 static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nesting) {
     Check_Type(const_name, T_STRING);
     rdxi_check_array_of_strings(nesting);
+    const char *const_name_string = StringValueCStr(const_name);
 
     // Convert the given file paths into a char** array, so that we can pass to Rust
     size_t length = RARRAY_LEN(nesting);
@@ -501,7 +502,7 @@ static VALUE rdxr_graph_resolve_constant(VALUE self, VALUE const_name, VALUE nes
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
     const CDeclaration *decl =
-        rdx_graph_resolve_constant(graph, StringValueCStr(const_name), (const char **)converted_file_paths, length);
+        rdx_graph_resolve_constant(graph, const_name_string, (const char **)converted_file_paths, length);
 
     rdxi_free_str_array(converted_file_paths, length);
 
@@ -787,6 +788,7 @@ static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE se
 
     Check_Type(name, T_STRING);
     rdxi_check_array_of_strings(nesting);
+    const char *name_string = StringValueCStr(name);
 
     const char *self_receiver = extract_self_receiver(opts);
 
@@ -797,7 +799,7 @@ static VALUE rdxr_graph_complete_method_argument(int argc, VALUE *argv, VALUE se
     char **converted_nesting = rdxi_str_array_to_char(nesting, nesting_count);
 
     struct CompletionResult result = rdx_graph_complete_method_argument(
-        graph, StringValueCStr(name), (const char *const *)converted_nesting, nesting_count, self_receiver);
+        graph, name_string, (const char *const *)converted_nesting, nesting_count, self_receiver);
 
     rdxi_free_str_array(converted_nesting, nesting_count);
     return completion_result_to_ruby_array(result, self);
