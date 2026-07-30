@@ -20,6 +20,7 @@ static VALUE cKeywordParameter;
 
 // Interned once in `rdxi_initialize_graph` to avoid repeated symbol-table lookups on hot completion paths.
 static ID id_self_receiver;
+static ID id_show_builtins;
 
 // Extracts the required `self_receiver:` kwarg from `opts`. Returns NULL when the value is `nil`,
 // which means "no self-type to walk" (e.g., empty class body where the singleton class hasn't
@@ -872,6 +873,40 @@ static VALUE rdxr_graph_workspace_path(VALUE self) {
 
 /*
  * call-seq:
+ *   to_dot(show_builtins: false) -> String
+ *
+ * Returns a Graphviz DOT visualization of the graph. Built-in declarations are omitted by default.
+ */
+static VALUE rdxr_graph_to_dot(int argc, VALUE *argv, VALUE self) {
+    VALUE opts;
+    rb_scan_args(argc, argv, "0:", &opts);
+
+    VALUE show_builtins = Qfalse;
+    if (!NIL_P(opts)) {
+        VALUE keyword;
+        rb_get_kwargs(opts, &id_show_builtins, 0, 1, &keyword);
+        if (keyword != Qundef) {
+            show_builtins = keyword;
+        }
+    }
+
+    if (show_builtins != Qtrue && show_builtins != Qfalse) {
+        rb_raise(rb_eArgError, "show_builtins must be true or false");
+    }
+
+    void *graph;
+    TypedData_Get_Struct(self, void *, &graph_type, graph);
+
+    const char *dot = rdx_graph_to_dot(graph, RTEST(show_builtins));
+    if (dot == NULL) {
+        rb_raise(rb_eRuntimeError, "Converting DOT output to Ruby string failed");
+    }
+
+    return rdxi_owned_c_string_to_ruby(dot);
+}
+
+/*
+ * call-seq:
  *   workspace_path=(path) -> void
  *
  * Sets the root directory of the workspace being indexed.
@@ -950,6 +985,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     cKeywordParameter = rb_define_class_under(mRubydex, "KeywordParameter", rb_cObject);
 
     id_self_receiver = rb_intern("self_receiver");
+    id_show_builtins = rb_intern("show_builtins");
 
     rb_define_alloc_func(cGraph, rdxr_graph_alloc);
     rb_define_method(cGraph, "initialize_copy", rdxr_graph_initialize_copy, 1);
@@ -966,6 +1002,7 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "method_references", rdxr_graph_method_references, 0);
     rb_define_method(cGraph, "diagnostics", rdxr_graph_diagnostics, 0);
     rb_define_method(cGraph, "check_integrity", rdxr_graph_check_integrity, 0);
+    rb_define_method(cGraph, "to_dot", rdxr_graph_to_dot, -1);
     rb_define_method(cGraph, "[]", rdxr_graph_aref, 1);
     rb_define_method(cGraph, "search", rdxr_graph_search, -1);
     rb_define_method(cGraph, "fuzzy_search", rdxr_graph_fuzzy_search, -1);
