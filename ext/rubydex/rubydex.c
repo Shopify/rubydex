@@ -1,3 +1,4 @@
+#include "complexity.h"
 #include "declaration.h"
 #include "definition.h"
 #include "diagnostic.h"
@@ -27,5 +28,6 @@ void Init_rubydex(void) {
     rdxi_initialize_location(mRubydex);
     rdxi_initialize_diagnostic(mRubydex);
     rdxi_initialize_reference(mRubydex);
+    rdxi_initialize_complexity(mRubydex);
     rdxi_initialize_signature(mRubydex);
 }

@@ -779,6 +779,7 @@ dependencies = [
  "ruby-rbs",
  "rubydex",
  "serde",
+ "serde_json",
  "tempfile",
  "tikv-jemalloc-ctl",
  "tikv-jemallocator",

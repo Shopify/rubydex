@@ -24,6 +24,18 @@ struct ConfigFile {
     /// Patterns to exclude from file discovery during indexing.
     #[serde(default)]
     exclude: Vec<Box<str>>,
+    /// Complexity-report-specific configuration (decoupled from indexing so a file can be
+    /// indexed but skipped by `rdx complexity`).
+    #[serde(default)]
+    complexity: ComplexityConfig,
+}
+
+/// The `[complexity]` table in `rubydex.toml`.
+#[derive(Debug, Default, Deserialize)]
+struct ComplexityConfig {
+    /// Patterns to exclude from complexity scoring (does not affect indexing).
+    #[serde(default)]
+    exclude: Vec<Box<str>>,
 }
 
 /// Project configuration
@@ -33,8 +45,12 @@ pub struct Config {
     workspace_path: Box<Path>,
     /// Patterns to exclude from file discovery during indexing.
     excluded_patterns: HashSet<Box<str>>,
+    /// Patterns to exclude from complexity scoring only (decoupled from `excluded_patterns` so
+    /// a file can be indexed but skipped by `rdx complexity`). Seeded with the same default
+    /// skipped directories.
+    complexity_excluded_patterns: HashSet<Box<str>>,
 }
-assert_mem_size!(Config, 64);
+assert_mem_size!(Config, 112);
 
 impl Default for Config {
     fn default() -> Self {
@@ -51,6 +67,7 @@ impl Config {
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .into_boxed_path(),
             excluded_patterns: DEFAULT_EXCLUDED_DIRECTORIES.iter().map(|&dir| Box::from(dir)).collect(),
+            complexity_excluded_patterns: DEFAULT_EXCLUDED_DIRECTORIES.iter().map(|&dir| Box::from(dir)).collect(),
         }
     }
 
@@ -75,6 +92,24 @@ impl Config {
     #[must_use]
     pub fn excluded_patterns(&self) -> HashSet<Box<str>> {
         self.excluded_patterns
+            .iter()
+            .map(|entry| {
+                self.workspace_path
+                    .join(&**entry)
+                    .to_string_lossy()
+                    .into_owned()
+                    .into_boxed_str()
+            })
+            .collect()
+    }
+
+    /// Returns the complexity-report exclusion patterns resolved against the workspace path.
+    /// These are separate from the indexer's [`excluded_patterns`](Self::excluded_patterns) so a
+    /// file can be indexed but skipped by `rdx complexity`; both share the default skipped
+    /// directories (`.git`, `node_modules`, etc.).
+    #[must_use]
+    pub fn complexity_excluded_patterns(&self) -> HashSet<Box<str>> {
+        self.complexity_excluded_patterns
             .iter()
             .map(|entry| {
                 self.workspace_path
@@ -130,13 +165,37 @@ impl Config {
             Errors::ConfigError(format!("Invalid config file `{}`: {error}", config_path.display()))
         })?;
 
+        // Fail closed: an invalid glob in either exclude set is a config error rather than a
+        // silently-dropped pattern that would let the file be scored/indexed unexpectedly.
+        if let Err(error) = Self::validate_globs(&parsed.exclude) {
+            return Err(Errors::ConfigError(format!(
+                "Invalid config file `{}`: malformed `exclude` glob: {error}",
+                config_path.display()
+            )));
+        }
+        if let Err(error) = Self::validate_globs(&parsed.complexity.exclude) {
+            return Err(Errors::ConfigError(format!(
+                "Invalid config file `{}`: malformed `[complexity].exclude` glob: {error}",
+                config_path.display()
+            )));
+        }
+
         self.excluded_patterns.extend(parsed.exclude);
+        self.complexity_excluded_patterns.extend(parsed.complexity.exclude);
         Ok(())
     }
-
     /// Parses the content into a [`ConfigFile`]
     fn parse(content: &str) -> Result<ConfigFile, toml::de::Error> {
         toml::from_str(content)
+    }
+
+    /// Validates that every pattern parses as a [`glob::Pattern`], so a typo in `rubydex.toml`
+    /// surfaces as a config error instead of being silently dropped during file discovery.
+    fn validate_globs(patterns: &[Box<str>]) -> Result<(), glob::PatternError> {
+        for pattern in patterns {
+            glob::Pattern::new(pattern)?;
+        }
+        Ok(())
     }
 }
 
@@ -206,6 +265,34 @@ mod tests {
         assert!(excluded.contains(workspace_exclusion("node_modules").as_str()));
         // A config file cannot override the programmatically-set workspace path.
         assert_eq!(config.workspace_path(), Path::new("/workspace"));
+    }
+
+    #[test]
+    fn load_file_merges_complexity_exclude_separately_from_indexer_exclude() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("rubydex.toml");
+        fs::write(
+            &config_path,
+            "exclude = [\"vendor\"]\n[complexity]\nexclude = [\"generated\"]\n",
+        )
+        .unwrap();
+
+        let mut config = Config::new();
+        config.set_workspace_path(PathBuf::from("/workspace"));
+        config
+            .load_file(&config_path)
+            .expect("expected the config file to load");
+
+        let indexer = config.excluded_patterns();
+        let complexity = config.complexity_excluded_patterns();
+        // The indexer's top-level `exclude` does not leak into complexity, and vice versa.
+        assert!(indexer.contains(workspace_exclusion("vendor").as_str()));
+        assert!(!complexity.contains(workspace_exclusion("vendor").as_str()));
+        assert!(complexity.contains(workspace_exclusion("generated").as_str()));
+        assert!(!indexer.contains(workspace_exclusion("generated").as_str()));
+        // Both still carry the default skipped directories.
+        assert!(complexity.contains(workspace_exclusion(".git").as_str()));
+        assert!(indexer.contains(workspace_exclusion(".git").as_str()));
     }
 
     #[test]
@@ -279,6 +366,36 @@ mod tests {
             .load_default()
             .expect_err("a malformed default config must still be an error");
 
+        assert!(matches!(error, Errors::ConfigError(_)), "unexpected error: {error:?}");
+    }
+
+    #[test]
+    fn load_file_rejects_a_malformed_indexer_exclude_glob() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("rubydex.toml");
+        fs::write(&config_path, "exclude = [\"[unclosed\"]\n").unwrap();
+
+        let mut config = Config::new();
+        config.set_workspace_path(PathBuf::from("/workspace"));
+
+        let error = config
+            .load_file(&config_path)
+            .expect_err("a malformed `exclude` glob must be a config error, not silently dropped");
+        assert!(matches!(error, Errors::ConfigError(_)), "unexpected error: {error:?}");
+    }
+
+    #[test]
+    fn load_file_rejects_a_malformed_complexity_exclude_glob() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config_path = dir.path().join("rubydex.toml");
+        fs::write(&config_path, "[complexity]\nexclude = [\"[unclosed\"]\n").unwrap();
+
+        let mut config = Config::new();
+        config.set_workspace_path(PathBuf::from("/workspace"));
+
+        let error = config
+            .load_file(&config_path)
+            .expect_err("a malformed `[complexity].exclude` glob must be a config error, not silently dropped");
         assert!(matches!(error, Errors::ConfigError(_)), "unexpected error: {error:?}");
     }
 

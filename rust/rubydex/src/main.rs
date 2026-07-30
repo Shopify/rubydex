@@ -2,7 +2,7 @@ use clap::{Parser, ValueEnum};
 use std::{fs, mem, path::PathBuf};
 
 use rubydex::{
-    dot,
+    complexity, dot,
     indexing::{self, IndexerBackend},
     integrity, listing,
     model::graph::Graph,
@@ -56,6 +56,55 @@ struct Args {
         help = "Write orphan definitions report to specified file"
     )]
     report_orphans: Option<String>,
+
+    #[arg(long = "complexity", help = "Compute a complexity report instead of indexing")]
+    complexity: bool,
+
+    #[arg(
+        long = "complexity-format",
+        value_enum,
+        default_value = "text",
+        requires = "complexity",
+        help = "Output format for the complexity report (text or json)"
+    )]
+    complexity_format: ComplexityFormat,
+
+    #[arg(
+        long = "complexity-top",
+        default_value_t = 25,
+        requires = "complexity",
+        help = "Max entries in text output (0 = all)"
+    )]
+    complexity_top: usize,
+
+    #[arg(
+        long = "complexity-methods-only",
+        requires = "complexity",
+        help = "Skip code outside methods"
+    )]
+    complexity_methods_only: bool,
+
+    #[arg(
+        long = "complexity-details",
+        requires = "complexity",
+        help = "Show per-construct score breakdown under each method"
+    )]
+    complexity_details: bool,
+
+    #[arg(
+        long = "complexity-group",
+        requires = "complexity",
+        help = "Group and sort entries by class with subtotals"
+    )]
+    complexity_group: bool,
+
+    #[arg(
+        long = "complexity-diff",
+        value_name = "FILE",
+        requires = "complexity",
+        help = "Baseline report JSON to diff against"
+    )]
+    complexity_diff: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -69,6 +118,12 @@ enum StopAfter {
 enum Indexer {
     RubyIndexer,
     OperationBuilder,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+enum ComplexityFormat {
+    Text,
+    Json,
 }
 
 impl From<&Indexer> for IndexerBackend {
@@ -89,13 +144,84 @@ fn exit(print_stats: bool) {
     std::process::exit(0);
 }
 
-fn workspace_path_for(paths: &[String]) -> Option<PathBuf> {
-    let first_path = paths.first()?;
-    fs::canonicalize(first_path).ok().filter(|path| path.is_dir())
+/// Run the complexity analysis pass and print the report (or a diff against a baseline), then exit.
+fn run_complexity(args: &Args) {
+    if args.complexity_diff.is_some() && args.complexity_details {
+        eprintln!("`--complexity-details` does not apply to diff output; remove it or drop `--complexity-diff`");
+        std::process::exit(1);
+    }
+    if args.complexity_diff.is_some() && args.complexity_group {
+        eprintln!("`--complexity-group` does not apply to diff output; remove it or drop `--complexity-diff`");
+        std::process::exit(1);
+    }
+    if args.complexity_group && matches!(args.complexity_format, ComplexityFormat::Json) {
+        eprintln!(
+            "`--complexity-group` only affects text output; use `--complexity-format text` or drop `--complexity-group`"
+        );
+        std::process::exit(1);
+    }
+    let (report, errors) = match complexity::analyze(
+        args.paths.clone(),
+        args.complexity_methods_only,
+        args.complexity_details && args.complexity_diff.is_none(),
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+
+    for error in errors {
+        eprintln!("{error}");
+    }
+
+    let output = match &args.complexity_diff {
+        Some(baseline_path) => {
+            let baseline_json = match fs::read_to_string(baseline_path) {
+                Ok(content) => content,
+                Err(error) => {
+                    eprintln!("Failed to read baseline report `{}`: {error}", baseline_path.display());
+                    std::process::exit(1);
+                }
+            };
+            let baseline = match complexity::Report::from_json(&baseline_json) {
+                Ok(report) => report,
+                Err(error) => {
+                    eprintln!("Failed to parse baseline report: {error}");
+                    std::process::exit(1);
+                }
+            };
+            let diff = match complexity::Report::diff(&baseline, &report) {
+                Ok(diff) => diff,
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            };
+            match args.complexity_format {
+                ComplexityFormat::Text => diff.render_text(args.complexity_top),
+                ComplexityFormat::Json => diff.to_json(),
+            }
+        }
+        None => match args.complexity_format {
+            ComplexityFormat::Text => {
+                report.render_text(args.complexity_top, args.complexity_details, args.complexity_group)
+            }
+            ComplexityFormat::Json => report.to_json(),
+        },
+    };
+
+    print!("{output}");
 }
 
 fn main() {
     let args = Args::parse();
+
+    if args.complexity {
+        run_complexity(&args);
+        return;
+    }
 
     if args.stats {
         Timer::set_global_timer(Timer::new());
@@ -103,7 +229,7 @@ fn main() {
 
     let mut graph = Graph::new();
 
-    if let Some(workspace_path) = workspace_path_for(&args.paths) {
+    if let Some(workspace_path) = listing::workspace_path_for(&args.paths) {
         graph.set_workspace_path(workspace_path);
         if let Err(error) = graph.load_config(None) {
             eprintln!("{error}");

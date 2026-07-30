@@ -623,4 +623,24 @@ class Rubydex::Reference
   end
 end
 
+module Rubydex::Complexity
+  sig do
+    params(
+      paths: T::Array[String],
+      format: T.any(String, Symbol),
+      top: Integer,
+      methods_only: T::Boolean,
+      details: T::Boolean,
+      group: T::Boolean,
+    ).returns(String)
+  end
+  def self.analyze(paths, format: :text, top: 25, methods_only: false, details: false, group: false); end
+
+  sig do
+    params(baseline_json: String, current_json: String, format: T.any(String, Symbol), top: Integer)
+      .returns(String)
+  end
+  def self.diff(baseline_json, current_json, format: :text, top: 25); end
+end
+
 Rubydex::VERSION = T.let(T.unsafe(nil), String)

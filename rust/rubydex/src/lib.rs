@@ -5,6 +5,7 @@
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub mod compile_assertions;
+pub mod complexity;
 pub mod config;
 pub mod diagnostic;
 pub mod dot;

@@ -1,7 +1,7 @@
 use assert_cmd::{assert::Assert, prelude::*};
 use predicates::prelude::*;
 use rubydex::test_utils::with_context;
-use std::process::Command;
+use std::{fs, path::PathBuf, process::Command};
 
 fn rdx_cmd(args: &[&str]) -> Command {
     let mut cmd = Command::cargo_bin("rubydex_cli").unwrap();
@@ -203,5 +203,214 @@ fn stop_after() {
             .stdout(predicate::str::contains("Indexing"))
             .stdout(predicate::str::contains("Resolution"))
             .stdout(predicate::str::contains("Querying"));
+    });
+}
+
+#[test]
+fn complexity_text_report() {
+    with_context(|context| {
+        context.write(
+            "foo.rb",
+            "class Foo\n  def bar(a)\n    if a\n      baz(a)\n    end\n  end\nend\n",
+        );
+
+        rdx(&[context.absolute_path().to_str().unwrap(), "--complexity"])
+            .success()
+            .stdout(predicate::str::contains("total complexity"))
+            .stdout(predicate::str::contains("average complexity"))
+            .stdout(predicate::str::contains("Foo#bar"));
+    });
+}
+
+#[test]
+fn complexity_json_report() {
+    with_context(|context| {
+        context.write(
+            "foo.rb",
+            "class Foo\n  def bar(a)\n    if a\n      baz(a)\n    end\n  end\nend\n",
+        );
+
+        let result = rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-format",
+            "json",
+        ])
+        .success();
+        let output = result.get_output();
+
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+        assert_eq!(json["schema_version"], 1);
+        assert_eq!(json["methods_count"], 1);
+    });
+}
+
+#[test]
+fn complexity_format_requires_complexity_flag() {
+    rdx(&["--complexity-format", "json"])
+        .failure()
+        .stderr(predicate::str::contains("--complexity"));
+}
+
+#[test]
+fn complexity_diff_shows_regression() {
+    with_context(|context| {
+        context.write(
+            "foo.rb",
+            "class Foo\n  def bar(a)\n    if a\n      baz(a)\n    end\n  end\nend\n",
+        );
+
+        let baseline_result = rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-format",
+            "json",
+        ])
+        .success();
+        let baseline = baseline_result.get_output();
+
+        let baseline_path: PathBuf = context.absolute_path().join("baseline.json");
+        fs::write(&baseline_path, &baseline.stdout).expect("write baseline");
+
+        context.write(
+            "foo.rb",
+            "class Foo\n  def bar(a)\n    if a\n      baz(a)\n      if a > 1\n        baz(a)\n      end\n    end\n  end\nend\n",
+        );
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-diff",
+            baseline_path.to_str().unwrap(),
+        ])
+        .success()
+        .stdout(predicate::str::contains("Regressions:"))
+        .stdout(predicate::str::contains("Foo#bar"));
+    });
+}
+
+#[test]
+fn complexity_details_shows_breakdown() {
+    with_context(|context| {
+        context.write("foo.rb", "def x; a += 1; end\n");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-details",
+        ])
+        .success()
+        .stdout(predicate::str::contains("main#x"))
+        .stdout(predicate::str::contains("assignment"))
+        .stdout(predicate::str::contains("magic_number"));
+    });
+}
+
+#[test]
+fn complexity_methods_only_skips_out_of_method() {
+    with_context(|context| {
+        context.write("foo.rb", "class Foo; include Bar; def none; bar; end; baz; end\n");
+
+        // Without --methods-only: `include Bar` lands in Foo#none.
+        rdx(&[context.absolute_path().to_str().unwrap(), "--complexity"])
+            .success()
+            .stdout(predicate::str::contains("Foo#none"));
+
+        // With --methods-only: out-of-method `include`/`baz` are dropped; the real
+        // `def none` remains but scores only its body (`bar`), not the out-of-method code.
+        let result = rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-methods-only",
+            "--complexity-format",
+            "json",
+        ])
+        .success();
+        let json: serde_json::Value = serde_json::from_slice(&result.get_output().stdout).expect("valid json");
+        assert_eq!(json["methods_count"], 1);
+        assert_eq!(json["methods"][0]["name"], "Foo#none");
+        assert!(json["methods"][0]["calls"].as_f64().unwrap() < 2.0);
+    });
+}
+
+#[test]
+fn complexity_group_emits_subtotals() {
+    with_context(|context| {
+        context.write(
+            "foo.rb",
+            "class Foo; def a; 1; end; def b; 2; end; end\nclass Bar; def c; 1; end; end\n",
+        );
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-group",
+        ])
+        .success()
+        .stdout(predicate::str::contains("Foo total"))
+        .stdout(predicate::str::contains("Bar total"));
+    });
+}
+
+#[test]
+fn complexity_diff_rejects_mismatched_methods_only() {
+    with_context(|context| {
+        context.write("foo.rb", "class Foo; include Bar; end\n");
+
+        let baseline = rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-format",
+            "json",
+        ])
+        .success();
+        let baseline_path: PathBuf = context.absolute_path().join("baseline.json");
+        fs::write(&baseline_path, &baseline.get_output().stdout).expect("write baseline");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-methods-only",
+            "--complexity-diff",
+            baseline_path.to_str().unwrap(),
+        ])
+        .failure()
+        .stderr(predicate::str::contains("mismatched scoring modes"));
+    });
+}
+
+#[test]
+fn complexity_rejects_details_with_diff() {
+    with_context(|context| {
+        context.write("foo.rb", "def x; end\n");
+        let baseline_path: PathBuf = context.absolute_path().join("baseline.json");
+        fs::write(&baseline_path, "{\"schema_version\":1}").expect("write baseline");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-details",
+            "--complexity-diff",
+            baseline_path.to_str().unwrap(),
+        ])
+        .failure()
+        .stderr(predicate::str::contains("does not apply to diff output"));
+    });
+}
+
+#[test]
+fn complexity_rejects_group_with_json() {
+    with_context(|context| {
+        context.write("foo.rb", "def x; end\n");
+
+        rdx(&[
+            context.absolute_path().to_str().unwrap(),
+            "--complexity",
+            "--complexity-group",
+            "--complexity-format",
+            "json",
+        ])
+        .failure()
+        .stderr(predicate::str::contains("only affects text output"));
     });
 }
