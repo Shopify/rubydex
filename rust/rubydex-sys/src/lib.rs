@@ -68,6 +68,7 @@ macro_rules! iterator {
     };
 }
 
+pub mod config_api;
 pub mod cypher_api;
 pub mod declaration_api;
 pub mod definition_api;
