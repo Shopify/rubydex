@@ -261,7 +261,9 @@ static VALUE rdxr_graph_fuzzy_search(int argc, VALUE *argv, VALUE self) {
  *   dead_code_candidates -> Enumerator[Rubydex::Declaration]
  *
  * Returns an enumerator that yields constant-like declarations (namespace, constant, or constant alias) that have zero
- * resolved constant references. Requires a resolved graph and covers everything indexed, including dependencies.
+ * resolved constant references and at least one definition. Declarations with a rubydex-seeded built-in definition are
+ * excluded, even when user code reopens them. Requires a resolved graph and covers everything indexed, including
+ * dependencies.
  *
  * The result is a working set, not an inventory. Deleting a reported declaration can leave its container unreferenced,
  * so re-index and call again until the result comes back empty. Accuracy follows the graph's reference data, so

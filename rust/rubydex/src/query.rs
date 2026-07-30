@@ -5,7 +5,7 @@ use std::thread;
 
 use url::Url;
 
-use crate::model::built_in::OBJECT_ID;
+use crate::model::built_in::{BUILT_IN_URI_ID, OBJECT_ID};
 use crate::model::declaration::{Ancestor, Declaration, Namespace};
 use crate::model::definitions::{Definition, Parameter};
 use crate::model::graph::Graph;
@@ -833,8 +833,23 @@ pub fn follow_method_alias(graph: &Graph, alias_id: DefinitionId) -> Result<Decl
     }
 }
 
-/// Returns every constant-like declaration (namespace, constant or constant alias) with zero resolved constant
-/// references. Methods and variables are never included, they cannot be the target of a constant reference.
+/// Returns `true` when any definition of `declaration` was seeded by rubydex rather than read from indexed source.
+///
+/// Candidates are reported at declaration granularity, so a seeded definition disqualifies the declaration even when
+/// user code also reopens it.
+fn is_built_in(graph: &Graph, declaration: &Declaration) -> bool {
+    declaration.definitions().iter().any(|definition_id| {
+        graph
+            .definitions()
+            .get(definition_id)
+            .is_some_and(|definition| definition.uri_id() == &*BUILT_IN_URI_ID)
+    })
+}
+
+/// Returns every constant-like declaration (namespace, constant or constant alias) that has zero resolved constant
+/// references and at least one definition. Declarations with a rubydex-seeded built-in definition are excluded, even
+/// when user code reopens them. Methods and variables are never included, they cannot be the target of a constant
+/// reference.
 ///
 /// Expects a resolved graph, and covers everything indexed, including dependencies.
 ///
@@ -868,6 +883,8 @@ pub fn dead_code_candidates(graph: &Graph) -> Vec<DeclarationId> {
                             // Methods and variables are excluded here: rubydex cannot attribute method
                             // calls to declarations, so called and uncalled both report zero references.
                             decl.constant_references().is_some_and(HashSet::is_empty)
+                                && !decl.has_no_definitions()
+                                && !is_built_in(graph, decl)
                         })
                         .copied()
                         .collect::<Vec<_>>()
@@ -4149,6 +4166,60 @@ mod tests {
         assert!(
             !names.contains(&"Target".to_string()),
             "Target unexpectedly present in {names:?}"
+        );
+    }
+
+    #[test]
+    fn dead_code_candidates_excludes_built_ins_and_definitionless_declarations() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Unused
+              def self.class_method; end
+            end
+
+            class Class
+            end
+            ",
+        );
+        context.resolve();
+
+        // Exact equality catches over-inclusion. Reopening `Class` guards against relying on definition order.
+        assert_eq!(vec!["Unused"], candidate_names(&context));
+    }
+
+    #[test]
+    fn dead_code_candidates_includes_unreferenced_explicit_singleton() {
+        let mut context = GraphTest::new();
+        context.index_uri(
+            "file:///foo.rb",
+            r"
+            class Referenced; end
+            class Unreferenced; end
+
+            class << Referenced
+              def call_me; end
+            end
+
+            class << Unreferenced
+              def never_called; end
+            end
+
+            Referenced.call_me
+            ",
+        );
+        context.resolve();
+
+        // Explicit singleton definitions are actionable, and class-level calls make their reference count non-zero.
+        let names = candidate_names(&context);
+        assert!(
+            names.contains(&"Unreferenced::<Unreferenced>".to_string()),
+            "dead explicit singleton missing from {names:?}"
+        );
+        assert!(
+            !names.contains(&"Referenced::<Referenced>".to_string()),
+            "called explicit singleton unexpectedly present in {names:?}"
         );
     }
 }
