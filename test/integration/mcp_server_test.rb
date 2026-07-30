@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "helpers/context"
+require "helpers/executable"
 require "json"
 require "open3"
 require "rbconfig"
@@ -10,6 +11,7 @@ require "timeout"
 
 class MCPServerIntegrationTest < Minitest::Test
   include Test::Helpers::WithContext
+  include Test::Helpers::WithExecutable
 
   MAX_INDEXING_RETRIES = 200
 
@@ -105,19 +107,6 @@ class MCPServerIntegrationTest < Minitest::Test
   end
 
   private
-
-  def run_executable(*arguments)
-    Open3.capture3(
-      RbConfig.ruby,
-      "-rbundler/setup",
-      executable_path,
-      *arguments,
-    )
-  end
-
-  def executable_path
-    File.expand_path("../../exe/rdx", __dir__)
-  end
 
   def send_message(stdin, message)
     stdin.puts(JSON.generate(message))

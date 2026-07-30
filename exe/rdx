@@ -13,6 +13,7 @@ USAGE = <<~TEXT
                      Use `query --schema` to describe the queryable schema (labels,
                      relationships, properties) without indexing the workspace.
     console          Open an interactive session with a populated graph for the current workspace
+    dot [PATH]       Output a Graphviz DOT visualization (workspace defaults to the current dir)
     mcp [PATH]       Run the MCP server for AI assistants (workspace defaults to the current dir)
     help             Show this help message
 
@@ -55,8 +56,8 @@ def with_timer(io, message)
 end
 
 # Builds the workspace graph, sending progress messages to `progress_io`.
-def build_graph(progress_io)
-  graph = Rubydex::Graph.new
+def build_graph(progress_io, workspace_path)
+  graph = Rubydex::Graph.new(workspace_path: File.expand_path(workspace_path))
   graph.load_config
   with_timer(progress_io, "Indexing workspace...") { graph.index_workspace }
   with_timer(progress_io, "Resolving graph...") { graph.resolve }
@@ -68,6 +69,8 @@ require "rubydex"
 # Resolve the command into an operation on a populated graph. Each command parses its own options
 # and does any graph-independent work here; a command that needs no graph (like `query --schema`)
 # handles itself and exits. Whatever falls through returns a lambda that runs against the graph.
+workspace_path = Dir.pwd
+
 operation =
   case command
   when "query"
@@ -105,6 +108,28 @@ operation =
       print(parsed.render(graph, format))
     rescue ArgumentError => e
       abort(e.message)
+    end
+  when "dot"
+    show_builtins = false
+    parser = OptionParser.new do |p|
+      p.banner = "Usage: rdx dot [PATH] [options]"
+      p.on("--show-builtins", "Include built-in declarations in DOT output") { show_builtins = true }
+      p.on("-h", "--help", "Show this help") do
+        puts p
+        exit
+      end
+    end
+    begin
+      parser.parse!
+    rescue OptionParser::ParseError => e
+      abort_with_usage(e.message)
+    end
+
+    workspace_path = ARGV.shift || Dir.pwd
+    abort_with_usage("unexpected argument: #{ARGV.first}") unless ARGV.empty?
+
+    lambda do |graph|
+      print(graph.to_dot(show_builtins: show_builtins))
     end
   when "console"
     OptionParser.new do |parser|
@@ -151,5 +176,5 @@ operation =
 
 # Everything that reaches here operates on a populated graph. Progress goes to stderr so stdout
 # carries only the command's output (e.g. for piping a query's JSON).
-graph = build_graph($stderr)
+graph = build_graph($stderr, workspace_path)
 operation.call(graph)

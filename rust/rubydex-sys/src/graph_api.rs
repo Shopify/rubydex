@@ -8,6 +8,7 @@ use crate::document_api::DocumentsIter;
 use crate::reference_api::{CConstantReference, CMethodReference, ConstantReferencesIter, MethodReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
+use rubydex::dot::DotBuilder;
 use rubydex::errors::Errors;
 use rubydex::indexing::LanguageId;
 use rubydex::model::encoding::Encoding;
@@ -38,6 +39,18 @@ pub extern "C" fn rdx_graph_free(pointer: GraphPointer) {
     unsafe {
         let _ = Box::from_raw(pointer.cast::<RwLock<Graph>>());
     }
+}
+
+/// Returns a DOT visualization of the graph. Caller must free the returned pointer with `free_c_string`.
+///
+/// # Safety
+///
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_graph_to_dot(pointer: GraphPointer, show_builtins: bool) -> *const c_char {
+    with_graph(pointer, |graph| {
+        utils::cstring_raw(&DotBuilder::generate(graph, show_builtins))
+    })
 }
 
 /// Runs `action` against the graph referenced by `pointer` under a read lock.

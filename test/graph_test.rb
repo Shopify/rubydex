@@ -1761,6 +1761,33 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_to_dot_renders_graph_and_hides_built_ins_by_default
+    with_context do |context|
+      context.write!("simple.rb", "class SimpleClass; end")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      dot = graph.to_dot
+
+      assert_includes(dot, "digraph rubydex")
+      assert_includes(dot, "SimpleClass")
+      assert_includes(dot, "defines")
+      assert_includes(dot, "declares")
+      refute_includes(dot, "rubydex:built-in")
+      assert_includes(graph.to_dot(show_builtins: true), "rubydex:built-in")
+    end
+  end
+
+  def test_to_dot_requires_boolean_show_builtins
+    graph = Rubydex::Graph.new
+
+    error = assert_raises(ArgumentError) { graph.to_dot(show_builtins: nil) }
+    assert_includes(error.message, "show_builtins must be true or false")
+    assert_raises(ArgumentError) { graph.to_dot(unknown: true) }
+  end
+
   def test_frozen_graph_allows_mutating_methods
     with_context do |context|
       context.write!("file.rb", "class Foo; end")

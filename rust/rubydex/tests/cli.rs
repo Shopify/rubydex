@@ -23,7 +23,6 @@ fn prints_help() {
             "If the first path is a directory, it is used as the workspace root for rubydex.toml",
         ))
         .stdout(predicate::str::contains("--stats"))
-        .stdout(predicate::str::contains("--dot"))
         .stdout(predicate::str::contains("--stop-after"));
 }
 
@@ -130,28 +129,6 @@ fn prints_index_metrics() {
             .stdout(predicate::str::contains("Indexed 3 files"))
             .stdout(predicate::str::contains("Found 7 names"))
             .stdout(predicate::str::contains("Found 7 definitions"));
-    });
-}
-
-#[test]
-fn dot_flag() {
-    with_context(|context| {
-        context.write("simple.rb", "class SimpleClass\nend\n");
-
-        rdx(&[context.absolute_path().to_str().unwrap(), "--dot"])
-            .success()
-            .stdout(predicate::str::contains("digraph rubydex"))
-            // Document node
-            .stdout(predicate::str::contains("Document"))
-            .stdout(predicate::str::contains("simple.rb"))
-            // Definition node
-            .stdout(predicate::str::contains("ClassDef"))
-            .stdout(predicate::str::contains("SimpleClass"))
-            // Declaration node
-            .stdout(predicate::str::contains("ClassDecl"))
-            // Edges
-            .stdout(predicate::str::contains("defines"))
-            .stdout(predicate::str::contains("declares"));
     });
 }
 
