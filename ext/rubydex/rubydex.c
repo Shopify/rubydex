@@ -1,3 +1,4 @@
+#include "config.h"
 #include "declaration.h"
 #include "definition.h"
 #include "diagnostic.h"
@@ -20,6 +21,7 @@ void Init_rubydex(void) {
      */
     mRubydex = rb_define_module("Rubydex");
     rdxi_initialize_graph(mRubydex);
+    rdxi_initialize_config(mRubydex);
     rdxi_initialize_query(mRubydex);
     rdxi_initialize_declaration(mRubydex);
     rdxi_initialize_document(mRubydex);
