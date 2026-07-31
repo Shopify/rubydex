@@ -5,7 +5,7 @@ module Rubydex
   #
   # Note: this class is partially defined in C to integrate with the Rust backend
   class Graph
-    INDEXABLE_EXTENSIONS = [".rb", ".rake", ".rbs", ".ru"].freeze
+    INDEXABLE_EXTENSIONS = [".rb", ".rake", ".rbs", ".ru", ".erb"].freeze
 
     class << self
       # Creates a new graph with the loaded configuration. For use cases where the graph must be shared between

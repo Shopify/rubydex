@@ -1814,3 +1814,13 @@ end
 
 Foo.singleton_class.constants  # => [:CONST]
 ```
+
+## ERB template parsing
+
+ERB templates execute as the body of an implicit rendering method rather than as a standalone Ruby file. In particular, a top-level `yield` is valid in a template because it yields to the render block:
+
+```erb
+<%= yield %>
+```
+
+The indexer parses Ruby extracted from ERB with Prism's partial-script mode, which permits constructs such as top-level `yield` that are valid inside the implicit rendering method. Ordinary Ruby files continue to use complete-file semantics, and genuine Ruby parse errors extracted from ERB are retained.
