@@ -364,9 +364,36 @@ class Rubydex::Config
     def load(workspace_path); end
   end
 
+  # The linter's settings, read from the `[linter]` section.
+  sig { returns(Rubydex::LinterConfig) }
+  def linter; end
+
   # The configured workspace path, which is usually PWD, except for editors that spawn language servers outside of pwd.
   sig { returns(String) }
   def workspace_path; end
+end
+
+# The linter's settings, read from the `[linter]` section of the configuration file.
+class Rubydex::LinterConfig
+  # The configured rules, keyed by rule name. Only rules the configuration file mentions appear here, so a rule that
+  # was never configured is absent rather than present with its defaults.
+  sig { returns(T::Hash[String, Rubydex::RuleConfig]) }
+  attr_reader :rules
+
+  sig { params(rules: T::Hash[String, Rubydex::RuleConfig]).void }
+  def initialize(rules); end
+end
+
+# The settings of a single linter rule, read from a `[linter.rules.RuleName]` table.
+class Rubydex::RuleConfig
+  sig { returns(String) }
+  attr_reader :name
+
+  sig { params(name: String, enabled: T::Boolean).void }
+  def initialize(name, enabled); end
+
+  sig { returns(T::Boolean) }
+  def enabled?; end
 end
 
 class Rubydex::Failure

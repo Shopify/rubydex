@@ -16,6 +16,7 @@ end
 
 require "rubydex/errors"
 require "rubydex/failures"
+require "rubydex/config"
 require "rubydex/location"
 require "rubydex/comment"
 require "rubydex/diagnostic"

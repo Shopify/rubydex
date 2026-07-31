@@ -1,6 +1,6 @@
 use crate::utils;
 use libc::{c_char, c_void};
-use rubydex::config::Config;
+use rubydex::config::{Config, Rule};
 use rubydex::errors::Errors;
 use std::ffi::CString;
 use std::path::Path;
@@ -87,5 +87,74 @@ pub unsafe extern "C" fn rdx_config_free(config: ConfigPointer) {
 
     unsafe {
         let _ = Box::from_raw(config.cast::<Config>());
+    }
+}
+
+/// C-compatible struct representing a single configured linter rule.
+#[repr(C)]
+#[derive(Debug)]
+pub struct CLinterRule {
+    pub name: *const c_char,
+    pub name_length: usize,
+    pub enabled: bool,
+}
+
+impl From<&Rule> for CLinterRule {
+    fn from(rule: &Rule) -> Self {
+        Self {
+            name: rule.name().as_ptr().cast::<c_char>(),
+            name_length: rule.name().len(),
+            enabled: rule.enabled(),
+        }
+    }
+}
+
+/// C-compatible array of configured linter rules.
+#[repr(C)]
+pub struct CLinterRuleArray {
+    pub items: *mut CLinterRule,
+    pub len: usize,
+}
+
+/// Returns the configured linter rules as an array. Caller must free it with `rdx_config_linter_rules_free`, while the
+/// configuration is still alive, since the rule names are borrowed from it.
+///
+/// # Safety
+///
+/// - `config` must be a valid `ConfigPointer` previously returned by `rdx_config_load`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_config_linter_rules(config: ConfigPointer) -> CLinterRuleArray {
+    let config = unsafe { &*config.cast::<Config>() };
+    let rules = config.linter().rules();
+
+    if rules.is_empty() {
+        return CLinterRuleArray {
+            items: ptr::null_mut(),
+            len: 0,
+        };
+    }
+
+    let items = rules.iter().map(CLinterRule::from).collect::<Box<[CLinterRule]>>();
+
+    CLinterRuleArray {
+        len: items.len(),
+        items: Box::into_raw(items).cast::<CLinterRule>(),
+    }
+}
+
+/// Frees an array previously returned by `rdx_config_linter_rules`. The rule names it borrowed are left alone, since
+/// they belong to the configuration.
+///
+/// # Safety
+///
+/// - `rules` must have been returned by `rdx_config_linter_rules` and must not be used afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_config_linter_rules_free(rules: CLinterRuleArray) {
+    if rules.items.is_null() {
+        return;
+    }
+
+    unsafe {
+        let _ = Box::from_raw(ptr::slice_from_raw_parts_mut(rules.items, rules.len));
     }
 }
