@@ -67,6 +67,86 @@ impl GraphSettings {
     }
 }
 
+/// The setting of a single linter rule, read from a `[linter.rules.RuleName]` table
+#[derive(Debug, Clone)]
+pub struct Rule {
+    name: Box<str>,
+    enabled: bool,
+}
+
+impl Rule {
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Parses a single `[linter.rules.{name}]` table
+    fn parse(name: &str, value: Value) -> Result<Self, String> {
+        let Value::Table(mut table) = value else {
+            return Err(format!("invalid `linter.rules.{name}` setting: expected a table"));
+        };
+
+        let enabled = match table.remove("enabled") {
+            Some(Value::Boolean(enabled)) => enabled,
+            Some(_) => {
+                return Err(format!(
+                    "invalid `linter.rules.{name}.enabled` setting: expected a boolean"
+                ));
+            }
+            None => return Err(format!("missing `linter.rules.{name}.enabled` setting")),
+        };
+
+        if let Some(key) = table.keys().next() {
+            return Err(format!("unknown setting `linter.rules.{name}.{key}`"));
+        }
+
+        Ok(Self {
+            name: Box::from(name),
+            enabled,
+        })
+    }
+}
+
+/// The linter's settings, read from the `[linter]` section of the configuration file
+#[derive(Debug, Clone, Default)]
+pub struct LinterSettings {
+    rules: Box<[Rule]>,
+}
+
+impl LinterSettings {
+    #[must_use]
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
+    }
+
+    /// Parses the `[linter]` section
+    fn parse(mut table: Table) -> Result<Self, String> {
+        let rules = match table.remove("rules") {
+            None => Box::default(),
+            Some(Value::Table(rules)) => rules
+                .into_iter()
+                .map(|(name, value)| Rule::parse(&name, value))
+                .collect::<Result<_, _>>()?,
+            Some(_) => {
+                return Err(String::from(
+                    "invalid `linter.rules` setting: expected a table of rules",
+                ));
+            }
+        };
+
+        if let Some(key) = table.keys().next() {
+            return Err(format!("unknown setting `linter.{key}`"));
+        }
+
+        Ok(Self { rules })
+    }
+}
+
 /// The configuration of a workspace, parsed from its `rubydex.toml` and shared by all built-in tools. It carries both
 /// the settings that are global to every tool, such as the workspace being analyzed, and the typed settings of each
 /// tool's own section (e.g. `[graph]`). Every section is parsed eagerly, so that all validation happens at load time and
@@ -78,8 +158,9 @@ pub struct Config {
     /// configurable through the file itself, since it is what says where that file is.
     workspace_path: Box<Path>,
     graph: GraphSettings,
+    linter: LinterSettings,
 }
-assert_mem_size!(Config, 64);
+assert_mem_size!(Config, 80);
 
 impl Default for Config {
     /// The configuration of the current working directory, with the default settings of every section, which is what a
@@ -92,6 +173,7 @@ impl Default for Config {
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .into_boxed_path(),
             graph: GraphSettings::default(),
+            linter: LinterSettings::default(),
         }
     }
 }
@@ -169,6 +251,11 @@ impl Config {
             .collect()
     }
 
+    #[must_use]
+    pub fn linter(&self) -> &LinterSettings {
+        &self.linter
+    }
+
     /// Parses the content of the configuration file of the workspace rooted at `workspace_path` into the typed
     /// settings of each section
     fn parse(workspace_path: PathBuf, content: &str) -> Result<Self, String> {
@@ -195,6 +282,11 @@ impl Config {
             _ => GraphSettings::default(),
         };
 
+        let linter = match sections.remove("linter") {
+            Some(Value::Table(table)) => LinterSettings::parse(table)?,
+            _ => LinterSettings::default(),
+        };
+
         // Every section must be backed by a typed settings struct, so any leftover section is unknown.
         if let Some(key) = sections.keys().next() {
             return Err(format!("unknown section `{key}`"));
@@ -203,6 +295,7 @@ impl Config {
         Ok(Self {
             workspace_path: Box::from(workspace_path),
             graph,
+            linter,
         })
     }
 }
@@ -270,9 +363,116 @@ mod tests {
     }
 
     #[test]
+    fn load_parses_the_settings_of_every_section() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        fs::write(
+            dir.path().join("rubydex.toml"),
+            "[graph]\nexclude = [\"vendor\"]\n\n[linter.rules.Something]\nenabled = true\n",
+        )
+        .unwrap();
+
+        let config = Config::load(dir.path()).expect("expected the config file to load");
+        let excluded = config.excluded_patterns();
+
+        let path = path_helpers::resolved(dir.path()).unwrap();
+        assert!(excluded.contains(exclusion(&path, "vendor").as_str()));
+
+        let rules = config.linter().rules();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name(), "Something");
+        assert!(rules[0].enabled());
+    }
+
+    #[test]
+    fn parse_parses_every_linter_rule() {
+        let config = parse("[linter.rules.Something]\nenabled = true\n\n[linter.rules.Other]\nenabled = false\n")
+            .expect("expected the config to parse");
+
+        let rules = config.linter().rules();
+        assert_eq!(rules.len(), 2);
+
+        let something = rules.iter().find(|rule| rule.name() == "Something").unwrap();
+        assert!(something.enabled());
+
+        let other = rules.iter().find(|rule| rule.name() == "Other").unwrap();
+        assert!(!other.enabled());
+    }
+
+    #[test]
+    fn parse_accepts_an_empty_linter_section() {
+        let config = parse("[linter]\n").expect("an empty linter section is valid");
+        assert!(config.linter().rules().is_empty());
+
+        let config = parse("[linter.rules]\n").expect("an empty rules table is valid");
+        assert!(config.linter().rules().is_empty());
+    }
+
+    #[test]
     fn parse_rejects_an_unknown_section() {
         let error = parse("[lintr]\n").expect_err("every section must be backed by typed settings structs");
         assert!(error.contains("unknown section `lintr`"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn parse_rejects_an_unknown_linter_setting() {
+        let error = parse("[linter]\nparallel = true\n").expect_err("typos inside the linter section must be rejected");
+
+        assert!(
+            error.contains("unknown setting `linter.parallel`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_a_rules_setting_that_is_not_a_table() {
+        let error = parse("[linter]\nrules = true\n").expect_err("rules must be a table of rule tables");
+
+        assert!(
+            error.contains("invalid `linter.rules` setting"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_a_rule_that_is_not_a_table() {
+        let error = parse("[linter.rules]\nSomething = true\n").expect_err("every rule setting must be a table");
+
+        assert!(
+            error.contains("invalid `linter.rules.Something` setting"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_a_rule_without_enabled() {
+        let error =
+            parse("[linter.rules.Something]\n").expect_err("a rule setting must state whether the rule is enabled");
+
+        assert!(
+            error.contains("missing `linter.rules.Something.enabled` setting"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_a_non_boolean_enabled_setting() {
+        let error = parse("[linter.rules.Something]\nenabled = \"yes\"\n").expect_err("enabled only accepts a boolean");
+
+        assert!(
+            error.contains("invalid `linter.rules.Something.enabled` setting"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_an_unknown_rule_setting() {
+        let error = parse("[linter.rules.Something]\nenabled = true\nseverity = \"error\"\n")
+            .expect_err("rules only accept the enabled setting");
+
+        assert!(
+            error.contains("unknown setting `linter.rules.Something.severity`"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -282,6 +482,7 @@ mod tests {
 
         assert_eq!(config.workspace_path(), path_helpers::resolved(dir.path()).unwrap());
         assert_eq!(config.excluded_patterns().len(), DEFAULT_EXCLUDED_DIRECTORIES.len());
+        assert!(config.linter().rules().is_empty());
     }
 
     #[test]
@@ -350,6 +551,7 @@ mod tests {
 
         // Nothing is configured, so the settings of every section are the default ones.
         assert_eq!(config.excluded_patterns().len(), DEFAULT_EXCLUDED_DIRECTORIES.len());
+        assert!(config.linter().rules().is_empty());
     }
 
     #[test]
