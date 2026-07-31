@@ -17,7 +17,7 @@ use crate::model::definitions::{
 };
 use crate::model::document::Document;
 use crate::model::ids::{ConstantReferenceId, DefinitionId, NameId, StringId, UriId};
-use crate::model::name::{Name, ParentScope};
+use crate::model::name::ParentScope;
 use crate::model::references::ConstantReference;
 use crate::model::visibility::Visibility;
 use crate::offset::Offset;
@@ -102,8 +102,7 @@ impl<'a> RBSIndexer<'a> {
         nesting_name_id: Option<NameId>,
     ) -> NameId {
         let string_id = self.local_graph.intern_string(symbol.as_str().to_owned());
-        self.local_graph
-            .add_name(Name::new(string_id, parent_scope, nesting_name_id))
+        self.local_graph.add_name(string_id, parent_scope, nesting_name_id)
     }
 
     fn parent_lexical_scope_id(&self) -> Option<DefinitionId> {

@@ -1829,9 +1829,15 @@ impl<'a> Resolver<'a> {
         Outcome::Unresolved
     }
 
-    /// Returns a complexity score for a given name, which is used to sort names for resolution. The complexity is based
-    /// on how many parent scopes are involved in a name's nesting. This is because simple names are always
-    /// straightforward to resolve no matter how deep the nesting is. For example:
+    /// Drains `pending_work` and classifies items into the resolution queue.
+    ///
+    /// Namespace definitions and constant references are sorted by their name's [depth](Name::depth) so that simpler
+    /// names are processed first, with the URI rank and offset breaking ties to keep the order deterministic.
+    /// Non-namespace definitions (methods, attrs, variables) are returned separately for
+    /// `handle_remaining_definitions`.
+    ///
+    /// Ordering by depth matters because a name's parts may need to be resolved before the name itself can be. Simple
+    /// names are always straightforward no matter how deeply they nest:
     ///
     /// ```ruby
     /// module Foo
@@ -1841,9 +1847,8 @@ impl<'a> Resolver<'a> {
     /// end
     /// ```
     ///
-    /// These are all simple names because they don't require resolution logic to determine the final name of each step.
-    /// We only have to ensure that they are ordered by nesting level. Names with parent scopes require that their parts
-    /// be resolved to determine what they refer to and so they must be sorted last.
+    /// Here `Foo`, `Bar` and `Baz` only have to be ordered by nesting level. Names with parent scopes, however, require
+    /// their parts to be resolved first, so they must sort last:
     ///
     /// ```ruby
     /// module Foo
@@ -1853,51 +1858,9 @@ impl<'a> Resolver<'a> {
     /// end
     /// ```
     ///
-    /// In this case, we need `Bar` to have already been processed so that we can resolve the `Bar` reference inside of
-    /// the `Foo` nesting, which then unblocks the resolution of `Baz` and finally `Qux`. Notice how `Qux` is a simple
-    /// name, but it's nested under a complex name so we have to sort it last. This is why we consider the number of
-    /// parent scopes in the entire nesting, not just for the name itself
-    ///
-    /// Compute the depth of a name in the graph by recursively summing the depths of its
-    /// `parent_scope` and `nesting` chains. Results are memoized in `cache` (`NameId` → depth)
-    /// so each name is computed at most once across all calls.
-    ///
-    /// Depth represents the total complexity of a name's position in the namespace hierarchy.
-    /// For example, in `module Foo; module Bar; class Baz; end; end; end`, Foo has depth 1
-    /// (top-level), Bar has depth 2, and Baz has depth 3.
-    ///
-    /// # Panics
-    ///
-    /// Will panic if there is inconsistent data in the graph
-    fn name_depth(
-        name_id: NameId,
-        names: &IdentityHashMap<NameId, NameRef>,
-        cache: &mut IdentityHashMap<NameId, u32>,
-    ) -> u32 {
-        if let Some(&depth) = cache.get(&name_id) {
-            return depth;
-        }
-
-        let name = names.get(&name_id).unwrap();
-
-        let depth = if name.parent_scope().is_top_level() {
-            1
-        } else {
-            let parent_depth = name.parent_scope().map_or(0, |id| Self::name_depth(*id, names, cache));
-
-            let nesting_depth = name.nesting().map_or(0, |id| Self::name_depth(id, names, cache));
-
-            parent_depth + nesting_depth + 1
-        };
-
-        cache.insert(name_id, depth);
-        depth
-    }
-
-    /// Drains `pending_work` and classifies items into the resolution queue.
-    /// Namespace definitions and constant references are sorted by name depth for deterministic
-    /// resolution order. Non-namespace definitions (methods, attrs, variables) are returned
-    /// separately for `handle_remaining_definitions`.
+    /// In this case `Bar` must already be processed so the `Bar` reference inside `Foo` resolves, which then unblocks
+    /// `Baz` and finally `Qux`. Notice how `Qux` is a simple name nested under a complex one, so it too sorts late —
+    /// which is why depth accounts for the parent scopes across the entire nesting, not just for the name itself.
     fn prepare_units(&mut self) -> Vec<DefinitionId> {
         let work = self.graph.take_pending_work();
         let estimated = work.len() / 2;
@@ -1907,16 +1870,13 @@ impl<'a> Resolver<'a> {
         let mut const_refs = Vec::new();
         let mut ancestors = vec![*BASIC_OBJECT_ID, *KERNEL_ID, *OBJECT_ID, *MODULE_ID, *CLASS_ID];
         let names = self.graph.names();
-        // Memoize name depths on demand for only the names referenced by the pending work. During incremental
-        // resolution this avoids walking every name in the graph just to sort the small subset of units below.
-        // A pending unit references at most one name, so `estimated` (bounded by the total number of names) is a
-        // reasonable capacity that avoids rehashing as depths accumulate.
-        let mut depths: IdentityHashMap<NameId, u32> =
-            IdentityHashMap::with_capacity_and_hasher(estimated.min(names.len()), IdentityHashBuilder);
+        // Every name captured its depth during indexing (see `Name::compute_depth`), so ordering the units below is a
+        // direct lookup rather than a recursive walk of the nesting chain.
+        let depth_of = |name_id: &NameId| names.get(name_id).unwrap().depth();
 
         // Precompute the lexicographic rank of every document URI. Definitions and references are sorted by
-        // (name depth, URI, offset) below; storing precomputed integer sort keys instead of looking up name
-        // depths and comparing URI strings on every comparison makes sorting substantially cheaper on large graphs.
+        // (name depth, URI, offset) below; storing a precomputed integer rank instead of comparing URI strings on
+        // every comparison makes sorting substantially cheaper on large graphs.
         let mut uris: Vec<(&str, UriId)> = self
             .graph
             .documents()
@@ -1950,23 +1910,23 @@ impl<'a> Resolver<'a> {
 
                     match definition {
                         Definition::Class(def) => {
-                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
+                            let depth = depth_of(def.name_id());
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::Module(def) => {
-                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
+                            let depth = depth_of(def.name_id());
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::Constant(def) => {
-                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
+                            let depth = depth_of(def.name_id());
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::ConstantAlias(def) => {
-                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
+                            let depth = depth_of(def.name_id());
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         Definition::SingletonClass(def) => {
-                            let depth = Self::name_depth(*def.name_id(), names, &mut depths);
+                            let depth = depth_of(def.name_id());
                             definitions.push((Unit::Definition(id), (depth, uri_rank, definition.offset())));
                         }
                         // SelfReceiver methods create singleton classes, which need
@@ -1989,7 +1949,7 @@ impl<'a> Resolver<'a> {
                         continue;
                     };
                     let uri_rank = *uri_ranks.get(&constant_ref.uri_id()).unwrap();
-                    let depth = Self::name_depth(*constant_ref.name_id(), names, &mut depths);
+                    let depth = depth_of(constant_ref.name_id());
                     const_refs.push((Unit::ConstantRef(id), (depth, uri_rank, constant_ref.offset())));
                 }
                 Unit::Ancestors(id) => {
