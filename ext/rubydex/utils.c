@@ -4,16 +4,23 @@
 #include "rustbindings.h"
 
 // Convert a Ruby array of strings into a double char pointer so that we can pass that to Rust.
-// This copies the data so it must be freed
+// This copies the data so it must be freed.
 char **rdxi_str_array_to_char(VALUE array, size_t length) {
+    // Validate every element before allocating so StringValueCStr cannot strand a partially built array.
+    for (size_t i = 0; i < length; i++) {
+        VALUE item = rb_ary_entry(array, i);
+        Check_Type(item, T_STRING);
+        (void)StringValueCStr(item);
+    }
+
     char **converted_array = malloc(length * sizeof(char *));
 
     for (size_t i = 0; i < length; i++) {
         VALUE item = rb_ary_entry(array, i);
-        const char *string = StringValueCStr(item);
+        size_t string_length = (size_t)RSTRING_LEN(item);
 
-        converted_array[i] = malloc(strlen(string) + 1);
-        strcpy(converted_array[i], string);
+        converted_array[i] = malloc(string_length + 1);
+        memcpy(converted_array[i], RSTRING_PTR(item), string_length + 1);
     }
 
     return converted_array;

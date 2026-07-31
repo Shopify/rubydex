@@ -389,6 +389,14 @@ class GraphTest < Minitest::Test
     assert_raises(TypeError) do
       graph.resolve_constant("CONST", "Not an array")
     end
+
+    assert_raises(ArgumentError) do
+      graph.resolve_constant("CONST", ["Foo", "Bar\0Baz"])
+    end
+
+    assert_raises(ArgumentError) do
+      graph.resolve_constant("CO\0NST", ["Foo"])
+    end
   end
 
   def test_graph_resolve_non_existing_constant
@@ -1413,6 +1421,7 @@ class GraphTest < Minitest::Test
     assert_raises(TypeError) { graph.complete_method_argument(123, [], self_receiver: nil) }
     assert_raises(TypeError) { graph.complete_method_argument("Foo#bar()", "not an array", self_receiver: nil) }
     assert_raises(TypeError) { graph.complete_method_argument("Foo#bar()", [123], self_receiver: nil) }
+    assert_raises(ArgumentError) { graph.complete_method_argument("Foo\0bar()", ["Foo"], self_receiver: nil) }
   end
 
   def test_completion_returns_empty_for_non_existent_declarations
