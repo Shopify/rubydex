@@ -1,1 +1,2 @@
+[graph]
 exclude = ["docs", "ext", "rust", "target"]

@@ -1,5 +1,6 @@
 //! This file provides the C API for the Graph object
 
+use crate::config_api::ConfigPointer;
 use crate::cypher_api::CQueryResult;
 use crate::declaration_api::CDeclaration;
 use crate::declaration_api::DeclarationsIter;
@@ -8,7 +9,7 @@ use crate::document_api::DocumentsIter;
 use crate::reference_api::{CConstantReference, CMethodReference, ConstantReferencesIter, MethodReferencesIter};
 use crate::{name_api, utils};
 use libc::{c_char, c_void};
-use rubydex::errors::Errors;
+use rubydex::config::Config;
 use rubydex::indexing::LanguageId;
 use rubydex::model::encoding::Encoding;
 use rubydex::model::graph::Graph;
@@ -21,7 +22,7 @@ use rubydex::query::{CompletionCandidate, CompletionContext, CompletionReceiver}
 use rubydex::resolution::Resolver;
 use rubydex::{indexing, integrity, listing, query};
 use std::ffi::CString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::{mem, ptr, sync::RwLock};
 
 pub type GraphPointer = *mut c_void;
@@ -217,14 +218,8 @@ pub unsafe extern "C" fn rdx_graph_excluded_patterns(
 
         let c_strings: Vec<*const c_char> = excluded
             .iter()
-            .filter_map(|path| {
-                // Normalize all paths to use forward slashes. Otherwise, you get mixed backslashes and forward slashes
-                // on Windows if a configuration file is using forward slashes. For example:
-                //
-                // C:\project/vendor/bundle
-                let normalized = path.replace(std::path::MAIN_SEPARATOR, "/");
-
-                CString::new(normalized)
+            .filter_map(|pattern| {
+                CString::new(pattern.as_ref())
                     .ok()
                     .map(|c_string| c_string.into_raw().cast_const())
             })
@@ -237,23 +232,6 @@ pub unsafe extern "C" fn rdx_graph_excluded_patterns(
     })
 }
 
-/// Sets the workspace path used as the root directory for indexing and relative path resolution. Silently ignores the
-/// call if the given path is not valid UTF-8, leaving the existing workspace path untouched (mirrors
-/// `rdx_graph_set_encoding`). This avoids unwinding across the FFI boundary on malformed input.
-///
-/// # Safety
-///
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - `path` must be a valid, null-terminated string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_set_workspace_path(pointer: GraphPointer, path: *const c_char) {
-    let Ok(path) = (unsafe { utils::convert_char_ptr_to_string(path) }) else {
-        return;
-    };
-
-    with_mut_graph(pointer, |graph| graph.set_workspace_path(PathBuf::from(path)));
-}
-
 /// Returns the workspace path as a C string. Caller must free with `free_c_string`.
 ///
 /// # Safety
@@ -262,42 +240,23 @@ pub unsafe extern "C" fn rdx_graph_set_workspace_path(pointer: GraphPointer, pat
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_graph_workspace_path(pointer: GraphPointer) -> *const c_char {
     with_graph(pointer, |graph| {
-        CString::new(graph.workspace_path().to_string_lossy().as_ref())
+        CString::new(utils::interop_path(graph.workspace_path()))
             .map_or(ptr::null(), |c_string| c_string.into_raw().cast_const())
     })
 }
 
-/// Loads configuration into the graph. A null `config_path` attempts to load the default configuration file.
-///
-/// Returns NULL on success. On failure returns an owned, null-terminated error message that the caller must free with
-/// `free_c_string`.
-///
-/// A `config_path` that is not valid UTF-8 is reported as an error message.
+/// Applies a parsed configuration file to the graph, which adopts the workspace it was loaded for along with the
+/// settings of its `[graph]` section. This is the only way to point the graph at a workspace other than the current
+/// directory, and it replaces any previously applied configuration. Tool-specific sections are ignored.
 ///
 /// # Safety
 ///
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
-/// - `config_path` must either be NULL or a valid, null-terminated string.
+/// - `config` must be a valid `ConfigPointer` previously returned by `rdx_config_load`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_graph_load_config(pointer: GraphPointer, config_path: *const c_char) -> *const c_char {
-    let result = with_mut_graph(pointer, |graph| {
-        if config_path.is_null() {
-            graph.load_config(None)
-        } else {
-            match unsafe { utils::convert_char_ptr_to_string(config_path) } {
-                Ok(config_path) => graph.load_config(Some(Path::new(&config_path))),
-                Err(_) => Err(Errors::ConfigError("config file path is not valid UTF-8".to_string())),
-            }
-        }
-    });
-
-    match result {
-        Ok(()) => ptr::null(),
-        Err(error) => CString::new(error.to_string())
-            .unwrap_or_default()
-            .into_raw()
-            .cast_const(),
-    }
+pub unsafe extern "C" fn rdx_graph_load_config(pointer: GraphPointer, config: ConfigPointer) {
+    let config = unsafe { &*config.cast::<Config>() };
+    with_mut_graph(pointer, |graph| graph.load_config(config));
 }
 
 /// Indexes all given file paths in parallel using the provided Graph pointer.

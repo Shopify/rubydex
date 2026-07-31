@@ -6,6 +6,7 @@ module Rubydex
   # Raised when `MethodAliasDefinition#target` walks an alias chain that loops back on itself.
   class AliasCycleError < Error; end
 
-  # Raised by `Graph#load_config` when the requested config file does not exist, cannot be read, or is malformed
+  # Raised by `Config.load` when the workspace does not exist, or when its config file cannot be read or is malformed.
+  # A workspace with no config file at all is not an error.
   class ConfigError < Error; end
 end

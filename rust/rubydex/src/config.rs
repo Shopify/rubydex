@@ -1,12 +1,13 @@
 use crate::assert_mem_size;
 use crate::errors::Errors;
-use serde::Deserialize;
+use crate::path_helpers;
 use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use toml::{Table, Value};
 
-pub const DEFAULT_EXCLUDED_DIRECTORIES: &[&str] = &[
+const DEFAULT_EXCLUDED_DIRECTORIES: &[&str] = &[
     ".bundle",
     ".claude",
     ".git",
@@ -18,106 +19,114 @@ pub const DEFAULT_EXCLUDED_DIRECTORIES: &[&str] = &[
     "tmp",
 ];
 
-/// Configuration coming from a config file
-#[derive(Debug, Default, Deserialize)]
-struct ConfigFile {
-    /// Patterns to exclude from file discovery during indexing.
-    #[serde(default)]
-    exclude: Vec<Box<str>>,
+/// The graph's settings, read from the `[graph]` section of the configuration file
+#[derive(Debug, Clone)]
+pub struct GraphSettings {
+    /// Patterns to exclude from file discovery during indexing, on top of the built-in defaults. Stored as written and
+    /// only joined with the workspace path when read, so that a pattern cannot outlive the configuration it came from
+    /// and be silently re-rooted under another workspace.
+    excluded_patterns: HashSet<Box<str>>,
 }
 
-/// Project configuration
-#[derive(Debug)]
+impl Default for GraphSettings {
+    /// The settings of a workspace that configures nothing: the built-in exclusions and no more
+    fn default() -> Self {
+        Self {
+            excluded_patterns: DEFAULT_EXCLUDED_DIRECTORIES.iter().map(|&dir| Box::from(dir)).collect(),
+        }
+    }
+}
+
+impl GraphSettings {
+    /// Parses the `[graph]` section on top of the default exclusions
+    fn parse(mut table: Table) -> Result<Self, String> {
+        let exclude = match table.remove("exclude") {
+            None => Vec::new(),
+            Some(value) => value
+                .try_into::<Vec<Box<str>>>()
+                .map_err(|error| format!("invalid `graph.exclude` setting: {error}"))?,
+        };
+
+        if let Some(key) = table.keys().next() {
+            return Err(format!("unknown setting `graph.{key}`"));
+        }
+
+        let mut settings = Self::default();
+        settings.exclude_patterns(exclude);
+        Ok(settings)
+    }
+
+    /// Adds patterns to exclude from file discovery during indexing
+    fn exclude_patterns(&mut self, patterns: impl IntoIterator<Item = Box<str>>) {
+        self.excluded_patterns.extend(patterns);
+    }
+
+    /// Returns the exclusion patterns as written, without resolving them against any workspace
+    fn excluded_patterns(&self) -> impl Iterator<Item = &str> {
+        self.excluded_patterns.iter().map(|pattern| &**pattern)
+    }
+}
+
+/// The configuration of a workspace, parsed from its `rubydex.toml` and shared by all built-in tools. It carries both
+/// the settings that are global to every tool, such as the workspace being analyzed, and the typed settings of each
+/// tool's own section (e.g. `[graph]`). Every section is parsed eagerly, so that all validation happens at load time and
+/// unknown sections or settings are rejected. Load the file once and hand the configuration to each consumer, so that
+/// none of them has to read it again.
+#[derive(Debug, Clone)]
 pub struct Config {
-    /// Path to the workspace being analyzed
+    /// Root directory of the workspace being analyzed, which is where its configuration file lives. Global, and not
+    /// configurable through the file itself, since it is what says where that file is.
     workspace_path: Box<Path>,
-    /// Patterns to exclude from file discovery during indexing.
-    excluded_patterns: HashSet<Box<str>>,
+    graph: GraphSettings,
 }
 assert_mem_size!(Config, 64);
 
 impl Default for Config {
+    /// The configuration of the current working directory, with the default settings of every section, which is what a
+    /// graph is configured by until one is loaded for it. Guessing a root here rather than leaving it empty is what
+    /// keeps `Graph::new` infallible, since patterns are resolved against it; every other configuration comes from
+    /// [`Config::load`]. Cannot be derived, as `Box<Path>` has no default.
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Config {
-    /// Creates a configuration whose workspace path defaults to the current working directory.
-    #[must_use]
-    pub fn new() -> Self {
         Self {
             workspace_path: std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .into_boxed_path(),
-            excluded_patterns: DEFAULT_EXCLUDED_DIRECTORIES.iter().map(|&dir| Box::from(dir)).collect(),
+            graph: GraphSettings::default(),
         }
     }
+}
 
-    /// Returns the root directory of the workspace being analyzed.
-    #[must_use]
-    pub fn workspace_path(&self) -> &Path {
-        &self.workspace_path
-    }
-
-    /// Sets the root directory of the workspace being analyzed.
-    pub fn set_workspace_path(&mut self, workspace_path: PathBuf) {
-        self.workspace_path = workspace_path.into_boxed_path();
-    }
-
-    /// Adds patterns to exclude from file discovery during indexing. Excluded directories will be skipped entirely during
-    /// directory traversal.
-    pub fn exclude_patterns(&mut self, patterns: impl IntoIterator<Item = Box<str>>) {
-        self.excluded_patterns.extend(patterns);
-    }
-
-    /// Returns the set of exclusion patterns resolved against the workspace path.
-    #[must_use]
-    pub fn excluded_patterns(&self) -> HashSet<Box<str>> {
-        self.excluded_patterns
-            .iter()
-            .map(|entry| {
-                self.workspace_path
-                    .join(&**entry)
-                    .to_string_lossy()
-                    .into_owned()
-                    .into_boxed_str()
-            })
-            .collect()
-    }
-
-    /// Merges the default `rubydex.toml` configuration file from the workspace root into this config, if present.
-    ///
-    /// The default config file is optional, so a missing `rubydex.toml` is silently ignored. Any other failure (an
-    /// unreadable or malformed file) is still reported.
+impl Config {
+    /// Loads the configuration of the workspace rooted at `workspace_path`, which is where its `rubydex.toml` is
+    /// expected to be. The configuration file itself is optional: a workspace without one gets the default settings.
     ///
     /// # Errors
     ///
-    /// Will error if the config file exists but cannot be read or has invalid syntax.
-    pub fn load_default(&mut self) -> Result<(), Errors> {
-        let config_path = self.workspace_path.join("rubydex.toml");
+    /// Returns [`Errors::ConfigError`] if `workspace_path` is not a directory, or if the configuration file exists but
+    /// cannot be read or is invalid.
+    pub fn load(workspace_path: &Path) -> Result<Self, Errors> {
+        let workspace_path = path_helpers::resolved(workspace_path).map_err(|error| {
+            Errors::ConfigError(format!(
+                "Failed to resolve workspace path `{}`: {error}",
+                workspace_path.display()
+            ))
+        })?;
 
-        match self.load_file(&config_path) {
-            Err(Errors::ConfigNotFound(_)) => Ok(()),
-            other => other,
+        // Since loading a configuration is how a workspace is chosen, a root that cannot be analyzed has to be rejected
+        // here. Otherwise the mistake is only reported much later, by whatever first tries to walk it.
+        if !workspace_path.is_dir() {
+            return Err(Errors::ConfigError(format!(
+                "Workspace `{}` is not a directory",
+                workspace_path.display()
+            )));
         }
-    }
 
-    /// Merges the configuration at `config_path` into this config
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Errors::ConfigNotFound`] if the file does not exist or [`Errors::ConfigError`] if it cannot otherwise
-    /// be read or has invalid syntax.
-    pub fn load_file(&mut self, config_path: &Path) -> Result<(), Errors> {
-        let content = match fs::read_to_string(config_path) {
+        let config_path = workspace_path.join("rubydex.toml");
+
+        let content = match fs::read_to_string(&config_path) {
             Ok(content) => content,
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                return Err(Errors::ConfigNotFound(format!(
-                    "Config file `{}` does not exist",
-                    config_path.display()
-                )));
-            }
+            // Configuring a workspace is optional, so a missing file is the same as an empty one
+            Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
             Err(error) => {
                 return Err(Errors::ConfigError(format!(
                     "Failed to read config file `{}`: {error}",
@@ -126,33 +135,103 @@ impl Config {
             }
         };
 
-        let parsed = Self::parse(&content).map_err(|error| {
-            Errors::ConfigError(format!("Invalid config file `{}`: {error}", config_path.display()))
-        })?;
-
-        self.excluded_patterns.extend(parsed.exclude);
-        Ok(())
+        Self::parse(workspace_path, &content)
+            .map_err(|error| Errors::ConfigError(format!("Invalid config file `{}`: {error}", config_path.display())))
     }
 
-    /// Parses the content into a [`ConfigFile`]
-    fn parse(content: &str) -> Result<ConfigFile, toml::de::Error> {
-        toml::from_str(content)
+    /// Returns the root directory of the workspace this configuration belongs to
+    #[must_use]
+    pub fn workspace_path(&self) -> &Path {
+        &self.workspace_path
+    }
+
+    /// Adds patterns to exclude from file discovery during indexing. Excluded directories will be skipped entirely
+    /// during directory traversal.
+    pub fn exclude_patterns(&mut self, patterns: impl IntoIterator<Item = Box<str>>) {
+        self.graph.exclude_patterns(patterns);
+    }
+
+    /// Returns the set of exclusion patterns resolved against the workspace path. Resolving is the one thing that needs
+    /// both halves of the configuration, which is why it lives here rather than on the settings of the section the
+    /// patterns come from.
+    #[must_use]
+    pub fn excluded_patterns(&self) -> HashSet<Box<str>> {
+        self.graph
+            .excluded_patterns()
+            .map(|pattern| {
+                // We must replace the separator on Windows for forward slash to use in glob patterns.
+                self.workspace_path
+                    .join(pattern)
+                    .to_string_lossy()
+                    .replace(MAIN_SEPARATOR, "/")
+                    .into_boxed_str()
+            })
+            .collect()
+    }
+
+    /// Parses the content of the configuration file of the workspace rooted at `workspace_path` into the typed
+    /// settings of each section
+    fn parse(workspace_path: PathBuf, content: &str) -> Result<Self, String> {
+        let mut sections: Table = toml::from_str(content).map_err(|error| error.to_string())?;
+
+        // Every top-level entry must be a section table. A non-table entry is most likely a typo, and an array of
+        // tables comes from `[[section]]` syntax, which is a section shape mistake rather than an unknown setting.
+        if let Some((key, value)) = sections.iter().find(|(_, value)| !value.is_table()) {
+            if value
+                .as_array()
+                .is_some_and(|array| !array.is_empty() && array.iter().all(Value::is_table))
+            {
+                return Err(format!(
+                    "section `{key}` must be a table; use `[{key}]` instead of `[[{key}]]`"
+                ));
+            }
+
+            return Err(format!("unknown setting `{key}`"));
+        }
+
+        // Non-table entries were rejected above, so every present section is always a table.
+        let graph = match sections.remove("graph") {
+            Some(Value::Table(table)) => GraphSettings::parse(table)?,
+            _ => GraphSettings::default(),
+        };
+
+        // Every section must be backed by a typed settings struct, so any leftover section is unknown.
+        if let Some(key) = sections.keys().next() {
+            return Err(format!("unknown section `{key}`"));
+        }
+
+        Ok(Self {
+            workspace_path: Box::from(workspace_path),
+            graph,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+
+    /// The pattern the exclusion `entry` resolves to under `workspace_path`, spelled the way exclusions are
+    fn exclusion(workspace_path: impl AsRef<Path>, entry: &str) -> String {
+        workspace_path
+            .as_ref()
+            .join(entry)
+            .to_string_lossy()
+            .replace(MAIN_SEPARATOR, "/")
+    }
 
     fn workspace_exclusion(entry: &str) -> String {
-        PathBuf::from("/workspace").join(entry).to_string_lossy().into_owned()
+        exclusion("/workspace", entry)
+    }
+
+    /// Parses configuration content for an arbitrary workspace, for the tests that only care about the settings
+    fn parse(content: &str) -> Result<Config, String> {
+        Config::parse(PathBuf::from("/workspace"), content)
     }
 
     #[test]
     fn excluded_patterns_resolves_patterns_against_the_workspace_path() {
-        let mut config = Config::new();
-        config.set_workspace_path(PathBuf::from("/workspace"));
+        let mut config = parse("").expect("an empty config is valid");
         config.exclude_patterns([
             Box::from("vendor"),
             Box::from("**/fixtures"),
@@ -174,122 +253,149 @@ mod tests {
     }
 
     #[test]
-    fn new_seeds_the_default_excluded_directories() {
-        let config = Config::new();
+    fn excluded_patterns_are_separated_by_forward_slashes() {
+        // Exclusions are glob patterns, and a glob pattern is written with forward slashes whatever the platform's own
+        // separator is. Joining them against the workspace path is what would otherwise introduce a backslash, so the
+        // invariant is asserted on the joined result. Vacuous where the separator already is a forward slash.
+        let mut config = parse("").expect("an empty config is valid");
+        config.exclude_patterns([Box::from("vendor/bundle")]);
 
-        for default in DEFAULT_EXCLUDED_DIRECTORIES {
+        let excluded = config.excluded_patterns();
+
+        assert!(!excluded.is_empty(), "expected the defaults at least");
+        assert!(
+            excluded.iter().all(|pattern| !pattern.contains('\\')),
+            "unexpected backslash in {excluded:?}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_an_unknown_section() {
+        let error = parse("[lintr]\n").expect_err("every section must be backed by typed settings structs");
+        assert!(error.contains("unknown section `lintr`"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn load_returns_the_default_configuration_for_a_workspace_without_a_config_file() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config = Config::load(dir.path()).expect("a missing rubydex.toml must not be an error");
+
+        assert_eq!(config.workspace_path(), path_helpers::resolved(dir.path()).unwrap());
+        assert_eq!(config.excluded_patterns().len(), DEFAULT_EXCLUDED_DIRECTORIES.len());
+    }
+
+    #[test]
+    fn load_reads_the_config_file_under_the_workspace_path() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        fs::write(dir.path().join("rubydex.toml"), "[graph]\nexclude = [\"vendor\"]\n").unwrap();
+
+        let config = Config::load(dir.path()).expect("expected rubydex.toml to load");
+        let excluded = config.excluded_patterns();
+
+        let path = path_helpers::resolved(dir.path()).unwrap();
+        assert_eq!(config.workspace_path(), path);
+        assert!(excluded.contains(exclusion(&path, "vendor").as_str()));
+        assert!(excluded.contains(exclusion(&path, ".git").as_str()));
+    }
+
+    #[test]
+    fn load_errors_when_the_workspace_is_not_a_directory() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let missing = dir.path().join("typo");
+        let file = dir.path().join("file.rb");
+        fs::write(&file, "class Foo; end").unwrap();
+
+        for workspace_path in [missing.as_path(), file.as_path()] {
+            let error = Config::load(workspace_path).expect_err("a workspace must be a directory");
+            let named = path_helpers::resolved(workspace_path).unwrap_or_else(|_| workspace_path.to_path_buf());
+
+            assert!(matches!(error, Errors::ConfigError(_)), "unexpected error: {error:?}");
             assert!(
-                config.excluded_patterns.contains(*default),
-                "expected `{default}` to be excluded by default"
+                error.to_string().contains(&named.display().to_string()),
+                "expected the error to name the workspace `{}`: {error}",
+                named.display()
             );
         }
     }
 
     #[test]
-    fn load_file_merges_excluded_patterns_and_leaves_the_workspace_path_untouched() {
+    fn load_errors_when_the_config_file_cannot_be_read() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let config_path = dir.path().join("rubydex.toml");
-        fs::write(&config_path, "exclude = [\"vendor\", \"generated\"]\n").unwrap();
+        // A `rubydex.toml` that exists but cannot be read is a broken workspace, unlike one that has no configuration
+        // at all. Making it a directory is the portable way of making it unreadable.
+        fs::create_dir(dir.path().join("rubydex.toml")).unwrap();
 
-        let mut config = Config::new();
-        config.set_workspace_path(PathBuf::from("/workspace"));
+        let error = Config::load(dir.path()).expect_err("an unreadable config file must be an error");
 
-        config
-            .load_file(&config_path)
-            .expect("expected the config file to load");
-
-        let excluded = config.excluded_patterns();
-        // Entries from the file are merged in and resolved against the workspace path.
-        assert!(excluded.contains(workspace_exclusion("vendor").as_str()));
-        assert!(excluded.contains(workspace_exclusion("generated").as_str()));
-        // Defaults seeded at construction survive the merge.
-        assert!(excluded.contains(workspace_exclusion("node_modules").as_str()));
-        // A config file cannot override the programmatically-set workspace path.
-        assert_eq!(config.workspace_path(), Path::new("/workspace"));
-    }
-
-    #[test]
-    fn load_file_accumulates_exclusions_across_multiple_loads() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        fs::write(dir.path().join("a.toml"), "exclude = [\"vendor\"]\n").unwrap();
-        fs::write(dir.path().join("b.toml"), "exclude = [\"generated\"]\n").unwrap();
-
-        let mut config = Config::new();
-        config.set_workspace_path(PathBuf::from("/workspace"));
-        config
-            .load_file(&dir.path().join("a.toml"))
-            .expect("expected the first file to load");
-        config
-            .load_file(&dir.path().join("b.toml"))
-            .expect("expected the second file to load");
-
-        let excluded = config.excluded_patterns();
-        assert!(excluded.contains(workspace_exclusion("vendor").as_str()));
-        assert!(excluded.contains(workspace_exclusion("generated").as_str()));
-    }
-
-    #[test]
-    fn load_file_errors_when_the_file_is_missing() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let mut config = Config::new();
-
-        let error = config
-            .load_file(&dir.path().join("does_not_exist.toml"))
-            .expect_err("an explicitly requested missing file must be an error");
-
+        assert!(matches!(error, Errors::ConfigError(_)), "unexpected error: {error:?}");
         assert!(
-            matches!(error, Errors::ConfigNotFound(_)),
-            "unexpected error: {error:?}"
+            error.to_string().contains("Failed to read config file"),
+            "unexpected error: {error}"
         );
     }
 
     #[test]
-    fn load_default_ignores_a_missing_config_file() {
+    fn load_propagates_malformed_config_errors() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let mut config = Config::new();
-        config.set_workspace_path(dir.path().to_path_buf());
+        fs::write(dir.path().join("rubydex.toml"), "[graph]\nexclude = [\n").unwrap();
 
-        config
-            .load_default()
-            .expect("a missing rubydex.toml must not be an error");
-    }
-
-    #[test]
-    fn load_default_loads_an_existing_config_file() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        fs::write(dir.path().join("rubydex.toml"), "exclude = [\"vendor\"]\n").unwrap();
-
-        let mut config = Config::new();
-        config.set_workspace_path(dir.path().to_path_buf());
-        config.load_default().expect("expected rubydex.toml to load");
-
-        let expected = dir.path().join("vendor").to_string_lossy().into_owned();
-        assert!(config.excluded_patterns().contains(expected.as_str()));
-    }
-
-    #[test]
-    fn load_default_propagates_malformed_config_errors() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        fs::write(dir.path().join("rubydex.toml"), "exclude = [\n").unwrap();
-
-        let mut config = Config::new();
-        config.set_workspace_path(dir.path().to_path_buf());
-
-        let error = config
-            .load_default()
-            .expect_err("a malformed default config must still be an error");
+        let error = Config::load(dir.path()).expect_err("a malformed config file must be an error");
 
         assert!(matches!(error, Errors::ConfigError(_)), "unexpected error: {error:?}");
     }
 
     #[test]
-    fn parse_defaults_the_excluded_patterns_to_empty_when_the_key_is_absent() {
-        let file = Config::parse("").expect("an empty config is valid");
-        assert!(file.exclude.is_empty());
+    fn parse_accepts_an_empty_config() {
+        let config = parse("").expect("an empty config is valid");
+
+        // Nothing is configured, so the settings of every section are the default ones.
+        assert_eq!(config.excluded_patterns().len(), DEFAULT_EXCLUDED_DIRECTORIES.len());
     }
 
     #[test]
     fn parse_rejects_an_exclude_value_of_the_wrong_type() {
-        Config::parse("exclude = \"vendor\"").expect_err("exclude must be an array of strings, not a string");
+        let error =
+            parse("[graph]\nexclude = \"vendor\"").expect_err("exclude must be an array of strings, not a string");
+
+        assert!(error.contains("graph.exclude"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn parse_rejects_an_unknown_top_level_setting() {
+        let error = parse("excludes = [\"vendor\"]\n").expect_err("every top-level entry must be a tool section table");
+
+        assert!(
+            error.contains("unknown setting `excludes`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_an_unknown_graph_setting() {
+        let error = parse("[graph]\nexcludes = [\"vendor\"]\n")
+            .expect_err("the graph section is owned by Rubydex, so typos inside it must be rejected");
+
+        assert!(
+            error.contains("unknown setting `graph.excludes`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_a_graph_section_that_is_not_a_table() {
+        let error = parse("graph = \"yes\"\n").expect_err("the graph section must be a table");
+
+        assert!(error.contains("`graph`"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn parse_rejects_an_array_of_tables_section() {
+        let error =
+            parse("[[linter]]\nparallel = true\n").expect_err("array-of-tables syntax is not a valid tool section");
+
+        assert!(
+            error.contains("use `[linter]` instead of `[[linter]]`"),
+            "unexpected error: {error}"
+        );
     }
 }

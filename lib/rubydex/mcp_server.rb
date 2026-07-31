@@ -28,8 +28,7 @@ module Rubydex
       def initialize(root_path:, transport: nil)
         @root_path = root_path
         @transport = transport
-        @graph = Graph.new(workspace_path: @root_path)
-        @graph.load_config
+        @graph = Graph.configure_for_workspace(@root_path)
         @index_finished = false
         @incoming_queue = Thread::Queue.new
         @outgoing_queue = Thread::Queue.new

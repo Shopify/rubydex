@@ -6,7 +6,8 @@ require "rubydex/mcp_server"
 
 class MCPServerBaseToolTest < Minitest::Test
   def setup
-    @tool = Rubydex::MCPServer::BaseTool.new(Rubydex::Graph.new(workspace_path: Dir.pwd))
+    graph = Rubydex::Graph.configure_for_workspace(Dir.pwd)
+    @tool = Rubydex::MCPServer::BaseTool.new(graph)
   end
 
   def test_file_path_for_uri_removes_windows_file_uri_leading_slash

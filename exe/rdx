@@ -56,8 +56,7 @@ end
 
 # Builds the workspace graph, sending progress messages to `progress_io`.
 def build_graph(progress_io)
-  graph = Rubydex::Graph.new
-  graph.load_config
+  graph = Rubydex::Graph.configure_for_workspace(Dir.pwd)
   with_timer(progress_io, "Indexing workspace...") { graph.index_workspace }
   with_timer(progress_io, "Resolving graph...") { graph.resolve }
   graph

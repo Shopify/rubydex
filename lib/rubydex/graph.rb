@@ -7,9 +7,16 @@ module Rubydex
   class Graph
     INDEXABLE_EXTENSIONS = [".rb", ".rake", ".rbs", ".ru"].freeze
 
-    #: (?workspace_path: String?) -> void
-    def initialize(workspace_path: nil)
-      self.workspace_path = workspace_path if workspace_path
+    class << self
+      # Creates a new graph with the loaded configuration. For use cases where the graph must be shared between
+      # different tools, do not use this. Create and own a `Config` object instead.
+      #
+      #: (String) -> instance
+      def configure_for_workspace(workspace_path)
+        graph = new
+        graph.load_config(Config.load(workspace_path))
+        graph
+      end
     end
 
     # Index all files and dependencies of the workspace that exists in `workspace_path`

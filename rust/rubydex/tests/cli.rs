@@ -60,7 +60,7 @@ fn single_directory_argument_is_workspace_root_for_config() {
     with_context(|context| {
         context.write("included.rb", "class Included\nend\n");
         context.write("excluded/skipped.rb", "class Skipped\nend\n");
-        context.write("rubydex.toml", "exclude = [\"excluded\"]\n");
+        context.write("rubydex.toml", "[graph]\nexclude = [\"excluded\"]\n");
 
         rdx(&[context.absolute_path().to_str().unwrap()])
             .success()
@@ -74,7 +74,7 @@ fn first_directory_argument_is_workspace_root_for_config() {
     with_context(|context| {
         context.write("included/kept.rb", "class Included\nend\n");
         context.write("excluded/skipped.rb", "class Skipped\nend\n");
-        context.write("rubydex.toml", "exclude = [\"excluded\"]\n");
+        context.write("rubydex.toml", "[graph]\nexclude = [\"excluded\"]\n");
 
         rdx(&[
             context.absolute_path().to_str().unwrap(),
@@ -92,7 +92,7 @@ fn single_file_argument_is_not_used_as_workspace_root() {
     with_context(|context| {
         context.write("included.rb", "class Included\nend\n");
         context.write("excluded/skipped.rb", "class Skipped\nend\n");
-        context.write("rubydex.toml", "exclude = [\"excluded\"]\n");
+        context.write("rubydex.toml", "[graph]\nexclude = [\"excluded\"]\n");
 
         rdx(&[context.absolute_path_to("excluded/skipped.rb").to_str().unwrap()])
             .success()
@@ -106,7 +106,7 @@ fn first_file_argument_is_not_used_as_workspace_root() {
     with_context(|context| {
         context.write("included.rb", "class Included\nend\n");
         context.write("excluded/skipped.rb", "class Skipped\nend\n");
-        context.write("rubydex.toml", "exclude = [\"excluded\"]\n");
+        context.write("rubydex.toml", "[graph]\nexclude = [\"excluded\"]\n");
 
         rdx(&[
             context.absolute_path_to("included.rb").to_str().unwrap(),

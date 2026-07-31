@@ -1,4 +1,5 @@
 #include "graph.h"
+#include "config.h"
 #include "declaration.h"
 #include "diagnostic.h"
 #include "document.h"
@@ -872,52 +873,18 @@ static VALUE rdxr_graph_workspace_path(VALUE self) {
 
 /*
  * call-seq:
- *   workspace_path=(path) -> void
+ *   load_config(config) -> void
  *
- * Sets the root directory of the workspace being indexed.
+ * Applies a parsed Rubydex::Config to the graph.
  */
-static VALUE rdxr_graph_set_workspace_path(VALUE self, VALUE path) {
-    Check_Type(path, T_STRING);
-
-    void *graph;
-    TypedData_Get_Struct(self, void*, &graph_type, graph);
-
-    rdx_graph_set_workspace_path(graph, StringValueCStr(path));
-    return path;
-}
-
-/*
- * call-seq:
- *   load_config(config_path = nil) -> void
- *
- * Loads a configuration file for the graph. If `config_path` is nil, loads the default configuration file at
- * `workspace_path/rubydex.toml` if it exists. Will raise on malformed files or if an explicit path is given but the
- * file does not exist.
- */
-static VALUE rdxr_graph_load_config(int argc, VALUE *argv, VALUE self) {
-    VALUE config_path;
-    rb_scan_args(argc, argv, "01", &config_path);
-
+static VALUE rdxr_graph_load_config(VALUE self, VALUE config_obj) {
     void *graph;
     TypedData_Get_Struct(self, void *, &graph_type, graph);
 
-    const char *config_path_cstr = NULL;
+    void *config = rdxi_config_from_object(config_obj);
+    rdx_graph_load_config(graph, config);
 
-    if (!NIL_P(config_path)) {
-        Check_Type(config_path, T_STRING);
-        config_path_cstr = StringValueCStr(config_path);
-    }
-
-    const char *error = rdx_graph_load_config(graph, config_path_cstr);
-    if (error == NULL) {
-        return Qnil;
-    }
-
-    VALUE message = rb_utf8_str_new_cstr(error);
-    free_c_string(error);
-
-    VALUE config_error = rb_const_get(mRubydex, rb_intern("ConfigError"));
-    rb_exc_raise(rb_exc_new_str(config_error, message));
+    return Qnil;
 }
 
 /*
@@ -979,7 +946,6 @@ void rdxi_initialize_graph(VALUE moduleRubydex) {
     rb_define_method(cGraph, "exclude_patterns", rdxr_graph_exclude_patterns, 1);
     rb_define_method(cGraph, "excluded_patterns", rdxr_graph_excluded_patterns, 0);
     rb_define_method(cGraph, "workspace_path", rdxr_graph_workspace_path, 0);
-    rb_define_method(cGraph, "workspace_path=", rdxr_graph_set_workspace_path, 1);
-    rb_define_method(cGraph, "load_config", rdxr_graph_load_config, -1);
+    rb_define_method(cGraph, "load_config", rdxr_graph_load_config, 1);
     rb_define_method(cGraph, "keyword", rdxr_graph_keyword, 1);
 }

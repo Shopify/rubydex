@@ -3,6 +3,7 @@ mod imp {
     use std::time::Instant;
 
     use rubydex::{
+        config::Config,
         indexing::{self, IndexerBackend},
         listing,
         model::graph::Graph,
@@ -27,11 +28,8 @@ mod imp {
         assert!(workspace_path.is_dir(), "the workspace path must be a directory");
 
         let mut graph = Graph::new();
-        graph.set_workspace_path(workspace_path);
-
-        if let Err(error) = graph.load_config(None) {
-            eprintln!("{error}");
-        }
+        let config = Config::load(&workspace_path).expect("the workspace configuration must be valid");
+        graph.load_config(&config);
 
         let time = Instant::now();
 

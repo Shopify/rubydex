@@ -1,4 +1,5 @@
 use super::normalize_indentation;
+use crate::path_helpers;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -37,7 +38,7 @@ impl Context {
     #[must_use]
     pub fn new() -> Self {
         let root = tempfile::tempdir().expect("failed to create temp dir");
-        let absolute_path = fs::canonicalize(root.path()).unwrap();
+        let absolute_path = path_helpers::resolved(root.path()).unwrap();
         Self {
             _root: root,
             absolute_path,
