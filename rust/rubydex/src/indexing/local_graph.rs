@@ -120,12 +120,7 @@ impl LocalGraph {
     }
 
     pub fn add_name(&mut self, str: StringId, parent_scope: ParentScope, nesting: Option<NameId>) -> NameId {
-        let name = Name::new(
-            str,
-            parent_scope,
-            nesting,
-            Name::name_depth(&self.names, parent_scope, nesting),
-        );
+        let name = Name::new(&self.names, str, parent_scope, nesting);
         let name_id = name.id();
 
         match self.names.entry(name_id) {

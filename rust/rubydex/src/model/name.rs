@@ -107,22 +107,23 @@ impl PartialEq for Name {
 
 impl Name {
     #[must_use]
-    pub fn new(str: StringId, parent_scope: ParentScope, nesting: Option<NameId>, depth: u16) -> Self {
+    pub fn new(
+        names: &IdentityHashMap<NameId, NameRef>,
+        str: StringId,
+        parent_scope: ParentScope,
+        nesting: Option<NameId>,
+    ) -> Self {
         Self {
             str,
             parent_scope,
             nesting,
             ref_count: 1,
-            depth,
+            depth: Self::name_depth(names, parent_scope, nesting),
         }
     }
 
     #[must_use]
-    pub(crate) fn name_depth(
-        names: &IdentityHashMap<NameId, NameRef>,
-        parent_scope: ParentScope,
-        nesting: Option<NameId>,
-    ) -> u16 {
+    fn name_depth(names: &IdentityHashMap<NameId, NameRef>, parent_scope: ParentScope, nesting: Option<NameId>) -> u16 {
         if parent_scope.is_top_level() {
             return 1;
         }
@@ -316,44 +317,47 @@ mod tests {
 
     #[test]
     fn same_parent_scope_and_nesting() {
-        let name_1 = Name::new(StringId::from("Foo"), ParentScope::None, None, 0);
-        let name_2 = Name::new(StringId::from("Foo"), ParentScope::None, None, 0);
+        let names = IdentityHashMap::default();
+
+        let name_1 = Name::new(&names, StringId::from("Foo"), ParentScope::None, None);
+        let name_2 = Name::new(&names, StringId::from("Foo"), ParentScope::None, None);
         assert_eq!(name_1.id(), name_2.id());
 
-        let name_3 = Name::new(StringId::from("Foo"), ParentScope::Some(name_1.id()), None, 0);
-        let name_4 = Name::new(StringId::from("Foo"), ParentScope::Some(name_2.id()), None, 0);
+        let name_3 = Name::new(&names, StringId::from("Foo"), ParentScope::Some(name_1.id()), None);
+        let name_4 = Name::new(&names, StringId::from("Foo"), ParentScope::Some(name_2.id()), None);
         assert_eq!(name_3.id(), name_4.id());
 
-        let name_5 = Name::new(StringId::from("Foo"), ParentScope::None, Some(name_1.id()), 0);
-        let name_6 = Name::new(StringId::from("Foo"), ParentScope::None, Some(name_2.id()), 0);
+        let name_5 = Name::new(&names, StringId::from("Foo"), ParentScope::None, Some(name_1.id()));
+        let name_6 = Name::new(&names, StringId::from("Foo"), ParentScope::None, Some(name_2.id()));
         assert_eq!(name_5.id(), name_6.id());
         assert_ne!(name_3.id(), name_5.id());
         assert_ne!(name_4.id(), name_6.id());
 
         let name_7 = Name::new(
+            &names,
             StringId::from("Foo"),
-            ParentScope::Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
-            Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
-            0,
+            ParentScope::Some(Name::new(&names, StringId::from("Foo"), ParentScope::None, None).id()),
+            Some(Name::new(&names, StringId::from("Foo"), ParentScope::None, None).id()),
         );
         let name_8 = Name::new(
+            &names,
             StringId::from("Foo"),
-            ParentScope::Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
-            Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
-            0,
+            ParentScope::Some(Name::new(&names, StringId::from("Foo"), ParentScope::None, None).id()),
+            Some(Name::new(&names, StringId::from("Foo"), ParentScope::None, None).id()),
         );
         assert_eq!(name_7.id(), name_8.id());
     }
 
     #[test]
     fn parent_scope_variants_are_distinct() {
-        let inner = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let names = IdentityHashMap::default();
+        let inner = Name::new(&names, StringId::from("Foo"), ParentScope::None, None).id();
 
         let ids = [
-            Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id(),
-            Name::new(StringId::from("Foo"), ParentScope::TopLevel, None, 0).id(),
-            Name::new(StringId::from("Foo"), ParentScope::Some(inner), None, 0).id(),
-            Name::new(StringId::from("Foo"), ParentScope::Attached(inner), None, 0).id(),
+            Name::new(&names, StringId::from("Foo"), ParentScope::None, None).id(),
+            Name::new(&names, StringId::from("Foo"), ParentScope::TopLevel, None).id(),
+            Name::new(&names, StringId::from("Foo"), ParentScope::Some(inner), None).id(),
+            Name::new(&names, StringId::from("Foo"), ParentScope::Attached(inner), None).id(),
         ];
 
         for (i, a) in ids.iter().enumerate() {

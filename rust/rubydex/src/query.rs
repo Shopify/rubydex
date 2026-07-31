@@ -1173,7 +1173,13 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Child"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("Child"),
+            ParentScope::None,
+            None,
+        )
+        .id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -1222,7 +1228,13 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Child"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("Child"),
+            ParentScope::None,
+            None,
+        )
+        .id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -1271,7 +1283,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -1320,8 +1332,14 @@ mod tests {
         );
         context.resolve();
 
-        let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
-        let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), Some(foo_id), 0).id();
+        let foo_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("<Foo>"),
+            ParentScope::Attached(foo_id),
+            Some(foo_id),
+        )
+        .id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -1341,7 +1359,7 @@ mod tests {
             ]
         );
 
-        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -1383,8 +1401,14 @@ mod tests {
         );
         context.resolve();
 
-        let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
-        let name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_id), Some(foo_id), 0).id();
+        let foo_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("<Foo>"),
+            ParentScope::Attached(foo_id),
+            Some(foo_id),
+        )
+        .id();
 
         assert_declaration_completion_eq!(
             context,
@@ -1431,10 +1455,10 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(
+            context.graph().names(),
             StringId::from("Bar"),
             ParentScope::TopLevel,
-            Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
-            0,
+            Some(Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
 
@@ -1458,7 +1482,7 @@ mod tests {
             ]
         );
 
-        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -1499,8 +1523,14 @@ mod tests {
         );
         context.resolve();
 
-        let foo_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
-        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, Some(foo_id), 0).id();
+        let foo_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("Bar"),
+            ParentScope::None,
+            Some(foo_id),
+        )
+        .id();
         // Foo::CONST is reachable from Foo::Bar through lexical scoping, so it must appear as a completion candidate
         // when the user types the unqualified name CONST
         assert_declaration_completion_eq!(
@@ -1545,10 +1575,10 @@ mod tests {
         context.resolve();
 
         let name_id = Name::new(
+            context.graph().names(),
             StringId::from("Bar"),
             ParentScope::None,
-            Some(Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id()),
-            0,
+            Some(Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id()),
         )
         .id();
         assert_declaration_completion_eq!(
@@ -2080,7 +2110,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
@@ -2121,7 +2151,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
@@ -2158,7 +2188,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
@@ -2184,7 +2214,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
@@ -2228,7 +2258,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
@@ -2256,7 +2286,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "class Foo; end");
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2321,7 +2351,7 @@ mod tests {
         context.index_uri("file:///foo.rb", "class Foo; def bar(name:); end; end");
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_completion_eq!(
             context,
             CompletionReceiver::MethodArgument {
@@ -2442,7 +2472,13 @@ mod tests {
         );
         context.resolve();
 
-        let outer_name_id = Name::new(StringId::from("Outer"), ParentScope::None, None, 0).id();
+        let outer_name_id = Name::new(
+            context.graph().names(),
+            StringId::from("Outer"),
+            ParentScope::None,
+            None,
+        )
+        .id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2481,7 +2517,13 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Outer"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("Outer"),
+            ParentScope::None,
+            None,
+        )
+        .id();
         // `self_decl_id` points to the alias `Outer::MyAlias`, which is a `ConstantAlias` rather than a `Namespace`.
         // The completion should still collect members from the aliased namespace (`Outer::Original`) instead of
         // returning an error, so callers do not have to unwrap aliases themselves.
@@ -2527,7 +2569,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2570,7 +2612,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2615,7 +2657,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2652,7 +2694,13 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Object"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("Object"),
+            ParentScope::None,
+            None,
+        )
+        .id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2679,7 +2727,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Mod"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Mod"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2717,7 +2765,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Mod"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Mod"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2752,7 +2800,13 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Object"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("Object"),
+            ParentScope::None,
+            None,
+        )
+        .id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2787,7 +2841,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2820,13 +2874,19 @@ mod tests {
         );
         context.resolve();
 
-        let bar_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
-        let foo_ref_id = Name::new(StringId::from("Foo"), ParentScope::None, Some(bar_id), 0).id();
+        let bar_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
+        let foo_ref_id = Name::new(
+            context.graph().names(),
+            StringId::from("Foo"),
+            ParentScope::None,
+            Some(bar_id),
+        )
+        .id();
         let nesting_name_id = Name::new(
+            context.graph().names(),
             StringId::from("<Foo>"),
             ParentScope::Attached(foo_ref_id),
             Some(bar_id),
-            0,
         )
         .id();
 
@@ -2867,7 +2927,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Mod"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Mod"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -2905,8 +2965,14 @@ mod tests {
         );
         context.resolve();
 
-        let foo_ref_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
-        let nesting_name_id = Name::new(StringId::from("<Foo>"), ParentScope::Attached(foo_ref_id), None, 0).id();
+        let foo_ref_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
+        let nesting_name_id = Name::new(
+            context.graph().names(),
+            StringId::from("<Foo>"),
+            ParentScope::Attached(foo_ref_id),
+            None,
+        )
+        .id();
 
         assert_declaration_completion_eq!(
             context,
@@ -2931,7 +2997,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         let result = completion_candidates(
             context.graph(),
             CompletionContext::new(CompletionReceiver::Expression {
@@ -2957,7 +3023,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         let result = completion_candidates(
             context.graph(),
             CompletionContext::new(CompletionReceiver::Expression {
@@ -2989,7 +3055,13 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Outer"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(
+            context.graph().names(),
+            StringId::from("Outer"),
+            ParentScope::None,
+            None,
+        )
+        .id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -3032,7 +3104,7 @@ mod tests {
         );
         context.resolve();
 
-        let name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
+        let name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -3105,7 +3177,7 @@ mod tests {
         );
         context.resolve();
 
-        let foo_name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let foo_name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -3125,7 +3197,7 @@ mod tests {
             ]
         );
 
-        let bar_name_id = Name::new(StringId::from("Bar"), ParentScope::None, None, 0).id();
+        let bar_name_id = Name::new(context.graph().names(), StringId::from("Bar"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
@@ -3441,7 +3513,7 @@ mod tests {
         );
         context.resolve();
 
-        let foo_name_id = Name::new(StringId::from("Foo"), ParentScope::None, None, 0).id();
+        let foo_name_id = Name::new(context.graph().names(), StringId::from("Foo"), ParentScope::None, None).id();
         assert_declaration_completion_eq!(
             context,
             CompletionReceiver::Expression {
