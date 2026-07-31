@@ -1,6 +1,6 @@
 use std::collections::hash_map::Entry;
 
-use crate::diagnostic::{Diagnostic, Rule};
+use crate::diagnostic::{Diagnostic, Rule, Severity};
 use crate::model::definitions::Definition;
 use crate::model::document::Document;
 use crate::model::graph::NameDependent;
@@ -196,7 +196,7 @@ impl LocalGraph {
     }
 
     pub fn add_diagnostic(&mut self, rule: Rule, offset: Offset, message: String) {
-        let diagnostic = Diagnostic::new(rule, self.uri_id, offset, message);
+        let diagnostic = Diagnostic::new(rule, Severity::Information, self.uri_id, offset, message);
         self.document.add_diagnostic(diagnostic);
     }
 

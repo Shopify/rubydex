@@ -5,7 +5,7 @@
 
 use std::collections::hash_map::Entry;
 
-use crate::diagnostic::{Diagnostic, Rule};
+use crate::diagnostic::{Diagnostic, Rule, Severity};
 use crate::model::comment::Comment;
 use crate::model::definitions::{DefinitionFlags, Parameter, ParameterStruct, Signatures};
 use crate::model::document::Document;
@@ -172,7 +172,7 @@ impl<'a> RubyOperationBuilder<'a> {
     }
 
     fn add_diagnostic(&mut self, rule: Rule, offset: Offset, message: String) {
-        let diagnostic = Diagnostic::new(rule, self.uri_id, offset, message);
+        let diagnostic = Diagnostic::new(rule, Severity::Information, self.uri_id, offset, message);
         self.document.add_diagnostic(diagnostic);
     }
 
