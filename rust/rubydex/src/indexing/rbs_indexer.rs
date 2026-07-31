@@ -3,8 +3,9 @@
 use core::panic;
 
 use ruby_rbs::node::{
-    self, AliasKind, ClassNode, CommentNode, ConstantNode, ExtendNode, FunctionTypeNode, GlobalNode, IncludeNode,
-    ModuleNode, Node, NodeList, PrependNode, TypeNameNode, Visit,
+    self, AliasKind, AttrAccessorNode, AttrReaderNode, AttrWriterNode, AttributeKind, AttributeVisibility, ClassNode,
+    CommentNode, ConstantNode, ExtendNode, FunctionTypeNode, GlobalNode, IncludeNode, ModuleNode, Node, NodeList,
+    PrependNode, TypeNameNode, Visit,
 };
 
 use crate::diagnostic::Rule;
@@ -220,6 +221,111 @@ impl<'a> RBSIndexer<'a> {
             self.add_member_to_current_lexical_scope(id, definition_id);
         }
         definition_id
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register_attribute_methods(
+        &mut self,
+        name: &str,
+        offset: Offset,
+        name_offset: Offset,
+        comments: Box<[Comment]>,
+        flags: DefinitionFlags,
+        lexical_nesting_id: Option<DefinitionId>,
+        kind: AttributeKind,
+        attribute_visibility: AttributeVisibility,
+        reader: bool,
+        writer: bool,
+    ) {
+        let (visibility, receiver) = match kind {
+            AttributeKind::Instance => {
+                let visibility = match attribute_visibility {
+                    AttributeVisibility::Public => Visibility::Public,
+                    AttributeVisibility::Private => Visibility::Private,
+                    AttributeVisibility::Unspecified => self.current_visibility,
+                };
+                (visibility, None)
+            }
+            AttributeKind::Singleton => {
+                let visibility = match attribute_visibility {
+                    AttributeVisibility::Private => Visibility::Private,
+                    AttributeVisibility::Public | AttributeVisibility::Unspecified => Visibility::Public,
+                };
+                (
+                    visibility,
+                    Some(Receiver::SelfReceiver(
+                        lexical_nesting_id.expect("Singleton attribute must have a lexical enclosing scope"),
+                    )),
+                )
+            }
+        };
+
+        if reader {
+            self.register_attribute_method(
+                name,
+                false,
+                offset.clone(),
+                name_offset.clone(),
+                comments.clone(),
+                flags.clone(),
+                lexical_nesting_id,
+                visibility,
+                receiver.clone(),
+            );
+        }
+
+        if writer {
+            self.register_attribute_method(
+                name,
+                true,
+                offset,
+                name_offset,
+                comments,
+                flags,
+                lexical_nesting_id,
+                visibility,
+                receiver,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register_attribute_method(
+        &mut self,
+        name: &str,
+        writer: bool,
+        offset: Offset,
+        name_offset: Offset,
+        comments: Box<[Comment]>,
+        flags: DefinitionFlags,
+        lexical_nesting_id: Option<DefinitionId>,
+        visibility: Visibility,
+        receiver: Option<Receiver>,
+    ) {
+        let str_id = self
+            .local_graph
+            .intern_string(format!("{name}{}()", if writer { "=" } else { "" }));
+        let signatures = if writer {
+            let parameter_name = self.local_graph.intern_string("arg0".to_string());
+            let parameter = Parameter::RequiredPositional(ParameterStruct::new(name_offset.clone(), parameter_name));
+            Signatures::Simple(vec![parameter].into_boxed_slice())
+        } else {
+            Signatures::Simple(Box::new([]))
+        };
+
+        let definition = Definition::Method(Box::new(MethodDefinition::new(
+            str_id,
+            self.uri_id,
+            offset,
+            name_offset,
+            comments,
+            flags,
+            lexical_nesting_id,
+            signatures,
+            visibility,
+            receiver,
+        )));
+        self.register_definition(definition, lexical_nesting_id);
     }
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -571,6 +677,51 @@ impl Visit for RBSIndexer<'_> {
         )));
 
         self.register_definition(definition, lexical_nesting_id);
+    }
+
+    fn visit_attr_reader_node(&mut self, attribute_node: &AttrReaderNode) {
+        self.register_attribute_methods(
+            attribute_node.name().as_str(),
+            Offset::from_rbs_location(&attribute_node.location()),
+            Offset::from_rbs_location(&attribute_node.name_location()),
+            self.collect_comments(attribute_node.comment()),
+            Self::flags(&attribute_node.annotations()),
+            self.parent_lexical_scope_id(),
+            attribute_node.kind(),
+            attribute_node.visibility(),
+            true,
+            false,
+        );
+    }
+
+    fn visit_attr_writer_node(&mut self, attribute_node: &AttrWriterNode) {
+        self.register_attribute_methods(
+            attribute_node.name().as_str(),
+            Offset::from_rbs_location(&attribute_node.location()),
+            Offset::from_rbs_location(&attribute_node.name_location()),
+            self.collect_comments(attribute_node.comment()),
+            Self::flags(&attribute_node.annotations()),
+            self.parent_lexical_scope_id(),
+            attribute_node.kind(),
+            attribute_node.visibility(),
+            false,
+            true,
+        );
+    }
+
+    fn visit_attr_accessor_node(&mut self, attribute_node: &AttrAccessorNode) {
+        self.register_attribute_methods(
+            attribute_node.name().as_str(),
+            Offset::from_rbs_location(&attribute_node.location()),
+            Offset::from_rbs_location(&attribute_node.name_location()),
+            self.collect_comments(attribute_node.comment()),
+            Self::flags(&attribute_node.annotations()),
+            self.parent_lexical_scope_id(),
+            attribute_node.kind(),
+            attribute_node.visibility(),
+            true,
+            true,
+        );
     }
 
     fn visit_method_definition_node(&mut self, def_node: &node::MethodDefinitionNode) {
@@ -1053,6 +1204,88 @@ mod tests {
             assert_def_str_eq!(&context, def, "$BAR");
             assert!(def.flags().contains(DefinitionFlags::DEPRECATED));
         });
+    }
+
+    #[test]
+    fn indexes_attribute_members_as_methods_without_retaining_types_or_instance_variables() {
+        let context = index_source({
+            "
+            class Foo
+              # Reader documentation
+              %a{deprecated}
+              attr_reader inferred: Integer
+              attr_reader absent(): Symbol
+              attr_writer explicit (@writer): String
+              attr_accessor accessor: bool
+              private
+              attr_reader inherited_visibility: Float
+              public
+              private attr_accessor self.class_value (@class_value): bool
+            end
+            "
+        });
+
+        assert_no_local_diagnostics!(&context);
+        assert_eq!(context.graph().definitions().len(), 9);
+
+        let method = |name: &str| {
+            context
+                .graph()
+                .definitions()
+                .values()
+                .find_map(|definition| match definition {
+                    Definition::Method(method)
+                        if context
+                            .graph()
+                            .strings()
+                            .get(method.str_id())
+                            .is_some_and(|string| string.as_str() == name) =>
+                    {
+                        Some(method)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("expected `{name}` method definition"))
+        };
+
+        for name in [
+            "inferred()",
+            "absent()",
+            "explicit=()",
+            "accessor()",
+            "accessor=()",
+            "inherited_visibility()",
+            "class_value()",
+            "class_value=()",
+        ] {
+            assert_eq!(method(name).signatures().as_slice().len(), 1);
+        }
+
+        for name in [
+            "inferred()",
+            "absent()",
+            "accessor()",
+            "inherited_visibility()",
+            "class_value()",
+        ] {
+            assert!(method(name).signatures().as_slice()[0].is_empty());
+        }
+
+        for name in ["explicit=()", "accessor=()", "class_value=()"] {
+            let signature = &method(name).signatures().as_slice()[0];
+            let [Parameter::RequiredPositional(parameter)] = signature.as_ref() else {
+                panic!("expected `{name}` to have one required positional parameter");
+            };
+            assert_string_eq!(&context, parameter.str(), "arg0");
+        }
+
+        assert_eq!(method("class_value()").visibility(), &Visibility::Private);
+        assert_eq!(method("class_value=()").visibility(), &Visibility::Private);
+        assert_eq!(method("inherited_visibility()").visibility(), &Visibility::Private);
+        assert_method_has_receiver!(&context, method("class_value()"), "Foo");
+        assert_method_has_receiver!(&context, method("class_value=()"), "Foo");
+        assert_def_comments_eq!(&context, method("inferred()"), ["# Reader documentation"]);
+        assert!(method("inferred()").flags().contains(DefinitionFlags::DEPRECATED));
     }
 
     #[test]

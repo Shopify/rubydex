@@ -5219,6 +5219,38 @@ mod rbs_tests {
     }
 
     #[test]
+    fn rbs_attributes_create_method_declarations_without_instance_variable_declarations() {
+        let mut context = graph_test();
+        context.index_rbs_uri("file:///attributes.rbs", {
+            r"
+            class Foo
+              attr_reader reader: String
+              attr_writer writer (@writer): Integer
+              attr_accessor accessor(): bool
+              private attr_accessor self.class_value (@class_value): Symbol
+            end
+            "
+        });
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+        for method in [
+            "Foo#reader()",
+            "Foo#writer=()",
+            "Foo#accessor()",
+            "Foo#accessor=()",
+            "Foo::<Foo>#class_value()",
+            "Foo::<Foo>#class_value=()",
+        ] {
+            assert_declaration_exists!(context, method);
+            assert_declaration_kind_eq!(context, method, "Method");
+        }
+        for instance_variable in ["Foo#@reader", "Foo#@writer", "Foo::<Foo>#@class_value"] {
+            assert_declaration_does_not_exist!(context, instance_variable);
+        }
+    }
+
+    #[test]
     fn rbs_mixin_resolution() {
         let mut context = graph_test();
         context.index_rbs_uri("file:///test.rbs", {
