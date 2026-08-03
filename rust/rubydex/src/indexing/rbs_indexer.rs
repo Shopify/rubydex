@@ -261,22 +261,43 @@ impl<'a> RBSIndexer<'a> {
             }
         };
 
-        if reader {
-            self.register_attribute_method(
+        match (reader, writer) {
+            (true, true) => {
+                self.register_attribute_method(
+                    name,
+                    false,
+                    offset.clone(),
+                    name_offset.clone(),
+                    comments.clone(),
+                    flags.clone(),
+                    lexical_nesting_id,
+                    visibility,
+                    receiver.clone(),
+                );
+                self.register_attribute_method(
+                    name,
+                    true,
+                    offset,
+                    name_offset,
+                    comments,
+                    flags,
+                    lexical_nesting_id,
+                    visibility,
+                    receiver,
+                );
+            }
+            (true, false) => self.register_attribute_method(
                 name,
                 false,
-                offset.clone(),
-                name_offset.clone(),
-                comments.clone(),
-                flags.clone(),
+                offset,
+                name_offset,
+                comments,
+                flags,
                 lexical_nesting_id,
                 visibility,
-                receiver.clone(),
-            );
-        }
-
-        if writer {
-            self.register_attribute_method(
+                receiver,
+            ),
+            (false, true) => self.register_attribute_method(
                 name,
                 true,
                 offset,
@@ -286,7 +307,8 @@ impl<'a> RBSIndexer<'a> {
                 lexical_nesting_id,
                 visibility,
                 receiver,
-            );
+            ),
+            (false, false) => unreachable!("attribute must have a reader or writer"),
         }
     }
 
