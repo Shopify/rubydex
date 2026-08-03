@@ -356,6 +356,71 @@ class Rubydex::Diagnostic
   def related_information; end
 end
 
+module Rubydex::Linter; end
+
+class Rubydex::Linter::Rule
+  abstract!
+
+  sig { returns(String) }
+  def self.rule_name; end
+
+  sig { params(graph: Rubydex::Graph).void }
+  def initialize(graph); end
+
+  sig { returns(Rubydex::Graph) }
+  def graph; end
+
+  sig { returns(T::Array[Rubydex::Diagnostic]) }
+  def diagnostics; end
+
+  sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
+  def severity; end
+
+  sig { abstract.void }
+  def lint; end
+
+  protected
+
+  sig do
+    params(
+      message: String,
+      location: Rubydex::Location,
+      related_information: T::Array[Rubydex::RelatedInformation],
+    ).void
+  end
+  def add_diagnostic(message, location, related_information: []); end
+end
+
+class Rubydex::Linter::Runner
+  sig do
+    params(
+      graph: Rubydex::Graph,
+      rules: T::Array[T.class_of(Rubydex::Linter::Rule)],
+    ).void
+  end
+  def initialize(graph, rules:); end
+
+  sig { returns(Rubydex::Graph) }
+  def graph; end
+
+  sig { returns(T::Array[T.class_of(Rubydex::Linter::Rule)]) }
+  def rules; end
+
+  sig { returns(Rubydex::Linter::Result) }
+  def run; end
+end
+
+class Rubydex::Linter::Result
+  sig { params(diagnostics: T::Array[Rubydex::Diagnostic]).void }
+  def initialize(diagnostics); end
+
+  sig { returns(T::Array[Rubydex::Diagnostic]) }
+  def diagnostics; end
+
+  sig { returns(T::Boolean) }
+  def success?; end
+end
+
 class Rubydex::Keyword
   sig { params(name: String, documentation: String).void }
   def initialize(name, documentation); end

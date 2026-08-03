@@ -135,21 +135,24 @@ module Rubydex
       end
 
       # Builds the workspace graph, sending progress messages to `progress_io`.
-      #: (IO progress_io) -> Rubydex::Graph
-      def build_graph(progress_io)
-        graph = Rubydex::Graph.configure_for_workspace(Dir.pwd)
-        with_timer(progress_io, "Indexing workspace...") { graph.index_workspace }
+      #: (IO progress_io, ?workspace_path: String, ?fail_on_index_errors: bool) -> Rubydex::Graph
+      def build_graph(progress_io, workspace_path: Dir.pwd, fail_on_index_errors: false)
+        graph = Rubydex::Graph.configure_for_workspace(workspace_path)
+        errors = with_timer(progress_io, "Indexing workspace...") { graph.index_workspace }
+        abort(errors.join("\n")) if fail_on_index_errors && !errors.empty?
+
         with_timer(progress_io, "Resolving graph...") { graph.resolve }
         graph
       end
 
-      #: (IO io, String message) { -> void } -> void
+      #: [T] (IO io, String message) { -> T } -> T
       def with_timer(io, message)
         io.print(message)
         start = Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond)
-        yield
+        result = yield
         duration = Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond) - start
         io.puts(" finished in #{duration.round(2)}ms")
+        result
       end
     end
   end

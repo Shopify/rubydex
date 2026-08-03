@@ -25,12 +25,14 @@ class CLITest < Minitest::Test
 
     assert_includes(commands, Rubydex::CLI::Command::Query)
     assert_includes(commands, Rubydex::CLI::Command::Console)
+    assert_includes(commands, Rubydex::CLI::Command::Lint)
     assert_includes(commands, Rubydex::CLI::Command::Mcp)
 
     # The declared name is what the class reports, and drives its usage line.
     assert_equal("query", Rubydex::CLI::Command::Query.command_name)
     assert_equal("query <CYPHER>", Rubydex::CLI::Command::Query.usage_form)
     assert_equal("console", Rubydex::CLI::Command::Console.usage_form)
+    assert_equal("lint [PATH]", Rubydex::CLI::Command::Lint.usage_form)
   end
 
   def test_commands_are_listed_alphabetically
@@ -45,11 +47,12 @@ class CLITest < Minitest::Test
     # before the offsets are compared: a missing one fails on its own assertion rather than on a
     # comparison against nil. We collect the beginning offset of the first match (index 0) for each
     # command so that we can compare their order below.
-    console, mcp, query, help = ["console", "mcp", "query", "help"].map do |name|
+    console, lint, mcp, query, help = ["console", "lint", "mcp", "query", "help"].map do |name|
       assert_stdout_includes_pattern(result, /^  #{name}\b/).begin(0)
     end
 
-    assert_operator(console, :<, mcp)
+    assert_operator(console, :<, lint)
+    assert_operator(lint, :<, mcp)
     assert_operator(mcp, :<, query)
     # `help` is listed last rather than in alphabetical position.
     assert_operator(query, :<, help)
@@ -93,6 +96,7 @@ class CLITest < Minitest::Test
     [
       Rubydex::CLI::Command::Query,
       Rubydex::CLI::Command::Console,
+      Rubydex::CLI::Command::Lint,
       Rubydex::CLI::Command::Mcp,
     ].each do |command|
       assert_stdout_includes_pattern(result, /^  #{Regexp.escape(command.usage_form)}\s{2,}\S/)
@@ -199,7 +203,7 @@ class CLITest < Minitest::Test
   end
 
   def test_command_help_is_available_per_subcommand
-    ["query", "console", "mcp"].each do |command|
+    ["query", "console", "lint", "mcp"].each do |command|
       result = rdx(command, "--help")
 
       assert_success_status(result)
@@ -208,7 +212,7 @@ class CLITest < Minitest::Test
   end
 
   def test_every_command_reports_an_invalid_option_with_the_usage
-    ["query", "console", "mcp"].each do |command|
+    ["query", "console", "lint", "mcp"].each do |command|
       result = rdx(command, "--bogus-flag")
 
       refute_success_status(result)
@@ -235,6 +239,61 @@ class CLITest < Minitest::Test
     assert_stderr_includes(result, "unexpected argument: two")
   end
 
+  def test_lint_reports_a_project_rule_diagnostic_with_related_information
+    with_context do |context|
+      write_linter_rule(context, "CLITestProjectErrorRule")
+      context.write!("app.rb", "class Foo; end\nclass Foo; end\n")
+
+      result = rdx(
+        "lint",
+        "--require",
+        "rubydex_linter/rules/no_foo.rb",
+        context.absolute_path,
+      )
+
+      refute_success_status(result)
+      assert_stdout_equals(
+        <<~OUTPUT,
+          #{context.absolute_path_to("app.rb")}:1:7: error: CLITestProjectErrorRule: Foo is not allowed.
+            #{context.absolute_path_to("app.rb")}:2:7: Foo is also defined here.
+        OUTPUT
+        result,
+      )
+      assert_stderr_includes(result, "Indexing workspace...")
+      assert_stderr_includes(result, "Resolving graph...")
+    end
+  end
+
+  def test_lint_allows_a_clean_workspace
+    with_context do |context|
+      write_linter_rule(context, "CLITestProjectCleanRule")
+      context.write!("app.rb", "class Bar; end\n")
+
+      result = rdx(
+        "lint",
+        "--require",
+        "rubydex_linter/rules/no_foo.rb",
+        context.absolute_path,
+      )
+
+      assert_success_status(result)
+      assert_empty_stdout(result)
+    end
+  end
+
+  def test_lint_requires_a_rule_before_indexing
+    with_context do |context|
+      context.write!("app.rb", "class Foo; end\n")
+
+      result = rdx("lint", context.absolute_path)
+
+      refute_success_status(result)
+      assert_empty_stdout(result)
+      assert_stderr_includes(result, "`lint` requires at least one --require FILE")
+      refute_stderr_includes(result, "Indexing workspace...")
+    end
+  end
+
   # `irb` is not a runtime dependency, so its absence is reported rather than raised. The graph is
   # stubbed out: this is about the `require`, and indexing a workspace would prove nothing here.
   def test_console_reports_a_missing_irb
@@ -257,6 +316,39 @@ class CLITest < Minitest::Test
   end
 
   private
+
+  # Each in-process invocation loads a distinct named rule. Reopening the same class would not add
+  # a subclass, so the linter could not identify which rule came from that invocation.
+  #: (Test::Helpers::Context context, String class_name) -> void
+  def write_linter_rule(context, class_name)
+    context.write!("rubydex_linter/rules/no_foo.rb", <<~RUBY)
+      # frozen_string_literal: true
+
+      class #{class_name} < Rubydex::Linter::Rule
+        def severity = Rubydex::Severity::Error
+
+        def lint
+          declaration = graph["Foo"]
+          return unless declaration
+
+          definitions = declaration.definitions.sort_by { |definition| definition.location }.to_a
+          primary = definitions.shift
+          return unless primary
+
+          add_diagnostic(
+            "Foo is not allowed.",
+            primary.name_location || primary.location,
+            related_information: definitions.map do |definition|
+              Rubydex::RelatedInformation.new(
+                "Foo is also defined here.",
+                definition.name_location || definition.location,
+              )
+            end,
+          )
+        end
+      end
+    RUBY
+  end
 
   #: (LoadError error) -> void
   def console_raising_on_require(error)
