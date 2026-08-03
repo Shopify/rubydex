@@ -357,6 +357,57 @@ class Rubydex::Diagnostic
 end
 
 module Rubydex::Linter; end
+module Rubydex::Linter::Helpers; end
+
+module Rubydex::Linter::Helpers::PathHelpers
+  extend T::Helpers
+
+  requires_ancestor { Rubydex::Linter::Rule }
+
+  RUBOCOP_EXCLUDE_FNMATCH_FLAGS = T.let(T.unsafe(nil), Integer)
+  TEST_PATHS = T.let(T.unsafe(nil), T::Array[String])
+
+  sig do
+    params(
+      path: String,
+      patterns: T::Array[String],
+      workspace: String,
+      flags: Integer,
+    ).returns(T::Boolean)
+  end
+  def self.path_matches_patterns?(path, patterns, workspace:, flags: 0); end
+
+  sig { params(location: Rubydex::Location, workspace: String).returns(String) }
+  def self.display_path(location, workspace:); end
+
+  sig do
+    params(
+      definitions: T::Enumerable[Rubydex::Definition],
+      excluded_patterns: T::Array[String],
+    ).returns(T::Array[Rubydex::Definition])
+  end
+  def reject_definitions_in_paths(definitions, excluded_patterns); end
+
+  sig do
+    params(
+      definitions: T::Enumerable[Rubydex::Definition],
+      patterns: T::Array[String],
+    ).returns(T::Array[Rubydex::Definition])
+  end
+  def select_definitions_in_paths(definitions, patterns); end
+
+  private
+
+  sig { params(path: String, patterns: T::Array[String]).returns(T::Boolean) }
+  def path_matches_patterns?(path, patterns); end
+
+  sig { params(path: String).returns(T::Boolean) }
+  def test_path?(path); end
+
+  sig { params(definition: Rubydex::Definition).returns(T.nilable(String)) }
+  def path_for_definition(definition); end
+
+end
 
 class Rubydex::Linter::Rule
   abstract!
@@ -376,6 +427,26 @@ class Rubydex::Linter::Rule
   sig { returns(T::Array[Rubydex::Diagnostic]) }
   def diagnostics; end
 
+  sig { params(definition: Rubydex::Definition).returns(Rubydex::Location) }
+  def diagnostic_location(definition); end
+
+  sig { params(base_name: String).returns(T::Enumerable[Rubydex::Class]) }
+  def child_classes(base_name); end
+
+  sig { params(name: String).returns(Rubydex::Namespace) }
+  def required_namespace(name); end
+
+  sig do
+    params(
+      namespace: Rubydex::Namespace,
+      method_name: String,
+    ).returns(Rubydex::Method)
+  end
+  def required_method(namespace, method_name); end
+
+  sig { returns(String) }
+  def rule_name; end
+
   sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
   def severity; end
 
@@ -392,6 +463,16 @@ class Rubydex::Linter::Rule
     ).void
   end
   def add_diagnostic(message, location, related_information: []); end
+
+  private
+
+  sig { params(location: Rubydex::Location).returns(T.nilable(String)) }
+  def source_for_location(location); end
+end
+
+class Rubydex::Linter::MissingGraphDependencyError < StandardError
+  sig { params(rule_name: String, dependency: String).void }
+  def initialize(rule_name, dependency); end
 end
 
 class Rubydex::Linter::Runner

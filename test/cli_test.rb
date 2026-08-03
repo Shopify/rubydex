@@ -358,11 +358,11 @@ class CLITest < Minitest::Test
 
           add_diagnostic(
             "Foo is not allowed.",
-            primary.name_location || primary.location,
+            diagnostic_location(primary),
             related_information: definitions.map do |definition|
               Rubydex::RelatedInformation.new(
                 "Foo is also defined here.",
-                definition.name_location || definition.location,
+                diagnostic_location(definition),
               )
             end,
           )
