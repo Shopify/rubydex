@@ -92,7 +92,7 @@ pub struct Graph {
     /// Project configuration
     config: Config,
 }
-assert_mem_size!(Graph, 352);
+assert_mem_size!(Graph, 368);
 assert_send_sync!(Graph);
 
 impl Graph {

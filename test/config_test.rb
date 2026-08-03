@@ -10,6 +10,7 @@ class ConfigTest < Minitest::Test
     with_context do |context|
       config = Rubydex::Config.load(context.absolute_path)
       assert_equal(context.absolute_path, config.workspace_path)
+      assert_empty(config.linter.rules)
     end
   end
 
@@ -61,5 +62,25 @@ class ConfigTest < Minitest::Test
 
   def test_load_raises_when_the_path_is_not_a_string
     assert_raises(TypeError) { Rubydex::Config.load(123) }
+  end
+
+  def test_linter_returns_the_configured_rules
+    with_context do |context|
+      context.write!("rubydex.toml", <<~TOML)
+        [linter.rules.Something]
+        enabled = true
+
+        [linter.rules.Other]
+        enabled = false
+      TOML
+
+      config = Rubydex::Config.load(context.absolute_path)
+      rules = config.linter.rules
+
+      assert_equal(["Other", "Something"], rules.keys.sort)
+      assert_predicate(rules, :frozen?)
+      assert_predicate(rules.fetch("Something"), :enabled?)
+      refute_predicate(rules.fetch("Other"), :enabled?)
+    end
   end
 end
