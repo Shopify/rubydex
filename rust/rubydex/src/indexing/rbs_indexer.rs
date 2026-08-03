@@ -306,7 +306,7 @@ impl<'a> RBSIndexer<'a> {
             .local_graph
             .intern_string(format!("{name}{}()", if writer { "=" } else { "" }));
         let signatures = if writer {
-            let parameter_name = self.local_graph.intern_string("arg0".to_string());
+            let parameter_name = self.local_graph.intern_string(name.to_owned());
             let parameter = Parameter::RequiredPositional(ParameterStruct::new(name_offset.clone(), parameter_name));
             Signatures::Simple(vec![parameter].into_boxed_slice())
         } else {
@@ -1271,12 +1271,17 @@ mod tests {
             assert!(method(name).signatures().as_slice()[0].is_empty());
         }
 
-        for name in ["explicit=()", "accessor=()", "class_value=()"] {
+        for (name, parameter_name) in [
+            ("explicit=()", "explicit"),
+            ("accessor=()", "accessor"),
+            ("class_value=()", "class_value"),
+        ] {
             let signature = &method(name).signatures().as_slice()[0];
             let [Parameter::RequiredPositional(parameter)] = signature.as_ref() else {
                 panic!("expected `{name}` to have one required positional parameter");
             };
-            assert_string_eq!(&context, parameter.str(), "arg0");
+            assert_string_eq!(&context, parameter.str(), parameter_name);
+            assert_offset_string!(&context, parameter.offset(), parameter_name);
         }
 
         assert_eq!(method("class_value()").visibility(), &Visibility::Private);
