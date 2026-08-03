@@ -2,6 +2,11 @@
 #include "rustbindings.h"
 #include "utils.h"
 
+/*
+ * RDoc parser workaround for https://github.com/ruby/rdoc/issues/1744:
+ * mRubydex = rb_define_module("Rubydex")
+ */
+
 static VALUE mRubydex;
 // Defined here so that the configuration can build them, but implemented in Ruby (`lib/rubydex/config.rb`), like the
 // other value objects handed back to Ruby.
@@ -14,6 +19,37 @@ static void config_free(void *ptr) {
     if (ptr) {
         rdx_config_free(ptr);
     }
+}
+
+// Body function for rb_ensure while building a Rubydex::LinterConfig.
+static VALUE config_linter_build(VALUE opaque_rule_array) {
+    CLinterRuleArray *rule_array = (CLinterRuleArray *)(uintptr_t)opaque_rule_array;
+    VALUE rules = rb_hash_new_capa((long)rule_array->len);
+
+    for (size_t i = 0; i < rule_array->len; i++) {
+        CLinterRule rule = rule_array->items[i];
+        VALUE rule_name = rb_str_freeze(rb_utf8_str_new(rule.name, (long)rule.name_length));
+        VALUE argv[] = {rule_name, rule.enabled ? Qtrue : Qfalse};
+
+        rb_hash_aset(rules, rule_name, rb_class_new_instance(2, argv, cRuleConfig));
+    }
+
+    return rb_class_new_instance(1, &rules, cLinterConfig);
+}
+
+// Ensure function for rb_ensure while building a Rubydex::LinterConfig.
+static VALUE config_linter_ensure(VALUE opaque_rule_array) {
+    CLinterRuleArray *rule_array = (CLinterRuleArray *)(uintptr_t)opaque_rule_array;
+    rdx_config_linter_rules_free(*rule_array);
+
+    return Qnil;
+}
+
+static VALUE config_linter(VALUE config_obj) {
+    CLinterRuleArray rule_array = rdx_config_linter_rules(rdxi_config_from_object(config_obj));
+    VALUE opaque_rule_array = (VALUE)(uintptr_t)&rule_array;
+
+    return rb_ensure(config_linter_build, opaque_rule_array, config_linter_ensure, opaque_rule_array);
 }
 
 const rb_data_type_t config_type = {
@@ -49,7 +85,10 @@ static VALUE rdxr_config_load(VALUE klass, VALUE workspace_path) {
         rb_exc_raise(rb_exc_new_str(config_error, message));
     }
 
-    return TypedData_Wrap_Struct(klass, &config_type, result.config);
+    VALUE config = TypedData_Wrap_Struct(klass, &config_type, result.config);
+    rb_ivar_set(config, id_linter, config_linter(config));
+
+    return config;
 }
 
 /*
@@ -69,40 +108,6 @@ static VALUE rdxr_config_workspace_path(VALUE self) {
     return rdxi_owned_c_string_to_ruby(result);
 }
 
-/*
- * call-seq:
- *   linter -> Rubydex::LinterConfig
- *
- * Returns the linter's settings, read from the `[linter]` section of the configuration file. The rules are keyed by
- * name and empty when the section is absent.
- */
-static VALUE rdxr_config_linter(VALUE self) {
-    // Return early if we already fetched the rule config from Rust and built the Ruby objects.
-    VALUE linter = rb_ivar_get(self, id_linter);
-
-    if (!NIL_P(linter)) {
-        return linter;
-    }
-
-    CLinterRuleArray rule_array = rdx_config_linter_rules(rdxi_config_from_object(self));
-    VALUE rules = rb_hash_new_capa((long)rule_array.len);
-
-    for (size_t i = 0; i < rule_array.len; i++) {
-        CLinterRule rule = rule_array.items[i];
-        VALUE rule_name = rb_str_freeze(rb_utf8_str_new(rule.name, (long)rule.name_length));
-        VALUE argv[] = { rule_name , rule.enabled ? Qtrue : Qfalse};
-
-        rb_hash_aset(rules, rule_name, rb_class_new_instance(2, argv, cRuleConfig));
-    }
-
-    rdx_config_linter_rules_free(rule_array);
-
-    linter = rb_class_new_instance(1, &rules, cLinterConfig);
-    rb_ivar_set(self, id_linter, linter);
-
-    return linter;
-}
-
 void rdxi_initialize_config(VALUE moduleRubydex) {
     mRubydex = moduleRubydex;
 
@@ -118,5 +123,7 @@ void rdxi_initialize_config(VALUE moduleRubydex) {
 
     rb_define_singleton_method(cConfig, "load", rdxr_config_load, 1);
     rb_define_method(cConfig, "workspace_path", rdxr_config_workspace_path, 0);
-    rb_define_method(cConfig, "linter", rdxr_config_linter, 0);
+
+    /* Returns the linter settings read from the `[linter]` section. Its rules are empty when the section is absent. */
+    rb_define_attr(cConfig, "linter", true, false);
 }

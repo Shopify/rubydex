@@ -11,7 +11,7 @@ module Rubydex
 
     #: (Hash[String, RuleConfig]) -> void
     def initialize(rules)
-      @rules = rules
+      @rules = rules.freeze
       freeze
     end
   end

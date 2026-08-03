@@ -10,6 +10,7 @@ class ConfigTest < Minitest::Test
     with_context do |context|
       config = Rubydex::Config.load(context.absolute_path)
       assert_equal(context.absolute_path, config.workspace_path)
+      assert_empty(config.linter.rules)
     end
   end
 
@@ -77,18 +78,9 @@ class ConfigTest < Minitest::Test
       rules = config.linter.rules
 
       assert_equal(["Other", "Something"], rules.keys.sort)
+      assert_predicate(rules, :frozen?)
       assert_predicate(rules.fetch("Something"), :enabled?)
       refute_predicate(rules.fetch("Other"), :enabled?)
-    end
-  end
-
-  def test_linter_settings_are_built_once_per_configuration
-    with_context do |context|
-      context.write!("rubydex.toml", "[linter.rules.Something]\nenabled = true\n")
-
-      config = Rubydex::Config.load(context.absolute_path)
-      assert_same(config.linter, config.linter)
-      assert_same(config.linter.rules.fetch("Something"), config.linter.rules.fetch("Something"))
     end
   end
 end
