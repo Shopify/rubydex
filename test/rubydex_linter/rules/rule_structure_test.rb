@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "rubydex_linter/rule_test_case"
+require "rubydex/linter/rule_test_case"
 require "rubydex_linter/rules/rule_structure"
 
 module Rubydex
