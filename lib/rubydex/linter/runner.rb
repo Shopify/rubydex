@@ -50,7 +50,7 @@ module Rubydex
 
       #: (Diagnostic) -> bool
       def diagnostic_in_workspace?(diagnostic)
-        path = URI::RFC2396_PARSER.unescape(diagnostic.location.to_file_path)
+        path = diagnostic.location.to_file_path
         workspace_path = Pathname.new(File.expand_path(@graph.workspace_path))
         relative_path = Pathname.new(File.expand_path(path)).relative_path_from(workspace_path)
 

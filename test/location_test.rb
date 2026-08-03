@@ -16,6 +16,28 @@ class LocationTest < Minitest::Test
     )
   end
 
+  def test_to_file_path_decodes_the_uri_path_once
+    uri = Gem.win_platform? ? "file:///D:/my%20app+%2520/file.rb" : "file:///tmp/my%20app+%2520/file.rb"
+    expected = Gem.win_platform? ? "D:/my app+%20/file.rb" : "/tmp/my app+%20/file.rb"
+    location = Rubydex::Location.new(uri: uri, start_line: 0, end_line: 0, start_column: 0, end_column: 0)
+
+    assert_equal(expected, location.to_file_path)
+  end
+
+  def test_to_file_path_rejects_a_file_uri_without_a_path
+    ["file:relative", "file:", "file://host"].each do |uri|
+      location = Rubydex::Location.new(
+        uri: uri,
+        start_line: 0,
+        end_line: 0,
+        start_column: 0,
+        end_column: 0,
+      )
+
+      assert_raises(Rubydex::Location::NotFileUriError) { location.to_file_path }
+    end
+  end
+
   def test_display_location_from_prism_raises_with_conversion_path
     prism_location = PrismLocation.new(start_line: 2, start_column: 12, end_line: 3, end_column: 19)
 
