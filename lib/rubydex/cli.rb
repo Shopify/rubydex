@@ -26,6 +26,14 @@ module Rubydex
         require "rubydex"
 
         dispatch(argv.shift, argv)
+      rescue StandardError => e
+        # A command loads `rubydex/server` only when it needs it, so the constant can be absent.
+        # A direct reference here would raise `NameError` and hide the real error.
+        raise unless defined?(Rubydex::Server::Error) && e.is_a?(Rubydex::Server::Error)
+
+        # A server that does not start or answer is a runtime condition, not a defect in rdx.
+        warn("rdx server: #{e.message}")
+        exit(1)
       end
 
       # Reports `message`, then the usage text, and exits non-zero. Public because the subcommands

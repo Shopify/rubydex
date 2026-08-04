@@ -26,6 +26,7 @@ class CLITest < Minitest::Test
     assert_includes(commands, Rubydex::CLI::Command::Query)
     assert_includes(commands, Rubydex::CLI::Command::Console)
     assert_includes(commands, Rubydex::CLI::Command::Mcp)
+    assert_includes(commands, Rubydex::CLI::Command::Server)
 
     # The declared name is what the class reports, and drives its usage line.
     assert_equal("query", Rubydex::CLI::Command::Query.command_name)
@@ -94,6 +95,7 @@ class CLITest < Minitest::Test
       Rubydex::CLI::Command::Query,
       Rubydex::CLI::Command::Console,
       Rubydex::CLI::Command::Mcp,
+      Rubydex::CLI::Command::Server,
     ].each do |command|
       assert_stdout_includes_pattern(result, /^  #{Regexp.escape(command.usage_form)}\s{2,}\S/)
     end
@@ -199,7 +201,7 @@ class CLITest < Minitest::Test
   end
 
   def test_command_help_is_available_per_subcommand
-    ["query", "console", "mcp"].each do |command|
+    ["query", "console", "mcp", "server"].each do |command|
       result = rdx(command, "--help")
 
       assert_success_status(result)
@@ -208,7 +210,7 @@ class CLITest < Minitest::Test
   end
 
   def test_every_command_reports_an_invalid_option_with_the_usage
-    ["query", "console", "mcp"].each do |command|
+    ["query", "console", "mcp", "server"].each do |command|
       result = rdx(command, "--bogus-flag")
 
       refute_success_status(result)
