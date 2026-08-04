@@ -10,6 +10,7 @@ GEM
     drb (2.2.3)
     erb (6.0.6)
     extconf_compile_commands_json (0.0.7)
+    fiddle (1.1.8)
     io-console (0.8.2)
     irb (1.18.0)
       pp (>= 0.6.0)
@@ -90,6 +91,7 @@ PLATFORMS
 
 DEPENDENCIES
   extconf_compile_commands_json
+  fiddle
   irb
   minitest
   mocha
