@@ -77,6 +77,36 @@ module Rubydex
         end
       end
 
+      def test_server_picks_up_file_changes
+        with_context do |context|
+          track(context)
+          context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+          query = "MATCH (c:Class)-[:HAS_PARENT]->(p:Class) WHERE p.name = 'Animal' RETURN c.name ORDER BY c.name"
+          refute_match(/Fox/, query!(context, query))
+
+          sleep(0.01) # ensure a distinct mtime
+          context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\nclass Fox < Animal; end\n")
+
+          assert_match(/Fox/, query!(context, query))
+        end
+      end
+
+      def test_server_drops_deleted_files
+        with_context do |context|
+          track(context)
+          context.write!("animal.rb", "class Animal; end")
+          context.write!("dog.rb", "class Dog < Animal; end")
+
+          query = "MATCH (c:Class {name: 'Dog'}) RETURN c.name"
+          assert_match(/Dog/, query!(context, query))
+
+          File.delete(context.absolute_path_to("dog.rb"))
+
+          refute_match(/Dog/, query!(context, query))
+        end
+      end
+
       def test_query_output_matches_inline
         with_context do |context|
           track(context)
