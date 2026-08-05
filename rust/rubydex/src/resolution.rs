@@ -995,7 +995,15 @@ impl<'a> Resolver<'a> {
             // again
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
                 let cached = declaration.as_namespace().unwrap().clone_ancestors();
-                self.propagate_descendants(&mut context.descendants, &cached);
+
+                // Only propagate descendants when there are new ones beyond `declaration_id`
+                // itself. When `declaration_id` was first linearized, it was already added to all
+                // of its ancestors' descendant sets, so propagating `{declaration_id}` again is
+                // redundant. The recursive case (descendants from the caller's chain) still needs
+                // propagation because those descendants are newly discovered.
+                if context.descendants.len() > 1 {
+                    self.propagate_descendants(&mut context.descendants, &cached);
+                }
 
                 context.finalize(declaration_id);
                 return cached;
@@ -1068,8 +1076,11 @@ impl<'a> Resolver<'a> {
         let (linearized_prepends, linearized_includes) =
             self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
 
-        // Build the final list
-        let mut ancestors = Vec::new();
+        // Build the final list with the exact capacity to avoid reallocation
+        let prepends_len = linearized_prepends.len();
+        let includes_len = linearized_includes.len();
+        let parents_len = parent_ancestors.as_ref().map_or(0, Vec::len);
+        let mut ancestors = Vec::with_capacity(prepends_len + 1 + includes_len + parents_len);
         ancestors.extend(linearized_prepends);
         ancestors.push(Ancestor::Complete(declaration_id));
         ancestors.extend(linearized_includes);
