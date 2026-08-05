@@ -189,6 +189,14 @@ like Claude to semantically query your Ruby codebase.
 | `get_file_declarations` | List declarations defined in a specific file |
 | `codebase_stats` | High-level statistics about the indexed codebase |
 
+## Skill Library (Experimental)
+
+Rubydex ships with a built in skill library. These skills are referenced by id by Rubydex tools (for example: `send-private-method` maps to `skills/send-private-method/SKILL.md`).
+
+The intention is for Rubydex to provide deterministic skill loading for agents. If a rule returns a skill id, the agent can then fetch the skill with `rdx skill <id>`.
+
+This removes the need for agents to load a large number of possibly unrelated skill descriptions when they may or may not be necessary. The information only surfaces if there is a verified violation to fix, and it only needs to be loaded once, rather than inlining it on every violation in every run of the tool (the common pattern for linters and analyzers).
+
 ## Contributing
 
 See [the contributing documentation](CONTRIBUTING.md).

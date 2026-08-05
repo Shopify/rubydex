@@ -9,4 +9,16 @@ module Rubydex
   # Raised by `Config.load` when the workspace does not exist, or when its config file cannot be read or is malformed.
   # A workspace with no config file at all is not an error.
   class ConfigError < Error; end
+
+  # Raised by `Skill.load` when the file cannot be read, is missing frontmatter, has malformed YAML, or lacks the
+  # required `name` or `description` fields.
+  # Every failure to produce a Skill is a `SkillError`, so a caller rescues one class instead
+  # of the union of what `File.read` and Psych happen to raise.
+  class SkillError < Error; end
+
+  # Raised by `SkillRegistry#fetch` when the library has no skill under the requested id.
+  class UnknownSkillError < SkillError; end
+
+  # Raised by `SkillRegistry.load` when the skill directory doesn't exist.
+  class UnknownSkillDirectoryError < SkillError; end
 end
