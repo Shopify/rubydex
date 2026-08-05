@@ -1234,36 +1234,62 @@ impl<'a> Resolver<'a> {
             &mut linearized_includes,
         );
 
-        // Build the final list with the exact capacity to avoid reallocation
-        let prepends_len = linearized_prepends.len();
-        let includes_len = linearized_includes.len();
-        let parents_len = parent_buffer.len();
-        let mut ancestors = Vec::with_capacity(prepends_len + 1 + includes_len + parents_len);
+        // Build the new list in a pooled buffer. The convergence loop repeats this work many
+        // times for the same declaration, and it almost always gets the chain that the graph
+        // already holds. A pooled buffer keeps that repeat free of heap allocations.
+        let mut ancestors = self.take_chain_buffer();
+        ancestors.reserve(linearized_prepends.len() + 1 + linearized_includes.len() + parent_buffer.len());
         ancestors.extend(linearized_prepends.drain(..));
         ancestors.push(Ancestor::Complete(declaration_id));
         ancestors.extend(linearized_includes.drain(..));
         ancestors.extend_from_slice(&parent_buffer);
 
-        // The scratch buffers gave up their contents to the final list, thus they go back to the
+        // The scratch buffers gave up their contents to the new list, thus they go back to the
         // pool for the next linearization to use
         self.return_chain_buffer(parent_buffer);
         self.return_mixin_buffer(mixins);
         self.return_deque(linearized_prepends);
         self.return_deque(linearized_includes);
 
-        let result = if context.cyclic {
-            Ancestors::Cyclic(ancestors)
+        let state = if context.cyclic {
+            ChainState::Cyclic
         } else if context.partial {
-            Ancestors::Partial(ancestors)
+            ChainState::Partial
         } else {
-            Ancestors::Complete(ancestors)
+            ChainState::Complete
         };
 
-        let state = ChainState::of(&result);
+        let stored = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .ancestors();
+
+        if ChainState::of(stored) == state && stored.as_slice() == ancestors.as_slice() {
+            // The graph already holds this exact chain. There is nothing to store and nothing new
+            // to record, thus the buffer goes straight back to the pool.
+            self.return_chain_buffer(ancestors);
+            context.finalize(declaration_id);
+            return state;
+        }
+
+        // The chain changed. Copy it into a list of the exact size, so that the graph does not
+        // hold the spare capacity of a pooled buffer, then give the buffer back to the pool.
+        let exact = ancestors.as_slice().to_vec();
+        self.return_chain_buffer(ancestors);
+
+        let result = match state {
+            ChainState::Cyclic => Ancestors::Cyclic(exact),
+            ChainState::Partial => Ancestors::Partial(exact),
+            ChainState::Complete => Ancestors::Complete(exact),
+        };
 
         // Record this declaration on its own chain before the chain goes into the graph, so that
         // the chain is still a local value and needs no read back from the graph
-        self.record_descendant_on_chain_if_new(declaration_id, &result);
+        self.record_descendant_on_chain(declaration_id, &result);
 
         self.graph
             .declarations_mut()
