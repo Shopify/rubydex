@@ -1814,6 +1814,54 @@ impl<'a> Resolver<'a> {
 
     /// Search for a member in a declaration's ancestor chain.
     fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
+        // Fast path: if the ancestor chain is already complete (the common case during
+        // constant resolution), iterate the cached chain directly without cloning it or
+        // creating a LinearizationContext. Only fall back to full linearization when the
+        // chain is still partial.
+        let needs_linearize = {
+            let Some(decl) = self.graph.declarations().get(&declaration_id) else {
+                return Outcome::Unresolved;
+            };
+            let Some(ns) = decl.as_namespace() else {
+                return Outcome::Unresolved;
+            };
+            !ns.has_complete_ancestors()
+        };
+
+        if needs_linearize {
+            return self.search_ancestors_slow(declaration_id, str_id);
+        }
+
+        // Read the cached ancestor chain by reference — no clone, no context allocation.
+        let ancestors = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .ancestors();
+
+        for ancestor_id in ancestors {
+            if let Ancestor::Complete(ancestor_id) = ancestor_id {
+                if let Some(id) = self
+                    .graph
+                    .declarations()
+                    .get(ancestor_id)
+                    .and_then(|decl| decl.as_namespace())
+                    .and_then(|ns| ns.member(&str_id))
+                {
+                    return Outcome::Resolved(*id);
+                }
+            }
+        }
+
+        Outcome::Unresolved
+    }
+
+    /// Full linearization path for `search_ancestors`, used when the ancestor chain is still
+    /// partial and must be (re)computed.
+    fn search_ancestors_slow(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
         match self.ancestors_of(declaration_id) {
             Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
                 .iter()
