@@ -204,20 +204,86 @@ counters to `resolution.rs`, call a `dump_stats` from `main.rs` at the
 - A per-call memo of partial chains caught only **295,987** of the repeats, thus
   the repetition happens **across** top level calls, not inside one call.
 
+### Dead end: a cache for partial chains (experiments 17 and 18)
+
+The 6.9M repeated linearizations of an unchanged partial chain looked like the
+last large win. Two forms were tried, and neither works.
+
+**Unsound form.** A per-pass set of "already partial in this pass" ids on the
+`Resolver`, cleared at the start of each pass. This cuts `resolve_s` to **6.471**
+from 8.126, and all 1132 Rust tests pass. A chain state audit shows why it is
+wrong: only **31,487** namespaces reach a complete chain, against **140,343** in
+the baseline. A partial chain becomes complete when a later unit of the same
+pass resolves a name, thus the repeat linearization is how the information
+spreads. It is not redundant work.
+
+**Correct form.** A `generation` counter steps on every graph change: a
+definition unit, a reference unit, a resolved name, a new singleton class, a
+cleared singleton hierarchy and every stored chain. A declaration that gives an
+unchanged partial chain gets recorded together with the counter value, and a
+later try skips only while the counter still holds. A declaration that has its
+own unit of work always linearizes for real, so that no side effect goes
+missing. The audit then matches the baseline exactly. Two runs give **8.189**
+and **8.133** against a best of 8.126, thus **parity**. The guard that makes it
+correct also stops it from skipping the work that made the unsound form fast.
+
+**Lesson: the unit tests do not catch under-convergence.** Their graphs converge
+in one pass. Any change to the convergence loop or to the linearization needs
+the chain state audit below.
+
+### The chain state audit
+
+Add this at the end of `Resolver::resolve`, build, and run against the
+benchmark workspace with `RDX_CHAIN_AUDIT=1`:
+
+```rust
+if std::env::var("RDX_CHAIN_AUDIT").is_ok() {
+    let (mut complete, mut cyclic, mut partial, mut descendants) = (0u64, 0u64, 0u64, 0u64);
+    for declaration in self.graph.declarations().values() {
+        if let Some(ns) = declaration.as_namespace() {
+            match ns.ancestors() {
+                Ancestors::Complete(_) => complete += 1,
+                Ancestors::Cyclic(_) => cyclic += 1,
+                Ancestors::Partial(_) => partial += 1,
+            }
+            descendants += ns.descendants().len() as u64;
+        }
+    }
+    eprintln!("AUDIT complete={complete} cyclic={cyclic} partial={partial} descendants={descendants}");
+}
+```
+
+The correct values for the Shopify core workspace, stable across runs:
+
+```
+AUDIT complete=140343 cyclic=0 partial=171700 descendants=3883377
+```
+
+### Open item for the operator: descendant iteration order
+
+`bundle exec rake test` fails one Ruby test, `DeclarationTest#test_descendants`
+at `test/declaration_test.rb:291`. It expects `["Child", "Parent"]` and gets
+`["Parent", "Child"]`. The **set contents are the same**; only the order of the
+iteration changed. `descendants` is an `IdentityHashSet`, and
+`rdx_declaration_descendants` iterates it raw, thus the order follows the
+placement in the hash table, which follows the order of the inserts.
+
+The cause is the self-registration of descendants (experiment 9). Before it, a
+child pushed itself onto its parents during the propagation; now each
+declaration adds itself to the entries of its own chain when its linearization
+completes. A parent linearizes before its child, thus the parent now enters its
+own set first.
+
+The Rust suite has no order-sensitive descendant test, and all 1132 pass.
+
 ### Next candidates (not yet tried)
-- **Per-pass cache for partial chains on the Resolver** (strongest lead). A
-  partial chain never enters the cache, thus 6.9M linearizations recompute a
-  chain that the graph already holds. A set of "partial in this pass" ids on the
-  `Resolver`, cleared at the start of every pass in `resolve`, would catch the
-  repeats that the per-call memo missed. Correctness comes from the convergence
-  loop: `handle_ancestor_unit` re-enqueues a partial declaration, thus a skipped
-  nested retry only moves the work to the next pass. **Care needed**:
-  `relinearize_singleton_hierarchy` calls `clear_ancestors` during a pass, thus
-  it must also drop the id from the cache, or a stale empty chain gets copied.
 - `handle_definition_unit`, `get_or_create_singleton_class` and `get_superclass`
   are now as costly as the linearization internals and have not been studied.
 - The final ancestors `Vec` on the changed path is the last allocation per
   declaration. It goes into the graph, thus it cannot simply be pooled.
+- A non-allocating fast path in `resolve_to_namespace` was tried and is a
+  regression (experiment 15): the fast path misses often, and a miss makes the
+  alias search walk the definitions a second time.
 
 ## Key Hot-Path Observations
 - `linearize_mixins` does O(n) `VecDeque::contains` / `Vec::contains` on
