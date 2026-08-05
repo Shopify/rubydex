@@ -14,6 +14,12 @@ SHOPIFY="${SHOPIFY_CORE:-/Users/dersam/world/trees/root/src/areas/core/shopify}"
 CFG="$SHOPIFY/rubydex.toml"
 CLI="rust/target/release/rubydex_cli"
 
+if [ ! -d "$SHOPIFY" ]; then
+    echo "error: the benchmark target '$SHOPIFY' does not exist." >&2
+    echo "Set SHOPIFY_CORE to the path of a checkout of the Shopify core monolith." >&2
+    exit 1
+fi
+
 # Fast pre-check: build is up to date and compiles.
 if ! cargo build --release --quiet --manifest-path rust/Cargo.toml 2>/dev/null; then
     echo "METRIC name=resolve_s value=0"
@@ -28,18 +34,16 @@ restore() {
         mv "$BAK" "$CFG"
     fi
 }
-trap restore EXIT
+# A signal must restore the config too. Without INT, a Ctrl-C leaves the target repo with a
+# modified, uncommitted `rubydex.toml`.
+trap restore EXIT INT TERM HUP
 
 if [ -f "$CFG" ] && ! grep -q '^\[graph\]' "$CFG" && grep -q '^exclude' "$CFG"; then
     BAK="$CFG.autoresearch.bak"
     cp "$CFG" "$BAK"
-    python3 -c "
-import sys
-content = open('$CFG').read()
-if '[graph]' not in content and 'exclude' in content:
-    content = '[graph]\n' + content
-open('$CFG','w').write(content)
-"
+    # Prepend the section header. This stays in the shell, because a path that carries a quote
+    # would break out of an interpolated `python3 -c` program.
+    printf '[graph]\n' | cat - "$BAK" > "$CFG"
 fi
 
 # Run multiple iterations and take the minimum (least CPU-interfered) for stability.
@@ -59,14 +63,24 @@ for run in $(seq 1 "$RUNS"); do
 
     RESOLVE_S=$(grep -iE '^[[:space:]]*Resolution[[:space:]]' "$OUT" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
     TOTAL_S=$(awk '/^real[[:space:]]/{print $2}' "$OUT")
+
+    # A failed parse must stop the run. Reporting 0 for a metric where lower is better would
+    # look like a perfect score and would win every comparison.
+    if [ -z "$RESOLVE_S" ] || [ -z "$TOTAL_S" ]; then
+        echo "error: could not read the timings out of the CLI output." >&2
+        cat "$OUT" >&2
+        rm -f "$OUT"
+        echo "PARSE_FAILED=1"
+        exit 1
+    fi
     rm -f "$OUT"
 
-    echo "# run $run: resolve_s=${RESOLVE_S:-0} total_s=${TOTAL_S:-0}"
-    if [ -z "$BEST_RESOLVE" ] || awk "BEGIN{exit !(${RESOLVE_S:-0} < ${BEST_RESOLVE:-9999})}"; then
-        BEST_RESOLVE="${RESOLVE_S:-0}"
-        BEST_TOTAL="${TOTAL_S:-0}"
+    echo "# run $run: resolve_s=$RESOLVE_S total_s=$TOTAL_S"
+    if [ -z "$BEST_RESOLVE" ] || awk "BEGIN{exit !($RESOLVE_S < $BEST_RESOLVE)}"; then
+        BEST_RESOLVE="$RESOLVE_S"
+        BEST_TOTAL="$TOTAL_S"
     fi
 done
 
-echo "METRIC name=resolve_s value=${BEST_RESOLVE:-0}"
-echo "METRIC name=total_s value=${BEST_TOTAL:-0}"
+echo "METRIC name=resolve_s value=$BEST_RESOLVE"
+echo "METRIC name=total_s value=$BEST_TOTAL"

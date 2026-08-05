@@ -1152,50 +1152,72 @@ impl<'a> Resolver<'a> {
     /// # Panics
     ///
     /// Can panic if there's inconsistent data in the graph
+    /// Handle the two cases that end a linearization before any work happens: a chain that is
+    /// already settled, and a cycle.
+    ///
+    /// Returns `Some(state)` when the caller must stop and report that state, or `None` when the
+    /// caller must build the chain. The caller gets marked as seen on the `None` path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the id has no declaration, or if that declaration is not a namespace.
+    fn linearization_shortcut(
+        &mut self,
+        declaration_id: DeclarationId,
+        context: &mut LinearizationContext,
+    ) -> Option<ChainState> {
+        let declaration = self.graph.declarations().get(&declaration_id).unwrap();
+
+        // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
+        // again.
+        //
+        // A cache hit needs no descendant work. Every declaration records itself on the
+        // declarations of its own chain when its linearization completes, and the chain of
+        // the caller contains the whole chain that is read here. Thus the caller records the
+        // same relationships when it completes.
+        let namespace = declaration.as_namespace().unwrap();
+
+        if namespace.has_complete_ancestors() {
+            let state = ChainState::of(namespace.ancestors());
+
+            context.finalize(declaration_id);
+            return Some(state);
+        }
+
+        if context.seen_ids.insert(declaration_id) {
+            return None;
+        }
+
+        // If we find a cycle when linearizing ancestors, it's an error that the programmer must fix. However, we try to
+        // still approximate features by assuming that it must inherit from `Object` at some point (which is what most
+        // classes/modules inherit from). This is not 100% correct, but it allows us to provide a bit better IDE support
+        // for these cases
+        let estimated_ancestors = if matches!(declaration, Declaration::Namespace(Namespace::Class(_))) {
+            Ancestors::Cyclic(vec![Ancestor::Complete(*OBJECT_ID)])
+        } else {
+            Ancestors::Cyclic(vec![])
+        };
+
+        self.record_descendant_on_chain_if_new(declaration_id, &estimated_ancestors);
+        self.graph
+            .declarations_mut()
+            .get_mut(&declaration_id)
+            .unwrap()
+            .as_namespace_mut()
+            .unwrap()
+            .set_ancestors(estimated_ancestors);
+
+        context.finalize(declaration_id);
+        Some(ChainState::Cyclic)
+    }
+
     fn linearize_ancestors_state(
         &mut self,
         declaration_id: DeclarationId,
         context: &mut LinearizationContext,
     ) -> ChainState {
-        {
-            let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
-
-            // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
-            // again.
-            //
-            // A cache hit needs no descendant work. Every declaration records itself on the
-            // declarations of its own chain when its linearization completes, and the chain of
-            // the caller contains the whole chain that is read here. Thus the caller records the
-            // same relationships when it completes.
-            if declaration.as_namespace().unwrap().has_complete_ancestors() {
-                let state = ChainState::of(declaration.as_namespace().unwrap().ancestors());
-
-                context.finalize(declaration_id);
-                return state;
-            }
-
-            if !context.seen_ids.insert(declaration_id) {
-                // If we find a cycle when linearizing ancestors, it's an error that the programmer must fix. However, we try to
-                // still approximate features by assuming that it must inherit from `Object` at some point (which is what most
-                // classes/modules inherit from). This is not 100% correct, but it allows us to provide a bit better IDE support
-                // for these cases
-                let estimated_ancestors = if matches!(declaration, Declaration::Namespace(Namespace::Class(_))) {
-                    Ancestors::Cyclic(vec![Ancestor::Complete(*OBJECT_ID)])
-                } else {
-                    Ancestors::Cyclic(vec![])
-                };
-                self.record_descendant_on_chain_if_new(declaration_id, &estimated_ancestors);
-                self.graph
-                    .declarations_mut()
-                    .get_mut(&declaration_id)
-                    .unwrap()
-                    .as_namespace_mut()
-                    .unwrap()
-                    .set_ancestors(estimated_ancestors);
-
-                context.finalize(declaration_id);
-                return ChainState::Cyclic;
-            }
+        if let Some(state) = self.linearization_shortcut(declaration_id, context) {
+            return state;
         }
 
         let mut parent_buffer = self.take_chain_buffer();
