@@ -51,10 +51,11 @@ module Rubydex
       #: (Diagnostic) -> bool
       def diagnostic_in_workspace?(diagnostic)
         path = URI::RFC2396_PARSER.unescape(diagnostic.location.to_file_path)
-        relative_path = Pathname.new(File.realpath(path)).relative_path_from(Pathname.new(@graph.workspace_path))
+        workspace_path = Pathname.new(File.expand_path(@graph.workspace_path))
+        relative_path = Pathname.new(File.expand_path(path)).relative_path_from(workspace_path)
 
         relative_path.each_filename.first != ".."
-      rescue Location::NotFileUriError, SystemCallError
+      rescue Location::NotFileUriError
         true
       rescue ArgumentError
         false

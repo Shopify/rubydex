@@ -148,6 +148,22 @@ class LinterTest < Minitest::Test
     end
   end
 
+  def test_runner_keeps_diagnostics_indexed_through_a_symlinked_workspace_path
+    with_context do |context|
+      context.write!("workspace/inside.rb")
+      context.write!("outside/broken.rb", "class Broken")
+      link = context.absolute_path_to("workspace/link")
+      File.symlink(context.absolute_path_to("outside"), link)
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      graph.index_all([link])
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [SilentRule], config: linter_config).run
+
+      expected_uri = context.uri_to("workspace/link/broken.rb")
+      assert_equal([expected_uri, expected_uri], result.diagnostics.map { |diagnostic| diagnostic.location.uri })
+    end
+  end
+
   private
 
   #: (?Hash[String, bool] rules) -> Rubydex::LinterConfig
