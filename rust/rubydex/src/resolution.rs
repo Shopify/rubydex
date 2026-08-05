@@ -1327,7 +1327,7 @@ impl<'a> Resolver<'a> {
                     context.partial = true;
                 }
 
-                self.extend_with_chain(singleton_parent_id, context, buffer);
+                self.extend_with_chain(singleton_parent_id, context, buffer).record(context);
                 true
             }
             _ => false,
@@ -1335,7 +1335,11 @@ impl<'a> Resolver<'a> {
     }
 
     /// Make sure the ancestor chain of a declaration is linearized, then copy it to the end of
-    /// `buffer` and record its state on the context.
+    /// `buffer` and give back its state.
+    ///
+    /// The state comes back instead of going straight on the context, because the superclass
+    /// caller must downgrade a cyclic state to a partial one first. Every other caller records
+    /// the state without a change.
     ///
     /// Almost every call finds a chain that is already complete. That path needs one map lookup
     /// only, because the state comes from the same chain that the copy reads.
@@ -1344,7 +1348,7 @@ impl<'a> Resolver<'a> {
         declaration_id: DeclarationId,
         context: &mut LinearizationContext,
         buffer: &mut Vec<Ancestor>,
-    ) {
+    ) -> ChainState {
         let namespace = self
             .graph
             .declarations()
@@ -1357,12 +1361,12 @@ impl<'a> Resolver<'a> {
             let chain = namespace.ancestors();
             let state = ChainState::of(chain);
             buffer.extend_from_slice(chain.as_slice());
-            state.record(context);
-            return;
+            return state;
         }
 
-        self.linearize_ancestors_state(declaration_id, context).record(context);
+        let state = self.linearize_ancestors_state(declaration_id, context);
         self.copy_chain_into(declaration_id, buffer);
+        state
     }
 
     /// Make sure the ancestor chain of a declaration is linearized, and record its state on the
@@ -2451,6 +2455,11 @@ impl<'a> Resolver<'a> {
             return false;
         };
 
+        debug_assert!(
+            buffer.is_empty(),
+            "the buffer must be empty, because the unresolved superclass goes at the front of the chain"
+        );
+
         if let Some(name_id) = unresolved_superclass {
             context.partial = true;
 
@@ -2459,7 +2468,18 @@ impl<'a> Resolver<'a> {
             buffer.push(Ancestor::Partial(name_id));
         }
 
-        self.extend_with_chain(superclass_id, context, buffer);
+        let mut state = self.extend_with_chain(superclass_id, context, buffer);
+
+        // A cyclic chain of the superclass must not make this chain cyclic while the superclass
+        // reference stays unresolved. `has_complete_ancestors` is true for a cyclic chain, thus a
+        // cyclic mark here would stop every later try, and the unresolved reference would never
+        // get a second chance. The old code got this from `Ancestors::to_partial` on the chain of
+        // the superclass.
+        if unresolved_superclass.is_some() && state == ChainState::Cyclic {
+            state = ChainState::Partial;
+        }
+
+        state.record(context);
         true
     }
 
