@@ -89,7 +89,29 @@ on exit. It does not modify rubydex source.
 
 ## What's Been Tried
 
-### Kept (cumulative: 12.318s → 11.142s, -9.5%)
+### Kept (cumulative: 12.318s → 10.000s, -18.8%)
+
+#### The allocation-removal series (11.142 → 10.000)
+The profile showed `_malloc` as the single largest cost centre. Four changes
+removed almost every heap allocation from the linearization path:
+
+- **No-clone linearization** (11.142→10.812): split `linearize_ancestors` into
+  `linearize_ancestors_state`, which returns only a `ChainState` and stores the
+  chain on the declaration, plus a thin wrapper that clones. Because the state
+  function always stores the chain that it computes, `linearize_mixins` can read
+  the chain from the graph by reference instead of a clone. Cache-hit descendant
+  propagation moves the chain out with `take_ancestors` and puts it back, rather
+  than a clone.
+- **Pooled parent chain buffer** (10.812→10.581): `Resolver.chain_pool` holds
+  spare `Vec<Ancestor>` buffers. `linearize_parent_ancestors_into` and
+  `linearize_superclass_into` copy into a reused buffer.
+- **Pooled mixin buffer and deques** (10.581→10.406): `linearize_mixins` writes
+  into caller-supplied deques and takes mixins by slice.
+- **Reused LinearizationContext** (10.406→10.000): one spare context on the
+  Resolver, cleared between linearizations, so the two identity hash sets keep
+  their capacity.
+
+#### Earlier fast-path series (12.318 → 11.142)
 - **resolve_alias_chains fast path**: return `vec![declaration_id]` at once for
   non-alias declarations, with no `VecDeque` or `HashSet` allocation. 11.142→
   11.167 (parity within noise; the run baseline had drifted to 11.57).
@@ -109,6 +131,20 @@ on exit. It does not modify rubydex source.
 Removing an allocation from a hot path helps. Adding a data structure to a hot
 path hurts, even when it improves the asymptotic complexity, because the
 ancestor chains are short. Prefer fast paths and moves over new containers.
+
+Buffer pools are the strongest tool found so far. The linearization recurses,
+but it takes and gives back buffers in strict last-in-first-out order, thus a
+simple `Vec` of spare buffers on the Resolver works. Each pool removed one heap
+allocation for each linearized declaration.
+
+When a function stores its result and also returns it, a caller that can read
+the stored copy does not need the returned clone. Split such a function into a
+state-only version plus a cloning wrapper.
+
+### Measurement note
+The benchmark machine has high and irregular load. A single run of
+`./autoresearch.sh` can show a spread of more than 2s between its five runs. When
+a result is within about 1% of the best, re-run before you judge it.
 
 ### Profile insights
 - linearize_ancestors dominates (55%+ of resolution time). Heavy allocation from ancestor Vec clones and growth.

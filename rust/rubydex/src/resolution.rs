@@ -1,6 +1,5 @@
 use std::{
     collections::{HashSet, VecDeque, hash_map::Entry},
-    hash::BuildHasher,
 };
 
 use crate::diagnostic::{Diagnostic, Rule, Severity};
@@ -52,7 +51,6 @@ enum SingletonAncestors {
 }
 
 struct LinearizationContext {
-    descendants: IdentityHashSet<DeclarationId>,
     seen_ids: IdentityHashSet<DeclarationId>,
     cyclic: bool,
     partial: bool,
@@ -62,7 +60,6 @@ impl LinearizationContext {
     /// Clear the context so that it can serve another linearization. The hash sets keep their
     /// capacity, which avoids a new allocation for each linearization.
     fn reset(&mut self) {
-        self.descendants.clear();
         self.seen_ids.clear();
         self.cyclic = false;
         self.partial = false;
@@ -70,7 +67,6 @@ impl LinearizationContext {
 
     fn new() -> Self {
         Self {
-            descendants: IdentityHashSet::default(),
             seen_ids: IdentityHashSet::default(),
             cyclic: false,
             partial: false,
@@ -81,7 +77,6 @@ impl LinearizationContext {
     /// the linearization algorithm, regardless of whether we are returning a cached result or a freshly built ancestor
     /// chain
     fn finalize(&mut self, declaration_id: DeclarationId) {
-        self.descendants.remove(&declaration_id);
         self.seen_ids.remove(&declaration_id);
     }
 }
@@ -1135,37 +1130,15 @@ impl<'a> Resolver<'a> {
         {
             let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
 
-            // Add this declaration to the descendants so that we capture transitive descendant relationships
-            context.descendants.insert(declaration_id);
-
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
-            // again
+            // again.
+            //
+            // A cache hit needs no descendant work. Every declaration records itself on the
+            // declarations of its own chain when its linearization completes, and the chain of
+            // the caller contains the whole chain that is read here. Thus the caller records the
+            // same relationships when it completes.
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
-                // Only propagate descendants when there are new ones beyond `declaration_id`
-                // itself. When `declaration_id` was first linearized, it was already added to all
-                // of its ancestors' descendant sets, so propagating `{declaration_id}` again is
-                // redundant. The recursive case (descendants from the caller's chain) still needs
-                // propagation because those descendants are newly discovered.
-                let state = if context.descendants.len() > 1 {
-                    // Propagation needs a mutable borrow of the graph, which prevents a read of the
-                    // chain at the same time. Move the chain out instead of a clone, which costs
-                    // nothing, and put it back immediately after the propagation.
-                    let cached = declaration.as_namespace_mut().unwrap().take_ancestors();
-                    self.propagate_descendants(&mut context.descendants, &cached);
-                    let state = ChainState::of(&cached);
-
-                    self.graph
-                        .declarations_mut()
-                        .get_mut(&declaration_id)
-                        .unwrap()
-                        .as_namespace_mut()
-                        .unwrap()
-                        .set_ancestors(cached);
-
-                    state
-                } else {
-                    ChainState::of(declaration.as_namespace().unwrap().ancestors())
-                };
+                let state = ChainState::of(declaration.as_namespace().unwrap().ancestors());
 
                 context.finalize(declaration_id);
                 return state;
@@ -1182,16 +1155,10 @@ impl<'a> Resolver<'a> {
                     Ancestors::Cyclic(vec![])
                 };
                 declaration.as_namespace_mut().unwrap().set_ancestors(estimated_ancestors);
+                self.record_self_as_descendant(declaration_id);
 
                 context.finalize(declaration_id);
                 return ChainState::Cyclic;
-            }
-
-            // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
-            // already linearized the parent's ancestors, but it's the first time we're discovering the descendant
-            let namespace = declaration.as_namespace_mut().unwrap();
-            for descendant in &context.descendants {
-                namespace.add_descendant(*descendant);
             }
         }
 
@@ -1280,6 +1247,8 @@ impl<'a> Resolver<'a> {
             .as_namespace_mut()
             .unwrap()
             .set_ancestors(result);
+
+        self.record_self_as_descendant(declaration_id);
 
         context.finalize(declaration_id);
         state
@@ -1448,27 +1417,40 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Propagate descendants to all cached ancestors
-    fn propagate_descendants<S: BuildHasher>(
-        &mut self,
-        descendants: &mut HashSet<DeclarationId, S>,
-        cached: &Ancestors,
-    ) {
-        if !descendants.is_empty() {
-            for ancestor in cached {
-                if let Ancestor::Complete(ancestor_id) = ancestor {
-                    let namespace = self
-                        .graph
-                        .declarations_mut()
-                        .get_mut(ancestor_id)
-                        .unwrap()
-                        .as_namespace_mut()
-                        .unwrap();
+    /// Record a declaration as a descendant of every resolved entry of its own ancestor chain.
+    ///
+    /// This runs once, when the linearization of the declaration completes. It replaces the older
+    /// scheme, which pushed the whole recursion stack onto every cached chain that it met. The
+    /// result is the same, because the chain of a declaration contains the chain of each of its
+    /// parents and mixins, thus each declaration reaches all of its own ancestors by itself. The
+    /// cost drops from the chain length times the stack depth, on every cache hit, to the chain
+    /// length once for each declaration.
+    fn record_self_as_descendant(&mut self, declaration_id: DeclarationId) {
+        let mut index = 0;
 
-                    for descendant in descendants.iter() {
-                        namespace.add_descendant(*descendant);
-                    }
-                }
+        loop {
+            let declarations = self.graph.declarations();
+            let chain = declarations
+                .get(&declaration_id)
+                .unwrap()
+                .as_namespace()
+                .unwrap()
+                .ancestors()
+                .as_slice();
+
+            let Some(&ancestor) = chain.get(index) else {
+                break;
+            };
+            index += 1;
+
+            if let Ancestor::Complete(ancestor_id) = ancestor {
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&ancestor_id)
+                    .unwrap()
+                    .as_namespace_mut()
+                    .unwrap()
+                    .add_descendant(declaration_id);
             }
         }
     }
