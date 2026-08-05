@@ -1154,7 +1154,7 @@ impl<'a> Resolver<'a> {
                 } else {
                     Ancestors::Cyclic(vec![])
                 };
-                self.record_descendant_on_chain(declaration_id, &estimated_ancestors);
+                self.record_descendant_on_chain_if_new(declaration_id, &estimated_ancestors);
                 self.graph
                     .declarations_mut()
                     .get_mut(&declaration_id)
@@ -1248,7 +1248,7 @@ impl<'a> Resolver<'a> {
 
         // Record this declaration on its own chain before the chain goes into the graph, so that
         // the chain is still a local value and needs no read back from the graph
-        self.record_descendant_on_chain(declaration_id, &result);
+        self.record_descendant_on_chain_if_new(declaration_id, &result);
 
         self.graph
             .declarations_mut()
@@ -1481,6 +1481,32 @@ impl<'a> Resolver<'a> {
     /// parents and mixins, thus each declaration reaches all of its own ancestors by itself. The
     /// cost drops from the chain length times the stack depth, on every cache hit, to the chain
     /// length once for each declaration.
+    /// Record the descendant relationships only if the new chain differs from the stored one.
+    ///
+    /// The convergence loop linearizes the same declaration many times, and almost every repeat
+    /// gives back the chain that the graph already holds. A compare of two short slices, which sit
+    /// next to each other in memory, costs far less than a repeat of the hash set writes, which go
+    /// to a different large table for each entry.
+    ///
+    /// The graph clears the ancestors and the descendants of a declaration together during
+    /// invalidation, thus a cleared declaration always sees a different chain and records again.
+    fn record_descendant_on_chain_if_new(&mut self, declaration_id: DeclarationId, chain: &Ancestors) {
+        let stored = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .ancestors();
+
+        if stored.as_slice() == chain.as_slice() {
+            return;
+        }
+
+        self.record_descendant_on_chain(declaration_id, chain);
+    }
+
     fn record_descendant_on_chain(&mut self, declaration_id: DeclarationId, chain: &Ancestors) {
         for ancestor in chain {
             if let Ancestor::Complete(ancestor_id) = ancestor {
