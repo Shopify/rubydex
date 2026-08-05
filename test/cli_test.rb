@@ -159,6 +159,9 @@ class CLITest < Minitest::Test
 
     refute_success_status(result)
     assert_stderr_includes(result, "`query` requires a Cypher query argument")
+    assert_stderr_includes(result, "Usage: rdx query <CYPHER> [options]")
+    assert_stderr_includes(result, "--format FORMAT")
+    refute_stderr_includes(result, "Usage: rdx <command> [options]")
   end
 
   def test_malformed_query_fails_before_indexing
@@ -213,7 +216,8 @@ class CLITest < Minitest::Test
 
       refute_success_status(result)
       assert_stderr_includes(result, "invalid option: --bogus-flag")
-      assert_stderr_includes(result, "Usage: rdx <command> [options]")
+      assert_stderr_includes(result, "Usage: rdx #{command}")
+      refute_stderr_includes(result, "Usage: rdx <command> [options]")
       # A bad option must not produce a Ruby backtrace.
       refute_stderr_includes(result, "OptionParser::InvalidOption")
       assert_empty_stdout(result)
@@ -225,6 +229,8 @@ class CLITest < Minitest::Test
 
     refute_success_status(result)
     assert_stderr_includes(result, "invalid argument: --format yaml")
+    assert_stderr_includes(result, "--format FORMAT")
+    assert_stderr_includes(result, "Output format (table or json)")
     refute_stderr_includes(result, "OptionParser::InvalidArgument")
   end
 
@@ -233,6 +239,8 @@ class CLITest < Minitest::Test
 
     refute_success_status(result)
     assert_stderr_includes(result, "unexpected argument: two")
+    assert_stderr_includes(result, "Usage: rdx mcp [PATH]")
+    refute_stderr_includes(result, "Usage: rdx <command> [options]")
   end
 
   # `irb` is not a runtime dependency, so its absence is reported rather than raised. The graph is

@@ -106,7 +106,10 @@ module Rubydex
 
       #: (String message) -> void
       def abort_with_usage(message)
-        CLI.abort_with_usage(message)
+        warn(message)
+        warn("")
+        warn(@parser)
+        exit(1)
       end
 
       # Parses this command's options out of `argv`, with a banner derived from the command's own
@@ -120,7 +123,7 @@ module Rubydex
         banner = +"Usage: rdx #{self.class.usage_form}"
         banner << " [options]" if options
 
-        parser = OptionParser.new do |p|
+        @parser = OptionParser.new do |p|
           p.banner = banner
           yield(p) if block_given?
           p.on("-h", "--help", "Show this help") do
@@ -129,7 +132,7 @@ module Rubydex
           end
         end
 
-        parser.parse!(argv)
+        @parser.parse!(argv)
       rescue OptionParser::ParseError => e
         abort_with_usage(e.message)
       end
