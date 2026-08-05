@@ -7,5 +7,6 @@
 extern VALUE cDiagnostic;
 
 void rdxi_initialize_diagnostic(VALUE mRubydex);
+VALUE rdxi_build_diagnostic_severity_value(VALUE mRubydex, DiagnosticSeverity severity);
 
 #endif // RUBYDEX_DIAGNOSTIC_H

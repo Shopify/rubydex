@@ -5,6 +5,7 @@ use crate::{model::ids::UriId, offset::Offset};
 #[derive(Debug)]
 pub struct Diagnostic {
     rule: Rule,
+    severity: Severity,
     uri_id: UriId,
     offset: Offset,
     message: String,
@@ -12,9 +13,10 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     #[must_use]
-    pub fn new(rule: Rule, uri_id: UriId, offset: Offset, message: String) -> Self {
+    pub fn new(rule: Rule, severity: Severity, uri_id: UriId, offset: Offset, message: String) -> Self {
         Self {
             rule,
+            severity,
             uri_id,
             offset,
             message,
@@ -24,6 +26,11 @@ impl Diagnostic {
     #[must_use]
     pub fn rule(&self) -> &Rule {
         &self.rule
+    }
+
+    #[must_use]
+    pub fn severity(&self) -> &Severity {
+        &self.severity
     }
 
     #[must_use]
@@ -51,6 +58,14 @@ impl Diagnostic {
             self.offset().to_display_range(document)
         )
     }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+    Information,
+    Hint,
 }
 
 fn camel_to_snake(s: &str) -> String {

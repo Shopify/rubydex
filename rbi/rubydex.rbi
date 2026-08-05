@@ -300,9 +300,45 @@ class Rubydex::Include < Rubydex::Mixin; end
 class Rubydex::Prepend < Rubydex::Mixin; end
 class Rubydex::Extend < Rubydex::Mixin; end
 
+module Rubydex::Severity
+  sig { params(value: Symbol).returns(T.class_of(Rubydex::Severity::Base)) }
+  def self.from_value(value); end
+end
+
+class Rubydex::Severity::Base
+  abstract!
+  
+  sig { returns(Symbol) }
+  def self.value; end
+end
+
+class Rubydex::Severity::Error < Rubydex::Severity::Base; end
+class Rubydex::Severity::Warning < Rubydex::Severity::Base; end
+class Rubydex::Severity::Information < Rubydex::Severity::Base; end
+class Rubydex::Severity::Hint < Rubydex::Severity::Base; end
+
+class Rubydex::RelatedInformation
+  sig { params(message: String, location: Rubydex::Location).void }
+  def initialize(message, location); end
+
+  sig { returns(Rubydex::Location) }
+  def location; end
+
+  sig { returns(String) }
+  def message; end
+end
+
 class Rubydex::Diagnostic
-  sig { params(rule: Symbol, message: String, location: Rubydex::Location).void }
-  def initialize(rule:, message:, location:); end
+  sig do
+    params(
+      rule: String,
+      message: String,
+      location: Rubydex::Location,
+      severity: T.class_of(Rubydex::Severity::Base),
+      related_information: T::Array[Rubydex::RelatedInformation],
+    ).void
+  end
+  def initialize(rule:, message:, location:, severity:, related_information: []); end
 
   sig { returns(Rubydex::Location) }
   def location; end
@@ -310,8 +346,14 @@ class Rubydex::Diagnostic
   sig { returns(String) }
   def message; end
 
-  sig { returns(Symbol) }
+  sig { returns(String) }
   def rule; end
+
+  sig { returns(T.class_of(Rubydex::Severity::Base)) }
+  def severity; end
+
+  sig { returns(T::Array[Rubydex::RelatedInformation]) }
+  def related_information; end
 end
 
 class Rubydex::Keyword

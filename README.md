@@ -77,6 +77,8 @@ diagnostic = graph.diagnostics.first
 diagnostic.rule
 diagnostic.message
 diagnostic.location
+diagnostic.severity
+diagnostic.related_information
 ```
 
 ## Ractor Safety

@@ -88,8 +88,20 @@ class GraphTest < Minitest::Test
 
       assert_diagnostics(
         [
-          { rule: :"parse-error", path: "file.rb", message: "expected an `end` to close the `class` statement" },
-          { rule: :"parse-error", path: "file.rb", message: "unexpected end-of-input, assuming it is closing the parent top level context" },
+          {
+            rule: "parse-error",
+            path: "file.rb",
+            message: "expected an `end` to close the `class` statement",
+            severity: Rubydex::Severity::Information,
+            related_information: [],
+          },
+          {
+            rule: "parse-error",
+            path: "file.rb",
+            message: "unexpected end-of-input, assuming it is closing the parent top level context",
+            severity: Rubydex::Severity::Information,
+            related_information: [],
+          },
         ],
         graph.diagnostics,
       )
@@ -1882,7 +1894,15 @@ class GraphTest < Minitest::Test
     assert_equal(
       expected,
       actual.sort_by { |d| [d.location, d.message] }
-        .map { |d| { rule: d.rule, path: File.basename(d.location.to_file_path), message: d.message } },
+        .map do |d|
+          {
+            rule: d.rule,
+            path: File.basename(d.location.to_file_path),
+            message: d.message,
+            severity: d.severity,
+            related_information: d.related_information,
+          }
+        end,
     )
   end
 
