@@ -117,6 +117,10 @@ pub struct Resolver<'a> {
     /// one buffer, thus the pool keeps the buffers alive between calls to avoid one heap
     /// allocation for each linearized declaration
     chain_pool: Vec<Vec<Ancestor>>,
+    /// Spare buffers for the collected mixins of a declaration, reused the same way as `chain_pool`
+    mixin_pool: Vec<Vec<Mixin>>,
+    /// Spare deques for the linearized prepends and includes, reused the same way as `chain_pool`
+    deque_pool: Vec<VecDeque<Ancestor>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -126,7 +130,31 @@ impl<'a> Resolver<'a> {
             unit_queue: VecDeque::new(),
             made_progress: false,
             chain_pool: Vec::new(),
+            mixin_pool: Vec::new(),
+            deque_pool: Vec::new(),
         }
+    }
+
+    /// Take an empty mixin buffer from the pool, or make a new one if the pool is empty
+    fn take_mixin_buffer(&mut self) -> Vec<Mixin> {
+        self.mixin_pool.pop().unwrap_or_default()
+    }
+
+    /// Give a mixin buffer back to the pool
+    fn return_mixin_buffer(&mut self, mut buffer: Vec<Mixin>) {
+        buffer.clear();
+        self.mixin_pool.push(buffer);
+    }
+
+    /// Take an empty deque from the pool, or make a new one if the pool is empty
+    fn take_deque(&mut self) -> VecDeque<Ancestor> {
+        self.deque_pool.pop().unwrap_or_default()
+    }
+
+    /// Give a deque back to the pool
+    fn return_deque(&mut self, mut deque: VecDeque<Ancestor>) {
+        deque.clear();
+        self.deque_pool.push(deque);
     }
 
     /// Take an empty buffer from the pool, or make a new one if the pool is empty
@@ -1153,8 +1181,8 @@ impl<'a> Resolver<'a> {
         let has_parent = self.linearize_parent_ancestors_into(declaration_id, context, &mut parent_buffer);
         let parent_ancestors = if has_parent { Some(&parent_buffer) } else { None };
 
+        let mut mixins = self.take_mixin_buffer();
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
-        let mut mixins = Vec::new();
 
         let is_singleton_class = matches!(declaration, Declaration::Namespace(Namespace::SingletonClass(_)));
 
@@ -1189,20 +1217,33 @@ impl<'a> Resolver<'a> {
             self.get_or_create_singleton_class(declaration_id, SingletonAncestors::Enqueue);
         }
 
-        let (linearized_prepends, linearized_includes) = self.linearize_mixins(context, mixins, parent_ancestors);
+        let mut linearized_prepends = self.take_deque();
+        let mut linearized_includes = self.take_deque();
+
+        self.linearize_mixins(
+            context,
+            &mixins,
+            parent_ancestors,
+            &mut linearized_prepends,
+            &mut linearized_includes,
+        );
 
         // Build the final list with the exact capacity to avoid reallocation
         let prepends_len = linearized_prepends.len();
         let includes_len = linearized_includes.len();
         let parents_len = parent_buffer.len();
         let mut ancestors = Vec::with_capacity(prepends_len + 1 + includes_len + parents_len);
-        ancestors.extend(linearized_prepends);
+        ancestors.extend(linearized_prepends.drain(..));
         ancestors.push(Ancestor::Complete(declaration_id));
-        ancestors.extend(linearized_includes);
+        ancestors.extend(linearized_includes.drain(..));
         ancestors.extend_from_slice(&parent_buffer);
 
-        // The parent chain is now part of the final list, thus the buffer goes back to the pool
+        // The scratch buffers gave up their contents to the final list, thus they go back to the
+        // pool for the next linearization to use
         self.return_chain_buffer(parent_buffer);
+        self.return_mixin_buffer(mixins);
+        self.return_deque(linearized_prepends);
+        self.return_deque(linearized_includes);
 
         let result = if context.cyclic {
             Ancestors::Cyclic(ancestors)
@@ -1280,12 +1321,11 @@ impl<'a> Resolver<'a> {
     fn linearize_mixins(
         &mut self,
         context: &mut LinearizationContext,
-        mixins: Vec<Mixin>,
+        mixins: &[Mixin],
         parent_ancestors: Option<&Vec<Ancestor>>,
-    ) -> (VecDeque<Ancestor>, VecDeque<Ancestor>) {
-        let mut linearized_prepends = VecDeque::new();
-        let mut linearized_includes = VecDeque::new();
-
+        linearized_prepends: &mut VecDeque<Ancestor>,
+        linearized_includes: &mut VecDeque<Ancestor>,
+    ) {
         // IMPORTANT! In the slice of mixins we receive, extends are the ones that occurred in the attached object, which we
         // collect ahead of time. This is the reason why we apparently treat an extend like an include, because an extend in
         // the attached object is equivalent to an include in the singleton class
@@ -1388,8 +1428,6 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-
-        (linearized_prepends, linearized_includes)
     }
 
     /// Propagate descendants to all cached ancestors
