@@ -18,6 +18,23 @@ fn graph_test() -> GraphTest {
     GraphTest::new_with_backend(super::backend())
 }
 
+/// The sorted names of the descendants of a namespace.
+///
+/// `assert_descendants_eq!` pins the whole set, which suits a small fixture. `Object` carries
+/// every core class too, thus a test about `Object` must check for containment instead.
+fn descendant_names(context: &GraphTest, name: &str) -> Vec<String> {
+    let declaration = context.graph().declarations().get(&DeclarationId::from(name)).unwrap();
+    let mut names = declaration
+        .as_namespace()
+        .unwrap()
+        .descendants()
+        .iter()
+        .map(|id| context.graph().declarations().get(id).unwrap().name().to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
 mod constant_resolution_tests {
     use super::*;
 
@@ -5993,5 +6010,193 @@ mod visibility_resolution_tests {
         assert_visibility_eq!(context, "Foo#bar()", Visibility::Public);
         assert_declaration_does_not_exist!(context, "Foo::<Foo>#bar()");
         assert_declaration_does_not_exist!(context, "Foo::<Foo>");
+    }
+}
+
+mod convergence_tests {
+    use super::*;
+
+    /// The resolver runs the linearization again and again until nothing changes. Two paths in
+    /// that loop skip work: `handle_ancestor_unit` returns early for a settled chain, and
+    /// `record_descendant_on_chain_if_new` skips the descendant writes when a rebuilt chain
+    /// equals the stored one.
+    ///
+    /// Most fixtures settle in a single pass, thus they exercise neither skip. The fixtures here
+    /// hold a chain of forward references, so a later declaration cannot finish until an earlier
+    /// pass resolves the one below it.
+    #[test]
+    fn descendants_are_complete_after_a_multi_pass_convergence() {
+        let mut context = graph_test();
+
+        // Each file names a superclass that only a later file defines. The reverse order makes
+        // the resolver need several passes to settle the whole chain.
+        context.index_uri("file:///e.rb", "class E < D; end");
+        context.index_uri("file:///d.rb", "class D < C; end");
+        context.index_uri("file:///c.rb", "class C < B; end");
+        context.index_uri("file:///b.rb", "class B < A; end");
+        context.index_uri("file:///a.rb", "class A; end");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_state!(context, "E", Complete);
+        assert_ancestors_eq!(
+            context,
+            "E",
+            ["E", "D", "C", "B", "A", "Object", "Kernel", "BasicObject"]
+        );
+
+        // Every declaration of the chain must appear on every one of its ancestors. A skipped
+        // descendant write shows up here as a missing entry.
+        assert_descendants_eq!(context, "A", ["A", "B", "C", "D", "E"]);
+        assert_descendants_eq!(context, "B", ["B", "C", "D", "E"]);
+        assert_descendants_eq!(context, "C", ["C", "D", "E"]);
+        assert_descendants_eq!(context, "D", ["D", "E"]);
+        assert_descendants_eq!(context, "E", ["E"]);
+    }
+
+    /// A module that a later file defines reaches the chain only on a second pass. The mixin
+    /// path builds the chain differently from the superclass path, thus it needs its own test.
+    #[test]
+    fn descendants_are_complete_for_a_forward_referenced_mixin() {
+        let mut context = graph_test();
+
+        context.index_uri(
+            "file:///user.rb",
+            r"
+            class User
+              include Trackable
+            end
+            ",
+        );
+        context.index_uri(
+            "file:///trackable.rb",
+            r"
+            module Trackable
+              include Auditable
+            end
+            ",
+        );
+        context.index_uri("file:///auditable.rb", "module Auditable; end");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_state!(context, "User", Complete);
+        assert_ancestors_eq!(
+            context,
+            "User",
+            ["User", "Trackable", "Auditable", "Object", "Kernel", "BasicObject"]
+        );
+
+        assert_descendants_eq!(context, "Auditable", ["Auditable", "Trackable", "User"]);
+        assert_descendants_eq!(context, "Trackable", ["Trackable", "User"]);
+    }
+
+    /// `Namespace::reset_linearization` clears the chain and the descendants together. The skip
+    /// in `record_descendant_on_chain_if_new` compares a rebuilt chain against the stored one,
+    /// thus a namespace that kept its chain but lost its descendants would never get them back.
+    ///
+    /// This test edits a document, which invalidates the chain of every descendant, and then
+    /// checks that the second resolve rebuilds the whole descendant set.
+    #[test]
+    fn descendants_return_after_an_invalidation_rebuilds_the_same_chain() {
+        let mut context = graph_test();
+
+        context.index_uri("file:///base.rb", "class Base; end");
+        context.index_uri("file:///middle.rb", "class Middle < Base; end");
+        context.index_uri("file:///leaf.rb", "class Leaf < Middle; end");
+        context.resolve();
+
+        assert_descendants_eq!(context, "Base", ["Base", "Middle", "Leaf"]);
+
+        // Re-index `middle.rb` with the same superclass. The chain that the resolver rebuilds is
+        // the same one it had, which is exactly the case the skip is about.
+        context.index_uri("file:///middle.rb", "class Middle < Base; end");
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_ancestors_eq!(
+            context,
+            "Leaf",
+            ["Leaf", "Middle", "Base", "Object", "Kernel", "BasicObject"]
+        );
+        assert_descendants_eq!(context, "Base", ["Base", "Middle", "Leaf"]);
+        assert_descendants_eq!(context, "Middle", ["Middle", "Leaf"]);
+    }
+
+    /// A class caught in a cycle gets an estimated chain of `[Object]`, which the resolver
+    /// records through `record_descendant_on_chain_if_new`.
+    ///
+    /// Note for a later reader: making that call skip every time leaves this test, and the whole
+    /// suite, green. The relationships it writes also arrive through the normal
+    /// `record_descendant_on_chain` call at the end of a linearization. The call therefore looks
+    /// redundant, but it stays because proving that for every graph shape needs more than the
+    /// fixtures here.
+    #[test]
+    fn a_class_in_a_cycle_still_reaches_the_descendants_of_object() {
+        let mut context = graph_test();
+
+        context.index_uri(
+            "file:///cycle.rb",
+            r"
+            class A < B; end
+            class B < A; end
+            ",
+        );
+        context.resolve();
+
+        // Both sides of the cycle settle as cyclic, so the resolver stops retrying them.
+        assert_ancestors_state!(context, "A", Cyclic);
+        assert_ancestors_state!(context, "B", Cyclic);
+
+        // The estimate assumes `Object`, which is what keeps IDE features working for a cycle.
+        // Each class must appear on `Object` as a descendant.
+        let object_descendants = descendant_names(&context, "Object");
+        assert!(
+            object_descendants.contains(&"A".to_string()),
+            "Expected 'A' to be a descendant of 'Object', got {object_descendants:?}"
+        );
+        assert!(
+            object_descendants.contains(&"B".to_string()),
+            "Expected 'B' to be a descendant of 'Object', got {object_descendants:?}"
+        );
+
+        assert_descendants_eq!(context, "A", ["A"]);
+        assert_descendants_eq!(context, "B", ["A", "B"]);
+    }
+
+    /// A second resolve with no change at all must not lose or duplicate a descendant. This is
+    /// the plain form of the skip: every chain is settled, thus every declaration takes the
+    /// early return.
+    #[test]
+    fn a_second_resolve_without_changes_keeps_the_descendants() {
+        let mut context = graph_test();
+
+        context.index_uri(
+            "file:///shapes.rb",
+            r"
+            module Drawable; end
+
+            class Shape
+              include Drawable
+            end
+
+            class Circle < Shape; end
+            class Square < Shape; end
+            ",
+        );
+        context.resolve();
+
+        assert_descendants_eq!(context, "Shape", ["Shape", "Circle", "Square"]);
+        assert_descendants_eq!(context, "Drawable", ["Drawable", "Shape", "Circle", "Square"]);
+
+        context.resolve();
+
+        assert_no_diagnostics!(&context);
+
+        assert_descendants_eq!(context, "Shape", ["Shape", "Circle", "Square"]);
+        assert_descendants_eq!(context, "Drawable", ["Drawable", "Shape", "Circle", "Square"]);
     }
 }
