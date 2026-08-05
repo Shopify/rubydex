@@ -1692,6 +1692,15 @@ impl<'a> Resolver<'a> {
     /// When an alias has multiple definitions with different targets (e.g., conditional assignment),
     /// this returns all possible final targets.
     fn resolve_alias_chains(&self, declaration_id: DeclarationId) -> Vec<DeclarationId> {
+        // Fast path: the vast majority of declarations are not aliases. Skip the
+        // BFS queue + seen-set allocation and return a single-element vector.
+        if !matches!(
+            self.graph.declarations().get(&declaration_id),
+            Some(Declaration::ConstantAlias(_))
+        ) {
+            return vec![declaration_id];
+        }
+
         let mut results = Vec::new();
         let mut queue = VecDeque::from([declaration_id]);
         let mut seen = HashSet::new();
