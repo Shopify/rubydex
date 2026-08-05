@@ -381,12 +381,12 @@ impl<'a> Resolver<'a> {
             return;
         }
 
-        match self.ancestors_of(id) {
-            Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
+        match self.ancestors_state_of(id) {
+            ChainState::Complete | ChainState::Cyclic => {
                 // We succeeded in some capacity this time
                 self.made_progress = true;
             }
-            Ancestors::Partial(_) => {
+            ChainState::Partial => {
                 // We still couldn't linearize ancestors, but there's a chance that this will succeed next time. We
                 // re-enqueue for another try, but we don't consider it as making progress
                 self.unit_queue.push_back(Unit::Ancestors(id));
@@ -1063,7 +1063,7 @@ impl<'a> Resolver<'a> {
                     .is_some_and(|ns| ns.has_complete_ancestors());
 
                 if !already_complete {
-                    let _ = self.ancestors_of(id);
+                    self.ancestors_state_of(id);
                 }
             }
             SingletonAncestors::Enqueue => {
@@ -1086,6 +1086,21 @@ impl<'a> Resolver<'a> {
         context.reset();
 
         let result = self.linearize_ancestors(declaration_id, &mut context);
+
+        self.spare_context = Some(context);
+        result
+    }
+
+    /// Linearize the ancestors of a declaration and give back only the state of the chain.
+    ///
+    /// Use this instead of `ancestors_of` when the caller looks at the state alone. `ancestors_of`
+    /// clones the whole chain, and a caller that drops the clone pays for one heap allocation and
+    /// one copy for nothing.
+    fn ancestors_state_of(&mut self, declaration_id: DeclarationId) -> ChainState {
+        let mut context = self.spare_context.take().unwrap_or_else(LinearizationContext::new);
+        context.reset();
+
+        let result = self.linearize_ancestors_state(declaration_id, &mut context);
 
         self.spare_context = Some(context);
         result
