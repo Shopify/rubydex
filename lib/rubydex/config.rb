@@ -14,6 +14,12 @@ module Rubydex
       @rules = rules.freeze
       freeze
     end
+
+    #: (singleton(Linter::Rule) rule_class) -> bool
+    def rule_enabled?(rule_class)
+      rule = @rules[rule_class.rule_name]
+      !rule || rule.enabled?
+    end
   end
 
   # The settings of a single linter rule, read from a `[linter.rules.RuleName]` table.

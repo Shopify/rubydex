@@ -11,18 +11,19 @@ module Rubydex
       #: Array[singleton(Rule)]
       attr_reader :rules
 
-      #: (Graph, rules: Array[singleton(Rule)]) -> void
-      def initialize(graph, rules:)
+      #: (Graph, rules: Array[singleton(Rule)], config: LinterConfig) -> void
+      def initialize(graph, rules:, config:)
         raise ArgumentError, "At least one linter rule is required" if rules.empty?
 
         @graph = graph
-        @rules = rules.sort_by { |rule| rule.name.to_s }
+        @config = config
+        @rules = rules.select { |rule| config.rule_enabled?(rule) }.sort_by { |rule| rule.name.to_s }
       end
 
       #: () -> Result
       def run
         rule_diagnostics = @rules.flat_map do |rule_class|
-          rule = rule_class.new(@graph)
+          rule = rule_class.new(@graph, config: @config)
           rule.lint
           rule.diagnostics
         end

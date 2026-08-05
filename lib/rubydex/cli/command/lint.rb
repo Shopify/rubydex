@@ -32,14 +32,29 @@ module Rubydex
 
           rules = load_linter_rules(rule_files, workspace_path)
           abort("No Rubydex::Linter::Rule subclasses were loaded") if rules.empty?
+          config = Rubydex::Config.load(workspace_path)
+          warn_unknown_rules(config.linter, rules)
 
-          graph = build_graph($stderr, workspace_path: workspace_path, fail_on_index_errors: true)
-          result = Rubydex::Linter::Runner.new(graph, rules: rules).run
+          graph = build_graph($stderr, workspace_path: workspace_path, config: config, fail_on_index_errors: true)
+          result = Rubydex::Linter::Runner.new(graph, rules: rules, config: config.linter).run
           result.diagnostics.each { |diagnostic| puts(format_linter_diagnostic(diagnostic)) }
           exit(1) unless result.success?
         end
 
         private
+
+        #: (Rubydex::LinterConfig config, Array[singleton(Rubydex::Linter::Rule)] known_rule_classes) -> void
+        def warn_unknown_rules(config, known_rule_classes)
+          known_rule_names = known_rule_classes.map(&:rule_name).uniq.sort
+          unknown_rule_names = config.rules.keys.reject { |name| known_rule_names.include?(name) }.sort
+          return if unknown_rule_names.empty?
+
+          formatted_names = unknown_rule_names.map { |name| "`#{name}`" }.join(", ")
+          warn(
+            "warning: linter config references rules that were not loaded: #{formatted_names}. " \
+              "Known rules: #{known_rule_names.join(", ")}",
+          )
+        end
 
         #: (Array[String] rule_files, String workspace_path) -> Array[singleton(Linter::Rule)]
         def load_linter_rules(rule_files, workspace_path)

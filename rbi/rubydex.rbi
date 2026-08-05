@@ -364,11 +364,14 @@ class Rubydex::Linter::Rule
   sig { returns(String) }
   def self.rule_name; end
 
-  sig { params(graph: Rubydex::Graph).void }
-  def initialize(graph); end
+  sig { params(graph: Rubydex::Graph, config: Rubydex::LinterConfig).void }
+  def initialize(graph, config:); end
 
   sig { returns(Rubydex::Graph) }
   def graph; end
+
+  sig { returns(Rubydex::LinterConfig) }
+  def config; end
 
   sig { returns(T::Array[Rubydex::Diagnostic]) }
   def diagnostics; end
@@ -396,9 +399,10 @@ class Rubydex::Linter::Runner
     params(
       graph: Rubydex::Graph,
       rules: T::Array[T.class_of(Rubydex::Linter::Rule)],
+      config: Rubydex::LinterConfig,
     ).void
   end
-  def initialize(graph, rules:); end
+  def initialize(graph, rules:, config:); end
 
   sig { returns(Rubydex::Graph) }
   def graph; end
@@ -489,6 +493,9 @@ class Rubydex::LinterConfig
 
   sig { params(rules: T::Hash[String, Rubydex::RuleConfig]).void }
   def initialize(rules); end
+
+  sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T::Boolean) }
+  def rule_enabled?(rule_class); end
 end
 
 # The settings of a single linter rule, read from a `[linter.rules.RuleName]` table.

@@ -135,9 +135,15 @@ module Rubydex
       end
 
       # Builds the workspace graph, sending progress messages to `progress_io`.
-      #: (IO progress_io, ?workspace_path: String, ?fail_on_index_errors: bool) -> Rubydex::Graph
-      def build_graph(progress_io, workspace_path: Dir.pwd, fail_on_index_errors: false)
-        graph = Rubydex::Graph.configure_for_workspace(workspace_path)
+      #: (IO progress_io, ?workspace_path: String, ?config: Rubydex::Config, ?fail_on_index_errors: bool) -> Rubydex::Graph
+      def build_graph(
+        progress_io,
+        workspace_path: Dir.pwd,
+        config: Rubydex::Config.load(workspace_path),
+        fail_on_index_errors: false
+      )
+        graph = Rubydex::Graph.new
+        graph.load_config(config)
         errors = with_timer(progress_io, "Indexing workspace...") { graph.index_workspace }
         abort(errors.join("\n")) if fail_on_index_errors && !errors.empty?
 

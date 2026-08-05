@@ -15,12 +15,16 @@ module Rubydex
       #: Graph
       attr_reader :graph
 
+      #: LinterConfig
+      attr_reader :config
+
       #: Array[Diagnostic]
       attr_reader :diagnostics
 
-      #: (Graph) -> void
-      def initialize(graph)
+      #: (Graph, config: LinterConfig) -> void
+      def initialize(graph, config:)
         @graph = graph
+        @config = config
         @diagnostics = [] #: Array[Diagnostic]
       end
 
