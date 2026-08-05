@@ -283,6 +283,22 @@ impl<'a> Resolver<'a> {
 
     /// Handles a unit of work for linearizing ancestors of a declaration
     fn handle_ancestor_unit(&mut self, id: DeclarationId) {
+        // Fast path: if the ancestors are already complete, no linearization or
+        // cloning is needed. This avoids a wasted `ancestors_of` call (which clones
+        // the full ancestor chain) on every convergence-loop pass for declarations
+        // that were already linearized in an earlier pass.
+        let already_complete = self
+            .graph
+            .declarations()
+            .get(&id)
+            .and_then(|decl| decl.as_namespace())
+            .is_some_and(|ns| ns.has_complete_ancestors());
+
+        if already_complete {
+            self.made_progress = true;
+            return;
+        }
+
         match self.ancestors_of(id) {
             Ancestors::Complete(_) | Ancestors::Cyclic(_) => {
                 // We succeeded in some capacity this time
@@ -956,7 +972,17 @@ impl<'a> Resolver<'a> {
     fn schedule_singleton_ancestors(&mut self, id: DeclarationId, mode: SingletonAncestors) {
         match mode {
             SingletonAncestors::Eager => {
-                let _ = self.ancestors_of(id);
+                // Fast path: if already complete, skip the clone that `ancestors_of` would do.
+                let already_complete = self
+                    .graph
+                    .declarations()
+                    .get(&id)
+                    .and_then(|decl| decl.as_namespace())
+                    .is_some_and(|ns| ns.has_complete_ancestors());
+
+                if !already_complete {
+                    let _ = self.ancestors_of(id);
+                }
             }
             SingletonAncestors::Enqueue => {
                 self.unit_queue.push_back(Unit::Ancestors(id));

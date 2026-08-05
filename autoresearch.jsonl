@@ -1,1 +1,2 @@
 {"type":"config","name":"Optimize Rubydex resolve stage on Shopify core","metricName":"resolve_s","metricUnit":"s","bestDirection":"lower"}
+{"run":5,"commit":"509c7bb","metric":11.568,"metrics":{"total_s":17.67},"status":"keep","description":"Skip redundant propagate_descendants on cache hit when only descendant is self (already propagated during first linearization). Also preallocate ancestors Vec. resolve_s=11.568 vs 11.737. Small consistent improvement.","timestamp":1785953479267,"segment":0}
