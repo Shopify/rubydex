@@ -113,6 +113,10 @@ pub struct Resolver<'a> {
     unit_queue: VecDeque<Unit>,
     /// Whether we made any progress in the last pass of the resolution loop
     made_progress: bool,
+    /// Spare buffers for the parent ancestor chains. Linearization recurses, and each level needs
+    /// one buffer, thus the pool keeps the buffers alive between calls to avoid one heap
+    /// allocation for each linearized declaration
+    chain_pool: Vec<Vec<Ancestor>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -121,7 +125,19 @@ impl<'a> Resolver<'a> {
             graph,
             unit_queue: VecDeque::new(),
             made_progress: false,
+            chain_pool: Vec::new(),
         }
+    }
+
+    /// Take an empty buffer from the pool, or make a new one if the pool is empty
+    fn take_chain_buffer(&mut self) -> Vec<Ancestor> {
+        self.chain_pool.pop().unwrap_or_default()
+    }
+
+    /// Give a buffer back to the pool for the next linearization to use
+    fn return_chain_buffer(&mut self, mut buffer: Vec<Ancestor>) {
+        buffer.clear();
+        self.chain_pool.push(buffer);
     }
 
     /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are computed:
@@ -1133,7 +1149,10 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        let parent_ancestors = self.linearize_parent_ancestors(declaration_id, context);
+        let mut parent_buffer = self.take_chain_buffer();
+        let has_parent = self.linearize_parent_ancestors_into(declaration_id, context, &mut parent_buffer);
+        let parent_ancestors = if has_parent { Some(&parent_buffer) } else { None };
+
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
         let mut mixins = Vec::new();
 
@@ -1170,20 +1189,20 @@ impl<'a> Resolver<'a> {
             self.get_or_create_singleton_class(declaration_id, SingletonAncestors::Enqueue);
         }
 
-        let (linearized_prepends, linearized_includes) =
-            self.linearize_mixins(context, mixins, parent_ancestors.as_ref());
+        let (linearized_prepends, linearized_includes) = self.linearize_mixins(context, mixins, parent_ancestors);
 
         // Build the final list with the exact capacity to avoid reallocation
         let prepends_len = linearized_prepends.len();
         let includes_len = linearized_includes.len();
-        let parents_len = parent_ancestors.as_ref().map_or(0, Vec::len);
+        let parents_len = parent_buffer.len();
         let mut ancestors = Vec::with_capacity(prepends_len + 1 + includes_len + parents_len);
         ancestors.extend(linearized_prepends);
         ancestors.push(Ancestor::Complete(declaration_id));
         ancestors.extend(linearized_includes);
-        if let Some(parents) = parent_ancestors {
-            ancestors.extend(parents);
-        }
+        ancestors.extend_from_slice(&parent_buffer);
+
+        // The parent chain is now part of the final list, thus the buffer goes back to the pool
+        self.return_chain_buffer(parent_buffer);
 
         let result = if context.cyclic {
             Ancestors::Cyclic(ancestors)
@@ -1207,26 +1226,21 @@ impl<'a> Resolver<'a> {
         state
     }
 
-    fn linearize_parent_ancestors(
+    /// Copy the parent ancestor chain of a declaration into `buffer`.
+    ///
+    /// Returns true if the declaration has a parent. A module, or a class without a superclass,
+    /// has no parent and leaves `buffer` untouched.
+    fn linearize_parent_ancestors_into(
         &mut self,
         declaration_id: DeclarationId,
         context: &mut LinearizationContext,
-    ) -> Option<Vec<Ancestor>> {
+        buffer: &mut Vec<Ancestor>,
+    ) -> bool {
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
 
         match declaration {
             Declaration::Namespace(Namespace::Class(_)) => {
-                Some(match self.linearize_superclass(declaration_id, context)? {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        context.partial = true;
-                        ids
-                    }
-                })
+                self.linearize_superclass_into(declaration_id, context, buffer)
             }
             Declaration::Namespace(Namespace::SingletonClass(_)) => {
                 let owner_id = *declaration.owner_id();
@@ -1236,20 +1250,29 @@ impl<'a> Resolver<'a> {
                     context.partial = true;
                 }
 
-                Some(match self.linearize_ancestors(singleton_parent_id, context) {
-                    Ancestors::Complete(ids) => ids,
-                    Ancestors::Cyclic(ids) => {
-                        context.cyclic = true;
-                        ids
-                    }
-                    Ancestors::Partial(ids) => {
-                        context.partial = true;
-                        ids
-                    }
-                })
+                self.linearize_ancestors_state(singleton_parent_id, context)
+                    .record(context);
+                self.copy_chain_into(singleton_parent_id, buffer);
+                true
             }
-            _ => None,
+            _ => false,
         }
+    }
+
+    /// Copy the stored ancestor chain of a declaration to the end of `buffer`.
+    ///
+    /// A copy into a pooled buffer replaces a clone, which keeps the heap allocation count down.
+    fn copy_chain_into(&self, declaration_id: DeclarationId, buffer: &mut Vec<Ancestor>) {
+        let chain = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .ancestors();
+
+        buffer.extend_from_slice(chain.as_slice());
     }
 
     /// Linearize all mixins into a prepend and include list. This function requires the parent ancestors because included
@@ -2271,28 +2294,30 @@ impl<'a> Resolver<'a> {
         ))
     }
 
-    fn linearize_superclass(
+    /// Copy the linearized superclass chain of a class into `buffer`. Returns true if the class
+    /// has a superclass.
+    fn linearize_superclass_into(
         &mut self,
         declaration_id: DeclarationId,
         context: &mut LinearizationContext,
-    ) -> Option<Ancestors> {
-        let (superclass_id, unresolved_superclass) = self.get_superclass(declaration_id)?;
-        let mut result = self.linearize_ancestors(superclass_id, context);
+        buffer: &mut Vec<Ancestor>,
+    ) -> bool {
+        let Some((superclass_id, unresolved_superclass)) = self.get_superclass(declaration_id) else {
+            return false;
+        };
+
+        self.linearize_ancestors_state(superclass_id, context).record(context);
 
         if let Some(name_id) = unresolved_superclass {
             context.partial = true;
 
-            // Insert the unresolved superclass as a Partial ancestor at the front of the chain, so it
-            // appears before the default Object ancestors
-            let ancestors = match &mut result {
-                Ancestors::Complete(ids) | Ancestors::Cyclic(ids) | Ancestors::Partial(ids) => ids,
-            };
-            ancestors.insert(0, Ancestor::Partial(name_id));
-
-            result = result.to_partial();
+            // Put the unresolved superclass as a Partial ancestor at the front of the chain, so it
+            // comes before the default Object ancestors
+            buffer.push(Ancestor::Partial(name_id));
         }
 
-        Some(result)
+        self.copy_chain_into(superclass_id, buffer);
+        true
     }
 
     fn mixins_of(&self, definition_id: DefinitionId) -> &[Mixin] {
