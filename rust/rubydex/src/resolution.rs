@@ -1034,13 +1034,42 @@ impl<'a> Resolver<'a> {
         self.linearize_ancestors(declaration_id, &mut context)
     }
 
-    /// Linearizes the ancestors of a declaration, returning the list of ancestor declaration IDs
+    /// Linearizes the ancestors of a declaration and returns a clone of the chain.
+    ///
+    /// Prefer `linearize_ancestors_state` when the caller can read the chain from the graph,
+    /// because that avoids the clone.
     ///
     /// # Panics
     ///
     /// Can panic if there's inconsistent data in the graph
     #[must_use]
     fn linearize_ancestors(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) -> Ancestors {
+        let _state = self.linearize_ancestors_state(declaration_id, context);
+
+        // `linearize_ancestors_state` always stores the chain that it computed on the declaration.
+        // Thus a read of the stored chain gives exactly the chain to return here.
+        self.graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+            .clone_ancestors()
+    }
+
+    /// Linearizes the ancestors of a declaration and stores the chain on the declaration.
+    ///
+    /// Returns only the state of the chain. Callers that need the chain must read it from the
+    /// graph, or call `linearize_ancestors` to get a clone.
+    ///
+    /// # Panics
+    ///
+    /// Can panic if there's inconsistent data in the graph
+    fn linearize_ancestors_state(
+        &mut self,
+        declaration_id: DeclarationId,
+        context: &mut LinearizationContext,
+    ) -> ChainState {
         {
             let declaration = self.graph.declarations_mut().get_mut(&declaration_id).unwrap();
 
@@ -1050,19 +1079,34 @@ impl<'a> Resolver<'a> {
             // Return the cached ancestors if we already computed them. If they are partial ancestors, ignore the cache to try
             // again
             if declaration.as_namespace().unwrap().has_complete_ancestors() {
-                let cached = declaration.as_namespace().unwrap().clone_ancestors();
-
                 // Only propagate descendants when there are new ones beyond `declaration_id`
                 // itself. When `declaration_id` was first linearized, it was already added to all
                 // of its ancestors' descendant sets, so propagating `{declaration_id}` again is
                 // redundant. The recursive case (descendants from the caller's chain) still needs
                 // propagation because those descendants are newly discovered.
-                if context.descendants.len() > 1 {
+                let state = if context.descendants.len() > 1 {
+                    // Propagation needs a mutable borrow of the graph, which prevents a read of the
+                    // chain at the same time. Move the chain out instead of a clone, which costs
+                    // nothing, and put it back immediately after the propagation.
+                    let cached = declaration.as_namespace_mut().unwrap().take_ancestors();
                     self.propagate_descendants(&mut context.descendants, &cached);
-                }
+                    let state = ChainState::of(&cached);
+
+                    self.graph
+                        .declarations_mut()
+                        .get_mut(&declaration_id)
+                        .unwrap()
+                        .as_namespace_mut()
+                        .unwrap()
+                        .set_ancestors(cached);
+
+                    state
+                } else {
+                    ChainState::of(declaration.as_namespace().unwrap().ancestors())
+                };
 
                 context.finalize(declaration_id);
-                return cached;
+                return state;
             }
 
             if !context.seen_ids.insert(declaration_id) {
@@ -1075,13 +1119,10 @@ impl<'a> Resolver<'a> {
                 } else {
                     Ancestors::Cyclic(vec![])
                 };
-                declaration
-                    .as_namespace_mut()
-                    .unwrap()
-                    .set_ancestors(estimated_ancestors.clone());
+                declaration.as_namespace_mut().unwrap().set_ancestors(estimated_ancestors);
 
                 context.finalize(declaration_id);
-                return estimated_ancestors;
+                return ChainState::Cyclic;
             }
 
             // Automatically track descendants as we recurse. This has to happen before checking the cache since we may have
@@ -1152,16 +1193,18 @@ impl<'a> Resolver<'a> {
             Ancestors::Complete(ancestors)
         };
 
+        let state = ChainState::of(&result);
+
         self.graph
             .declarations_mut()
             .get_mut(&declaration_id)
             .unwrap()
             .as_namespace_mut()
             .unwrap()
-            .set_ancestors(result.clone());
+            .set_ancestors(result);
 
         context.finalize(declaration_id);
-        result
+        state
     }
 
     fn linearize_parent_ancestors(
@@ -1238,17 +1281,20 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
-                            let ids = match self.linearize_ancestors(module_id, context) {
-                                Ancestors::Complete(ids) => ids,
-                                Ancestors::Cyclic(ids) => {
-                                    context.cyclic = true;
-                                    ids
-                                }
-                                Ancestors::Partial(ids) => {
-                                    context.partial = true;
-                                    ids
-                                }
-                            };
+                            self.linearize_ancestors_state(module_id, context).record(context);
+
+                            // `linearize_ancestors_state` stores the chain on the declaration.
+                            // Thus a read by reference gives the same chain that a clone gives,
+                            // but without the cost of the clone.
+                            let ids = self
+                                .graph
+                                .declarations()
+                                .get(&module_id)
+                                .unwrap()
+                                .as_namespace()
+                                .unwrap()
+                                .ancestors()
+                                .as_slice();
 
                             // Only reorder if there are new modules to add. If all modules being
                             // prepended are already in the chain (e.g., `prepend A` when A is already
@@ -1257,8 +1303,8 @@ impl<'a> Resolver<'a> {
                                 // Remove existing entries that will be re-added from the new chain
                                 linearized_prepends.retain(|id| !ids.contains(id));
 
-                                for id in ids.into_iter().rev() {
-                                    linearized_prepends.push_front(id);
+                                for id in ids.iter().rev() {
+                                    linearized_prepends.push_front(*id);
                                 }
                             }
                         }
@@ -1277,29 +1323,36 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
-                            let mut ids = match self.linearize_ancestors(module_id, context) {
-                                Ancestors::Complete(ids) => ids,
-                                Ancestors::Cyclic(ids) => {
-                                    context.cyclic = true;
-                                    ids
-                                }
-                                Ancestors::Partial(ids) => {
-                                    context.partial = true;
-                                    ids
-                                }
-                            };
+                            self.linearize_ancestors_state(module_id, context).record(context);
+
+                            // `linearize_ancestors_state` stores the chain on the declaration.
+                            // Thus a read by reference gives the same chain that a clone gives,
+                            // but without the cost of the clone.
+                            let ids = self
+                                .graph
+                                .declarations()
+                                .get(&module_id)
+                                .unwrap()
+                                .as_namespace()
+                                .unwrap()
+                                .ancestors()
+                                .as_slice();
 
                             // Prepended module are deduped based only on other prepended modules
-                            ids.retain(|id| {
-                                !linearized_prepends.contains(id)
-                                    && !linearized_includes.contains(id)
-                                    && parent_ancestors
-                                        .as_ref()
-                                        .is_none_or(|parent_ids| !parent_ids.contains(id))
-                            });
+                            let mut pushed = 0;
 
-                            for id in ids.into_iter().rev() {
-                                linearized_includes.push_front(id);
+                            for id in ids.iter().rev() {
+                                // Compare only against the entries that the deque had before this
+                                // loop. The entries that this loop adds go to the front, thus the
+                                // skip of the first `pushed` entries.
+                                let is_duplicate = linearized_prepends.contains(id)
+                                    || linearized_includes.range(pushed..).any(|existing| existing == id)
+                                    || parent_ancestors.is_some_and(|parent_ids| parent_ids.contains(id));
+
+                                if !is_duplicate {
+                                    linearized_includes.push_front(*id);
+                                    pushed += 1;
+                                }
                             }
                         }
                         NameRef::Unresolved(_) => {
