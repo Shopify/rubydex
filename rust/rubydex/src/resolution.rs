@@ -77,6 +77,36 @@ impl LinearizationContext {
     }
 }
 
+/// The state of an ancestor chain, without the chain itself.
+///
+/// `linearize_ancestors_state` returns this instead of the chain, so that callers which can read
+/// the chain from the graph do not pay for a clone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChainState {
+    Complete,
+    Cyclic,
+    Partial,
+}
+
+impl ChainState {
+    fn of(ancestors: &Ancestors) -> Self {
+        match ancestors {
+            Ancestors::Complete(_) => ChainState::Complete,
+            Ancestors::Cyclic(_) => ChainState::Cyclic,
+            Ancestors::Partial(_) => ChainState::Partial,
+        }
+    }
+
+    /// Record this state on the linearization context, the way the callers that receive a chain do.
+    fn record(self, context: &mut LinearizationContext) {
+        match self {
+            ChainState::Complete => {}
+            ChainState::Cyclic => context.cyclic = true,
+            ChainState::Partial => context.partial = true,
+        }
+    }
+}
+
 pub struct Resolver<'a> {
     graph: &'a mut Graph,
     /// Contains all units of work for resolution, sorted in order for resolution (less complex constant names first)

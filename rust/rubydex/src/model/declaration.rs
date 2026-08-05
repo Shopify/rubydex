@@ -40,6 +40,14 @@ impl Ancestors {
         }
     }
 
+    /// The ancestor chain as a slice, independent of the chain state.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Ancestor] {
+        match self {
+            Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => ancestors,
+        }
+    }
+
     #[must_use]
     pub fn to_partial(self) -> Self {
         match self {
@@ -270,6 +278,15 @@ impl NamespaceStore {
     #[must_use]
     pub fn clone_ancestors(&self) -> Ancestors {
         self.ancestors.clone()
+    }
+
+    /// Move the ancestor chain out and leave an empty complete chain in its place.
+    ///
+    /// This lets a caller read the chain while it holds a mutable borrow of the graph, without
+    /// the cost of a clone. The caller must put the chain back with `set_ancestors`.
+    #[must_use]
+    pub fn take_ancestors(&mut self) -> Ancestors {
+        std::mem::replace(&mut self.ancestors, Ancestors::Complete(Vec::new()))
     }
 
     #[must_use]
@@ -601,6 +618,11 @@ impl Namespace {
 
     pub fn set_ancestors(&mut self, ancestors: Ancestors) {
         all_namespaces!(self, it => it.namespace_store.set_ancestors(ancestors));
+    }
+
+    #[must_use]
+    pub fn take_ancestors(&mut self) -> Ancestors {
+        all_namespaces!(self, it => it.namespace_store.take_ancestors())
     }
 
     #[must_use]
