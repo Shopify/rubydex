@@ -531,33 +531,70 @@ macro_rules! assert_ancestors_eq {
     };
 }
 
+/// Assert the exact descendant set of a namespace.
+///
+/// This replaces an older containment-only macro, which could not see an extra or a stale
+/// entry. The descendant recording is an optimized path, thus a test of it must pin the whole
+/// set.
+///
+/// The descendants live in an `IdentityHashSet`, thus the iteration order is not defined. Both
+/// sides get sorted before the comparison.
+///
+/// A namespace is a descendant of itself, because its own ancestor chain starts with itself.
 #[cfg(test)]
 #[macro_export]
-macro_rules! assert_descendants {
-    ($context:expr, $parent:expr, $descendants:expr) => {
+macro_rules! assert_descendants_eq {
+    ($context:expr, $parent:expr, [$($descendant:expr),* $(,)?]) => {
         let parent = $context
             .graph()
             .declarations()
             .get(&$crate::model::ids::DeclarationId::from($parent))
             .unwrap();
-        let actual = parent
+
+        let mut actual = parent
             .as_namespace()
             .expect("Tried to get descendants for a declaration that isn't a namespace")
             .descendants()
             .iter()
-            .cloned()
+            .map(|id| $context.graph().declarations().get(id).unwrap().name().to_string())
             .collect::<Vec<_>>();
+        actual.sort();
 
-        for descendant in &$descendants {
-            let descendant_id = $crate::model::ids::DeclarationId::from(*descendant);
+        let mut expected = vec![$($descendant.to_string()),*];
+        expected.sort();
 
-            assert!(
-                actual.contains(&descendant_id),
-                "Expected '{}' to be a descendant of '{}'",
-                $context.graph().declarations().get(&descendant_id).unwrap().name(),
-                parent.name()
-            );
-        }
+        assert_eq!(expected, actual, "Incorrect descendants for {}", $parent);
+    };
+}
+
+/// Assert the state of the ancestor chain of a namespace: `Complete`, `Cyclic` or `Partial`.
+///
+/// `assert_ancestors_eq!` accepts any of the three states, thus it tests the content of the
+/// chain only. The state decides whether the resolver puts the declaration back on the queue,
+/// therefore a test of the convergence behaviour must pin it.
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_ancestors_state {
+    ($context:expr, $name:expr, $state:ident) => {
+        let declaration = $context
+            .graph()
+            .declarations()
+            .get(&$crate::model::ids::DeclarationId::from($name))
+            .unwrap();
+
+        let ancestors = declaration.as_namespace().unwrap().ancestors();
+
+        assert!(
+            matches!(ancestors, $crate::model::declaration::Ancestors::$state(_)),
+            "Expected the ancestors of '{}' to be {}, but they are {}",
+            $name,
+            stringify!($state),
+            match ancestors {
+                $crate::model::declaration::Ancestors::Complete(_) => "Complete",
+                $crate::model::declaration::Ancestors::Cyclic(_) => "Cyclic",
+                $crate::model::declaration::Ancestors::Partial(_) => "Partial",
+            }
+        );
     };
 }
 

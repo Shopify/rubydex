@@ -1,6 +1,4 @@
-use std::{
-    collections::{HashSet, VecDeque, hash_map::Entry},
-};
+use std::collections::{HashSet, VecDeque, hash_map::Entry};
 
 use crate::diagnostic::{Diagnostic, Rule, Severity};
 use crate::model::{
@@ -174,6 +172,43 @@ impl<'a> Resolver<'a> {
     fn return_chain_buffer(&mut self, mut buffer: Vec<Ancestor>) {
         buffer.clear();
         self.chain_pool.push(buffer);
+    }
+
+    /// Get the namespace of a declaration id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the id has no declaration, or if that declaration is not a namespace. Use this
+    /// only where the caller got the id from the graph itself and a miss means the graph is
+    /// broken.
+    fn namespace(&self, declaration_id: DeclarationId) -> &Namespace {
+        self.graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap()
+    }
+
+    /// Get the stored ancestor chain of a declaration id.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`Resolver::namespace`].
+    fn chain_of(&self, declaration_id: DeclarationId) -> &Ancestors {
+        self.namespace(declaration_id).ancestors()
+    }
+
+    /// Report whether the ancestor chain of a declaration is already settled, thus the resolver
+    /// does not need to linearize it again.
+    ///
+    /// A missing declaration, or one that is not a namespace, counts as not settled.
+    fn is_linearized(&self, declaration_id: DeclarationId) -> bool {
+        self.graph
+            .declarations()
+            .get(&declaration_id)
+            .and_then(Declaration::as_namespace)
+            .is_some_and(Namespace::has_complete_ancestors)
     }
 
     /// Runs the resolution phase on the graph. The resolution phase is when 4 main pieces of information are computed:
@@ -369,14 +404,7 @@ impl<'a> Resolver<'a> {
         // cloning is needed. This avoids a wasted `ancestors_of` call (which clones
         // the full ancestor chain) on every convergence-loop pass for declarations
         // that were already linearized in an earlier pass.
-        let already_complete = self
-            .graph
-            .declarations()
-            .get(&id)
-            .and_then(|decl| decl.as_namespace())
-            .is_some_and(|ns| ns.has_complete_ancestors());
-
-        if already_complete {
+        if self.is_linearized(id) {
             self.made_progress = true;
             return;
         }
@@ -1054,15 +1082,8 @@ impl<'a> Resolver<'a> {
     fn schedule_singleton_ancestors(&mut self, id: DeclarationId, mode: SingletonAncestors) {
         match mode {
             SingletonAncestors::Eager => {
-                // Fast path: if already complete, skip the clone that `ancestors_of` would do.
-                let already_complete = self
-                    .graph
-                    .declarations()
-                    .get(&id)
-                    .and_then(|decl| decl.as_namespace())
-                    .is_some_and(|ns| ns.has_complete_ancestors());
-
-                if !already_complete {
+                // Fast path: if already settled, skip the clone that `ancestors_of` would do.
+                if !self.is_linearized(id) {
                     self.ancestors_state_of(id);
                 }
             }
@@ -1120,13 +1141,7 @@ impl<'a> Resolver<'a> {
 
         // `linearize_ancestors_state` always stores the chain that it computed on the declaration.
         // Thus a read of the stored chain gives exactly the chain to return here.
-        self.graph
-            .declarations()
-            .get(&declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
-            .clone_ancestors()
+        self.namespace(declaration_id).clone_ancestors()
     }
 
     /// Linearizes the ancestors of a declaration and stores the chain on the declaration.
@@ -1185,7 +1200,7 @@ impl<'a> Resolver<'a> {
 
         let mut parent_buffer = self.take_chain_buffer();
         let has_parent = self.linearize_parent_ancestors_into(declaration_id, context, &mut parent_buffer);
-        let parent_ancestors = if has_parent { Some(&parent_buffer) } else { None };
+        let parent_ancestors = has_parent.then_some(parent_buffer.as_slice());
 
         let mut mixins = self.take_mixin_buffer();
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
@@ -1259,14 +1274,7 @@ impl<'a> Resolver<'a> {
             ChainState::Complete
         };
 
-        let stored = self
-            .graph
-            .declarations()
-            .get(&declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
-            .ancestors();
+        let stored = self.chain_of(declaration_id);
 
         if ChainState::of(stored) == state && stored.as_slice() == ancestors.as_slice() {
             // The graph already holds this exact chain. There is nothing to store and nothing new
@@ -1327,7 +1335,8 @@ impl<'a> Resolver<'a> {
                     context.partial = true;
                 }
 
-                self.extend_with_chain(singleton_parent_id, context, buffer).record(context);
+                self.extend_with_chain(singleton_parent_id, context, buffer)
+                    .record(context);
                 true
             }
             _ => false,
@@ -1349,13 +1358,7 @@ impl<'a> Resolver<'a> {
         context: &mut LinearizationContext,
         buffer: &mut Vec<Ancestor>,
     ) -> ChainState {
-        let namespace = self
-            .graph
-            .declarations()
-            .get(&declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap();
+        let namespace = self.namespace(declaration_id);
 
         if namespace.has_complete_ancestors() {
             let chain = namespace.ancestors();
@@ -1372,13 +1375,7 @@ impl<'a> Resolver<'a> {
     /// Make sure the ancestor chain of a declaration is linearized, and record its state on the
     /// context. Use this when the caller reads the chain from the graph by itself.
     fn ensure_chain(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) {
-        let namespace = self
-            .graph
-            .declarations()
-            .get(&declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap();
+        let namespace = self.namespace(declaration_id);
 
         if namespace.has_complete_ancestors() {
             ChainState::of(namespace.ancestors()).record(context);
@@ -1392,14 +1389,7 @@ impl<'a> Resolver<'a> {
     ///
     /// A copy into a pooled buffer replaces a clone, which keeps the heap allocation count down.
     fn copy_chain_into(&self, declaration_id: DeclarationId, buffer: &mut Vec<Ancestor>) {
-        let chain = self
-            .graph
-            .declarations()
-            .get(&declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
-            .ancestors();
+        let chain = self.chain_of(declaration_id);
 
         buffer.extend_from_slice(chain.as_slice());
     }
@@ -1410,7 +1400,7 @@ impl<'a> Resolver<'a> {
         &mut self,
         context: &mut LinearizationContext,
         mixins: &[Mixin],
-        parent_ancestors: Option<&Vec<Ancestor>>,
+        parent_ancestors: Option<&[Ancestor]>,
         linearized_prepends: &mut VecDeque<Ancestor>,
         linearized_includes: &mut VecDeque<Ancestor>,
     ) {
@@ -1437,15 +1427,7 @@ impl<'a> Resolver<'a> {
                             // `linearize_ancestors_state` stores the chain on the declaration.
                             // Thus a read by reference gives the same chain that a clone gives,
                             // but without the cost of the clone.
-                            let ids = self
-                                .graph
-                                .declarations()
-                                .get(&module_id)
-                                .unwrap()
-                                .as_namespace()
-                                .unwrap()
-                                .ancestors()
-                                .as_slice();
+                            let ids = self.chain_of(module_id).as_slice();
 
                             // Only reorder if there are new modules to add. If all modules being
                             // prepended are already in the chain (e.g., `prepend A` when A is already
@@ -1479,15 +1461,7 @@ impl<'a> Resolver<'a> {
                             // `linearize_ancestors_state` stores the chain on the declaration.
                             // Thus a read by reference gives the same chain that a clone gives,
                             // but without the cost of the clone.
-                            let ids = self
-                                .graph
-                                .declarations()
-                                .get(&module_id)
-                                .unwrap()
-                                .as_namespace()
-                                .unwrap()
-                                .ancestors()
-                                .as_slice();
+                            let ids = self.chain_of(module_id).as_slice();
 
                             // Prepended module are deduped based only on other prepended modules
                             let mut pushed = 0;
@@ -1518,14 +1492,6 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Record a declaration as a descendant of every resolved entry of its own ancestor chain.
-    ///
-    /// This runs once, when the linearization of the declaration completes. It replaces the older
-    /// scheme, which pushed the whole recursion stack onto every cached chain that it met. The
-    /// result is the same, because the chain of a declaration contains the chain of each of its
-    /// parents and mixins, thus each declaration reaches all of its own ancestors by itself. The
-    /// cost drops from the chain length times the stack depth, on every cache hit, to the chain
-    /// length once for each declaration.
     /// Record the descendant relationships only if the new chain differs from the stored one.
     ///
     /// The convergence loop linearizes the same declaration many times, and almost every repeat
@@ -1536,14 +1502,7 @@ impl<'a> Resolver<'a> {
     /// The graph clears the ancestors and the descendants of a declaration together during
     /// invalidation, thus a cleared declaration always sees a different chain and records again.
     fn record_descendant_on_chain_if_new(&mut self, declaration_id: DeclarationId, chain: &Ancestors) {
-        let stored = self
-            .graph
-            .declarations()
-            .get(&declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
-            .ancestors();
+        let stored = self.chain_of(declaration_id);
 
         if stored.as_slice() == chain.as_slice() {
             return;
@@ -1552,6 +1511,14 @@ impl<'a> Resolver<'a> {
         self.record_descendant_on_chain(declaration_id, chain);
     }
 
+    /// Record a declaration as a descendant of every resolved entry of its own ancestor chain.
+    ///
+    /// This runs once, when the linearization of the declaration completes. It replaces the older
+    /// scheme, which pushed the whole recursion stack onto every cached chain that it met. The
+    /// result is the same, because the chain of a declaration contains the chain of each of its
+    /// parents and mixins, thus each declaration reaches all of its own ancestors by itself. The
+    /// cost drops from the chain length times the stack depth, on every cache hit, to the chain
+    /// length once for each declaration.
     fn record_descendant_on_chain(&mut self, declaration_id: DeclarationId, chain: &Ancestors) {
         for ancestor in chain {
             if let Ancestor::Complete(ancestor_id) = ancestor {
@@ -1949,11 +1916,14 @@ impl<'a> Resolver<'a> {
     fn resolve_alias_chains(&self, declaration_id: DeclarationId) -> Vec<DeclarationId> {
         // Fast path: the vast majority of declarations are not aliases. Skip the
         // BFS queue + seen-set allocation and return a single-element vector.
-        if !matches!(
-            self.graph.declarations().get(&declaration_id),
-            Some(Declaration::ConstantAlias(_))
-        ) {
-            return vec![declaration_id];
+        //
+        // A missing declaration must still panic, the way the loop below does. Treating it as
+        // "not an alias" would hand a dangling id back to the caller as a valid target, and the
+        // failure would then show up at some later, unrelated place.
+        match self.graph.declarations().get(&declaration_id) {
+            Some(Declaration::ConstantAlias(_)) => {}
+            Some(_) => return vec![declaration_id],
+            None => panic!("Declaration {declaration_id:?} not found in graph"),
         }
 
         let mut results = Vec::new();
@@ -2079,71 +2049,57 @@ impl<'a> Resolver<'a> {
     /// Search for a member in a declaration's ancestor chain.
     fn search_ancestors(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
         // Fast path: if the ancestor chain is already complete (the common case during
-        // constant resolution), iterate the cached chain directly without cloning it or
-        // creating a LinearizationContext. Only fall back to full linearization when the
-        // chain is still partial.
-        let needs_linearize = {
+        // constant resolution), read the cached chain directly, with no clone and no
+        // LinearizationContext. Fall back to the full linearization only when the chain is
+        // still partial.
+        {
             let Some(decl) = self.graph.declarations().get(&declaration_id) else {
                 return Outcome::Unresolved;
             };
             let Some(ns) = decl.as_namespace() else {
                 return Outcome::Unresolved;
             };
-            !ns.has_complete_ancestors()
-        };
 
-        if needs_linearize {
-            return self.search_ancestors_slow(declaration_id, str_id);
-        }
-
-        // Read the cached ancestor chain by reference — no clone, no context allocation.
-        let ancestors = self
-            .graph
-            .declarations()
-            .get(&declaration_id)
-            .unwrap()
-            .as_namespace()
-            .unwrap()
-            .ancestors();
-
-        for ancestor_id in ancestors {
-            if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                if let Some(id) = self
-                    .graph
-                    .declarations()
-                    .get(ancestor_id)
-                    .and_then(|decl| decl.as_namespace())
-                    .and_then(|ns| ns.member(&str_id))
-                {
-                    return Outcome::Resolved(*id);
-                }
+            if ns.has_complete_ancestors() {
+                // Read the cached ancestor chain by reference — no clone, no context allocation
+                return self
+                    .find_member_in_chain(ns.ancestors().as_slice(), str_id)
+                    .map_or(Outcome::Unresolved, Outcome::Resolved);
             }
         }
 
-        Outcome::Unresolved
+        self.search_ancestors_slow(declaration_id, str_id)
+    }
+
+    /// Find a member with the given name in an ancestor chain, walking the chain in order.
+    ///
+    /// A `Partial` entry gets skipped, thus this helper suits a chain that is complete or
+    /// cyclic. The `Partial` arm of `search_ancestors_slow` needs its own loop, because it must
+    /// stop at the first unresolved entry and ask for a retry.
+    ///
+    /// An id that has no declaration, or that names something other than a namespace, gets
+    /// skipped. A chain can hold a stale id after an incremental update, and a member lookup
+    /// must not bring the process down for that.
+    fn find_member_in_chain(&self, chain: &[Ancestor], str_id: StringId) -> Option<DeclarationId> {
+        chain.iter().find_map(|ancestor| match ancestor {
+            Ancestor::Complete(ancestor_id) => self
+                .graph
+                .declarations()
+                .get(ancestor_id)
+                .and_then(Declaration::as_namespace)
+                .and_then(|ns| ns.member(&str_id))
+                .copied(),
+            Ancestor::Partial(_) => None,
+        })
     }
 
     /// Full linearization path for `search_ancestors`, used when the ancestor chain is still
     /// partial and must be (re)computed.
     fn search_ancestors_slow(&mut self, declaration_id: DeclarationId, str_id: StringId) -> Outcome {
         match self.ancestors_of(declaration_id) {
-            Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => ids
-                .iter()
-                .find_map(|ancestor_id| {
-                    if let Ancestor::Complete(ancestor_id) = ancestor_id {
-                        self.graph
-                            .declarations()
-                            .get(ancestor_id)
-                            .unwrap()
-                            .as_namespace()
-                            .unwrap()
-                            .member(&str_id)
-                            .map(|id| Outcome::Resolved(*id))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(Outcome::Unresolved),
+            Ancestors::Complete(ids) | Ancestors::Cyclic(ids) => self
+                .find_member_in_chain(&ids, str_id)
+                .map_or(Outcome::Unresolved, Outcome::Resolved),
             Ancestors::Partial(ids) => {
                 for ancestor_id in ids {
                     match ancestor_id {
@@ -2157,14 +2113,14 @@ impl<'a> Resolver<'a> {
                             }
                         }
                         Ancestor::Complete(ancestor_id) => {
+                            // Skip a missing or non-namespace id, the same way
+                            // `find_member_in_chain` does
                             if let Some(id) = self
                                 .graph
                                 .declarations()
                                 .get(&ancestor_id)
-                                .unwrap()
-                                .as_namespace()
-                                .unwrap()
-                                .member(&str_id)
+                                .and_then(Declaration::as_namespace)
+                                .and_then(|ns| ns.member(&str_id))
                             {
                                 return Outcome::Resolved(*id);
                             }
@@ -2422,11 +2378,8 @@ impl<'a> Resolver<'a> {
 
                 match name {
                     NameRef::Resolved(resolved) => {
-                        if first_superclass.is_none() {
-                            if let Some(superclass_id) = self.resolve_to_namespace(*resolved.declaration_id()) {
-                                first_superclass = Some(superclass_id);
-                            }
-                        }
+                        first_superclass =
+                            first_superclass.or_else(|| self.resolve_to_namespace(*resolved.declaration_id()));
                     }
                     NameRef::Unresolved(_) => {
                         unresolved_superclass = Some(*constant_reference.name_id());
@@ -2437,10 +2390,7 @@ impl<'a> Resolver<'a> {
 
         // If there's more than one superclass that isn't `Object` and they are different, then there's a superclass
         // mismatch error. TODO: We should add a diagnostic here
-        Some((
-            first_superclass.unwrap_or(*OBJECT_ID),
-            unresolved_superclass,
-        ))
+        Some((first_superclass.unwrap_or(*OBJECT_ID), unresolved_superclass))
     }
 
     /// Copy the linearized superclass chain of a class into `buffer`. Returns true if the class

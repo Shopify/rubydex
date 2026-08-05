@@ -1314,8 +1314,7 @@ impl Graph {
                 queue.push(InvalidationItem::Declaration(*descendant_id));
             });
 
-            namespace.clear_ancestors();
-            namespace.clear_descendants();
+            namespace.reset_linearization();
 
             self.push_work(Unit::Ancestors(decl_id));
 
@@ -1565,7 +1564,7 @@ mod tests {
     use crate::model::declaration::Ancestors;
     use crate::test_utils::GraphTest;
     use crate::{
-        assert_declaration_does_not_exist, assert_declaration_kind_eq, assert_dependents, assert_descendants,
+        assert_declaration_does_not_exist, assert_declaration_kind_eq, assert_dependents, assert_descendants_eq,
         assert_members_eq, assert_no_diagnostics, assert_no_members,
     };
 
@@ -1791,9 +1790,9 @@ mod tests {
             else {
                 panic!("Expected Bar to be a module");
             };
-            assert_descendants!(context, "Bar", ["Foo"]);
+            assert_descendants_eq!(context, "Bar", ["Bar", "Baz", "Foo"]);
         }
-        assert_descendants!(context, "Foo", ["Baz"]);
+        assert_descendants_eq!(context, "Foo", ["Baz", "Foo"]);
 
         context.index_uri("file:///a.rb", "");
 
@@ -1830,7 +1829,7 @@ mod tests {
             Ancestors::Complete(_)
         ));
 
-        assert_descendants!(context, "Foo", ["Baz"]);
+        assert_descendants_eq!(context, "Foo", ["Baz", "Foo"]);
     }
 
     #[test]

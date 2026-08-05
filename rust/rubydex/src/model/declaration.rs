@@ -33,11 +33,7 @@ assert_mem_size!(Ancestors, 32);
 
 impl Ancestors {
     pub fn iter(&self) -> std::slice::Iter<'_, Ancestor> {
-        match self {
-            Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => {
-                ancestors.iter()
-            }
-        }
+        self.as_slice().iter()
     }
 
     /// The ancestor chain as a slice, independent of the chain state.
@@ -45,15 +41,6 @@ impl Ancestors {
     pub fn as_slice(&self) -> &[Ancestor] {
         match self {
             Ancestors::Complete(ancestors) | Ancestors::Partial(ancestors) | Ancestors::Cyclic(ancestors) => ancestors,
-        }
-    }
-
-    #[must_use]
-    pub fn to_partial(self) -> Self {
-        match self {
-            Ancestors::Complete(ancestors) | Ancestors::Cyclic(ancestors) | Ancestors::Partial(ancestors) => {
-                Ancestors::Partial(ancestors)
-            }
         }
     }
 }
@@ -280,15 +267,6 @@ impl NamespaceStore {
         self.ancestors.clone()
     }
 
-    /// Move the ancestor chain out and leave an empty complete chain in its place.
-    ///
-    /// This lets a caller read the chain while it holds a mutable borrow of the graph, without
-    /// the cost of a clone. The caller must put the chain back with `set_ancestors`.
-    #[must_use]
-    pub fn take_ancestors(&mut self) -> Ancestors {
-        std::mem::replace(&mut self.ancestors, Ancestors::Complete(Vec::new()))
-    }
-
     #[must_use]
     pub fn has_complete_ancestors(&self) -> bool {
         matches!(&self.ancestors, Ancestors::Complete(_) | Ancestors::Cyclic(_))
@@ -302,7 +280,20 @@ impl NamespaceStore {
         self.descendants.remove(&descendant_id);
     }
 
+    /// Clear the descendants of this namespace.
+    ///
+    /// # Invariant
+    ///
+    /// The ancestor chain must be cleared first. The resolver skips the descendant recording
+    /// when a freshly built chain equals the stored one (`record_descendant_on_chain_if_new`),
+    /// thus a namespace that loses its descendants but keeps its chain never gets them back.
+    /// Use [`Namespace::reset_linearization`] instead of calling this on its own.
     pub fn clear_descendants(&mut self) {
+        debug_assert!(
+            self.ancestors.as_slice().is_empty(),
+            "clear the ancestor chain before the descendants, or the resolver cannot rebuild the descendant set"
+        );
+
         self.descendants.clear();
     }
 
@@ -621,11 +612,6 @@ impl Namespace {
     }
 
     #[must_use]
-    pub fn take_ancestors(&mut self) -> Ancestors {
-        all_namespaces!(self, it => it.namespace_store.take_ancestors())
-    }
-
-    #[must_use]
     pub fn has_complete_ancestors(&self) -> bool {
         all_namespaces!(self, it => it.namespace_store.has_complete_ancestors())
     }
@@ -650,11 +636,22 @@ impl Namespace {
         all_namespaces!(self, it => it.namespace_store.descendants().iter().for_each(&mut f));
     }
 
+    /// Clear the ancestor chain of this namespace, so that the resolver linearizes it again.
+    ///
+    /// Clearing the chain on its own is safe: a rebuilt chain that differs from the empty one
+    /// makes the resolver record the descendants again. Clearing the *descendants* on their own
+    /// is not safe — see [`Namespace::reset_linearization`].
     pub fn clear_ancestors(&mut self) {
         all_namespaces!(self, it => it.namespace_store.set_ancestors(Ancestors::Partial(vec![])));
     }
 
-    pub fn clear_descendants(&mut self) {
+    /// Clear the ancestor chain and the descendants together, in that order.
+    ///
+    /// The two must move as a pair during an invalidation. The resolver skips the descendant
+    /// recording when a freshly built chain equals the stored one, thus a namespace that keeps
+    /// its chain but loses its descendants would never get them back.
+    pub fn reset_linearization(&mut self) {
+        self.clear_ancestors();
         all_namespaces!(self, it => it.namespace_store.clear_descendants());
     }
 

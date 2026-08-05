@@ -3,11 +3,12 @@
 // a `backend()` function that `graph_test()` calls via `super::backend()`.
 
 use crate::{
-    assert_alias_targets_contain, assert_ancestors_eq, assert_constant_alias_target_eq, assert_constant_reference_to,
-    assert_constant_reference_unresolved, assert_declaration_definitions_count_eq, assert_declaration_does_not_exist,
-    assert_declaration_exists, assert_declaration_kind_eq, assert_declaration_references_count_eq, assert_descendants,
-    assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target,
-    assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
+    assert_alias_targets_contain, assert_ancestors_eq, assert_ancestors_state, assert_constant_alias_target_eq,
+    assert_constant_reference_to, assert_constant_reference_unresolved, assert_declaration_definitions_count_eq,
+    assert_declaration_does_not_exist, assert_declaration_exists, assert_declaration_kind_eq,
+    assert_declaration_references_count_eq, assert_descendants_eq, assert_diagnostics_eq, assert_instance_variables_eq,
+    assert_members_eq, assert_no_constant_alias_target, assert_no_diagnostics, assert_no_members, assert_owner_eq,
+    assert_singleton_class_eq,
     diagnostic::Rule,
     model::{declaration::Ancestors, ids::DeclarationId, name::NameRef},
     test_utils::GraphTest,
@@ -1027,8 +1028,8 @@ mod superclass_tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_descendants!(context, "Foo", ["Bar"]);
-        assert_descendants!(context, "Bar", ["Baz", "Qux"]);
+        assert_descendants_eq!(context, "Foo", ["Foo", "Bar", "Baz", "Qux"]);
+        assert_descendants_eq!(context, "Bar", ["Bar", "Baz", "Qux"]);
     }
 
     #[test]
@@ -1184,6 +1185,38 @@ mod superclass_tests {
                 .ancestors(),
             Ancestors::Partial(_)
         ));
+    }
+
+    /// A class that has an unresolved superclass reference *and* a superclass whose chain is
+    /// cyclic must keep a partial chain, never a cyclic one.
+    ///
+    /// `has_complete_ancestors` is true for a cyclic chain. A cyclic mark here would therefore
+    /// make the fast path in `handle_ancestor_unit` and the cache test at the top of
+    /// `linearize_ancestors_state` treat the chain as settled, and the unresolved reference
+    /// would stay in the chain for the rest of the run.
+    ///
+    /// `Foo` must sit outside the cycle. A class inside the cycle gets a cyclic chain from the
+    /// cycle itself, thus it cannot show the difference.
+    #[test]
+    fn unresolved_superclass_beats_a_cyclic_superclass_chain() {
+        let mut context = graph_test();
+        context.index_uri(
+            "file:///foo.rb",
+            "
+            class A < B; end
+            class B < A; end
+            class Foo < A; end
+            class Foo < Undefined; end
+            ",
+        );
+        context.resolve();
+
+        // `A` and `B` are the real cycle
+        assert_ancestors_state!(context, "A", Cyclic);
+
+        // `Foo` only inherits from the cycle, thus the unresolved `Undefined` decides its state.
+        // It must stay partial, so that a later pass can try `Undefined` again.
+        assert_ancestors_state!(context, "Foo", Partial);
     }
 }
 
@@ -1491,8 +1524,8 @@ mod include_tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_descendants!(context, "Bar", ["Baz"]);
-        assert_descendants!(context, "Foo", ["Bar", "Baz"]);
+        assert_descendants_eq!(context, "Bar", ["Bar", "Baz"]);
+        assert_descendants_eq!(context, "Foo", ["Foo", "Bar", "Baz"]);
     }
 }
 
@@ -1624,8 +1657,8 @@ mod prepend_tests {
 
         assert_no_diagnostics!(&context);
 
-        assert_descendants!(context, "Foo", ["Bar", "Baz"]);
-        assert_descendants!(context, "Bar", ["Baz"]);
+        assert_descendants_eq!(context, "Foo", ["Foo", "Bar", "Baz"]);
+        assert_descendants_eq!(context, "Bar", ["Bar", "Baz"]);
     }
 
     #[test]
@@ -1960,7 +1993,7 @@ mod object_ancestors_tests {
         context.resolve();
 
         assert_ancestors_eq!(context, "Foo", ["Foo", "Bar", "Object", "Kernel", "BasicObject"]);
-        assert_descendants!(context, "Bar", ["Foo"]);
+        assert_descendants_eq!(context, "Bar", ["Bar", "Foo"]);
     }
 
     #[test]
