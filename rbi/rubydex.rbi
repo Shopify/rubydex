@@ -306,6 +306,8 @@ module Rubydex::Severity
 end
 
 class Rubydex::Severity::Base
+  abstract!
+  
   sig { returns(Symbol) }
   def self.value; end
 end
