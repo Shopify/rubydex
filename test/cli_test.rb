@@ -59,9 +59,9 @@ class CLITest < Minitest::Test
     # An anonymous command whose declared name matches no class or file name: if dispatch derived
     # the name from either, this could not be reached.
     #
-    # Anonymous commands stay visible to `Command.subclasses` for the rest of the process, so the
-    # assertions here and in the other discovery tests check for inclusion rather than exact sets.
-    Class.new(Rubydex::CLI::Command) do
+    # Keep a strong reference through dispatch: `Class#subclasses` does not retain anonymous
+    # classes, so a GC between declaration and dispatch would make this command disappear.
+    command_class = Class.new(Rubydex::CLI::Command) do
       command "totally-unrelated"
       summary "A command that exists only for this test"
 
@@ -71,17 +71,17 @@ class CLITest < Minitest::Test
     end
 
     result = rdx("totally-unrelated", "an-argument")
-
+    assert_equal("totally-unrelated", command_class.command_name)
     assert_stdout_equals('dispatched with ["an-argument"]', result)
   end
 
   def test_declaring_a_name_twice_is_rejected
-    Class.new(Rubydex::CLI::Command) { command "conflicting" }
+    command_class = Class.new(Rubydex::CLI::Command) { command "conflicting" }
 
     error = assert_raises(ArgumentError) do
       Class.new(Rubydex::CLI::Command) { command "conflicting" }
     end
-
+    assert_equal("conflicting", command_class.command_name)
     assert_match(/`conflicting` is already declared/, error.message)
   end
 
