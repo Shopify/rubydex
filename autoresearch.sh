@@ -42,23 +42,31 @@ open('$CFG','w').write(content)
 "
 fi
 
-# Run and capture stats output. Use /usr/bin/time for total wall clock.
-OUT=$(mktemp -t rubydex_bench.XXXXXX)
-/usr/bin/time -p "$CLI" "$SHOPIFY" --stats --stop-after resolution > "$OUT" 2>&1 || {
-    cat "$OUT"
+# Run multiple iterations and take the minimum (least CPU-interfered) for stability.
+# The shared machine has variable load, so a single run is too noisy.
+BEST_RESOLVE=""
+BEST_TOTAL=""
+RUNS=3
+for run in $(seq 1 "$RUNS"); do
+    OUT=$(mktemp -t rubydex_bench.XXXXXX)
+    /usr/bin/time -p "$CLI" "$SHOPIFY" --stats --stop-after resolution > "$OUT" 2>&1 || {
+        cat "$OUT"
+        rm -f "$OUT"
+        echo "METRIC name=resolve_s value=0"
+        echo "RUN_FAILED=1"
+        exit 1
+    }
+
+    RESOLVE_S=$(grep -iE '^[[:space:]]*Resolution[[:space:]]' "$OUT" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
+    TOTAL_S=$(awk '/^real[[:space:]]/{print $2}' "$OUT")
     rm -f "$OUT"
-    echo "METRIC name=resolve_s value=0"
-    echo "RUN_FAILED=1"
-    exit 1
-}
 
-# Extract the resolution stage time from the Timer breakdown.
-# Format: "  Resolution         11.512s ( 66.2%)"
-RESOLVE_S=$(grep -iE '^[[:space:]]*Resolution[[:space:]]' "$OUT" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
-TOTAL_S=$(awk '/^real[[:space:]]/{print $2}' "$OUT")
+    echo "# run $run: resolve_s=${RESOLVE_S:-0} total_s=${TOTAL_S:-0}"
+    if [ -z "$BEST_RESOLVE" ] || awk "BEGIN{exit !(${RESOLVE_S:-0} < ${BEST_RESOLVE:-9999})}"; then
+        BEST_RESOLVE="${RESOLVE_S:-0}"
+        BEST_TOTAL="${TOTAL_S:-0}"
+    fi
+done
 
-cat "$OUT"
-rm -f "$OUT"
-
-echo "METRIC name=resolve_s value=${RESOLVE_S:-0}"
-echo "METRIC name=total_s value=${TOTAL_S:-0}"
+echo "METRIC name=resolve_s value=${BEST_RESOLVE:-0}"
+echo "METRIC name=total_s value=${BEST_TOTAL:-0}"
