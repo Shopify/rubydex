@@ -46,7 +46,7 @@ fi
 # The shared machine has variable load, so a single run is too noisy.
 BEST_RESOLVE=""
 BEST_TOTAL=""
-RUNS=3
+RUNS=5
 for run in $(seq 1 "$RUNS"); do
     OUT=$(mktemp -t rubydex_bench.XXXXXX)
     /usr/bin/time -p "$CLI" "$SHOPIFY" --stats --stop-after resolution > "$OUT" 2>&1 || {
