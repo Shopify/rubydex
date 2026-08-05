@@ -76,7 +76,7 @@ class LinterTest < Minitest::Test
 
   def test_rule_exposes_linter_config
     config = linter_config
-    rule = WarningRule.new(Rubydex::Graph.new, config: config)
+    rule = WarningRule.new(Rubydex::Graph.new, config:)
 
     assert_same(config, rule.config)
   end
@@ -86,7 +86,7 @@ class LinterTest < Minitest::Test
     runner = Rubydex::Linter::Runner.new(
       Rubydex::Graph.new,
       rules: [WarningRule, ErrorRule],
-      config: config,
+      config:,
     )
 
     assert_equal([ErrorRule], runner.rules)
@@ -95,7 +95,7 @@ class LinterTest < Minitest::Test
 
   def test_runner_allows_every_rule_to_be_disabled
     config = linter_config("WarningRule" => false)
-    runner = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config: config)
+    runner = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config:)
 
     assert_empty(runner.rules)
     assert_predicate(runner.run, :success?)

@@ -241,15 +241,15 @@ class CLITest < Minitest::Test
 
   def test_lint_reports_a_project_rule_diagnostic_with_related_information
     with_context do |context|
-      write_linter_rule(context, "CLITestProjectErrorRule")
-      context.write!("app.rb", "class Foo; end\nclass Foo; end\n")
-
-      result = rdx(
-        "lint",
-        "--require",
-        "rubydex_linter/rules/no_foo.rb",
-        context.absolute_path,
+      write_linter_rule(
+        context,
+        "CLITestProjectErrorRule",
+        path: "rubydex_linter/rules/nested/no_foo.rb",
       )
+      context.write!("app.rb", "class Foo; end\nclass Foo; end\n")
+      Gem.expects(:find_latest_files).never
+
+      result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
 
       refute_success_status(result)
       assert_stdout_equals(
@@ -269,27 +269,40 @@ class CLITest < Minitest::Test
       write_linter_rule(context, "CLITestProjectCleanRule")
       context.write!("app.rb", "class Bar; end\n")
 
-      result = rdx(
-        "lint",
-        "--require",
-        "rubydex_linter/rules/no_foo.rb",
-        context.absolute_path,
-      )
+      result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
 
       assert_success_status(result)
       assert_empty_stdout(result)
     end
   end
 
-  def test_lint_requires_a_rule_before_indexing
+  def test_lint_loads_rules_from_bundled_dependencies
+    with_context do |context|
+      rule_path = "fake_gem/lib/rubydex_linter/rules/no_foo.rb"
+      write_linter_rule(context, "CLITestDependencyErrorRule", path: rule_path)
+      context.write!("app.rb", "class Foo; end\n")
+      Gem.expects(:find_latest_files)
+        .with("rubydex_linter/rules/**/*.rb")
+        .returns([context.absolute_path_to(rule_path)])
+
+      result = with_bundle_gemfile(context.absolute_path_to("Gemfile")) do
+        rdx("lint", context.absolute_path)
+      end
+
+      refute_success_status(result)
+      assert_stdout_includes(result, "error: CLITestDependencyErrorRule: Foo is not allowed.")
+    end
+  end
+
+  def test_lint_requires_a_discovered_rule_before_indexing
     with_context do |context|
       context.write!("app.rb", "class Foo; end\n")
 
-      result = rdx("lint", context.absolute_path)
+      result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
 
       refute_success_status(result)
       assert_empty_stdout(result)
-      assert_stderr_includes(result, "`lint` requires at least one --require FILE")
+      assert_stderr_includes(result, "No Rubydex::Linter::Rule subclasses were loaded")
       refute_stderr_includes(result, "Indexing workspace...")
     end
   end
@@ -319,9 +332,9 @@ class CLITest < Minitest::Test
 
   # Each in-process invocation loads a distinct named rule. Reopening the same class would not add
   # a subclass, so the linter could not identify which rule came from that invocation.
-  #: (Test::Helpers::Context context, String class_name) -> void
-  def write_linter_rule(context, class_name)
-    context.write!("rubydex_linter/rules/no_foo.rb", <<~RUBY)
+  #: (Test::Helpers::Context context, String class_name, ?path: String) -> void
+  def write_linter_rule(context, class_name, path: "rubydex_linter/rules/no_foo.rb")
+    context.write!(path, <<~RUBY)
       # frozen_string_literal: true
 
       class #{class_name} < Rubydex::Linter::Rule
@@ -348,6 +361,15 @@ class CLITest < Minitest::Test
         end
       end
     RUBY
+  end
+
+  #: [R] (String?) { -> R } -> R
+  def with_bundle_gemfile(value)
+    previous = ENV["BUNDLE_GEMFILE"]
+    ENV["BUNDLE_GEMFILE"] = value
+    yield
+  ensure
+    ENV["BUNDLE_GEMFILE"] = previous
   end
 
   #: (LoadError error) -> void
