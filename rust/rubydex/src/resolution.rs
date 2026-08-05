@@ -1154,8 +1154,14 @@ impl<'a> Resolver<'a> {
                 } else {
                     Ancestors::Cyclic(vec![])
                 };
-                declaration.as_namespace_mut().unwrap().set_ancestors(estimated_ancestors);
-                self.record_self_as_descendant(declaration_id);
+                self.record_descendant_on_chain(declaration_id, &estimated_ancestors);
+                self.graph
+                    .declarations_mut()
+                    .get_mut(&declaration_id)
+                    .unwrap()
+                    .as_namespace_mut()
+                    .unwrap()
+                    .set_ancestors(estimated_ancestors);
 
                 context.finalize(declaration_id);
                 return ChainState::Cyclic;
@@ -1240,6 +1246,10 @@ impl<'a> Resolver<'a> {
 
         let state = ChainState::of(&result);
 
+        // Record this declaration on its own chain before the chain goes into the graph, so that
+        // the chain is still a local value and needs no read back from the graph
+        self.record_descendant_on_chain(declaration_id, &result);
+
         self.graph
             .declarations_mut()
             .get_mut(&declaration_id)
@@ -1247,8 +1257,6 @@ impl<'a> Resolver<'a> {
             .as_namespace_mut()
             .unwrap()
             .set_ancestors(result);
-
-        self.record_self_as_descendant(declaration_id);
 
         context.finalize(declaration_id);
         state
@@ -1425,28 +1433,12 @@ impl<'a> Resolver<'a> {
     /// parents and mixins, thus each declaration reaches all of its own ancestors by itself. The
     /// cost drops from the chain length times the stack depth, on every cache hit, to the chain
     /// length once for each declaration.
-    fn record_self_as_descendant(&mut self, declaration_id: DeclarationId) {
-        let mut index = 0;
-
-        loop {
-            let declarations = self.graph.declarations();
-            let chain = declarations
-                .get(&declaration_id)
-                .unwrap()
-                .as_namespace()
-                .unwrap()
-                .ancestors()
-                .as_slice();
-
-            let Some(&ancestor) = chain.get(index) else {
-                break;
-            };
-            index += 1;
-
+    fn record_descendant_on_chain(&mut self, declaration_id: DeclarationId, chain: &Ancestors) {
+        for ancestor in chain {
             if let Ancestor::Complete(ancestor_id) = ancestor {
                 self.graph
                     .declarations_mut()
-                    .get_mut(&ancestor_id)
+                    .get_mut(ancestor_id)
                     .unwrap()
                     .as_namespace_mut()
                     .unwrap()
