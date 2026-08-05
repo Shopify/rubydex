@@ -43,7 +43,20 @@ on exit. It does not modify rubydex source.
 - Code-only optimizations; behavior must be preserved.
 
 ## What's Been Tried
-(baseline pending)
+
+### Kept (cumulative: 12.318s → 11.142s, -9.5%)
+- **Skip redundant propagate_descendants on cache hit** when only descendant is self (already propagated during first linearization). Also preallocate ancestors Vec. 11.737→11.568.
+- **Fast paths in handle_ancestor_unit and schedule_singleton_ancestors::Eager**: skip ancestors_of clone when ancestors already complete. 11.568→11.494.
+- **search_ancestors fast path**: read cached ancestors by reference without clone or LinearizationContext allocation when chain is complete. 11.494→11.309.
+- **get_superclass Vec elimination**: track only first superclass in Option instead of collecting into Vec. 11.309→11.142.
+
+### Discarded
+- **Arc<Vec<Ancestor>> for O(1) clones**: REGRESSION (12.802). Arc atomic refcount overhead + make_mut clones in mutation paths (linearize_mixins, linearize_superclass) outweigh clone savings for small chains.
+
+### Profile insights
+- linearize_ancestors dominates (55%+ of resolution time). Heavy allocation from ancestor Vec clones and growth.
+- get_superclass, resolve_alias_chains, resolve_to_namespace are secondary hot spots.
+- Machine has high variance (load avg 7.4); min-of-5 runs used for stability.
 
 ## Key Hot-Path Observations
 - `linearize_mixins` does O(n) `VecDeque::contains` / `Vec::contains` on
