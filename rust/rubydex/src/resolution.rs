@@ -59,6 +59,15 @@ struct LinearizationContext {
 }
 
 impl LinearizationContext {
+    /// Clear the context so that it can serve another linearization. The hash sets keep their
+    /// capacity, which avoids a new allocation for each linearization.
+    fn reset(&mut self) {
+        self.descendants.clear();
+        self.seen_ids.clear();
+        self.cyclic = false;
+        self.partial = false;
+    }
+
     fn new() -> Self {
         Self {
             descendants: IdentityHashSet::default(),
@@ -121,6 +130,9 @@ pub struct Resolver<'a> {
     mixin_pool: Vec<Vec<Mixin>>,
     /// Spare deques for the linearized prepends and includes, reused the same way as `chain_pool`
     deque_pool: Vec<VecDeque<Ancestor>>,
+    /// A spare linearization context. `ancestors_of` is the only place that starts a
+    /// linearization, and it does not recurse into itself, thus one spare context is enough
+    spare_context: Option<LinearizationContext>,
 }
 
 impl<'a> Resolver<'a> {
@@ -132,6 +144,7 @@ impl<'a> Resolver<'a> {
             chain_pool: Vec::new(),
             mixin_pool: Vec::new(),
             deque_pool: Vec::new(),
+            spare_context: None,
         }
     }
 
@@ -1074,8 +1087,13 @@ impl<'a> Resolver<'a> {
     /// Can panic if there's inconsistent data in the graph
     #[must_use]
     fn ancestors_of(&mut self, declaration_id: DeclarationId) -> Ancestors {
-        let mut context = LinearizationContext::new();
-        self.linearize_ancestors(declaration_id, &mut context)
+        let mut context = self.spare_context.take().unwrap_or_else(LinearizationContext::new);
+        context.reset();
+
+        let result = self.linearize_ancestors(declaration_id, &mut context);
+
+        self.spare_context = Some(context);
+        result
     }
 
     /// Linearizes the ancestors of a declaration and returns a clone of the chain.
