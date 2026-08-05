@@ -1286,13 +1286,61 @@ impl<'a> Resolver<'a> {
                     context.partial = true;
                 }
 
-                self.linearize_ancestors_state(singleton_parent_id, context)
-                    .record(context);
-                self.copy_chain_into(singleton_parent_id, buffer);
+                self.extend_with_chain(singleton_parent_id, context, buffer);
                 true
             }
             _ => false,
         }
+    }
+
+    /// Make sure the ancestor chain of a declaration is linearized, then copy it to the end of
+    /// `buffer` and record its state on the context.
+    ///
+    /// Almost every call finds a chain that is already complete. That path needs one map lookup
+    /// only, because the state comes from the same chain that the copy reads.
+    fn extend_with_chain(
+        &mut self,
+        declaration_id: DeclarationId,
+        context: &mut LinearizationContext,
+        buffer: &mut Vec<Ancestor>,
+    ) {
+        let namespace = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+
+        if namespace.has_complete_ancestors() {
+            let chain = namespace.ancestors();
+            let state = ChainState::of(chain);
+            buffer.extend_from_slice(chain.as_slice());
+            state.record(context);
+            return;
+        }
+
+        self.linearize_ancestors_state(declaration_id, context).record(context);
+        self.copy_chain_into(declaration_id, buffer);
+    }
+
+    /// Make sure the ancestor chain of a declaration is linearized, and record its state on the
+    /// context. Use this when the caller reads the chain from the graph by itself.
+    fn ensure_chain(&mut self, declaration_id: DeclarationId, context: &mut LinearizationContext) {
+        let namespace = self
+            .graph
+            .declarations()
+            .get(&declaration_id)
+            .unwrap()
+            .as_namespace()
+            .unwrap();
+
+        if namespace.has_complete_ancestors() {
+            ChainState::of(namespace.ancestors()).record(context);
+            return;
+        }
+
+        self.linearize_ancestors_state(declaration_id, context).record(context);
     }
 
     /// Copy the stored ancestor chain of a declaration to the end of `buffer`.
@@ -1339,7 +1387,7 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
-                            self.linearize_ancestors_state(module_id, context).record(context);
+                            self.ensure_chain(module_id, context);
 
                             // `linearize_ancestors_state` stores the chain on the declaration.
                             // Thus a read by reference gives the same chain that a clone gives,
@@ -1381,7 +1429,7 @@ impl<'a> Resolver<'a> {
                                 continue;
                             };
 
-                            self.linearize_ancestors_state(module_id, context).record(context);
+                            self.ensure_chain(module_id, context);
 
                             // `linearize_ancestors_state` stores the chain on the declaration.
                             // Thus a read by reference gives the same chain that a clone gives,
@@ -2336,8 +2384,6 @@ impl<'a> Resolver<'a> {
             return false;
         };
 
-        self.linearize_ancestors_state(superclass_id, context).record(context);
-
         if let Some(name_id) = unresolved_superclass {
             context.partial = true;
 
@@ -2346,7 +2392,7 @@ impl<'a> Resolver<'a> {
             buffer.push(Ancestor::Partial(name_id));
         }
 
-        self.copy_chain_into(superclass_id, buffer);
+        self.extend_with_chain(superclass_id, context, buffer);
         true
     }
 
