@@ -89,7 +89,22 @@ on exit. It does not modify rubydex source.
 
 ## What's Been Tried
 
-### Kept (cumulative: 12.318s → 10.000s, -18.8%)
+### Kept (cumulative: 12.318s → 9.126s, -25.9%)
+
+#### The descendant-tracking rewrite (10.000 → 9.126)
+The largest single win. The old scheme pushed the whole recursion stack onto
+every cached chain that it met, which cost chain length times stack depth on
+*every* cache hit. The new scheme has each declaration record itself on the
+entries of its own chain, once, when its linearization completes.
+
+This gives the same result, because the chain of a declaration contains the
+chain of each of its parents and mixins. Thus every declaration reaches all of
+its own ancestors without help from the recursion stack. `propagate_descendants`
+and the `descendants` set on `LinearizationContext` are both gone.
+
+- Self-registration replaces stack propagation: 10.000→9.454.
+- Record from the local chain before the chain goes into the graph, rather than
+  a read back per ancestor: 9.454→9.126.
 
 #### The allocation-removal series (11.142 → 10.000)
 The profile showed `_malloc` as the single largest cost centre. Four changes
@@ -146,10 +161,31 @@ The benchmark machine has high and irregular load. A single run of
 `./autoresearch.sh` can show a spread of more than 2s between its five runs. When
 a result is within about 1% of the best, re-run before you judge it.
 
-### Profile insights
-- linearize_ancestors dominates (55%+ of resolution time). Heavy allocation from ancestor Vec clones and growth.
-- get_superclass, resolve_alias_chains, resolve_to_namespace are secondary hot spots.
-- Machine has high variance (load avg 7.4); min-of-5 runs used for stability.
+### Profile insights (latest, at 9.126s)
+`_malloc` fell from 1233 samples to 408 across the series. Current order:
+
+| Function | Samples |
+|---|---|
+| `linearize_ancestors_state` | 299 |
+| `record_descendant_on_chain` | 54 |
+| `handle_definition_unit` | 46 |
+| `get_or_create_singleton_class` | 38 |
+| `get_superclass` | 37 |
+| `resolve_to_namespace` | 33 |
+| `search_ancestors` | 26 |
+
+Machine has high variance (load avg 7.4); min-of-5 runs used for stability.
+
+### Next candidates (not yet tried)
+- The cache-hit path of `linearize_ancestors_state` still takes the declaration
+  through `declarations_mut()`, but both remaining paths only read. A change to
+  `declarations()` may help. **This was the next step when the session paused.**
+- `record_descendant_on_chain` inserts into descendant sets that grow very large
+  for widely inherited classes such as `Object`, thus the inserts miss cache.
+- The final ancestors `Vec` is the last allocation per declaration. It goes into
+  the graph, thus it cannot simply be pooled.
+- `get_or_create_singleton_class`, `get_superclass`, and `handle_definition_unit`
+  are now comparable in cost to the linearization internals.
 
 ## Key Hot-Path Observations
 - `linearize_mixins` does O(n) `VecDeque::contains` / `Vec::contains` on
