@@ -2144,7 +2144,7 @@ impl<'a> Resolver<'a> {
         }
 
         let declaration = self.graph.declarations().get(&declaration_id).unwrap();
-        let mut explicit_superclasses = Vec::new();
+        let mut first_superclass: Option<DeclarationId> = None;
         let mut unresolved_superclass = None;
 
         for definition_id in declaration.definitions() {
@@ -2158,8 +2158,10 @@ impl<'a> Resolver<'a> {
 
                 match name {
                     NameRef::Resolved(resolved) => {
-                        if let Some(superclass_id) = self.resolve_to_namespace(*resolved.declaration_id()) {
-                            explicit_superclasses.push(superclass_id);
+                        if first_superclass.is_none() {
+                            if let Some(superclass_id) = self.resolve_to_namespace(*resolved.declaration_id()) {
+                                first_superclass = Some(superclass_id);
+                            }
                         }
                     }
                     NameRef::Unresolved(_) => {
@@ -2172,7 +2174,7 @@ impl<'a> Resolver<'a> {
         // If there's more than one superclass that isn't `Object` and they are different, then there's a superclass
         // mismatch error. TODO: We should add a diagnostic here
         Some((
-            explicit_superclasses.first().copied().unwrap_or(*OBJECT_ID),
+            first_superclass.unwrap_or(*OBJECT_ID),
             unresolved_superclass,
         ))
     }
