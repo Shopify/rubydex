@@ -37,7 +37,9 @@ module Rubydex
             return
           end
 
-          abort_with_usage("`query` requires a Cypher query argument (or pass `--schema`)") if query.nil? || query.empty?
+          if query.nil? || query.empty?
+            abort_with_usage("`query` requires a Cypher query argument (or pass `--schema`)")
+          end
 
           # Parse the query up front so a malformed query fails fast, before the expensive indexing.
           parsed = parse_query(query)

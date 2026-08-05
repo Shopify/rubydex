@@ -28,8 +28,9 @@ module Rubydex
         dispatch(argv.shift, argv)
       end
 
-      # Reports `message`, then the usage text, and exits non-zero. Public because the subcommands
-      # report their own argument errors through it.
+      private
+
+      # Reports `message`, then the top-level usage text, and exits non-zero.
       #: (String message) -> void
       def abort_with_usage(message)
         warn(message)
@@ -37,8 +38,6 @@ module Rubydex
         warn(usage)
         exit(1)
       end
-
-      private
 
       # The top-level usage text, built from the declared commands.
       #: -> String
