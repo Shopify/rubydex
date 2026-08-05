@@ -288,9 +288,11 @@ class DeclarationTest < Minitest::Test
       graph.index_all(context.glob("**/*.rb"))
       graph.resolve
 
-      assert_equal(["Child", "Parent"], graph["Parent"].descendants.map(&:name))
-      assert_equal(["Child", "Foo"], graph["Foo"].descendants.map(&:name))
-      assert_equal(["Child", "Bar"], graph["Bar"].descendants.map(&:name))
+      # Descendants are a set, thus the order of the iteration is not a part of the contract. Sort
+      # before the comparison, so that the test checks the contents only.
+      assert_equal(["Child", "Parent"], graph["Parent"].descendants.map(&:name).sort)
+      assert_equal(["Child", "Foo"], graph["Foo"].descendants.map(&:name).sort)
+      assert_equal(["Bar", "Child"], graph["Bar"].descendants.map(&:name).sort)
     end
   end
 
