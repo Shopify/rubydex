@@ -2,6 +2,8 @@
 
 require "optparse"
 
+require "rubydex/progress"
+
 module Rubydex
   module CLI
     # Base class for `rdx` subcommands. A subcommand parses its own options out of `argv` and, when
@@ -109,16 +111,17 @@ module Rubydex
         CLI.abort_with_usage(message)
       end
 
-      # Parses this command's options out of `argv`, with a banner derived from the command's own
-      # declaration. `-h`/`--help` prints the parser and exits, so every subcommand documents itself
-      # the same way. Pass `options: true` when the command accepts options beyond `--help`.
+      # A command with subactions passes its own `banner`. Every other command builds one from its
+      # declaration.
       #
       # A bad option reports the message and the usage text, so every subcommand rejects bad input
       # the same way.
-      #: (?options: bool) ?{ (OptionParser parser) -> void } -> void
-      def parse_options!(options: false)
-        banner = +"Usage: rdx #{self.class.usage_form}"
-        banner << " [options]" if options
+      #: (?options: bool, ?banner: String?) ?{ (OptionParser parser) -> void } -> void
+      def parse_options!(options: false, banner: nil)
+        unless banner
+          banner = +"Usage: rdx #{self.class.usage_form}"
+          banner << " [options]" if options
+        end
 
         parser = OptionParser.new do |p|
           p.banner = banner
@@ -138,18 +141,9 @@ module Rubydex
       #: (IO progress_io) -> Rubydex::Graph
       def build_graph(progress_io)
         graph = Rubydex::Graph.configure_for_workspace(Dir.pwd)
-        with_timer(progress_io, "Indexing workspace...") { graph.index_workspace }
-        with_timer(progress_io, "Resolving graph...") { graph.resolve }
+        Progress.with_timer(progress_io, "Indexing workspace...") { graph.index_workspace }
+        Progress.with_timer(progress_io, "Resolving graph...") { graph.resolve }
         graph
-      end
-
-      #: (IO io, String message) { -> void } -> void
-      def with_timer(io, message)
-        io.print(message)
-        start = Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond)
-        yield
-        duration = Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond) - start
-        io.puts(" finished in #{duration.round(2)}ms")
       end
     end
   end

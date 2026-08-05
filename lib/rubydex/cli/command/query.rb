@@ -5,7 +5,7 @@ require "rubydex/cli/command"
 module Rubydex
   module CLI
     # `rdx query <CYPHER>` — runs a Cypher query against the workspace graph and prints the result.
-    # `--schema` describes the queryable schema instead, which needs no graph.
+    # `--schema` needs no graph. `--server` sends the query to the resident server.
     class Command
       class Query < Command
         command "query"
@@ -20,11 +20,15 @@ module Rubydex
         def run
           schema = false
           format = "table"
+          use_server = false
 
           parse_options!(options: true) do |parser|
             parser.on("--schema", "Describe the queryable schema instead of running a query") { schema = true }
             parser.on("--format FORMAT", ["table", "json"], "Output format (table or json)") do |value|
               format = value
+            end
+            parser.on("--server", "Run the query through the resident server for this workspace") do
+              use_server = true
             end
           end
 
@@ -39,6 +43,34 @@ module Rubydex
 
           abort_with_usage("`query` requires a Cypher query argument (or pass `--schema`)") if query.nil? || query.empty?
 
+          if use_server && server_available?
+            query_through_server(query, format)
+          else
+            run_inline(query, format)
+          end
+        end
+
+        private
+
+        # The require is cheap, because the client side loads no native extension. An unsupported
+        # platform falls back to the inline path.
+        #: -> bool
+        def server_available?
+          require "rubydex/server"
+
+          Rubydex::Server.supported?
+        end
+
+        # The server parses and runs the query, so this process forwards a string and loads no
+        # native extension.
+        #: (String query, String format) -> bot
+        def query_through_server(query, format)
+          state = Rubydex::Server::State.new(workspace_path: Dir.pwd)
+          exit(Rubydex::Server::Client.query(state, { query: query, query_format: format }))
+        end
+
+        #: (String query, String format) -> void
+        def run_inline(query, format)
           # Parse the query up front so a malformed query fails fast, before the expensive indexing.
           parsed = parse_query(query)
 
@@ -47,8 +79,6 @@ module Rubydex
 
           render(parsed, graph, format)
         end
-
-        private
 
         #: (String query) -> Rubydex::Query
         def parse_query(query)
