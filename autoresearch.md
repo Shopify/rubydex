@@ -2,48 +2,18 @@
 
 ## Current State
 
-- **Status**: Experiment loop active. 11 experiments run, 5 kept, 2 discarded.
-- **Best `resolve_s`**: **11.142s** (commit `5f61461`); latest run 11.167s is the
-  same within noise. Original baseline was 12.318s, so the total gain is ~9.5%.
-- **Active branch**: `autoresearch/optimize-resolve-20260805`
-  (base: `main`).
+- **Status**: Experiment loop active. 16 experiments run, 12 kept, 4 discarded.
+- **Best `resolve_s`**: **8.126s** at commit `4d683f2`. The original baseline was
+  12.318s, thus the total gain is **-34.0%**. `total_s` fell from about 19.0s to
+  13.93s.
+- **Active branch**: `autoresearch/optimize-resolve-20260805` (base: `main`).
+- **Working tree**: clean at `4d683f2`. All 1132 workspace tests pass.
 - **Current blocker**: None.
-- **Next action**: Finish the `ChainState` refactor described in *Work In
-  Progress* below, then benchmark it.
+- **Next action**: See *Next candidates* below. The strongest remaining lead is a
+  per-pass cache for partial chains on the Resolver.
 - **Related tasks / PRs**: None yet. No PR is open.
-
-### Work In Progress (committed, not yet wired up)
-
-Groundwork for a no-clone linearization path is committed but **not yet used**:
-
-- `Ancestors::as_slice()` in `model/declaration.rs`.
-- `NamespaceStore::take_ancestors()` and the `Declaration::take_ancestors()`
-  forwarder, which move the chain out and leave an empty chain behind. This lets
-  `propagate_descendants` run against the chain while the graph is mutably
-  borrowed, with no clone.
-- `ChainState` enum plus `ChainState::of` and `ChainState::record` in
-  `resolution.rs`.
-
-Remaining steps to complete the optimization:
-
-1. Split `linearize_ancestors` into `linearize_ancestors_state(&mut self, id,
-   context) -> ChainState`, which stores the chain on the declaration and
-   returns only the state. Keep `linearize_ancestors` as a thin wrapper that
-   calls the state function and then clones the chain back out of the graph.
-   This is safe because `linearize_ancestors` **always** stores exactly the
-   chain it returns, on all three paths (cache hit, cycle estimate, fresh
-   linearization).
-2. In the state function, replace `set_ancestors(result.clone())` with a move,
-   and use `take_ancestors` + restore around `propagate_descendants` on the
-   cache-hit path.
-3. Change `linearize_mixins` to call `linearize_ancestors_state`, then read the
-   chain from the graph with `ancestors().as_slice()`. This removes one full
-   chain clone per mixin.
-4. **Ordering caution** for the include branch: the original code runs
-   `ids.retain(...)` before it pushes, so the dedup compares against the deque
-   contents from before the push. When iterating a slice in reverse and pushing
-   as you go, keep a `pushed` counter and compare only against
-   `linearized_includes.range(pushed..)` to keep the same result.
+- **Still to do before the task finishes**: run `bundle exec rake test` (the Ruby
+  suite). `cargo test --workspace` already passes after every kept experiment.
 
 ## Objective
 Reduce the wall-clock time of the Rubydex **resolution** stage when indexing the
@@ -126,6 +96,33 @@ removed almost every heap allocation from the linearization path:
   Resolver, cleared between linearizations, so the two identity hash sets keep
   their capacity.
 
+#### The redundant-work series (10.000 → 8.126)
+Instrumentation, not guessing, drove these. The counters above show where.
+
+- **One self-registration for descendants** (10.000→9.454): each declaration now
+  records itself on the entries of its own chain when its linearization
+  completes, in place of pushing the whole recursion stack onto every cached
+  chain that the recursion met. The result is the same, because the chain of a
+  declaration contains the chain of each of its parents and mixins. The cost
+  drops from chain length times stack depth on every cache hit to chain length
+  once for each declaration. The `descendants` set left `LinearizationContext`.
+- **Record from the local chain** (9.454→9.126): record before the chain goes
+  into the graph, which removes one map lookup for each ancestor entry.
+- **Fuse the linearize call with the chain read** (9.126→9.045):
+  `extend_with_chain` and `ensure_chain` check for a complete chain first, thus
+  the common path needs one map lookup instead of a nested call plus a second
+  lookup.
+- **Skip the descendant recording when the chain is unchanged** (9.045→8.443,
+  the largest single win). A compare of two short adjacent slices replaces
+  repeated scattered hash writes. Safe because the graph clears ancestors and
+  descendants together during invalidation.
+- **`ancestors_state_of`** (8.443→8.352): `handle_ancestor_unit` and the eager
+  singleton schedule cloned the whole chain on every pass and then dropped it.
+- **Build the chain in a pooled buffer and compare** (8.352→8.126): the repeat
+  linearization now costs no heap allocation and no store. A changed chain still
+  goes into a list of the exact size, so the graph never holds the spare
+  capacity of a pooled buffer.
+
 #### Earlier fast-path series (12.318 → 11.142)
 - **resolve_alias_chains fast path**: return `vec![declaration_id]` at once for
   non-alias declarations, with no `VecDeque` or `HashSet` allocation. 11.142→
@@ -142,6 +139,14 @@ removed almost every heap allocation from the linearization path:
   `HashSet<DeclarationId>` sets costs more than it saves, because the sets must
   be allocated on every call and the chains are short in practice.
 
+- **Non-allocating `single_alias_target` fast path in `resolve_to_namespace`**:
+  REGRESSION, confirmed twice (8.225 and 8.241 against a best of 8.126). The
+  fast path misses often, and a miss makes the alias search walk the definitions
+  a second time.
+- **Per-call memo of partial chains** (`exhausted` set on
+  `LinearizationContext`): parity at 8.129. It caught only 296k of 7.2M
+  linearizations, because the repetition is across top level calls.
+
 ### Lesson learned
 Removing an allocation from a hot path helps. Adding a data structure to a hot
 path hurts, even when it improves the asymptotic complexity, because the
@@ -156,36 +161,63 @@ When a function stores its result and also returns it, a caller that can read
 the stored copy does not need the returned clone. Split such a function into a
 state-only version plus a cloning wrapper.
 
+Measure before you optimize. Two rounds of atomic counters found waste that the
+sampling profiler could not show: 94% of all linearizations recompute a chain
+that the graph already holds. The two changes that came from those counters gave
+more than the six changes that came from reading the profile.
+
+A fast path only pays when it hits. A miss that repeats the work of the slow
+path makes the code slower, as the alias experiment showed.
+
 ### Measurement note
 The benchmark machine has high and irregular load. A single run of
 `./autoresearch.sh` can show a spread of more than 2s between its five runs. When
 a result is within about 1% of the best, re-run before you judge it.
 
-### Profile insights (latest, at 9.126s)
-`_malloc` fell from 1233 samples to 408 across the series. Current order:
+### Profile insights (latest, at 8.126s)
+`_malloc` fell from 1233 samples to 302 across the series, and
+`linearize_ancestors_state` from 593 to 172. The profile is now flat:
 
 | Function | Samples |
 |---|---|
-| `linearize_ancestors_state` | 299 |
-| `record_descendant_on_chain` | 54 |
-| `handle_definition_unit` | 46 |
-| `get_or_create_singleton_class` | 38 |
-| `get_superclass` | 37 |
-| `resolve_to_namespace` | 33 |
-| `search_ancestors` | 26 |
+| `linearize_ancestors_state` | 172 |
+| `handle_definition_unit` | 45 |
+| `ensure_chain` | 43 |
+| `get_or_create_singleton_class` | 35 |
+| `get_superclass` | 34 |
+| `resolve_to_namespace` | 28 |
+| `search_ancestors` | 23 |
+| `record_descendant_on_chain` | 7 |
 
-Machine has high variance (load avg 7.4); min-of-5 runs used for stability.
+### Counter measurements (instrumented run, do not commit the counters)
+Two instrumented runs gave the numbers that drove the largest wins. Add atomic
+counters to `resolution.rs`, call a `dump_stats` from `main.rs` at the
+`StopAfter::Resolution` branch, then revert both files.
+
+- Convergence loop passes: **4**.
+- Top level `ancestors_state_of` calls: **607,797**.
+- Total `linearize_ancestors_state` calls: **7,303,342** (about 12 nested calls
+  for each top level call).
+- Linearizations that gave a partial chain equal to the stored chain:
+  **6,878,613**, which is 94% of all of them. This is the largest known waste.
+- Descendant set writes before the skip optimization: **93,504,020**.
+- A per-call memo of partial chains caught only **295,987** of the repeats, thus
+  the repetition happens **across** top level calls, not inside one call.
 
 ### Next candidates (not yet tried)
-- The cache-hit path of `linearize_ancestors_state` still takes the declaration
-  through `declarations_mut()`, but both remaining paths only read. A change to
-  `declarations()` may help. **This was the next step when the session paused.**
-- `record_descendant_on_chain` inserts into descendant sets that grow very large
-  for widely inherited classes such as `Object`, thus the inserts miss cache.
-- The final ancestors `Vec` is the last allocation per declaration. It goes into
-  the graph, thus it cannot simply be pooled.
-- `get_or_create_singleton_class`, `get_superclass`, and `handle_definition_unit`
-  are now comparable in cost to the linearization internals.
+- **Per-pass cache for partial chains on the Resolver** (strongest lead). A
+  partial chain never enters the cache, thus 6.9M linearizations recompute a
+  chain that the graph already holds. A set of "partial in this pass" ids on the
+  `Resolver`, cleared at the start of every pass in `resolve`, would catch the
+  repeats that the per-call memo missed. Correctness comes from the convergence
+  loop: `handle_ancestor_unit` re-enqueues a partial declaration, thus a skipped
+  nested retry only moves the work to the next pass. **Care needed**:
+  `relinearize_singleton_hierarchy` calls `clear_ancestors` during a pass, thus
+  it must also drop the id from the cache, or a stale empty chain gets copied.
+- `handle_definition_unit`, `get_or_create_singleton_class` and `get_superclass`
+  are now as costly as the linearization internals and have not been studied.
+- The final ancestors `Vec` on the changed path is the last allocation per
+  declaration. It goes into the graph, thus it cannot simply be pooled.
 
 ## Key Hot-Path Observations
 - `linearize_mixins` does O(n) `VecDeque::contains` / `Vec::contains` on
