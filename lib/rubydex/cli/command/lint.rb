@@ -4,20 +4,31 @@ require "rubydex/cli/command"
 
 module Rubydex
   module CLI
-    # `rdx lint [PATH]` — discovers project and dependency rules and runs them against a workspace.
+    # `rdx lint` — discovers project and dependency rules and runs them against the current workspace.
     class Command
       class Lint < Command
         command "lint"
-        arguments "[PATH]"
-        summary "Run semantic lint rules against a workspace"
+        summary "Run semantic lint rules in the current workspace"
 
         #: -> void
         def run
-          parse_options!
+          if argv.first == "explain"
+            argv.shift
+            require "rubydex/cli/command/lint/explain"
+            Explain.new(argv).run
+            return
+          end
 
-          workspace_path = File.expand_path(argv.shift || Dir.pwd)
+          parse_options! do |parser|
+            parser.separator("")
+            parser.separator("Commands:")
+            parser.separator("  explain <RULE>  Print documentation for matching linter rules")
+            parser.separator("")
+            parser.separator("Options:")
+          end
+
           abort_with_usage("unexpected argument: #{argv.first}") unless argv.empty?
-          abort_with_usage("workspace is not a directory: #{workspace_path}") unless File.directory?(workspace_path)
+          workspace_path = current_workspace_path
 
           # Keep top-level help lightweight: command discovery loads this file before the native
           # extension, while linter support is only needed when this command runs.
@@ -77,6 +88,7 @@ module Rubydex
           end
 
           print_summary(graph.documents.count, diagnostics)
+          puts("For more information about a rule, run `rdx lint explain RuleName`.")
         end
 
         #: (Location location, workspace_path: String) -> String
