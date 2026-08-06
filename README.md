@@ -136,10 +136,14 @@ graph = Rubydex::Graph.new
 graph.index_workspace
 graph.resolve
 
-# Parse once, render against a graph as a table or JSON string
+# Parse once, then run against a graph. `run` executes the query and returns the result set.
 query = Rubydex::Query.parse("MATCH (c:Class) RETURN c.name")
-puts query.render(graph, "table")
-puts query.render(graph, "json")
+result = query.run(graph)
+
+# Read the rows as Ruby objects, or render the same result set as a table or JSON string
+result.rows.each { |row| puts row["c.name"] }
+puts result.render("table")
+puts result.render("json")
 
 # Describe the schema
 puts Rubydex::Query.schema("table")

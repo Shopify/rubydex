@@ -1,5 +1,5 @@
-use super::run_query;
 use super::schema::RelType;
+use super::{render, run_query};
 use crate::model::graph::Graph;
 use crate::test_utils::GraphTest;
 use cypher_parser::{CypherValue, OutputFormat, ResultSet, execute, parse};
@@ -195,6 +195,20 @@ fn run_query_json_output() {
     )
     .unwrap();
     assert_eq!(output, "[{\"c.name\":\"Dog\"}]");
+}
+
+#[test]
+fn render_formats_one_result_set_in_both_formats() {
+    // `execute` runs the query once; `render` formats that same result set as often as needed.
+    let graph = fixture_graph();
+    let result = run(&graph, "MATCH (c:Class {name: 'Dog'}) RETURN c.name");
+
+    assert_eq!(render(&result, OutputFormat::Json), "[{\"c.name\":\"Dog\"}]");
+
+    let table = render(&result, OutputFormat::Table);
+    assert!(table.contains("c.name"));
+    assert!(table.contains("Dog"));
+    assert!(table.contains("1 row"));
 }
 
 #[test]
