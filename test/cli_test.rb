@@ -25,6 +25,7 @@ class CLITest < Minitest::Test
 
     assert_includes(commands, Rubydex::CLI::Command::Query)
     assert_includes(commands, Rubydex::CLI::Command::Console)
+    assert_includes(commands, Rubydex::CLI::Command::List)
     assert_includes(commands, Rubydex::CLI::Command::Lint)
     assert_includes(commands, Rubydex::CLI::Command::Mcp)
 
@@ -32,6 +33,7 @@ class CLITest < Minitest::Test
     assert_equal("query", Rubydex::CLI::Command::Query.command_name)
     assert_equal("query <CYPHER>", Rubydex::CLI::Command::Query.usage_form)
     assert_equal("console", Rubydex::CLI::Command::Console.usage_form)
+    assert_equal("list [docs|roots] [PATH]", Rubydex::CLI::Command::List.usage_form)
     assert_equal("lint [PATH]", Rubydex::CLI::Command::Lint.usage_form)
   end
 
@@ -47,12 +49,13 @@ class CLITest < Minitest::Test
     # before the offsets are compared: a missing one fails on its own assertion rather than on a
     # comparison against nil. We collect the beginning offset of the first match (index 0) for each
     # command so that we can compare their order below.
-    console, lint, mcp, query, help = ["console", "lint", "mcp", "query", "help"].map do |name|
+    console, lint, list, mcp, query, help = ["console", "lint", "list", "mcp", "query", "help"].map do |name|
       assert_stdout_includes_pattern(result, /^  #{name}\b/).begin(0)
     end
 
     assert_operator(console, :<, lint)
-    assert_operator(lint, :<, mcp)
+    assert_operator(lint, :<, list)
+    assert_operator(list, :<, mcp)
     assert_operator(mcp, :<, query)
     # `help` is listed last rather than in alphabetical position.
     assert_operator(query, :<, help)
@@ -96,6 +99,7 @@ class CLITest < Minitest::Test
     [
       Rubydex::CLI::Command::Query,
       Rubydex::CLI::Command::Console,
+      Rubydex::CLI::Command::List,
       Rubydex::CLI::Command::Lint,
       Rubydex::CLI::Command::Mcp,
     ].each do |command|
@@ -206,7 +210,7 @@ class CLITest < Minitest::Test
   end
 
   def test_command_help_is_available_per_subcommand
-    ["query", "console", "lint", "mcp"].each do |command|
+    ["query", "console", "list", "lint", "mcp"].each do |command|
       result = rdx(command, "--help")
 
       assert_success_status(result)
@@ -215,7 +219,7 @@ class CLITest < Minitest::Test
   end
 
   def test_every_command_reports_an_invalid_option_with_the_usage
-    ["query", "console", "lint", "mcp"].each do |command|
+    ["query", "console", "list", "lint", "mcp"].each do |command|
       result = rdx(command, "--bogus-flag")
 
       refute_success_status(result)
@@ -245,6 +249,48 @@ class CLITest < Minitest::Test
     assert_stderr_includes(result, "unexpected argument: two")
     assert_stderr_includes(result, "Usage: rdx mcp [PATH]")
     refute_stderr_includes(result, "Usage: rdx <command> [options]")
+  end
+
+  def test_list_docs_prints_sorted_workspace_relative_paths
+    with_context do |context|
+      context.write!("z.rb", "class Z; end\n")
+      context.write!("lib/a.rb", "class A; end\n")
+
+      result = rdx("list", chdir: context.absolute_path)
+
+      assert_success_status(result)
+      paths = result.out.lines(chomp: true)
+      assert_equal(paths.sort, paths)
+      assert_includes(paths, "lib/a.rb")
+      assert_includes(paths, "z.rb")
+    end
+  end
+
+  def test_list_roots_omits_excluded_roots
+    with_context do |context|
+      context.write!("app/main.rb", "class Main; end\n")
+      context.write!("ignored/skip.rb", "class Skip; end\n")
+      context.write!("rubydex.toml", "[graph]\nexclude = [\"ignored\"]\n")
+
+      result = rdx("list", "roots", context.absolute_path)
+
+      assert_success_status(result)
+      paths = result.out.lines(chomp: true)
+      assert_equal(paths.sort, paths)
+      assert_includes(paths, "app")
+      refute_includes(paths, "ignored")
+    end
+  end
+
+  def test_list_rejects_an_unknown_target
+    with_context do |context|
+      result = rdx("list", "things", context.absolute_path)
+
+      refute_success_status(result)
+      assert_empty_stdout(result)
+      assert_stderr_includes(result, "Unknown list target: things. Expected `docs` or `roots`.")
+      assert_stderr_includes(result, "Usage: rdx list [docs|roots] [PATH]")
+    end
   end
 
   def test_lint_reports_a_project_rule_diagnostic_with_related_information
