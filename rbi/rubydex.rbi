@@ -478,6 +478,15 @@ class Rubydex::Linter::MissingGraphDependencyError < StandardError
   def initialize(rule_name, dependency); end
 end
 
+class Rubydex::Linter::RuleLoadError < StandardError; end
+
+class Rubydex::Linter::RuleLoader
+  RULE_GLOB = T.let(T.unsafe(nil), String)
+
+  sig { params(workspace_path: String).returns(T::Array[T.class_of(Rubydex::Linter::Rule)]) }
+  def self.load(workspace_path); end
+end
+
 class Rubydex::Linter::Runner
   sig do
     params(

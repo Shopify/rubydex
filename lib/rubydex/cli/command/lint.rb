@@ -7,8 +7,6 @@ module Rubydex
     # `rdx lint [PATH]` — discovers project and dependency rules and runs them against a workspace.
     class Command
       class Lint < Command
-        RULE_GLOB = "rubydex_linter/rules/**/*.rb" #: String
-
         command "lint"
         arguments "[PATH]"
         summary "Run semantic lint rules against a workspace"
@@ -56,23 +54,11 @@ module Rubydex
           )
         end
 
-        #: (String workspace_path) -> Array[singleton(Linter::Rule)]
+        #: (String workspace_path) -> Array[singleton(Rubydex::Linter::Rule)]
         def load_linter_rules(workspace_path)
-          existing_rules = Rubydex::Linter::Rule.subclasses
-          rule_files = Dir.glob(RULE_GLOB, base: workspace_path).map do |rule_file|
-            File.expand_path(rule_file, workspace_path)
-          end
-          if ENV["BUNDLE_GEMFILE"]
-            rule_files.concat(Gem.find_latest_files(RULE_GLOB))
-          end
-
-          rule_files.each do |rule_file|
-            require rule_file
-          rescue LoadError, SyntaxError => error
-            abort("Unable to load linter rules from #{rule_file}: #{error.message}")
-          end
-
-          Rubydex::Linter::Rule.subclasses - existing_rules
+          Rubydex::Linter::RuleLoader.load(workspace_path)
+        rescue Rubydex::Linter::RuleLoadError => error
+          abort(error.message)
         end
 
         #: (Array[Diagnostic] diagnostics, Graph graph) -> void

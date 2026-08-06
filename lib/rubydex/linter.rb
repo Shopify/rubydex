@@ -4,6 +4,7 @@ require "rubydex"
 require "rubydex/linter/helpers/path_helpers"
 require "rubydex/linter/result"
 require "rubydex/linter/rule"
+require "rubydex/linter/rule_loader"
 require "rubydex/linter/runner"
 
 module Rubydex
