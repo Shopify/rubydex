@@ -262,13 +262,23 @@ class CLITest < Minitest::Test
       result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
 
       refute_success_status(result)
-      assert_stdout_equals(
-        <<~OUTPUT,
-          #{context.absolute_path_to("app.rb")}:1:7: error: CLITestProjectErrorRule: Foo is not allowed.
-            #{context.absolute_path_to("app.rb")}:2:7: Foo is also defined here.
-        OUTPUT
+      assert_stdout_includes(
         result,
+        <<~OUTPUT,
+          Offenses:
+
+          app.rb:1:7: error: CLITestProjectErrorRule: Foo is not allowed.
+            app.rb:2:7: Foo is also defined here.
+
+          class Foo; end
+                ^^^
+        OUTPUT
       )
+      assert_stdout_includes_pattern(
+        result,
+        /\d+ files inspected, 1 offense detected: 1 error, 0 warnings, 0 info, 0 hints/,
+      )
+      refute_stdout_includes(result, context.absolute_path)
       assert_stderr_includes(result, "Indexing workspace...")
       assert_stderr_includes(result, "Resolving graph...")
     end
@@ -282,7 +292,7 @@ class CLITest < Minitest::Test
       result = with_bundle_gemfile(nil) { rdx("lint", context.absolute_path) }
 
       assert_success_status(result)
-      assert_empty_stdout(result)
+      assert_stdout_includes_pattern(result, /\d+ files inspected, no offenses detected/)
     end
   end
 
