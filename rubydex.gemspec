@@ -24,6 +24,7 @@ Gem::Specification.new do |spec|
     Dir.glob("lib/**/*.rb") +
     Dir.glob("rbi/**/*.rbi") +
     Dir.glob("ext/rubydex/**/*.{c,h}") +
+    Dir.glob("skills/**/SKILL.md") +
     Dir.glob("rust/**/*.{rs,toml,lock,hbs}").reject { |f| f.start_with?("rust/target") }
 
   if ENV["RELEASE"]

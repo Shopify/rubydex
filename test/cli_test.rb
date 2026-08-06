@@ -27,6 +27,7 @@ class CLITest < Minitest::Test
     assert_includes(commands, Rubydex::CLI::Command::Console)
     assert_includes(commands, Rubydex::CLI::Command::Lint)
     assert_includes(commands, Rubydex::CLI::Command::Mcp)
+    assert_includes(commands, Rubydex::CLI::Command::Skill)
 
     # The declared name is what the class reports, and drives its usage line.
     assert_equal("query", Rubydex::CLI::Command::Query.command_name)
@@ -98,6 +99,7 @@ class CLITest < Minitest::Test
       Rubydex::CLI::Command::Console,
       Rubydex::CLI::Command::Lint,
       Rubydex::CLI::Command::Mcp,
+      Rubydex::CLI::Command::Skill,
     ].each do |command|
       assert_stdout_includes_pattern(result, /^  #{Regexp.escape(command.usage_form)}\s{2,}\S/)
     end
@@ -336,6 +338,55 @@ class CLITest < Minitest::Test
     assert_equal("fiddle/import", error.path)
   end
 
+  def test_skill_lists_available_skill_ids
+    result = rdx("skill")
+
+    assert_success_status(result)
+    assert_stdout_includes(result, "send-private-method")
+  end
+
+  def test_skill_loads_a_skill_by_id
+    result = rdx("skill", "send-private-method")
+
+    assert_success_status(result)
+    assert_stdout_includes(result, "# Send Private Method")
+  end
+
+  def test_skill_rejects_an_unknown_id
+    result = rdx("skill", "nonexistent")
+
+    refute_success_status(result)
+    # The CLI, not the registry, decides to answer an unknown id with the ids it does have.
+    assert_stderr_includes(result, "Unknown skill: nonexistent. Available skills: send-private-method")
+    refute_match(/Usage: rdx <command>/, result.err)
+  end
+
+  def test_skill_rejects_an_extra_argument
+    result = rdx("skill", "send-private-method", "extra")
+
+    refute_success_status(result)
+    assert_stderr_includes(result, "unexpected argument: extra")
+    assert_empty_stdout(result)
+  end
+
+  def test_skill_reports_a_library_with_no_skills
+    with_empty_skill_library do
+      result = rdx("skill")
+
+      assert_success_status(result)
+      assert_stdout_includes(result, "No skills are available.")
+    end
+  end
+
+  def test_skill_reports_a_library_with_no_skills_for_an_unknown_id
+    with_empty_skill_library do
+      result = rdx("skill", "alpha")
+
+      refute_success_status(result)
+      assert_stderr_includes(result, "Unknown skill: alpha. No skills are available.")
+    end
+  end
+
   private
 
   # Each in-process invocation loads a distinct named rule. Reopening the same class would not add
@@ -385,6 +436,19 @@ class CLITest < Minitest::Test
     console = Rubydex::CLI::Command::Console.any_instance
     console.stubs(:build_graph).returns(:unused)
     console.stubs(:require).with("irb").raises(error)
+  end
+
+  # Points the `skill` command at a library of its own, so the tests that need one without skills do
+  # not depend on what `skills/` happens to hold.
+  #: { -> void } -> void
+  def with_empty_skill_library(&block)
+    with_context do |context|
+      context.write!("skills/.keep", "")
+      Rubydex::CLI::Command::Skill.any_instance.stubs(:skills_directory)
+        .returns(context.absolute_path_to("skills"))
+
+      block.call
+    end
   end
 
   # `LoadError#path` names the feature that could not be loaded, and has no public writer.

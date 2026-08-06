@@ -32,6 +32,9 @@ the Ruby VM to the Rust crate logic.
 - `ext/rubydex`: The C native extension that connects the Ruby VM with the Rust crate logic through FFI
 - `lib`: The rest of the Ruby code
 - `test`: Ruby test files
+- `skills`: the skill library for deterministic skill loading. These are NOT for developing on Rubydex and should not be loaded unless explicitly requested. Each `skills/<id>/SKILL.md` is a Markdown playbook with YAML frontmatter (`name`,
+`description`) that `rdx skill <id>` prints for an AI agent. The directory name is the id and the frontmatter `name`
+must repeat it. Add a skill by adding the directory and the file; nothing else registers it
 
 ### Naming Conventions
 
