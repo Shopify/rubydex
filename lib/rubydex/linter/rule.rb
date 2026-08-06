@@ -27,12 +27,18 @@ module Rubydex
         @graph = graph
         @config = config
         @diagnostics = [] #: Array[Diagnostic]
+        @verified_severity = nil #: singleton(Severity::Base)?
       end
 
       # @abstract
       #: () -> singleton(Severity::Base)
       def severity
         raise NotImplementedError, "Subclasses must implement the severity method"
+      end
+
+      #: () -> singleton(Severity::Base)
+      def verified_severity
+        @verified_severity ||= config.severity_for(self.class, default: severity)
       end
 
       # @abstract
@@ -91,7 +97,7 @@ module Rubydex
           rule: self.class.rule_name,
           message: message,
           location: location,
-          severity: severity,
+          severity: verified_severity,
           related_information: related_information,
         )
       end

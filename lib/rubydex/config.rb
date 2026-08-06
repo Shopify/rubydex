@@ -20,6 +20,16 @@ module Rubydex
       rule = @rules[rule_class.rule_name]
       !rule || rule.enabled?
     end
+
+    #: (singleton(Linter::Rule) rule_class) -> Array[String]
+    def excludes_for(rule_class)
+      @rules[rule_class.rule_name]&.exclude_patterns || []
+    end
+
+    #: (singleton(Linter::Rule) rule_class, default: singleton(Severity::Base)) -> singleton(Severity::Base)
+    def severity_for(rule_class, default:)
+      @rules[rule_class.rule_name]&.severity || default
+    end
   end
 
   # The settings of a single linter rule, read from a `[linter.rules.RuleName]` table.
@@ -27,10 +37,18 @@ module Rubydex
     #: String
     attr_reader :name
 
-    #: (String, bool) -> void
-    def initialize(name, enabled)
+    #: Array[String]
+    attr_reader :exclude_patterns
+
+    #: singleton(Severity::Base)?
+    attr_reader :severity
+
+    #: (String, bool, ?Array[String], ?singleton(Severity::Base)?) -> void
+    def initialize(name, enabled, exclude_patterns = [], severity = nil)
       @name = name
       @enabled = enabled
+      @exclude_patterns = exclude_patterns
+      @severity = severity
     end
 
     #: () -> bool
