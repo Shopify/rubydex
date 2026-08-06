@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "helpers/context"
+require "mocha/minitest"
 require "rubydex/linter"
 
 class LinterTest < Minitest::Test
@@ -64,6 +65,21 @@ class LinterTest < Minitest::Test
     end
   end
 
+  class DependencyPathRule < Rubydex::Linter::Rule
+    def severity = Rubydex::Severity::Information
+
+    def lint
+      path = File.join(graph.workspace_path, "vendor/bundle/gems/example.rb")
+      path.prepend("/") if Gem.win_platform?
+      uri = URI::File.build(path: path).to_s
+
+      add_diagnostic(
+        "Inside a dependency path.",
+        Rubydex::Location.new(uri: uri, start_line: 0, end_line: 0, start_column: 0, end_column: 1),
+      )
+    end
+  end
+
   class ExcludedPrimaryRule < Rubydex::Linter::Rule
     def severity = Rubydex::Severity::Information
 
@@ -116,27 +132,6 @@ class LinterTest < Minitest::Test
     rule = WarningRule.new(Rubydex::Graph.new, config:)
 
     assert_same(config, rule.config)
-  end
-
-  def test_rule_builds_a_zero_width_file_location
-    location = WarningRule.new(Rubydex::Graph.new, config: linter_config).file_location("file:///tmp/example.rb")
-
-    assert_equal("file:///tmp/example.rb", location.uri)
-    assert_equal([0, 0, 0, 0], [
-      location.start_line,
-      location.start_column,
-      location.end_line,
-      location.end_column,
-    ])
-  end
-
-  def test_rule_extracts_file_paths_and_preserves_other_uris
-    with_context do |context|
-      rule = WarningRule.new(Rubydex::Graph.new, config: linter_config)
-
-      assert_equal(context.absolute_path_to("example.rb"), rule.path_for_uri(context.uri_to("example.rb")))
-      assert_equal("untitled:example.rb", rule.path_for_uri("untitled:example.rb"))
-    end
   end
 
   def test_configured_severity_overrides_the_rule_severity
@@ -213,6 +208,19 @@ class LinterTest < Minitest::Test
     end
   end
 
+  def test_runner_filters_diagnostics_under_dependency_paths
+    with_context do |context|
+      context.write!("workspace/inside.rb")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      dependency_path = context.absolute_path_to("workspace/vendor/bundle")
+      Gem.stubs(:path).returns([dependency_path])
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [DependencyPathRule], config: linter_config).run
+
+      assert_empty(result.diagnostics)
+    end
+  end
+
   def test_runner_filters_a_diagnostic_when_its_primary_location_matches_a_rule_exclude
     with_context do |context|
       context.write!("workspace/inside.rb")
@@ -261,7 +269,7 @@ class LinterTest < Minitest::Test
   #: (?Hash[String, bool] rules) -> Rubydex::LinterConfig
   def linter_config(rules = {})
     Rubydex::LinterConfig.new(
-      rules.to_h { |name, enabled| [name, Rubydex::RuleConfig.new(name, enabled, [], nil)] },
+      rules.to_h { |name, enabled| [name, Rubydex::RuleConfig.new(name, enabled)] },
     )
   end
 

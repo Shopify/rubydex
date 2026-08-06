@@ -27,6 +27,7 @@ module Rubydex
         @graph = graph
         @config = config
         @diagnostics = [] #: Array[Diagnostic]
+        @verified_severity = nil #: singleton(Severity::Base)?
       end
 
       # @abstract
@@ -37,7 +38,7 @@ module Rubydex
 
       #: () -> singleton(Severity::Base)
       def verified_severity
-        config.severity_for(self.class, default: severity)
+        @verified_severity ||= config.severity_for(self.class, default: severity)
       end
 
       # @abstract
@@ -59,13 +60,8 @@ module Rubydex
 
       #: (String) -> String
       def path_for_uri(uri)
-        parsed_uri = URI.parse(uri)
-        if parsed_uri.scheme == "file"
-          path = parsed_uri.path #: as !nil
-          path.delete_prefix!("/") if Gem.win_platform?
-          return path
-        end
-
+        file_location(uri).to_file_path
+      rescue Location::NotFileUriError
         uri
       end
 

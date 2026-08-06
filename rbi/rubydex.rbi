@@ -627,7 +627,7 @@ class Rubydex::RuleConfig
       severity: T.nilable(T.class_of(Rubydex::Severity::Base)),
     ).void
   end
-  def initialize(name, enabled, exclude_patterns, severity); end
+  def initialize(name, enabled, exclude_patterns = [], severity = nil); end
 
   sig { returns(T::Boolean) }
   def enabled?; end

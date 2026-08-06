@@ -43,8 +43,8 @@ module Rubydex
     #: singleton(Severity::Base)?
     attr_reader :severity
 
-    #: (String, bool, Array[String], singleton(Severity::Base)?) -> void
-    def initialize(name, enabled, exclude_patterns, severity)
+    #: (String, bool, ?Array[String], ?singleton(Severity::Base)?) -> void
+    def initialize(name, enabled, exclude_patterns = [], severity = nil)
       @name = name
       @enabled = enabled
       @exclude_patterns = exclude_patterns

@@ -28,10 +28,11 @@ module Rubydex
           #: (Location, workspace: String) -> String
           def display_path(location, workspace:)
             path = location.to_file_path
-            relative_path = Pathname.new(path).relative_path_from(workspace).to_s
-            relative_path.start_with?("../") ? path : relative_path
+            return path unless path == workspace || path.start_with?("#{workspace}/")
+
+            Pathname.new(path).relative_path_from(workspace).to_s
           rescue Location::NotFileUriError
-            URI(location.uri).opaque #: as !nil
+            URI(location.uri).opaque || location.uri
           end
         end
 

@@ -42,6 +42,9 @@ module Rubydex
       raise NotFileUriError, "URI is not a file:// URI: #{@uri}" unless uri.scheme == "file"
 
       path = uri.path
+      raise NotFileUriError, "URI has no file path: #{@uri}" unless path
+
+      path = URI.decode_uri_component(path)
       # TODO: This has to go away once we have a proper URI abstraction
       path.delete_prefix!("/") if Gem.win_platform?
       path
