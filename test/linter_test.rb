@@ -188,12 +188,11 @@ class LinterTest < Minitest::Test
     assert_predicate(result, :success?)
   end
 
-  def test_runner_requires_rules
-    error = assert_raises(ArgumentError) do
-      Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [], config: linter_config)
-    end
+  def test_runner_accepts_no_rules
+    result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [], config: linter_config).run
 
-    assert_equal("At least one linter rule is required", error.message)
+    assert_empty(result.diagnostics)
+    assert_predicate(result, :success?)
   end
 
   def test_runner_filters_diagnostics_outside_the_workspace
