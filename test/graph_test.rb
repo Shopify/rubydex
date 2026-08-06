@@ -3,6 +3,7 @@
 require "test_helper"
 require "helpers/context"
 require "json"
+require "mocha/minitest"
 
 class GraphTest < Minitest::Test
   include Test::Helpers::WithContext
@@ -761,6 +762,26 @@ class GraphTest < Minitest::Test
       end
 
       assert_equal(paths.length, paths.uniq.length)
+    end
+  end
+
+  def test_index_workspace_skips_missing_dependency_require_paths
+    with_context do |context|
+      context.write!("workspace/app.rb", "class App; end\n")
+      context.write!("dependency/lib/dependency.rb", "class WorkspacePathsDependency; end\n")
+      Bundler.stubs(:locked_gems).returns(stub(specs: [stub(name: "dependency")]))
+      Gem::Specification.expects(:find_by_name).with("dependency").returns(
+        stub(
+          full_gem_path: context.absolute_path_to("dependency"),
+          require_paths: ["lib", "missing"],
+        ),
+      )
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+
+      assert_empty(graph.index_workspace)
+      graph.resolve
+
+      refute_nil(graph["WorkspacePathsDependency"])
     end
   end
 

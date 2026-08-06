@@ -7,6 +7,16 @@ require "rubydex/linter"
 class RuleLoaderTest < Minitest::Test
   include Test::Helpers::WithContext
 
+  def test_load_returns_built_in_rules_without_bundler
+    with_context do |context|
+      rules = with_bundle_gemfile(nil) do
+        Rubydex::Linter::RuleLoader.load(context.absolute_path)
+      end
+
+      assert_includes(rules, Rubydex::Linter::Rules::RuleStructure)
+    end
+  end
+
   def test_load_wraps_rule_file_errors
     with_context do |context|
       rule_file = "rubydex_linter/rules/broken_rule.rb"

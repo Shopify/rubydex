@@ -221,6 +221,20 @@ class LinterTest < Minitest::Test
     end
   end
 
+  def test_runner_filters_native_diagnostics_under_dependency_paths
+    with_context do |context|
+      context.write!("workspace/inside.rb")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      dependency_path = context.absolute_path_to("workspace/.dev/gem")
+      graph.index_source(context.uri_to("workspace/.dev/gem/broken.rb"), "class Broken", "ruby")
+      Gem.stubs(:path).returns([dependency_path])
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [SilentRule], config: linter_config).run
+
+      assert_empty(result.diagnostics)
+    end
+  end
+
   def test_runner_filters_a_diagnostic_when_its_primary_location_matches_a_rule_exclude
     with_context do |context|
       context.write!("workspace/inside.rb")
