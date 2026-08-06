@@ -25,6 +25,7 @@ class CLITest < Minitest::Test
 
     assert_includes(commands, Rubydex::CLI::Command::Query)
     assert_includes(commands, Rubydex::CLI::Command::Console)
+    assert_includes(commands, Rubydex::CLI::Command::Explain)
     assert_includes(commands, Rubydex::CLI::Command::List)
     assert_includes(commands, Rubydex::CLI::Command::Lint)
     assert_includes(commands, Rubydex::CLI::Command::Mcp)
@@ -33,6 +34,7 @@ class CLITest < Minitest::Test
     assert_equal("query", Rubydex::CLI::Command::Query.command_name)
     assert_equal("query <CYPHER>", Rubydex::CLI::Command::Query.usage_form)
     assert_equal("console", Rubydex::CLI::Command::Console.usage_form)
+    assert_equal("explain <RULE> [PATH]", Rubydex::CLI::Command::Explain.usage_form)
     assert_equal("list [docs|roots] [PATH]", Rubydex::CLI::Command::List.usage_form)
     assert_equal("lint [PATH]", Rubydex::CLI::Command::Lint.usage_form)
   end
@@ -49,11 +51,12 @@ class CLITest < Minitest::Test
     # before the offsets are compared: a missing one fails on its own assertion rather than on a
     # comparison against nil. We collect the beginning offset of the first match (index 0) for each
     # command so that we can compare their order below.
-    console, lint, list, mcp, query, help = ["console", "lint", "list", "mcp", "query", "help"].map do |name|
+    console, explain, lint, list, mcp, query, help = ["console", "explain", "lint", "list", "mcp", "query", "help"].map do |name|
       assert_stdout_includes_pattern(result, /^  #{name}\b/).begin(0)
     end
 
-    assert_operator(console, :<, lint)
+    assert_operator(console, :<, explain)
+    assert_operator(explain, :<, lint)
     assert_operator(lint, :<, list)
     assert_operator(list, :<, mcp)
     assert_operator(mcp, :<, query)
@@ -99,6 +102,7 @@ class CLITest < Minitest::Test
     [
       Rubydex::CLI::Command::Query,
       Rubydex::CLI::Command::Console,
+      Rubydex::CLI::Command::Explain,
       Rubydex::CLI::Command::List,
       Rubydex::CLI::Command::Lint,
       Rubydex::CLI::Command::Mcp,
@@ -210,7 +214,7 @@ class CLITest < Minitest::Test
   end
 
   def test_command_help_is_available_per_subcommand
-    ["query", "console", "list", "lint", "mcp"].each do |command|
+    ["query", "console", "explain", "list", "lint", "mcp"].each do |command|
       result = rdx(command, "--help")
 
       assert_success_status(result)
@@ -219,7 +223,7 @@ class CLITest < Minitest::Test
   end
 
   def test_every_command_reports_an_invalid_option_with_the_usage
-    ["query", "console", "list", "lint", "mcp"].each do |command|
+    ["query", "console", "explain", "list", "lint", "mcp"].each do |command|
       result = rdx(command, "--bogus-flag")
 
       refute_success_status(result)
@@ -249,6 +253,100 @@ class CLITest < Minitest::Test
     assert_stderr_includes(result, "unexpected argument: two")
     assert_stderr_includes(result, "Usage: rdx mcp [PATH]")
     refute_stderr_includes(result, "Usage: rdx <command> [options]")
+  end
+
+  def test_explain_reports_discovered_rules_with_the_same_name_in_stable_order
+    with_context do |context|
+      context.write!("rubydex_linter/rules/shared_rule.rb", <<~RUBY)
+        module ExplainDuplicateFixtures
+          module First
+            # Flags raw SQL built through application query helpers.
+            #
+            # Prefer parameter binding instead.
+            class SharedRule < Rubydex::Linter::Rule
+              def severity = Rubydex::Severity::Error
+              def lint; end
+            end
+          end
+
+          module Second
+            class SharedRule < Rubydex::Linter::Rule
+              def severity = Rubydex::Severity::Error
+              def lint; end
+            end
+          end
+        end
+      RUBY
+
+      result = with_bundle_gemfile(nil) { rdx("explain", "SharedRule", context.absolute_path) }
+
+      assert_success_status(result)
+      assert_stdout_equals(<<~DOCS, result)
+        ExplainDuplicateFixtures::First::SharedRule
+
+        Flags raw SQL built through application query helpers.
+
+        Prefer parameter binding instead.
+
+        ExplainDuplicateFixtures::Second::SharedRule: no documentation available.
+      DOCS
+    end
+  end
+
+  def test_explain_reports_only_the_exact_rule_name
+    with_context do |context|
+      context.write!("rubydex_linter/rules/exact_rule.rb", <<~RUBY)
+        module ExplainExactFixtures
+          # Flags raw SQL string interpolation.
+          class ExactRule < Rubydex::Linter::Rule
+            class Helper; end
+
+            def severity = Rubydex::Severity::Error
+            def lint; end
+          end
+
+          class ExactRuleExtension < Rubydex::Linter::Rule
+            def severity = Rubydex::Severity::Error
+            def lint; end
+          end
+        end
+      RUBY
+
+      result = with_bundle_gemfile(nil) { rdx("explain", "ExactRule", context.absolute_path) }
+
+      assert_success_status(result)
+      assert_stdout_equals(<<~DOCS, result)
+        ExplainExactFixtures::ExactRule
+
+        Flags raw SQL string interpolation.
+      DOCS
+    end
+  end
+
+  def test_explain_rejects_an_unknown_rule
+    with_context do |context|
+      context.write!("rubydex_linter/rules/known_rule.rb", <<~RUBY)
+        class ExplainKnownRule < Rubydex::Linter::Rule
+          def severity = Rubydex::Severity::Error
+          def lint; end
+        end
+      RUBY
+
+      result = with_bundle_gemfile(nil) { rdx("explain", "MissingRule", context.absolute_path) }
+
+      refute_success_status(result)
+      assert_empty_stdout(result)
+      assert_stderr_includes(result, "Rule does not exist: MissingRule")
+    end
+  end
+
+  def test_explain_requires_a_rule_name
+    result = rdx("explain")
+
+    refute_success_status(result)
+    assert_empty_stdout(result)
+    assert_stderr_includes(result, "`explain` requires a rule name argument")
+    assert_stderr_includes(result, "Usage: rdx explain <RULE> [PATH]")
   end
 
   def test_list_docs_prints_sorted_workspace_relative_paths
@@ -322,6 +420,7 @@ class CLITest < Minitest::Test
         result,
         /\d+ files inspected, 1 offense detected: 1 error, 0 warnings, 0 info, 0 hints/,
       )
+      assert_stdout_includes(result, "For more information about a rule, run `rdx explain RuleName`.")
       refute_stdout_includes(result, context.absolute_path)
       assert_stderr_includes(result, "Indexing workspace...")
       assert_stderr_includes(result, "Resolving graph...")
