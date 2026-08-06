@@ -560,6 +560,52 @@ class Rubydex::Linter::RuleTestCase < ::Minitest::Test
   def assert_handles_missing_required_dependency(dependency, *args, after_excluding: [], &rule_builder); end
 end
 
+class Rubydex::Linter::FileRuleTestCase < Rubydex::Linter::RuleTestCase
+  sig { returns(String) }
+  def workspace_path; end
+
+  sig { params(sources: T::Hash[String, String]).void }
+  def add_shared_source(sources); end
+
+  sig { returns(T::Array[String]) }
+  def ignored_diagnostic_files; end
+
+  sig do
+    params(
+      args: T.any(String, T::Hash[T.any(String, Symbol), String]),
+      config: Rubydex::LinterConfig,
+      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::Rule)),
+    ).void
+  end
+  def assert_diagnostics(*args, config: default_rule_config, &rule_builder); end
+
+  sig do
+    params(
+      args: T.any(String, T::Hash[T.any(String, Symbol), String]),
+      config: Rubydex::LinterConfig,
+      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::Rule)),
+    ).returns(T::Array[Rubydex::Diagnostic])
+  end
+  def assert_no_diagnostics(*args, config: default_rule_config, &rule_builder); end
+
+  sig do
+    params(
+      dependency: String,
+      args: T.any(String, T::Hash[T.any(String, Symbol), String]),
+      after_excluding: T::Array[String],
+      config: Rubydex::LinterConfig,
+      rule_builder: T.nilable(T.proc.params(graph: Rubydex::Graph).returns(Rubydex::Linter::Rule)),
+    ).void
+  end
+  def assert_handles_missing_required_dependency(
+    dependency,
+    *args,
+    after_excluding: [],
+    config: default_rule_config,
+    &rule_builder
+  ); end
+end
+
 class Rubydex::Linter::Runner
   sig do
     params(
