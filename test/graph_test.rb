@@ -1741,7 +1741,7 @@ class GraphTest < Minitest::Test
       assert_equal(2, result.length)
       refute_empty(result)
 
-      # Enumerable comes from `each`, which walks the same memoized rows.
+      # Enumerable comes from `each`. It walks the memoized rows once `rows` has built them.
       assert_equal(["Animal", "Dog"], result.map { |row| row["c.name"] })
       assert_same(result.rows, result.rows)
 
@@ -1750,6 +1750,85 @@ class GraphTest < Minitest::Test
       assert_equal(0, empty.size)
       # The columns of a query that matched nothing are still known.
       assert_equal(["c.name"], empty.columns)
+    end
+  end
+
+  def test_each_converts_only_the_rows_the_block_consumes
+    with_context do |context|
+      context.write!("zoo.rb", 300.times.map { |i| "class Klass#{i}; end" }.join("\n"))
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      query = Rubydex::Query.parse("MATCH (c:Class) WHERE c.name STARTS WITH 'Klass' RETURN c.name, c.kind")
+      assert_equal(300, query.run(graph).size)
+
+      # `first` breaks out of `each` after one row, so only that row becomes Ruby objects. `rows`
+      # converts all 300. Each run gets a fresh result, because `rows` memoizes its array.
+      early = count_allocations { query.run(graph).first }
+      every = count_allocations { query.run(graph).rows }
+
+      assert_operator(early * 10, :<, every, "expected `first` to convert one row, not all of them")
+    end
+  end
+
+  def test_each_without_a_block_returns_an_enumerator
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      result = Rubydex::Query.parse(
+        "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name ORDER BY c.name",
+      ).run(graph)
+
+      enumerator = result.each
+      assert_instance_of(Enumerator, enumerator)
+      assert_equal([{ "c.name" => "Animal" }, { "c.name" => "Dog" }], enumerator.to_a)
+    end
+  end
+
+  def test_each_stays_usable_after_a_break_and_after_a_raising_block
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      result = Rubydex::Query.parse(
+        "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name ORDER BY c.name",
+      ).run(graph)
+
+      # Both exits leave the walk through `rb_ensure`, which frees the row cursor.
+      assert_equal("Animal", result.each { |row| break row["c.name"] })
+      assert_raises(RuntimeError) { result.each { raise("boom") } }
+
+      assert_equal(["Animal", "Dog"], result.map { |row| row["c.name"] })
+      assert_equal(2, result.rows.length)
+    end
+  end
+
+  def test_rows_share_one_frozen_key_per_column
+    with_context do |context|
+      context.write!("zoo.rb", "class Animal; end\nclass Dog < Animal; end\n")
+
+      graph = Rubydex::Graph.new
+      graph.index_all(context.glob("**/*.rb"))
+      graph.resolve
+
+      rows = Rubydex::Query.parse(
+        "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name, c.kind ORDER BY c.name",
+      ).run(graph).rows
+
+      key = rows.first.keys.first
+      assert_predicate(key, :frozen?)
+      assert_equal(Encoding::UTF_8, key.encoding)
+      # One key object per column serves every row, so a wide result allocates no key per cell.
+      assert_same(key, rows.last.keys.first)
     end
   end
 
@@ -1957,5 +2036,14 @@ class GraphTest < Minitest::Test
 
   def graph_for(context)
     Rubydex::Graph.configure_for_workspace(context.absolute_path)
+  end
+
+  # Counts the objects that the block allocates. `GC.start` first, so that a pending collection does
+  # not land inside the measurement.
+  def count_allocations
+    GC.start
+    before = GC.stat(:total_allocated_objects)
+    yield
+    GC.stat(:total_allocated_objects) - before
   end
 end
