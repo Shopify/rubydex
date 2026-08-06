@@ -227,35 +227,86 @@ static VALUE cypher_cell_to_value(VALUE graph_obj, const struct CCell *cell) {
     }
 }
 
-// Body function for rb_ensure in Rubydex::Query::Result#rows — walks the iterator and builds the
-// rows array. May raise if cell conversion (e.g. handle construction) fails; the ensure function
-// frees the iterator regardless.
-static VALUE query_rows_yield(VALUE args) {
+// Builds the Hash keys of one walk: one frozen UTF-8 String per column. The keys are shared by
+// every row of the walk, so a wide result does not allocate a key String per cell. `rb_hash_aset`
+// stores a frozen String key as it is, instead of duplicating and freezing it.
+static VALUE query_row_keys(struct CRowsIter *iter) {
+    size_t count = rdx_rows_iter_column_count(iter);
+    const char *const *columns = rdx_rows_iter_columns(iter);
+    VALUE keys = rb_ary_new_capa((long)count);
+
+    for (size_t i = 0; i < count; i++) {
+        rb_ary_push(keys, rb_str_freeze(rb_utf8_str_new_cstr(columns[i])));
+    }
+
+    return keys;
+}
+
+// Converts one row of the cursor into a Hash keyed by the shared Strings in `keys`.
+static VALUE query_row_to_hash(VALUE graph_obj, VALUE keys, const struct CResultRow *row) {
+    long column_count = RARRAY_LEN(keys);
+    VALUE hash = rb_hash_new_capa(column_count);
+
+    for (size_t c = 0; c < row->len && (long)c < column_count; c++) {
+        rb_hash_aset(hash, RARRAY_AREF(keys, (long)c), cypher_cell_to_value(graph_obj, &row->cells[c]));
+    }
+
+    return hash;
+}
+
+// Body function for rb_ensure in Rubydex::Query::Result#rows — walks the cursor and collects every
+// row. May raise if cell conversion (e.g. handle construction) fails; the ensure function frees the
+// cursor regardless.
+static VALUE query_rows_collect(VALUE args) {
     VALUE graph_obj = rb_ary_entry(args, 0);
     struct CRowsIter *iter = (struct CRowsIter *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
 
-    size_t column_count = rdx_rows_iter_column_count(iter);
-    const char *const *columns = rdx_rows_iter_columns(iter);
+    VALUE keys = query_row_keys(iter);
     VALUE rows = rb_ary_new_capa((long)rdx_rows_iter_len(iter));
 
     struct CResultRow row;
     while (rdx_rows_iter_next(iter, &row)) {
-        VALUE hash = rb_hash_new();
-        for (size_t c = 0; c < row.len && c < column_count; c++) {
-            VALUE key = rb_utf8_str_new_cstr(columns[c]);
-            rb_hash_aset(hash, key, cypher_cell_to_value(graph_obj, &row.cells[c]));
-        }
-        rb_ary_push(rows, hash);
+        rb_ary_push(rows, query_row_to_hash(graph_obj, keys, &row));
     }
 
     return rows;
 }
 
-// Ensure function for rb_ensure in Rubydex::Query::Result#rows to always free the iterator.
+// Body function for rb_ensure in Rubydex::Query::Result#each — walks the cursor and yields one row
+// at a time, so only one row exists as Ruby objects at any moment. A `break` or an exception in the
+// block leaves through rb_ensure, which frees the cursor.
+static VALUE query_rows_stream(VALUE args) {
+    VALUE graph_obj = rb_ary_entry(args, 0);
+    struct CRowsIter *iter = (struct CRowsIter *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
+
+    VALUE keys = query_row_keys(iter);
+
+    struct CResultRow row;
+    while (rdx_rows_iter_next(iter, &row)) {
+        rb_yield(query_row_to_hash(graph_obj, keys, &row));
+    }
+
+    return Qnil;
+}
+
+// Ensure function for rb_ensure to always free the cursor.
 static VALUE query_rows_ensure(VALUE args) {
     struct CRowsIter *iter = (struct CRowsIter *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
     rdx_rows_iter_free(iter);
     return Qnil;
+}
+
+// Opens a cursor over the result set's rows and runs `body` with it. The cursor is always freed.
+static VALUE query_with_rows(VALUE self, VALUE (*body)(VALUE)) {
+    QueryResultData *data = query_result_data(self);
+
+    struct CRowsIter *iter = rdx_result_set_rows(data->result_set, rdxi_graph_from_object(data->graph_obj));
+    if (iter == NULL) {
+        rb_raise(rb_eRuntimeError, "failed to create iterator");
+    }
+
+    VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
+    return rb_ensure(body, args, query_rows_ensure, args);
 }
 
 /*
@@ -268,21 +319,14 @@ static VALUE query_rows_ensure(VALUE args) {
  * the first call and reused afterwards.
  */
 static VALUE rdxr_query_result_rows(VALUE self) {
-    QueryResultData *data = query_result_data(self);
-
-    if (!NIL_P(data->rows)) {
-        return data->rows;
+    if (!NIL_P(query_result_data(self)->rows)) {
+        return query_result_data(self)->rows;
     }
 
-    struct CRowsIter *iter = rdx_result_set_rows(data->result_set, rdxi_graph_from_object(data->graph_obj));
-    if (iter == NULL) {
-        rb_raise(rb_eRuntimeError, "failed to create iterator");
-    }
+    VALUE rows = rb_ary_freeze(query_with_rows(self, query_rows_collect));
+    query_result_data(self)->rows = rows;
 
-    VALUE args = rb_ary_new_from_args(2, data->graph_obj, ULL2NUM((uintptr_t)iter));
-    data->rows = rb_ary_freeze(rb_ensure(query_rows_yield, args, query_rows_ensure, args));
-
-    return data->rows;
+    return rows;
 }
 
 /*
@@ -312,11 +356,21 @@ static VALUE rdxr_query_result_columns(VALUE self) {
  *
  * Yields every row as a Hash keyed by RETURN column name. Rubydex::Query::Result is Enumerable, so
  * +map+, +select+, and the rest of Enumerable work on the rows.
+ *
+ * Unless #rows already built the whole array, +each+ converts one row at a time and discards it
+ * after the block returns. A large result therefore needs memory for one row, not for all of them,
+ * and +first+ or +find+ stops converting as soon as the block breaks.
  */
 static VALUE rdxr_query_result_each(VALUE self) {
     RETURN_ENUMERATOR(self, 0, 0);
 
-    VALUE rows = rdxr_query_result_rows(self);
+    VALUE rows = query_result_data(self)->rows;
+
+    if (NIL_P(rows)) {
+        query_with_rows(self, query_rows_stream);
+        return self;
+    }
+
     long length = RARRAY_LEN(rows);
 
     for (long i = 0; i < length; i++) {

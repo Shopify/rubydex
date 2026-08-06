@@ -246,11 +246,16 @@ pub struct CResultRow {
     pub len: usize,
 }
 
-/// Iterator over structured query result rows. Opaque from the C side — use
-/// `rdx_rows_iter_*` methods to work with it.
+/// A cursor over an executed result set's rows. It converts one row per `rdx_rows_iter_next` call,
+/// so a caller can walk a large result set without a copy of every cell in memory at once. Opaque
+/// from the C side — use the `rdx_rows_iter_*` methods to work with it.
 pub struct CRowsIter {
+    /// Borrowed from the caller, which must keep it alive for the whole life of the cursor.
+    result_set: *const CResultSet,
+    graph: GraphPointer,
     columns: Box<[*const c_char]>,
-    rows: Box<[CResultRow]>,
+    /// Cells of the row that the last `rdx_rows_iter_next` call produced.
+    current: Vec<CCell>,
     index: usize,
 }
 
@@ -484,46 +489,36 @@ pub unsafe extern "C" fn rdx_result_set_row_count(result_set: *const CResultSet)
     unsafe { &*result_set }.0.rows.len()
 }
 
-/// Materializes an executed result set as a row iterator (column names + typed rows), so callers
-/// can build their own value/handle objects instead of formatted text. Returns null when
-/// `result_set` is null.
+/// Opens a cursor over the rows of an executed result set, so callers can build their own
+/// value/handle objects instead of formatted text. The cursor converts a row only when
+/// `rdx_rows_iter_next` asks for it. Returns null when `result_set` is null.
 ///
 /// # Safety
 ///
-/// - `result_set` must be a valid pointer returned by `rdx_query_execute`, or null.
-/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+/// - `result_set` must be a valid pointer returned by `rdx_query_execute`, or null. It must stay
+///   alive until `rdx_rows_iter_free` releases the cursor.
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate. It must stay valid
+///   for the same span.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_result_set_rows(result_set: *const CResultSet, pointer: GraphPointer) -> *mut CRowsIter {
     if result_set.is_null() {
         return ptr::null_mut();
     }
 
-    let result_set = &unsafe { &*result_set }.0;
+    let columns: Box<[*const c_char]> = unsafe { &*result_set }
+        .0
+        .columns
+        .iter()
+        .map(|name| utils::cstring_raw(name))
+        .collect();
 
-    with_graph(pointer, |graph| {
-        let columns: Box<[*const c_char]> = result_set.columns.iter().map(|name| utils::cstring_raw(name)).collect();
-
-        let rows: Box<[CResultRow]> = result_set
-            .rows
-            .iter()
-            .map(|row| {
-                let cells: Vec<CCell> = row.iter().map(|cell| build_cell(graph, cell)).collect();
-                let len = cells.len();
-                let cells_ptr = if cells.is_empty() {
-                    ptr::null_mut()
-                } else {
-                    Box::into_raw(cells.into_boxed_slice()).cast::<CCell>()
-                };
-                CResultRow { cells: cells_ptr, len }
-            })
-            .collect();
-
-        Box::into_raw(Box::new(CRowsIter {
-            columns,
-            rows,
-            index: 0,
-        }))
-    })
+    Box::into_raw(Box::new(CRowsIter {
+        result_set,
+        graph: pointer,
+        columns,
+        current: Vec::new(),
+        index: 0,
+    }))
 }
 
 /// Frees a result set previously returned by `rdx_query_execute`.
@@ -581,12 +576,17 @@ pub unsafe extern "C" fn rdx_rows_iter_len(iter: *const CRowsIter) -> usize {
         return 0;
     }
     let iter = unsafe { &*iter };
-    iter.rows.len()
+    unsafe { &*iter.result_set }.0.rows.len()
 }
 
-/// Advances the iterator and copies the next row into `out`. Returns `true` if a row was read,
-/// `false` if the iterator is exhausted. The copied `CResultRow` is a view into the iterator's
-/// owned cells — it remains valid until `rdx_rows_iter_free` is called.
+/// Converts the next row and copies a view of it into `out`. Returns `true` if a row was read,
+/// `false` if the cursor is exhausted. The cells belong to the cursor, so the copied `CResultRow`
+/// stays valid only until the next `rdx_rows_iter_next` call or `rdx_rows_iter_free`, whichever
+/// comes first. Read the row's values before calling either.
+///
+/// The graph read lock is taken for the conversion of one row and released before this function
+/// returns, so a caller may run arbitrary code, including code that writes to the graph, between
+/// two calls.
 ///
 /// # Safety
 ///
@@ -599,14 +599,26 @@ pub unsafe extern "C" fn rdx_rows_iter_next(iter: *mut CRowsIter, out: *mut CRes
     }
 
     let it = unsafe { &mut *iter };
-    if it.index >= it.rows.len() {
-        return false;
-    }
 
-    let row = it.rows[it.index];
+    // The previous row is out of scope for the caller now, so release its cells before the next one.
+    unsafe { free_cells(&it.current) };
+    it.current.clear();
+
+    let result_set = unsafe { &*it.result_set };
+    let Some(row) = result_set.0.rows.get(it.index) else {
+        return false;
+    };
     it.index += 1;
+
+    it.current = with_graph(it.graph, |graph| {
+        row.iter().map(|cell| build_cell(graph, cell)).collect()
+    });
+
     unsafe {
-        *out = row;
+        *out = CResultRow {
+            cells: it.current.as_mut_ptr(),
+            len: it.current.len(),
+        };
     }
 
     true
@@ -656,8 +668,19 @@ unsafe fn free_cell(cell: &CCell) {
     }
 }
 
-/// Frees a `CRowsIter` previously returned by `rdx_result_set_rows`, including all column strings,
-/// row cells, and nested allocations.
+/// Frees every cell of one row.
+///
+/// # Safety
+///
+/// - `cells` must come from `build_cell`, and nothing else may own their allocations.
+unsafe fn free_cells(cells: &[CCell]) {
+    for cell in cells {
+        unsafe { free_cell(cell) };
+    }
+}
+
+/// Frees a `CRowsIter` previously returned by `rdx_result_set_rows`, including its column strings
+/// and the cells of the row it converted last.
 ///
 /// # Safety
 ///
@@ -670,20 +693,13 @@ pub unsafe extern "C" fn rdx_rows_iter_free(iter: *mut CRowsIter) {
 
     let it = unsafe { Box::from_raw(iter) };
 
-    // Free column C strings (the boxed slice itself is freed when `it` drops).
+    // The cursor owns the cells of the last row it produced. The `Vec` and the boxed slice of
+    // column pointers drop with `it`; their contents do not.
+    unsafe { free_cells(&it.current) };
+
     for &col in &it.columns {
         if !col.is_null() {
             let _ = unsafe { CString::from_raw(col.cast_mut()) };
-        }
-    }
-
-    // Free cells in each row (the boxed slice of CResultRow is freed when `it` drops).
-    for row in &it.rows {
-        if !row.cells.is_null() && row.len > 0 {
-            let cells = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(row.cells, row.len)) };
-            for cell in &cells {
-                unsafe { free_cell(cell) };
-            }
         }
     }
 }
