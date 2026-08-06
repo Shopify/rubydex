@@ -6,6 +6,7 @@ use crate::{
     assert_def_comments_eq, assert_def_mixins_eq, assert_def_name_eq, assert_def_name_offset_eq, assert_def_str_eq,
     assert_def_superclass_ref_eq, assert_definition_at, assert_dependents, assert_local_diagnostics_eq,
     assert_method_has_receiver, assert_name_path_eq, assert_no_local_diagnostics, assert_string_eq,
+    diagnostic::Severity,
     model::{
         definitions::{Definition, Parameter, Receiver, Signatures},
         ids::{StringId, UriId},
@@ -967,7 +968,8 @@ mod class_and_module_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"]
+            ["dynamic-constant-reference: Dynamic constant reference (1:7-1:10)"],
+            severity: Severity::Information
         );
         assert!(context.graph().definitions().is_empty());
     }
@@ -1777,7 +1779,8 @@ mod visibility_tests {
                 "invalid-constant-visibility: Dynamic receiver for `private_constant` (3:1-3:4)",
                 "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:20-6:29)",
                 "invalid-constant-visibility: `private_constant` called with a non-literal argument (6:31-6:42)",
-            ]
+            ],
+            severity: Severity::Warning
         );
 
         assert_eq!(context.graph().definitions().len(), 3); // Foo, Foo.qux, Foo#foo
@@ -2312,7 +2315,8 @@ mod visibility_tests {
                 "invalid-method-visibility: `private_class_method` called with a non-literal argument (6:24-6:35)",
                 "invalid-method-visibility: `private_class_method` does not accept `attr_*` arguments (8:24-8:41)",
                 "invalid-method-visibility: `private_class_method` requires a singleton method definition (9:24-9:39)",
-            ]
+            ],
+            severity: Severity::Warning
         );
     }
 
@@ -5263,7 +5267,8 @@ mod diagnostic_tests {
             [
                 "parse-error: expected an `end` to close the `class` statement (1:1-1:6)",
                 "parse-error: unexpected end-of-input, assuming it is closing the parent top level context (1:10-2:1)"
-            ]
+            ],
+            severity: Severity::Error
         );
 
         // We still index the definition, even though it has errors
@@ -5283,7 +5288,8 @@ mod diagnostic_tests {
 
         assert_local_diagnostics_eq!(
             &context,
-            ["parse-warning: assigned but unused variable - foo (1:1-1:4)"]
+            ["parse-warning: assigned but unused variable - foo (1:1-1:4)"],
+            severity: Severity::Warning
         );
     }
 }

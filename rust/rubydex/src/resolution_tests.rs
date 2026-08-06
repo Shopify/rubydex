@@ -8,7 +8,7 @@ use crate::{
     assert_declaration_exists, assert_declaration_kind_eq, assert_declaration_references_count_eq, assert_descendants,
     assert_diagnostics_eq, assert_instance_variables_eq, assert_members_eq, assert_no_constant_alias_target,
     assert_no_diagnostics, assert_no_members, assert_owner_eq, assert_singleton_class_eq,
-    diagnostic::Rule,
+    diagnostic::{Rule, Severity},
     model::{declaration::Ancestors, ids::DeclarationId, name::NameRef},
     test_utils::GraphTest,
 };
@@ -5386,7 +5386,8 @@ mod visibility_resolution_tests {
             context,
             &[
                 "undefined-method-visibility-target: undefined method `Foo#nonexistent()` for visibility change (2:12-2:23)"
-            ]
+            ],
+            severity: Severity::Warning
         );
     }
 
@@ -5522,7 +5523,8 @@ mod visibility_resolution_tests {
             &[
                 "undefined-constant-visibility-target: undefined constant `NOPE_ONE` for visibility change in `Foo` (2:21-2:29)",
                 "undefined-constant-visibility-target: undefined constant `NOPE_TWO` for visibility change in `Foo` (2:32-2:40)",
-            ]
+            ],
+            severity: Severity::Warning
         );
     }
 

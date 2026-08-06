@@ -1,6 +1,6 @@
 //! Visit the Ruby AST and create the definitions.
 
-use crate::diagnostic::Rule;
+use crate::diagnostic::{Rule, Severity};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
@@ -119,6 +119,7 @@ impl<'a> RubyIndexer<'a> {
         for error in result.errors() {
             self.local_graph.add_diagnostic(
                 Rule::ParseError,
+                Severity::Error,
                 Offset::from_prism_location(&error.location()),
                 error.message().to_string(),
             );
@@ -127,6 +128,7 @@ impl<'a> RubyIndexer<'a> {
         for warning in result.warnings() {
             self.local_graph.add_diagnostic(
                 Rule::ParseWarning,
+                Severity::Warning,
                 Offset::from_prism_location(&warning.location()),
                 warning.message().to_string(),
             );
@@ -407,6 +409,7 @@ impl<'a> RubyIndexer<'a> {
                         _ => {
                             self.local_graph.add_diagnostic(
                                 Rule::DynamicConstantReference,
+                                Severity::Information,
                                 Offset::from_prism_location(&parent.location()),
                                 "Dynamic constant reference".to_string(),
                             );
@@ -662,6 +665,7 @@ impl<'a> RubyIndexer<'a> {
         {
             self.local_graph.add_diagnostic(
                 Rule::DynamicAncestor,
+                Severity::Information,
                 Offset::from_prism_location(&superclass_node.location()),
                 "Dynamic superclass".to_string(),
             );
@@ -959,6 +963,7 @@ impl<'a> RubyIndexer<'a> {
                     if parent_nesting_id.is_none() {
                         self.local_graph.add_diagnostic(
                             Rule::TopLevelMixinSelf,
+                            Severity::Information,
                             Offset::from_prism_location(&arg.location()),
                             "Top level mixin self".to_string(),
                         );
@@ -975,6 +980,7 @@ impl<'a> RubyIndexer<'a> {
                 } else {
                     self.local_graph.add_diagnostic(
                         Rule::DynamicAncestor,
+                        Severity::Information,
                         Offset::from_prism_location(&arg.location()),
                         "Dynamic mixin argument".to_string(),
                     );
@@ -1192,6 +1198,7 @@ impl<'a> RubyIndexer<'a> {
                 None => {
                     self.local_graph.add_diagnostic(
                         Rule::InvalidConstantVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&node.location()),
                         format!("`{call_name}` called at top level"),
                     );
@@ -1203,6 +1210,7 @@ impl<'a> RubyIndexer<'a> {
             Some(other) => {
                 self.local_graph.add_diagnostic(
                     Rule::InvalidConstantVisibility,
+                    Severity::Warning,
                     Offset::from_prism_location(&other.location()),
                     format!("Dynamic receiver for `{call_name}`"),
                 );
@@ -1219,6 +1227,7 @@ impl<'a> RubyIndexer<'a> {
             let Some((name, location)) = Self::extract_literal_name(&argument) else {
                 self.local_graph.add_diagnostic(
                     Rule::InvalidConstantVisibility,
+                    Severity::Warning,
                     Offset::from_prism_location(&argument.location()),
                     format!("`{call_name}` called with a non-literal argument"),
                 );
@@ -1261,6 +1270,7 @@ impl<'a> RubyIndexer<'a> {
                 None => {
                     self.local_graph.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&node.location()),
                         format!("`{call_name}` called at top level"),
                     );
@@ -1307,6 +1317,7 @@ impl<'a> RubyIndexer<'a> {
                                 if def_node.receiver().is_none() {
                                     self.local_graph.add_diagnostic(
                                         Rule::InvalidMethodVisibility,
+                                        Severity::Warning,
                                         Offset::from_prism_location(&element.location()),
                                         format!("`{call_name}` requires a singleton method definition"),
                                     );
@@ -1326,6 +1337,7 @@ impl<'a> RubyIndexer<'a> {
                             _ => {
                                 self.local_graph.add_diagnostic(
                                     Rule::InvalidMethodVisibility,
+                                    Severity::Warning,
                                     Offset::from_prism_location(&element.location()),
                                     format!(
                                         "`{call_name}` array element must be a Symbol, String, or method definition"
@@ -1341,6 +1353,7 @@ impl<'a> RubyIndexer<'a> {
                     if def_node.receiver().is_none() {
                         self.local_graph.add_diagnostic(
                             Rule::InvalidMethodVisibility,
+                            Severity::Warning,
                             Offset::from_prism_location(&argument.location()),
                             format!("`{call_name}` requires a singleton method definition"),
                         );
@@ -1360,6 +1373,7 @@ impl<'a> RubyIndexer<'a> {
                 arg if Self::is_attr_call(&arg) => {
                     self.local_graph.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&arg.location()),
                         format!("`{call_name}` does not accept `attr_*` arguments"),
                     );
@@ -1368,6 +1382,7 @@ impl<'a> RubyIndexer<'a> {
                 ruby_prism::Node::ArrayNode { .. } => {
                     self.local_graph.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&argument.location()),
                         format!("`{call_name}` array argument must be the only argument"),
                     );
@@ -1376,6 +1391,7 @@ impl<'a> RubyIndexer<'a> {
                 _ => {
                     self.local_graph.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&argument.location()),
                         format!("`{call_name}` called with a non-literal argument"),
                     );
@@ -1460,7 +1476,7 @@ impl<'a> RubyIndexer<'a> {
                     format!("`{call_name}` called with a non-literal argument")
                 };
                 self.local_graph
-                    .add_diagnostic(Rule::InvalidMethodVisibility, arg_offset, message);
+                    .add_diagnostic(Rule::InvalidMethodVisibility, Severity::Warning, arg_offset, message);
                 self.visit(&arg);
             }
         }
@@ -1610,6 +1626,7 @@ impl Visit<'_> for RubyIndexer<'_> {
             self.visit(&expression);
             self.local_graph.add_diagnostic(
                 Rule::DynamicSingletonDefinition,
+                Severity::Information,
                 Offset::from_prism_location(&node.location()),
                 "Dynamic singleton class definition".to_string(),
             );
@@ -1619,6 +1636,7 @@ impl Visit<'_> for RubyIndexer<'_> {
         let Some(attached_target) = attached_target else {
             self.local_graph.add_diagnostic(
                 Rule::DynamicSingletonDefinition,
+                Severity::Information,
                 Offset::from_prism_location(&node.location()),
                 "Dynamic singleton class definition".to_string(),
             );
@@ -1833,6 +1851,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                 _ => {
                     self.local_graph.add_diagnostic(
                         Rule::DynamicSingletonDefinition,
+                        Severity::Information,
                         Offset::from_prism_location(&node.location()),
                         "Dynamic receiver for singleton method definition".to_string(),
                     );
@@ -2113,6 +2132,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     let offset = Offset::from_prism_location(&node.location());
                     self.local_graph.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         offset,
                         format!("`{message}` cannot be called with an explicit receiver"),
                     );
@@ -2127,6 +2147,7 @@ impl Visit<'_> for RubyIndexer<'_> {
                     if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
                         self.local_graph.add_diagnostic(
                             Rule::InvalidMethodVisibility,
+                            Severity::Warning,
                             offset,
                             "`module_function` can only be used in modules".to_string(),
                         );

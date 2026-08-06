@@ -195,8 +195,8 @@ impl LocalGraph {
         self.document.diagnostics()
     }
 
-    pub fn add_diagnostic(&mut self, rule: Rule, offset: Offset, message: String) {
-        let diagnostic = Diagnostic::new(rule, Severity::Information, self.uri_id, offset, message);
+    pub fn add_diagnostic(&mut self, rule: Rule, severity: Severity, offset: Offset, message: String) {
+        let diagnostic = Diagnostic::new(rule, severity, self.uri_id, offset, message);
         self.document.add_diagnostic(diagnostic);
     }
 

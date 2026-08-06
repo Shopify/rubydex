@@ -635,7 +635,7 @@ impl<'a> Resolver<'a> {
                     } else {
                         let diagnostic = Diagnostic::new(
                             Rule::UndefinedConstantVisibilityTarget,
-                            Severity::Information,
+                            Severity::Warning,
                             uri_id,
                             offset,
                             format!(
@@ -757,7 +757,7 @@ impl<'a> Resolver<'a> {
             let owner_name = self.graph.declarations().get(&namespace_id).unwrap().name().to_string();
             let diagnostic = Diagnostic::new(
                 Rule::UndefinedMethodVisibilityTarget,
-                Severity::Information,
+                Severity::Warning,
                 uri_id,
                 offset,
                 format!("undefined method `{owner_name}#{method_name}` for visibility change"),
