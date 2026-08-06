@@ -5,6 +5,11 @@ require "rubydex/linter/helpers/path_helpers"
 require "rubydex/linter/helpers/source_access_helpers"
 require "rubydex/linter/result"
 require "rubydex/linter/rule"
+
+Dir.glob(File.expand_path("../rubydex_linter/rules/**/*.rb", __dir__)).each do |rule_file|
+  require rule_file
+end
+
 require "rubydex/linter/rule_loader"
 require "rubydex/linter/runner"
 

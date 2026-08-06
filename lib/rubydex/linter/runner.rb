@@ -27,7 +27,8 @@ module Rubydex
           filter_diagnostics(rule.diagnostics, @config.excludes_for(rule_class))
         end
 
-        diagnostics = (@graph.diagnostics + rule_diagnostics).select do |diagnostic|
+        graph_diagnostics = filter_diagnostics(@graph.diagnostics, [])
+        diagnostics = (graph_diagnostics + rule_diagnostics).select do |diagnostic|
           diagnostic_in_workspace?(diagnostic)
         end.sort_by do |diagnostic|
           location = diagnostic.location

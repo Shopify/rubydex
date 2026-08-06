@@ -27,6 +27,12 @@ jobs:
       - name: Lint
         run: bundle exec rake lint
 
+      - name: Compile
+        run: bundle exec rake compile
+
+      - name: Run Rubydex linter
+        run: bundle exec rdx lint .
+
       # Verify that licenses conform to the policy in rust/about.toml
       - name: Check licenses
         run: |
