@@ -32,4 +32,21 @@ module Rubydex
   # Raised by `Query#run` when a parsed query fails while it runs against a graph, for example
   # because it names an unknown property or relationship type.
   class QueryExecutionError < QueryError; end
+
+  # Raised when a query result names a node that the graph no longer holds, because the graph
+  # changed after the query ran. Reading the rows would silently turn that column from a
+  # `Declaration`, `Definition`, or `Document` handle into a plain String, so it raises instead.
+  # `render`, `columns`, `size`, and `empty?` still work, because they read the executed result set
+  # and never touch the graph.
+  #
+  # The check runs while a row is built, so it covers the rows that a walk has not reached yet. Two
+  # cases fall outside it:
+  #
+  # - A handle that a walk already handed out. Such a handle resolves against the graph on each
+  #   call, so a later change to the graph can make it stale. Handles from `Graph#[]` share that
+  #   property. This error says nothing about them.
+  # - A re-index that keeps the ids. A declaration id comes from the name, so a file indexed again
+  #   under the same names still resolves, and this error does not fire, even though the
+  #   definitions and ancestors behind that name may differ.
+  class StaleQueryResultError < QueryError; end
 end

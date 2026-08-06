@@ -246,6 +246,19 @@ pub struct CResultRow {
     pub len: usize,
 }
 
+/// The outcome of one `rdx_rows_iter_next` call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CRowsNextStatus {
+    /// `out` holds the next row.
+    Row,
+    /// The cursor reached the end of the result set.
+    Done,
+    /// The graph no longer holds a node that the row returned, so the row cannot be built.
+    /// `rdx_rows_iter_error` names the node.
+    MissingNode,
+}
+
 /// A cursor over an executed result set's rows. It converts one row per `rdx_rows_iter_next` call,
 /// so a caller can walk a large result set without a copy of every cell in memory at once. Opaque
 /// from the C side — use the `rdx_rows_iter_*` methods to work with it.
@@ -256,6 +269,8 @@ pub struct CRowsIter {
     columns: Box<[*const c_char]>,
     /// Cells of the row that the last `rdx_rows_iter_next` call produced.
     current: Vec<CCell>,
+    /// Name of the node that the last `rdx_rows_iter_next` call could not resolve.
+    error: Option<CString>,
     index: usize,
 }
 
@@ -275,41 +290,74 @@ pub struct CExecuteResult {
 }
 
 /// Converts a `CypherValue` into a `CCell`, resolving node identity to a handle-buildable category +
-/// kind + id. A node whose id cannot be decoded or found falls back to its display name as a string.
-fn build_cell(graph: &Graph, value: &CypherValue) -> CCell {
+/// kind + id.
+///
+/// # Errors
+///
+/// Returns the node's display name when the graph no longer holds a node that the result set
+/// returned, or when its id cannot be decoded. The caller must treat the whole row as stale,
+/// because a fallback would silently change the column's type from a handle to a string. Cells that
+/// this function already built are freed before it returns.
+fn build_cell(graph: &Graph, value: &CypherValue) -> Result<CCell, String> {
     match value {
-        CypherValue::Null => CCell::null(),
-        CypherValue::Bool(b) => CCell::new(CCellTag::Bool, CCellPayload { bool_val: *b }),
-        CypherValue::Int(i) => CCell::new(CCellTag::Int, CCellPayload { int_val: *i }),
-        CypherValue::Str(s) => CCell::new(
+        CypherValue::Null => Ok(CCell::null()),
+        CypherValue::Bool(b) => Ok(CCell::new(CCellTag::Bool, CCellPayload { bool_val: *b })),
+        CypherValue::Int(i) => Ok(CCell::new(CCellTag::Int, CCellPayload { int_val: *i })),
+        CypherValue::Str(s) => Ok(CCell::new(
             CCellTag::Str,
             CCellPayload {
                 str_val: utils::cstring_raw(s),
             },
-        ),
+        )),
         CypherValue::List(items) => {
-            let cells: Vec<CCell> = items.iter().map(|item| build_cell(graph, item)).collect();
+            let mut cells: Vec<CCell> = Vec::with_capacity(items.len());
+
+            for item in items {
+                match build_cell(graph, item) {
+                    Ok(cell) => cells.push(cell),
+                    Err(node) => {
+                        // SAFETY: `cells` holds only what this loop built, and nothing else owns it.
+                        unsafe { free_cells(&cells) };
+                        return Err(node);
+                    }
+                }
+            }
+
             let len = cells.len();
             let items = if cells.is_empty() {
                 ptr::null_mut()
             } else {
                 Box::into_raw(cells.into_boxed_slice()).cast::<CCell>()
             };
-            CCell::new(
+            Ok(CCell::new(
                 CCellTag::List,
                 CCellPayload {
                     list: CList { items, len },
                 },
-            )
+            ))
         }
         CypherValue::Map(pairs) => {
             let len = pairs.len();
             let mut keys: Vec<*const c_char> = Vec::with_capacity(len);
             let mut values: Vec<CCell> = Vec::with_capacity(len);
+
             for (key, val) in pairs {
-                keys.push(utils::cstring_raw(key));
-                values.push(build_cell(graph, val));
+                match build_cell(graph, val) {
+                    Ok(cell) => {
+                        keys.push(utils::cstring_raw(key));
+                        values.push(cell);
+                    }
+                    Err(node) => {
+                        // SAFETY: both vectors hold only what this loop built.
+                        unsafe { free_cells(&values) };
+                        for key in keys {
+                            let _ = unsafe { CString::from_raw(key.cast_mut()) };
+                        }
+                        return Err(node);
+                    }
+                }
             }
+
             let (keys, values) = if len == 0 {
                 (ptr::null_mut(), ptr::null_mut())
             } else {
@@ -318,21 +366,14 @@ fn build_cell(graph: &Graph, value: &CypherValue) -> CCell {
                     Box::into_raw(values.into_boxed_slice()).cast::<CCell>(),
                 )
             };
-            CCell::new(
+            Ok(CCell::new(
                 CCellTag::Map,
                 CCellPayload {
                     map: CMap { keys, values, len },
                 },
-            )
+            ))
         }
-        CypherValue::Node { id, name, .. } => build_node_cell(graph, id).unwrap_or_else(|| {
-            CCell::new(
-                CCellTag::Str,
-                CCellPayload {
-                    str_val: utils::cstring_raw(name),
-                },
-            )
-        }),
+        CypherValue::Node { id, name, .. } => build_node_cell(graph, id).ok_or_else(|| name.clone()),
     }
 }
 
@@ -517,6 +558,7 @@ pub unsafe extern "C" fn rdx_result_set_rows(result_set: *const CResultSet, poin
         graph: pointer,
         columns,
         current: Vec::new(),
+        error: None,
         index: 0,
     }))
 }
@@ -579,10 +621,13 @@ pub unsafe extern "C" fn rdx_rows_iter_len(iter: *const CRowsIter) -> usize {
     unsafe { &*iter.result_set }.0.rows.len()
 }
 
-/// Converts the next row and copies a view of it into `out`. Returns `true` if a row was read,
-/// `false` if the cursor is exhausted. The cells belong to the cursor, so the copied `CResultRow`
-/// stays valid only until the next `rdx_rows_iter_next` call or `rdx_rows_iter_free`, whichever
-/// comes first. Read the row's values before calling either.
+/// Converts the next row and copies a view of it into `out`. The cells belong to the cursor, so the
+/// copied `CResultRow` stays valid only until the next `rdx_rows_iter_next` call or
+/// `rdx_rows_iter_free`, whichever comes first. Read the row's values before calling either.
+///
+/// Returns `MissingNode` when the graph no longer holds a node that the row returned. That happens
+/// when the graph changed after the query ran. The cursor keeps the node's name for
+/// `rdx_rows_iter_error`, and the caller should stop the walk.
 ///
 /// The graph read lock is taken for the conversion of one row and released before this function
 /// returns, so a caller may run arbitrary code, including code that writes to the graph, between
@@ -593,9 +638,9 @@ pub unsafe extern "C" fn rdx_rows_iter_len(iter: *const CRowsIter) -> usize {
 /// - `iter` must be a valid pointer returned by `rdx_result_set_rows`, or null.
 /// - `out` must be a valid, writable pointer, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_rows_iter_next(iter: *mut CRowsIter, out: *mut CResultRow) -> bool {
+pub unsafe extern "C" fn rdx_rows_iter_next(iter: *mut CRowsIter, out: *mut CResultRow) -> CRowsNextStatus {
     if iter.is_null() || out.is_null() {
-        return false;
+        return CRowsNextStatus::Done;
     }
 
     let it = unsafe { &mut *iter };
@@ -603,25 +648,66 @@ pub unsafe extern "C" fn rdx_rows_iter_next(iter: *mut CRowsIter, out: *mut CRes
     // The previous row is out of scope for the caller now, so release its cells before the next one.
     unsafe { free_cells(&it.current) };
     it.current.clear();
+    it.error = None;
 
     let result_set = unsafe { &*it.result_set };
     let Some(row) = result_set.0.rows.get(it.index) else {
-        return false;
+        return CRowsNextStatus::Done;
     };
     it.index += 1;
 
-    it.current = with_graph(it.graph, |graph| {
-        row.iter().map(|cell| build_cell(graph, cell)).collect()
+    let built = with_graph(it.graph, |graph| {
+        let mut cells: Vec<CCell> = Vec::with_capacity(row.len());
+
+        for value in row {
+            match build_cell(graph, value) {
+                Ok(cell) => cells.push(cell),
+                Err(node) => {
+                    // SAFETY: `cells` holds only what this loop built, and nothing else owns it.
+                    unsafe { free_cells(&cells) };
+                    return Err(node);
+                }
+            }
+        }
+
+        Ok(cells)
     });
 
-    unsafe {
-        *out = CResultRow {
-            cells: it.current.as_mut_ptr(),
-            len: it.current.len(),
-        };
+    match built {
+        Ok(cells) => {
+            it.current = cells;
+            unsafe {
+                *out = CResultRow {
+                    cells: it.current.as_mut_ptr(),
+                    len: it.current.len(),
+                };
+            }
+            CRowsNextStatus::Row
+        }
+        Err(node) => {
+            it.error = CString::new(node).ok();
+            CRowsNextStatus::MissingNode
+        }
+    }
+}
+
+/// Returns the name of the node that the last `rdx_rows_iter_next` call could not resolve, or null
+/// when it resolved every node. The string belongs to the cursor, so it stays valid only until the
+/// next `rdx_rows_iter_next` call or `rdx_rows_iter_free`.
+///
+/// # Safety
+///
+/// - `iter` must be a valid pointer returned by `rdx_result_set_rows`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_rows_iter_error(iter: *const CRowsIter) -> *const c_char {
+    if iter.is_null() {
+        return ptr::null();
     }
 
-    true
+    match unsafe { &*iter }.error.as_ref() {
+        Some(name) => name.as_ptr(),
+        None => ptr::null(),
+    }
 }
 
 /// Recursively frees a `CCell`'s owned allocations (its string, or its nested list cells).

@@ -254,9 +254,24 @@ static VALUE query_row_to_hash(VALUE graph_obj, VALUE keys, const struct CResult
     return hash;
 }
 
+// Raises when the graph no longer holds a node that the query returned. Building a string in place
+// of the missing handle would silently change the column's type, so the walk stops instead.
+NORETURN(static void raise_stale_result(struct CRowsIter *iter));
+
+static void raise_stale_result(struct CRowsIter *iter) {
+    VALUE error_class = rb_const_get(mRubydex, rb_intern("StaleQueryResultError"));
+    const char *node = rdx_rows_iter_error(iter);
+
+    if (node == NULL) {
+        rb_raise(error_class, "the graph no longer holds a node that this query returned");
+    }
+
+    rb_raise(error_class, "the graph no longer holds `%s`, a node that this query returned", node);
+}
+
 // Body function for rb_ensure in Rubydex::Query::Result#rows — walks the cursor and collects every
-// row. May raise if cell conversion (e.g. handle construction) fails; the ensure function frees the
-// cursor regardless.
+// row. May raise if a node is gone, or if cell conversion (e.g. handle construction) fails; the
+// ensure function frees the cursor regardless.
 static VALUE query_rows_collect(VALUE args) {
     VALUE graph_obj = rb_ary_entry(args, 0);
     struct CRowsIter *iter = (struct CRowsIter *)(uintptr_t)NUM2ULL(rb_ary_entry(args, 1));
@@ -265,11 +280,17 @@ static VALUE query_rows_collect(VALUE args) {
     VALUE rows = rb_ary_new_capa((long)rdx_rows_iter_len(iter));
 
     struct CResultRow row;
-    while (rdx_rows_iter_next(iter, &row)) {
-        rb_ary_push(rows, query_row_to_hash(graph_obj, keys, &row));
+    for (;;) {
+        switch (rdx_rows_iter_next(iter, &row)) {
+        case CRowsNextStatus_Row:
+            rb_ary_push(rows, query_row_to_hash(graph_obj, keys, &row));
+            break;
+        case CRowsNextStatus_MissingNode:
+            raise_stale_result(iter);
+        default:
+            return rows;
+        }
     }
-
-    return rows;
 }
 
 // Body function for rb_ensure in Rubydex::Query::Result#each — walks the cursor and yields one row
@@ -282,11 +303,17 @@ static VALUE query_rows_stream(VALUE args) {
     VALUE keys = query_row_keys(iter);
 
     struct CResultRow row;
-    while (rdx_rows_iter_next(iter, &row)) {
-        rb_yield(query_row_to_hash(graph_obj, keys, &row));
+    for (;;) {
+        switch (rdx_rows_iter_next(iter, &row)) {
+        case CRowsNextStatus_Row:
+            rb_yield(query_row_to_hash(graph_obj, keys, &row));
+            break;
+        case CRowsNextStatus_MissingNode:
+            raise_stale_result(iter);
+        default:
+            return Qnil;
+        }
     }
-
-    return Qnil;
 }
 
 // Ensure function for rb_ensure to always free the cursor.

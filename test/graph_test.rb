@@ -1832,6 +1832,123 @@ class GraphTest < Minitest::Test
     end
   end
 
+  def test_rows_raise_when_the_graph_no_longer_holds_a_returned_node
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse(
+      "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c, c.name ORDER BY c.name",
+    ).run(graph)
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # A String in place of the missing handle would change the column's type without a word.
+    error = assert_raises(Rubydex::StaleQueryResultError) { result.rows }
+    assert_match(/the graph no longer holds `Animal`/, error.message)
+    assert_kind_of(Rubydex::QueryError, error)
+  end
+
+  def test_each_raises_when_a_returned_node_disappears_during_the_walk
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse(
+      "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c, c.name ORDER BY c.name",
+    ).run(graph)
+
+    seen = []
+
+    # The cursor holds no lock while the block runs, so the block may write to the graph. The next
+    # row then cannot build its handle, and the walk stops.
+    error = assert_raises(Rubydex::StaleQueryResultError) do
+      result.each do |row|
+        seen << row["c.name"]
+        graph.delete_document("file:///zoo.rb")
+        graph.resolve
+      end
+    end
+
+    assert_equal(["Animal"], seen)
+    assert_match(/the graph no longer holds `Dog`/, error.message)
+  end
+
+  def test_a_stale_result_still_renders_and_reports_its_shape
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse(
+      "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c, c.name ORDER BY c.name",
+    ).run(graph)
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # These read the executed result set and never touch the graph, so they keep working.
+    assert_equal(["c", "c.name"], result.columns)
+    assert_equal(2, result.size)
+    refute_empty(result)
+    assert_match(/Animal/, result.render(:json))
+  end
+
+  def test_rows_without_a_node_column_survive_a_graph_change
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    result = Rubydex::Query.parse(
+      "MATCH (c:Class) WHERE c.name IN ['Animal', 'Dog'] RETURN c.name ORDER BY c.name",
+    ).run(graph)
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # Scalar cells are pure snapshot data. They cannot go stale, so nothing raises.
+    assert_equal([{ "c.name" => "Animal" }, { "c.name" => "Dog" }], result.rows)
+  end
+
+  def test_rows_raise_when_a_node_inside_a_list_is_gone
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    query = Rubydex::Query.parse("MATCH (c:Class {name: 'Animal'}) RETURN [c] AS boxed")
+    stale = query.run(graph)
+
+    # While the graph holds the node, the list carries a handle rather than a name.
+    assert_kind_of(Rubydex::Declaration, query.run(graph).rows.first["boxed"].first)
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # A `List` cell frees the cells it already built, then reports the missing node like any other.
+    error = assert_raises(Rubydex::StaleQueryResultError) { stale.rows }
+    assert_match(/the graph no longer holds `Animal`/, error.message)
+  end
+
+  def test_rows_raise_when_a_node_inside_a_map_projection_is_gone
+    graph = Rubydex::Graph.new
+    graph.index_source("file:///zoo.rb", "class Animal; end\nclass Dog < Animal; end\n", "ruby")
+    graph.resolve
+
+    query = Rubydex::Query.parse("MATCH (c:Class {name: 'Animal'}) RETURN c { .name, node: c } AS projection")
+    stale = query.run(graph)
+
+    projection = query.run(graph).rows.first["projection"]
+    assert_equal("Animal", projection["name"])
+    assert_kind_of(Rubydex::Declaration, projection["node"])
+
+    graph.delete_document("file:///zoo.rb")
+    graph.resolve
+
+    # A `Map` cell frees both the keys and the values it already built before it reports.
+    error = assert_raises(Rubydex::StaleQueryResultError) { stale.rows }
+    assert_match(/the graph no longer holds `Animal`/, error.message)
+  end
+
   def test_render_returns_table_output
     with_context do |context|
       context.write!("zoo.rb", <<~RUBY)
