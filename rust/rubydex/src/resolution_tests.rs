@@ -5763,7 +5763,7 @@ mod visibility_resolution_tests {
 
     #[test]
     fn retroactive_singleton_method_visibility_inline_def() {
-        let mut context = GraphTest::new();
+        let mut context = graph_test();
         context.index_uri(
             "file:///foo.rb",
             r"
@@ -5780,7 +5780,7 @@ mod visibility_resolution_tests {
 
     #[test]
     fn retroactive_singleton_method_visibility_array_form() {
-        let mut context = GraphTest::new();
+        let mut context = graph_test();
         context.index_uri(
             "file:///foo.rb",
             r#"
@@ -5804,7 +5804,7 @@ mod visibility_resolution_tests {
 
     #[test]
     fn inline_module_function() {
-        let mut context = GraphTest::new();
+        let mut context = graph_test();
         context.index_uri(
             "file:///foo.rb",
             r"
@@ -5844,7 +5844,7 @@ mod visibility_resolution_tests {
 
     #[test]
     fn retroactive_module_function() {
-        let mut context = GraphTest::new();
+        let mut context = graph_test();
         context.index_uri(
             "file:///foo.rb",
             r"
@@ -5868,7 +5868,7 @@ mod visibility_resolution_tests {
 
     #[test]
     fn retroactive_module_function_undefined_target_emits_single_diagnostic() {
-        let mut context = GraphTest::new();
+        let mut context = graph_test();
         context.index_uri(
             "file:///foo.rb",
             r"
@@ -5890,7 +5890,7 @@ mod visibility_resolution_tests {
 
     #[test]
     fn retroactive_module_function_singleton_companion_cleared_when_removed_multi_file() {
-        let mut context = GraphTest::new();
+        let mut context = graph_test();
         context.index_uri(
             "file:///a.rb",
             r"
@@ -5932,7 +5932,7 @@ mod visibility_resolution_tests {
 
     #[test]
     fn retroactive_module_function_singleton_companion_cleared_when_removed() {
-        let mut context = GraphTest::new();
+        let mut context = graph_test();
         context.index_uri(
             "file:///foo.rb",
             r"
