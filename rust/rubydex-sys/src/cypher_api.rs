@@ -12,7 +12,30 @@ use rubydex::query::cypher::{self, CypherValue, OutputFormat};
 use std::ffi::CString;
 use std::ptr;
 
-/// The result of running a Cypher query, carrying either the formatted output or an error message.
+/// Which layer of the Cypher pipeline rejected a call, so callers can raise a matching error class.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CQueryErrorKind {
+    /// No failure: the `error` field of the containing struct is null.
+    None,
+    /// The caller passed an invalid argument, such as a null pointer or a string that is not UTF-8.
+    Argument,
+    /// The query text is not valid Cypher.
+    Syntax,
+    /// The query parsed, but it failed while it ran against the graph.
+    Execution,
+}
+
+impl CQueryErrorKind {
+    fn of(error: &cypher::CypherError) -> Self {
+        match error {
+            cypher::CypherError::Syntax { .. } => Self::Syntax,
+            cypher::CypherError::Execution { .. } => Self::Execution,
+        }
+    }
+}
+
+/// The formatted output of a Cypher result set, or the argument error that prevented it.
 #[repr(C)]
 pub struct CQueryResult {
     /// Non-null on success; null on error. Caller must free with `free_c_string`.
@@ -49,13 +72,15 @@ pub struct CParseResult {
     pub query: *mut c_void,
     /// Non-null on error; null on success. Caller must free with `free_c_string`.
     pub error: *const c_char,
+    /// Which kind of failure `error` describes; `None` when `error` is null.
+    pub error_kind: CQueryErrorKind,
 }
 
 /// Parses a Cypher query string into an opaque parsed-query object, without needing a graph.
 ///
 /// On success, `query` is a heap-allocated parsed query that can be executed against a graph with
-/// `rdx_query_run` and must eventually be freed with `rdx_cypher_query_free`. On failure, `error`
-/// holds the message.
+/// `rdx_query_execute` and must eventually be freed with `rdx_cypher_query_free`. On failure,
+/// `error` holds the message and `error_kind` tells the caller which error to raise.
 ///
 /// # Safety
 ///
@@ -66,6 +91,7 @@ pub unsafe extern "C" fn rdx_cypher_parse(query: *const c_char) -> CParseResult 
         return CParseResult {
             query: ptr::null_mut(),
             error: utils::cstring_raw("query is not valid UTF-8"),
+            error_kind: CQueryErrorKind::Argument,
         };
     };
 
@@ -73,10 +99,12 @@ pub unsafe extern "C" fn rdx_cypher_parse(query: *const c_char) -> CParseResult 
         Ok(parsed) => CParseResult {
             query: Box::into_raw(Box::new(parsed)).cast::<c_void>(),
             error: ptr::null(),
+            error_kind: CQueryErrorKind::None,
         },
         Err(error) => CParseResult {
             query: ptr::null_mut(),
             error: utils::cstring_raw(&error.to_string()),
+            error_kind: CQueryErrorKind::of(&error),
         },
     }
 }
@@ -219,21 +247,26 @@ pub struct CResultRow {
 }
 
 /// Iterator over structured query result rows. Opaque from the C side — use
-/// `rdx_rows_iter_column_count`, `rdx_rows_iter_columns`, `rdx_rows_iter_len`, `rdx_rows_iter_next`,
-/// and `rdx_rows_iter_free`.
+/// `rdx_rows_iter_*` methods to work with it.
 pub struct CRowsIter {
     columns: Box<[*const c_char]>,
     rows: Box<[CResultRow]>,
     index: usize,
 }
 
-/// The result of running a query for structured rows: either a row iterator or an error message.
+/// An executed query's result set: the column names and rows that `rdx_query_execute` produced.
+/// Opaque from the C side — use `rdx_result_set_*` methods to work with it.
+pub struct CResultSet(cypher::ResultSet);
+
+/// The result of executing a parsed query against a graph.
 #[repr(C)]
-pub struct CRunRows {
-    /// Non-null on success; free with `rdx_rows_iter_free`.
-    pub iter: *mut CRowsIter,
-    /// Non-null on error; free with `free_c_string`.
+pub struct CExecuteResult {
+    /// Non-null on success; free with `rdx_result_set_free`.
+    pub result_set: *mut CResultSet,
+    /// Non-null on error; null on success. Caller must free with `free_c_string`.
     pub error: *const c_char,
+    /// Which kind of failure `error` describes; `None` when `error` is null.
+    pub error_kind: CQueryErrorKind,
 }
 
 /// Converts a `CypherValue` into a `CCell`, resolving node identity to a handle-buildable category +
@@ -342,35 +375,132 @@ fn build_node_cell(graph: &Graph, encoded_id: &str) -> Option<CCell> {
     }
 }
 
-/// Runs a previously parsed query and returns a row iterator (column names + typed rows),
-/// so callers can build their own value/handle objects instead of a formatted string.
+/// Executes a previously parsed query against the graph and returns its result set. Format the
+/// result set with `rdx_result_set_format`, or read it as structured rows with
+/// `rdx_result_set_rows`; either way the query runs only once.
 ///
 /// # Safety
 ///
 /// - `query` must be a valid pointer returned by `rdx_cypher_parse`.
 /// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rdx_query_run_rows(query: *const c_void, pointer: GraphPointer) -> CRunRows {
+pub unsafe extern "C" fn rdx_query_execute(query: *const c_void, pointer: GraphPointer) -> CExecuteResult {
     if query.is_null() {
-        return CRunRows {
-            iter: ptr::null_mut(),
+        return CExecuteResult {
+            result_set: ptr::null_mut(),
             error: utils::cstring_raw("query is null"),
+            error_kind: CQueryErrorKind::Argument,
         };
     }
 
     let parsed = unsafe { &*query.cast::<cypher::Query>() };
 
-    with_graph(pointer, |graph| {
-        let result_set = match cypher::execute(graph, parsed) {
-            Ok(result_set) => result_set,
-            Err(error) => {
-                return CRunRows {
-                    iter: ptr::null_mut(),
-                    error: utils::cstring_raw(&error.to_string()),
-                };
-            }
-        };
+    with_graph(pointer, |graph| match cypher::execute(graph, parsed) {
+        Ok(result_set) => CExecuteResult {
+            result_set: Box::into_raw(Box::new(CResultSet(result_set))),
+            error: ptr::null(),
+            error_kind: CQueryErrorKind::None,
+        },
+        Err(error) => CExecuteResult {
+            result_set: ptr::null_mut(),
+            error: utils::cstring_raw(&error.to_string()),
+            error_kind: CQueryErrorKind::of(&error),
+        },
+    })
+}
 
+/// Formats an executed result set as `format` (`"table"` or `"json"`) without running the query
+/// again. A non-null `error` always describes an invalid argument.
+///
+/// # Safety
+///
+/// - `result_set` must be a valid pointer returned by `rdx_query_execute`, or null.
+/// - `format` must be a valid, null-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_result_set_format(result_set: *const CResultSet, format: *const c_char) -> CQueryResult {
+    if result_set.is_null() {
+        return CQueryResult::error("result set is null");
+    }
+
+    let Ok(format_str) = (unsafe { utils::convert_char_ptr_to_string(format) }) else {
+        return CQueryResult::error("format is not valid UTF-8");
+    };
+
+    let output_format = match format_str.as_str() {
+        "table" => OutputFormat::Table,
+        "json" => OutputFormat::Json,
+        other => {
+            return CQueryResult::error(&format!("unknown query format `{other}` (expected `table` or `json`)"));
+        }
+    };
+
+    let result_set = unsafe { &*result_set };
+    CQueryResult::success(&cypher::render(&result_set.0, output_format))
+}
+
+/// Returns the number of columns in an executed result set.
+///
+/// # Safety
+///
+/// - `result_set` must be a valid pointer returned by `rdx_query_execute`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_result_set_column_count(result_set: *const CResultSet) -> usize {
+    if result_set.is_null() {
+        return 0;
+    }
+
+    unsafe { &*result_set }.0.columns.len()
+}
+
+/// Returns the name of the column at `index`, or null when `index` is out of range. The caller must
+/// free the returned string with `free_c_string`.
+///
+/// # Safety
+///
+/// - `result_set` must be a valid pointer returned by `rdx_query_execute`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_result_set_column(result_set: *const CResultSet, index: usize) -> *const c_char {
+    if result_set.is_null() {
+        return ptr::null();
+    }
+
+    match unsafe { &*result_set }.0.columns.get(index) {
+        Some(name) => utils::cstring_raw(name),
+        None => ptr::null(),
+    }
+}
+
+/// Returns the number of rows in an executed result set.
+///
+/// # Safety
+///
+/// - `result_set` must be a valid pointer returned by `rdx_query_execute`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_result_set_row_count(result_set: *const CResultSet) -> usize {
+    if result_set.is_null() {
+        return 0;
+    }
+
+    unsafe { &*result_set }.0.rows.len()
+}
+
+/// Materializes an executed result set as a row iterator (column names + typed rows), so callers
+/// can build their own value/handle objects instead of formatted text. Returns null when
+/// `result_set` is null.
+///
+/// # Safety
+///
+/// - `result_set` must be a valid pointer returned by `rdx_query_execute`, or null.
+/// - `pointer` must be a valid `GraphPointer` previously returned by this crate.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_result_set_rows(result_set: *const CResultSet, pointer: GraphPointer) -> *mut CRowsIter {
+    if result_set.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result_set = &unsafe { &*result_set }.0;
+
+    with_graph(pointer, |graph| {
         let columns: Box<[*const c_char]> = result_set.columns.iter().map(|name| utils::cstring_raw(name)).collect();
 
         let rows: Box<[CResultRow]> = result_set
@@ -388,22 +518,34 @@ pub unsafe extern "C" fn rdx_query_run_rows(query: *const c_void, pointer: Graph
             })
             .collect();
 
-        CRunRows {
-            iter: Box::into_raw(Box::new(CRowsIter {
-                columns,
-                rows,
-                index: 0,
-            })),
-            error: ptr::null(),
-        }
+        Box::into_raw(Box::new(CRowsIter {
+            columns,
+            rows,
+            index: 0,
+        }))
     })
+}
+
+/// Frees a result set previously returned by `rdx_query_execute`.
+///
+/// # Safety
+///
+/// - `result_set` must be a pointer returned by `rdx_query_execute`, or null. It must not be used
+///   after.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rdx_result_set_free(result_set: *mut CResultSet) {
+    if result_set.is_null() {
+        return;
+    }
+
+    let _ = unsafe { Box::from_raw(result_set) };
 }
 
 /// Returns the number of columns in the result set.
 ///
 /// # Safety
 ///
-/// - `iter` must be a valid pointer returned by `rdx_query_run_rows`, or null.
+/// - `iter` must be a valid pointer returned by `rdx_result_set_rows`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_rows_iter_column_count(iter: *const CRowsIter) -> usize {
     if iter.is_null() {
@@ -418,7 +560,7 @@ pub unsafe extern "C" fn rdx_rows_iter_column_count(iter: *const CRowsIter) -> u
 ///
 /// # Safety
 ///
-/// - `iter` must be a valid pointer returned by `rdx_query_run_rows`, or null.
+/// - `iter` must be a valid pointer returned by `rdx_result_set_rows`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_rows_iter_columns(iter: *const CRowsIter) -> *const *const c_char {
     if iter.is_null() {
@@ -432,7 +574,7 @@ pub unsafe extern "C" fn rdx_rows_iter_columns(iter: *const CRowsIter) -> *const
 ///
 /// # Safety
 ///
-/// - `iter` must be a valid pointer returned by `rdx_query_run_rows`, or null.
+/// - `iter` must be a valid pointer returned by `rdx_result_set_rows`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_rows_iter_len(iter: *const CRowsIter) -> usize {
     if iter.is_null() {
@@ -448,7 +590,7 @@ pub unsafe extern "C" fn rdx_rows_iter_len(iter: *const CRowsIter) -> usize {
 ///
 /// # Safety
 ///
-/// - `iter` must be a valid pointer returned by `rdx_query_run_rows`, or null.
+/// - `iter` must be a valid pointer returned by `rdx_result_set_rows`, or null.
 /// - `out` must be a valid, writable pointer, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_rows_iter_next(iter: *mut CRowsIter, out: *mut CResultRow) -> bool {
@@ -514,12 +656,12 @@ unsafe fn free_cell(cell: &CCell) {
     }
 }
 
-/// Frees a `CRowsIter` previously returned by `rdx_query_run_rows`, including all column strings,
+/// Frees a `CRowsIter` previously returned by `rdx_result_set_rows`, including all column strings,
 /// row cells, and nested allocations.
 ///
 /// # Safety
 ///
-/// - `iter` must be a pointer returned by `rdx_query_run_rows`, or null. It must not be used after.
+/// - `iter` must be a pointer returned by `rdx_result_set_rows`, or null. It must not be used after.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rdx_rows_iter_free(iter: *mut CRowsIter) {
     if iter.is_null() {

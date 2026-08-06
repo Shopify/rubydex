@@ -464,6 +464,9 @@ end
 class Rubydex::Error < StandardError; end
 class Rubydex::AliasCycleError < Rubydex::Error; end
 class Rubydex::ConfigError < Rubydex::Error; end
+class Rubydex::QueryError < Rubydex::Error; end
+class Rubydex::QuerySyntaxError < Rubydex::QueryError; end
+class Rubydex::QueryExecutionError < Rubydex::QueryError; end
 
 # The configuration of a workspace, parsed from its `rubydex.toml`. It carries both the settings that are global to
 # every built-in tool, such as the workspace being analyzed, and the typed settings of each tool's own section (e.g.
@@ -529,11 +532,46 @@ class Rubydex::Query
     def schema(format = :table); end
   end
 
-  sig { params(graph: Rubydex::Graph).returns(T::Array[T::Hash[String, T.untyped]]) }
+  sig { params(graph: Rubydex::Graph).returns(Rubydex::Query::Result) }
   def run(graph); end
+end
 
-  sig { params(graph: Rubydex::Graph, format: T.any(String, Symbol)).returns(String) }
-  def render(graph, format = :table); end
+# The columns and rows produced by one run of a query. Enumerable over its rows.
+class Rubydex::Query::Result
+  include Enumerable
+  extend T::Generic
+
+  Elem = type_member { { fixed: T::Hash[String, T.untyped] } }
+
+  class << self
+    private
+
+    # A result only comes from `Query#run`. The C extension undefines `new`, so a call raises.
+    sig { returns(T.noreturn) }
+    def new; end
+  end
+
+  sig { returns(T::Array[String]) }
+  def columns; end
+
+  sig { returns(T::Array[T::Hash[String, T.untyped]]) }
+  def rows; end
+
+  sig { override.params(block: T.proc.params(row: T::Hash[String, T.untyped]).void).returns(T.self_type) }
+  sig { override.returns(T::Enumerator[T::Hash[String, T.untyped]]) }
+  def each(&block); end
+
+  sig { returns(Integer) }
+  def size; end
+
+  sig { returns(Integer) }
+  def length; end
+
+  sig { returns(T::Boolean) }
+  def empty?; end
+
+  sig { params(format: T.any(String, Symbol)).returns(String) }
+  def render(format = :table); end
 end
 
 class Rubydex::Graph
