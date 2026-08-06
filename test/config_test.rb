@@ -68,7 +68,8 @@ class ConfigTest < Minitest::Test
     with_context do |context|
       context.write!("rubydex.toml", <<~TOML)
         [linter.rules.Something]
-        enabled = true
+        severity = "warning"
+        exclude = ["components/legacy/**", "test/fixtures/**"]
 
         [linter.rules.Other]
         enabled = false
@@ -80,7 +81,43 @@ class ConfigTest < Minitest::Test
       assert_equal(["Other", "Something"], rules.keys.sort)
       assert_predicate(rules, :frozen?)
       assert_predicate(rules.fetch("Something"), :enabled?)
+      assert_equal(
+        ["components/legacy/**", "test/fixtures/**"],
+        rules.fetch("Something").exclude_patterns,
+      )
+      assert_equal(Rubydex::Severity::Warning, rules.fetch("Something").severity)
       refute_predicate(rules.fetch("Other"), :enabled?)
+      assert_empty(rules.fetch("Other").exclude_patterns)
+      assert_nil(rules.fetch("Other").severity)
+    end
+  end
+
+  def test_linter_maps_every_configured_severity
+    with_context do |context|
+      context.write!("rubydex.toml", <<~TOML)
+        [linter.rules.ErrorRule]
+        severity = "error"
+
+        [linter.rules.WarningRule]
+        severity = "warning"
+
+        [linter.rules.InformationRule]
+        severity = "information"
+
+        [linter.rules.HintRule]
+        severity = "hint"
+      TOML
+
+      rules = Rubydex::Config.load(context.absolute_path).linter.rules
+
+      {
+        "ErrorRule" => Rubydex::Severity::Error,
+        "WarningRule" => Rubydex::Severity::Warning,
+        "InformationRule" => Rubydex::Severity::Information,
+        "HintRule" => Rubydex::Severity::Hint,
+      }.each do |rule_name, severity|
+        assert_equal(severity, rules.fetch(rule_name).severity)
+      end
     end
   end
 end

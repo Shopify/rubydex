@@ -64,6 +64,43 @@ class LinterTest < Minitest::Test
     end
   end
 
+  class ExcludedPrimaryRule < Rubydex::Linter::Rule
+    def severity = Rubydex::Severity::Information
+
+    def lint
+      add_diagnostic("Excluded primary location.", workspace_location("components/legacy/example.rb"))
+    end
+
+    private
+
+    def workspace_location(relative_path)
+      path = File.join(graph.workspace_path, relative_path)
+      path.prepend("/") if Gem.win_platform?
+      Rubydex::Location.new(
+        uri: URI::File.build(path: path).to_s,
+        start_line: 0,
+        end_line: 0,
+        start_column: 0,
+        end_column: 1,
+      )
+    end
+  end
+
+  class ExcludedRelatedInformationRule < ExcludedPrimaryRule
+    def lint
+      add_diagnostic(
+        "Included primary location.",
+        workspace_location("components/current/example.rb"),
+        related_information: [
+          Rubydex::RelatedInformation.new(
+            "Excluded related location.",
+            workspace_location("components/legacy/example.rb"),
+          ),
+        ],
+      )
+    end
+  end
+
   def test_runner_builds_diagnostics_with_rule_severity_and_related_information
     result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config: linter_config).run
     diagnostic = result.diagnostics.fetch(0)
@@ -79,6 +116,13 @@ class LinterTest < Minitest::Test
     rule = WarningRule.new(Rubydex::Graph.new, config:)
 
     assert_same(config, rule.config)
+  end
+
+  def test_configured_severity_overrides_the_rule_severity
+    config = configured_linter_config("WarningRule", severity: Rubydex::Severity::Error)
+    result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config:).run
+
+    assert_equal(Rubydex::Severity::Error, result.diagnostics.fetch(0).severity)
   end
 
   def test_runner_drops_disabled_rules
@@ -148,6 +192,33 @@ class LinterTest < Minitest::Test
     end
   end
 
+  def test_runner_filters_a_diagnostic_when_its_primary_location_matches_a_rule_exclude
+    with_context do |context|
+      context.write!("workspace/inside.rb")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      config = configured_linter_config("ExcludedPrimaryRule", exclude_patterns: ["components/legacy/**"])
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [ExcludedPrimaryRule], config:).run
+
+      assert_empty(result.diagnostics)
+    end
+  end
+
+  def test_runner_keeps_a_diagnostic_when_only_related_information_matches_a_rule_exclude
+    with_context do |context|
+      context.write!("workspace/inside.rb")
+      graph = Rubydex::Graph.configure_for_workspace(context.absolute_path_to("workspace"))
+      config = configured_linter_config(
+        "ExcludedRelatedInformationRule",
+        exclude_patterns: ["components/legacy/**"],
+      )
+
+      result = Rubydex::Linter::Runner.new(graph, rules: [ExcludedRelatedInformationRule], config:).run
+
+      assert_equal(["Included primary location."], result.diagnostics.map(&:message))
+    end
+  end
+
   def test_runner_keeps_diagnostics_indexed_through_a_symlinked_workspace_path
     with_context do |context|
       context.write!("workspace/inside.rb")
@@ -169,7 +240,19 @@ class LinterTest < Minitest::Test
   #: (?Hash[String, bool] rules) -> Rubydex::LinterConfig
   def linter_config(rules = {})
     Rubydex::LinterConfig.new(
-      rules.to_h { |name, enabled| [name, Rubydex::RuleConfig.new(name, enabled)] },
+      rules.to_h { |name, enabled| [name, Rubydex::RuleConfig.new(name, enabled, [], nil)] },
+    )
+  end
+
+  #: (
+  #|   String,
+  #|   ?enabled: bool,
+  #|   ?exclude_patterns: Array[String],
+  #|   ?severity: singleton(Rubydex::Severity::Base)?,
+  #| ) -> Rubydex::LinterConfig
+  def configured_linter_config(rule_name, enabled: true, exclude_patterns: [], severity: nil)
+    Rubydex::LinterConfig.new(
+      rule_name => Rubydex::RuleConfig.new(rule_name, enabled, exclude_patterns, severity),
     )
   end
 

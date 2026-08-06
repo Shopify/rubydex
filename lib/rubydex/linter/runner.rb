@@ -25,7 +25,7 @@ module Rubydex
         rule_diagnostics = @rules.flat_map do |rule_class|
           rule = rule_class.new(@graph, config: @config)
           rule.lint
-          rule.diagnostics
+          filter_diagnostics(rule.diagnostics, @config.excludes_for(rule_class))
         end
 
         diagnostics = (@graph.diagnostics + rule_diagnostics).select do |diagnostic|
@@ -47,6 +47,21 @@ module Rubydex
       end
 
       private
+
+      #: (Array[Diagnostic], Array[String]) -> Array[Diagnostic]
+      def filter_diagnostics(diagnostics, exclude_patterns)
+        diagnostics.reject do |diagnostic|
+          path = diagnostic.location.to_file_path
+          Helpers::PathHelpers.path_matches_patterns?(
+            path,
+            exclude_patterns,
+            workspace: @graph.workspace_path,
+            flags: Helpers::PathHelpers::RUBOCOP_EXCLUDE_FNMATCH_FLAGS,
+          )
+        rescue Location::NotFileUriError
+          false
+        end
+      end
 
       #: (Diagnostic) -> bool
       def diagnostic_in_workspace?(diagnostic)

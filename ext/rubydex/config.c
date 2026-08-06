@@ -1,4 +1,5 @@
 #include "config.h"
+#include "diagnostic.h"
 #include "rustbindings.h"
 #include "utils.h"
 
@@ -29,9 +30,19 @@ static VALUE config_linter_build(VALUE opaque_rule_array) {
     for (size_t i = 0; i < rule_array->len; i++) {
         CLinterRule rule = rule_array->items[i];
         VALUE rule_name = rb_str_freeze(rb_utf8_str_new(rule.name, (long)rule.name_length));
-        VALUE argv[] = {rule_name, rule.enabled ? Qtrue : Qfalse};
+        VALUE exclude_patterns = rb_ary_new_capa((long)rule.exclude_patterns_length);
+        for (size_t j = 0; j < rule.exclude_patterns_length; j++) {
+            CConfigString pattern = rule.exclude_patterns[j];
+            rb_ary_push(exclude_patterns, rb_str_freeze(rb_utf8_str_new(pattern.data, (long)pattern.length)));
+        }
+        rb_obj_freeze(exclude_patterns);
 
-        rb_hash_aset(rules, rule_name, rb_class_new_instance(2, argv, cRuleConfig));
+        VALUE severity = rule.severity == NULL
+            ? Qnil
+            : rdxi_build_diagnostic_severity_value(mRubydex, *rule.severity);
+        VALUE argv[] = {rule_name, rule.enabled ? Qtrue : Qfalse, exclude_patterns, severity};
+
+        rb_hash_aset(rules, rule_name, rb_class_new_instance(4, argv, cRuleConfig));
     }
 
     return rb_class_new_instance(1, &rules, cLinterConfig);

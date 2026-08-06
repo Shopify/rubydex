@@ -1,3 +1,4 @@
+use crate::diagnostic_api::DiagnosticSeverity;
 use crate::utils;
 use libc::{c_char, c_void};
 use rubydex::config::{Config, Rule};
@@ -90,6 +91,14 @@ pub unsafe extern "C" fn rdx_config_free(config: ConfigPointer) {
     }
 }
 
+/// Borrowed string bytes exposed while building Ruby configuration values.
+#[repr(C)]
+#[derive(Debug)]
+pub struct CConfigString {
+    pub data: *const c_char,
+    pub length: usize,
+}
+
 /// C-compatible struct representing a single configured linter rule.
 #[repr(C)]
 #[derive(Debug)]
@@ -97,14 +106,38 @@ pub struct CLinterRule {
     pub name: *const c_char,
     pub name_length: usize,
     pub enabled: bool,
+    pub exclude_patterns: *const CConfigString,
+    pub exclude_patterns_length: usize,
+    pub severity: *const DiagnosticSeverity,
 }
 
 impl From<&Rule> for CLinterRule {
     fn from(rule: &Rule) -> Self {
+        let exclude_patterns = rule
+            .exclude_patterns()
+            .iter()
+            .map(|pattern| CConfigString {
+                data: pattern.as_ptr().cast::<c_char>(),
+                length: pattern.len(),
+            })
+            .collect::<Box<[CConfigString]>>();
+        let exclude_patterns_length = exclude_patterns.len();
+        let exclude_patterns = if exclude_patterns.is_empty() {
+            ptr::null()
+        } else {
+            Box::into_raw(exclude_patterns).cast::<CConfigString>().cast_const()
+        };
+        let severity = rule.severity().map_or(ptr::null(), |severity| {
+            Box::into_raw(Box::new(DiagnosticSeverity::from(severity))).cast_const()
+        });
+
         Self {
             name: rule.name().as_ptr().cast::<c_char>(),
             name_length: rule.name().len(),
             enabled: rule.enabled(),
+            exclude_patterns,
+            exclude_patterns_length,
+            severity,
         }
     }
 }
@@ -155,6 +188,18 @@ pub unsafe extern "C" fn rdx_config_linter_rules_free(rules: CLinterRuleArray) {
     }
 
     unsafe {
-        let _ = Box::from_raw(ptr::slice_from_raw_parts_mut(rules.items, rules.len));
+        let rules = Box::from_raw(ptr::slice_from_raw_parts_mut(rules.items, rules.len));
+
+        for rule in &*rules {
+            if !rule.exclude_patterns.is_null() {
+                let exclude_patterns =
+                    ptr::slice_from_raw_parts_mut(rule.exclude_patterns.cast_mut(), rule.exclude_patterns_length);
+                let _ = Box::from_raw(exclude_patterns);
+            }
+
+            if !rule.severity.is_null() {
+                let _ = Box::from_raw(rule.severity.cast_mut());
+            }
+        }
     }
 }

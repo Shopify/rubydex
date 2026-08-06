@@ -450,6 +450,9 @@ class Rubydex::Linter::Rule
   sig { abstract.returns(T.class_of(Rubydex::Severity::Base)) }
   def severity; end
 
+  sig { returns(T.class_of(Rubydex::Severity::Base)) }
+  def verified_severity; end
+
   sig { abstract.void }
   def lint; end
 
@@ -577,6 +580,17 @@ class Rubydex::LinterConfig
 
   sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T::Boolean) }
   def rule_enabled?(rule_class); end
+
+  sig { params(rule_class: T.class_of(Rubydex::Linter::Rule)).returns(T::Array[String]) }
+  def excludes_for(rule_class); end
+
+  sig do
+    params(
+      rule_class: T.class_of(Rubydex::Linter::Rule),
+      default: T.class_of(Rubydex::Severity::Base),
+    ).returns(T.class_of(Rubydex::Severity::Base))
+  end
+  def severity_for(rule_class, default:); end
 end
 
 # The settings of a single linter rule, read from a `[linter.rules.RuleName]` table.
@@ -584,8 +598,21 @@ class Rubydex::RuleConfig
   sig { returns(String) }
   attr_reader :name
 
-  sig { params(name: String, enabled: T::Boolean).void }
-  def initialize(name, enabled); end
+  sig { returns(T::Array[String]) }
+  attr_reader :exclude_patterns
+
+  sig { returns(T.nilable(T.class_of(Rubydex::Severity::Base))) }
+  attr_reader :severity
+
+  sig do
+    params(
+      name: String,
+      enabled: T::Boolean,
+      exclude_patterns: T::Array[String],
+      severity: T.nilable(T.class_of(Rubydex::Severity::Base)),
+    ).void
+  end
+  def initialize(name, enabled, exclude_patterns, severity); end
 
   sig { returns(T::Boolean) }
   def enabled?; end

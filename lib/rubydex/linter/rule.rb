@@ -35,6 +35,11 @@ module Rubydex
         raise NotImplementedError, "Subclasses must implement the severity method"
       end
 
+      #: () -> singleton(Severity::Base)
+      def verified_severity
+        config.severity_for(self.class, default: severity)
+      end
+
       # @abstract
       #: () -> void
       def lint
@@ -91,7 +96,7 @@ module Rubydex
           rule: self.class.rule_name,
           message: message,
           location: location,
-          severity: severity,
+          severity: verified_severity,
           related_information: related_information,
         )
       end
