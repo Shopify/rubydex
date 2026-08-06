@@ -76,6 +76,7 @@ module Rubydex
           end
 
           print_summary(graph.documents.count, diagnostics)
+          puts("For more information about a rule, run `rdx explain RuleName`.")
         end
 
         #: (Location location, workspace_path: String) -> String
