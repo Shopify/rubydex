@@ -52,6 +52,23 @@ module Rubydex
         definition.name_location || definition.location
       end
 
+      #: (String) -> Location
+      def file_location(uri)
+        Location.new(uri: uri, start_line: 0, end_line: 0, start_column: 0, end_column: 0)
+      end
+
+      #: (String) -> String
+      def path_for_uri(uri)
+        parsed_uri = URI.parse(uri)
+        if parsed_uri.scheme == "file"
+          path = parsed_uri.path #: as !nil
+          path.delete_prefix!("/") if Gem.win_platform?
+          return path
+        end
+
+        uri
+      end
+
       # Returns every class inheriting from +base_name+, excluding the base class itself.
       #: (String) -> Enumerable[Rubydex::Class]
       def child_classes(base_name)

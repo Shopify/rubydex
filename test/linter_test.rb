@@ -118,6 +118,27 @@ class LinterTest < Minitest::Test
     assert_same(config, rule.config)
   end
 
+  def test_rule_builds_a_zero_width_file_location
+    location = WarningRule.new(Rubydex::Graph.new, config: linter_config).file_location("file:///tmp/example.rb")
+
+    assert_equal("file:///tmp/example.rb", location.uri)
+    assert_equal([0, 0, 0, 0], [
+      location.start_line,
+      location.start_column,
+      location.end_line,
+      location.end_column,
+    ])
+  end
+
+  def test_rule_extracts_file_paths_and_preserves_other_uris
+    with_context do |context|
+      rule = WarningRule.new(Rubydex::Graph.new, config: linter_config)
+
+      assert_equal(context.absolute_path_to("example.rb"), rule.path_for_uri(context.uri_to("example.rb")))
+      assert_equal("untitled:example.rb", rule.path_for_uri("untitled:example.rb"))
+    end
+  end
+
   def test_configured_severity_overrides_the_rule_severity
     config = configured_linter_config("WarningRule", severity: Rubydex::Severity::Error)
     result = Rubydex::Linter::Runner.new(Rubydex::Graph.new, rules: [WarningRule], config:).run

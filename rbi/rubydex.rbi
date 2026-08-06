@@ -430,6 +430,12 @@ class Rubydex::Linter::Rule
   sig { params(definition: Rubydex::Definition).returns(Rubydex::Location) }
   def diagnostic_location(definition); end
 
+  sig { params(uri: String).returns(Rubydex::Location) }
+  def file_location(uri); end
+
+  sig { params(uri: String).returns(String) }
+  def path_for_uri(uri); end
+
   sig { params(base_name: String).returns(T::Enumerable[Rubydex::Class]) }
   def child_classes(base_name); end
 
