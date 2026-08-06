@@ -358,6 +358,7 @@ end
 
 module Rubydex::Linter; end
 module Rubydex::Linter::Helpers; end
+module Rubydex::Linter::Rules; end
 
 module Rubydex::Linter::Helpers::PathHelpers
   extend T::Helpers
@@ -488,9 +489,23 @@ class Rubydex::Linter::RuleLoadError < StandardError; end
 
 class Rubydex::Linter::RuleLoader
   RULE_GLOB = T.let(T.unsafe(nil), String)
+  BUILT_IN_RULE_GLOB = T.let(T.unsafe(nil), String)
 
   sig { params(workspace_path: String).returns(T::Array[T.class_of(Rubydex::Linter::Rule)]) }
   def self.load(workspace_path); end
+end
+
+class Rubydex::Linter::Rules::RuleStructure < Rubydex::Linter::Rule
+  BASE_RULE_NAME = T.let(T.unsafe(nil), String)
+  RULE_NAMESPACE = T.let(T.unsafe(nil), String)
+  RULE_FILE_PATTERNS = T.let(T.unsafe(nil), T::Array[String])
+  TEST_FILE_PATTERNS = T.let(T.unsafe(nil), T::Array[String])
+
+  sig { returns(T.class_of(Rubydex::Severity::Base)) }
+  def severity; end
+
+  sig { void }
+  def lint; end
 end
 
 class Rubydex::Linter::Runner

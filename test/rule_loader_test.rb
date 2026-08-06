@@ -5,7 +5,12 @@ require "helpers/context"
 require "mocha/minitest"
 require "rubydex/linter"
 
-module RuleLoaderTestFixtures; end
+module RuleLoaderTestFixtures
+  class IntermediateRule < Rubydex::Linter::Rule
+    def severity = Rubydex::Severity::Error
+    def lint; end
+  end
+end
 
 class RuleLoaderTest < Minitest::Test
   include Test::Helpers::WithContext
@@ -24,9 +29,42 @@ class RuleLoaderTest < Minitest::Test
         first_load = Rubydex::Linter::RuleLoader.load(context.absolute_path)
         second_load = Rubydex::Linter::RuleLoader.load(context.absolute_path)
 
-        assert_equal(["DependencyRule", "ProjectRule"], first_load.map(&:rule_name).sort)
+        rule_names = first_load.map(&:rule_name)
+        assert_includes(rule_names, "DependencyRule")
+        assert_includes(rule_names, "ProjectRule")
+        assert_includes(rule_names, "RuleStructure")
         assert_equal(first_load, second_load)
       end
+    end
+  end
+
+  def test_load_returns_built_in_rules_without_bundler
+    with_context do |context|
+      Gem.expects(:find_latest_files).never
+
+      rules = with_bundle_gemfile(nil) do
+        Rubydex::Linter::RuleLoader.load(context.absolute_path)
+      end
+
+      assert_includes(rules, Rubydex::Linter::Rules::RuleStructure)
+    end
+  end
+
+  def test_load_returns_indirect_rule_subclasses
+    with_context do |context|
+      write_rule(
+        context,
+        "rubydex_linter/rules/indirect_rule.rb",
+        "IndirectRule",
+        superclass: "RuleLoaderTestFixtures::IntermediateRule",
+      )
+
+      rules = with_bundle_gemfile(nil) do
+        Rubydex::Linter::RuleLoader.load(context.absolute_path)
+      end
+
+      assert_includes(rules, RuleLoaderTestFixtures::IndirectRule)
+      refute_includes(rules, RuleLoaderTestFixtures::IntermediateRule)
     end
   end
 
@@ -48,13 +86,13 @@ class RuleLoaderTest < Minitest::Test
 
   private
 
-  #: (Test::Helpers::Context, String, String) -> void
-  def write_rule(context, path, class_name)
+  #: (Test::Helpers::Context, String, String, ?superclass: String) -> void
+  def write_rule(context, path, class_name, superclass: "Rubydex::Linter::Rule")
     context.write!(path, <<~RUBY)
       # frozen_string_literal: true
 
       module RuleLoaderTestFixtures
-        class #{class_name} < Rubydex::Linter::Rule
+        class #{class_name} < #{superclass}
           def severity = Rubydex::Severity::Error
           def lint; end
         end

@@ -67,6 +67,10 @@ jobs:
       - name: Run Ruby tests
         run: bundle exec rake test
 
+      - name: Run Rubydex linter
+        if: matrix.os == 'ubuntu-latest' && matrix.ruby == '4.0'
+        run: bundle exec rdx lint .
+
       - name: Save Rust compile cache
         id: rust-compile-cache-save
         uses: actions/cache/save@v6
