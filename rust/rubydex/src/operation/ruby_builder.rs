@@ -1566,8 +1566,10 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         };
 
         if receiver.is_none() && visibility == Visibility::ModuleFunction {
-            // module_function: emit two EnterMethod/ExitScope pairs (singleton + instance),
-            // each visiting the body so ivars are associated with both methods.
+            // Each EnterMethod creates a method definition, so emit one for the public singleton
+            // method and one for the private instance method. Emit body definitions and references
+            // only under the instance method because emitting them in both scopes would duplicate
+            // their source-based IDs.
             let singleton_receiver = Some(Target::ExplicitSelf);
             let body = node.body();
 
@@ -1581,7 +1583,6 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 signatures: Signatures::Simple(parameters.clone().into_boxed_slice()),
                 receiver: singleton_receiver,
             }));
-            self.visit_method_body(method_nesting_receiver, body.as_ref());
             self.operations.push(Operation::ExitScope);
 
             self.operations.push(Operation::EnterMethod(op::EnterMethod {
@@ -2446,14 +2447,15 @@ mod tests {
     }
 
     #[test]
-    fn build_module_function_with_ivar() {
-        assert_operations(
+    fn build_module_function_with_body() {
+        assert_operations_with_references(
             "
             module Foo
               module_function
 
               def bar
-                @x = 1
+                @x = CONST
+                baz(1)
               end
             end
             ",
@@ -2461,10 +2463,11 @@ mod tests {
             EnterModule(Foo)
               SetDefaultVisibility(module_function)
               EnterMethod(self.bar())
-                DefineInstanceVariable(@x)
               ExitScope
               EnterMethod(bar())
                 DefineInstanceVariable(@x)
+                ReferenceConstant(CONST)
+                ReferenceMethod(baz)
               ExitScope
             ExitScope
             ",
