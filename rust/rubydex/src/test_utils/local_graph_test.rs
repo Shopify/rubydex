@@ -557,6 +557,25 @@ macro_rules! assert_method_has_receiver {
 #[cfg(test)]
 #[macro_export]
 macro_rules! assert_local_diagnostics_eq {
+    ($context:expr, $expected_diagnostics:expr, severity: $expected_severity:expr) => {{
+        let context = &$context;
+        $crate::assert_local_diagnostics_eq!(context, $expected_diagnostics);
+
+        let expected_severity = $expected_severity;
+        let actual_severities = context
+            .graph()
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| *diagnostic.severity())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vec![expected_severity; actual_severities.len()],
+            actual_severities,
+            "diagnostic severities mismatch: expected all `{:?}`, got `{:?}`",
+            expected_severity,
+            actual_severities
+        );
+    }};
     ($context:expr, $expected_diagnostics:expr) => {{
         let mut diagnostics = $context.graph().diagnostics().iter().collect::<Vec<_>>();
         diagnostics.sort_by_key(|d| d.offset());

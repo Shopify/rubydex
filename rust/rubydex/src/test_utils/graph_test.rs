@@ -662,6 +662,25 @@ macro_rules! assert_instance_variables_eq {
 #[cfg(test)]
 #[macro_export]
 macro_rules! assert_diagnostics_eq {
+    ($context:expr, $expected_diagnostics:expr, severity: $expected_severity:expr) => {{
+        let context = &$context;
+        $crate::assert_diagnostics_eq!(context, $expected_diagnostics);
+
+        let expected_severity = $expected_severity;
+        let actual_severities = context
+            .graph()
+            .all_diagnostics()
+            .iter()
+            .map(|diagnostic| *diagnostic.severity())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vec![expected_severity; actual_severities.len()],
+            actual_severities,
+            "diagnostic severities mismatch: expected all `{:?}`, got `{:?}`",
+            expected_severity,
+            actual_severities
+        );
+    }};
     ($context:expr, $expected_diagnostics:expr) => {{
         assert_eq!($expected_diagnostics, $context.format_diagnostics(&[]).as_slice());
     }};

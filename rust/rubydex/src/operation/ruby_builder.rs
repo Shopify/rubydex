@@ -111,6 +111,7 @@ impl<'a> RubyOperationBuilder<'a> {
         for error in result.errors() {
             self.add_diagnostic(
                 Rule::ParseError,
+                Severity::Error,
                 Offset::from_prism_location(&error.location()),
                 error.message().to_string(),
             );
@@ -119,6 +120,7 @@ impl<'a> RubyOperationBuilder<'a> {
         for warning in result.warnings() {
             self.add_diagnostic(
                 Rule::ParseWarning,
+                Severity::Warning,
                 Offset::from_prism_location(&warning.location()),
                 warning.message().to_string(),
             );
@@ -171,8 +173,8 @@ impl<'a> RubyOperationBuilder<'a> {
         name_id
     }
 
-    fn add_diagnostic(&mut self, rule: Rule, offset: Offset, message: String) {
-        let diagnostic = Diagnostic::new(rule, Severity::Information, self.uri_id, offset, message);
+    fn add_diagnostic(&mut self, rule: Rule, severity: Severity, offset: Offset, message: String) {
+        let diagnostic = Diagnostic::new(rule, severity, self.uri_id, offset, message);
         self.document.add_diagnostic(diagnostic);
     }
 
@@ -288,6 +290,7 @@ impl<'a> RubyOperationBuilder<'a> {
                         _ => {
                             self.add_diagnostic(
                                 Rule::DynamicConstantReference,
+                                Severity::Information,
                                 Offset::from_prism_location(&parent.location()),
                                 "Dynamic constant reference".to_string(),
                             );
@@ -667,6 +670,7 @@ impl<'a> RubyOperationBuilder<'a> {
         {
             self.add_diagnostic(
                 Rule::DynamicAncestor,
+                Severity::Information,
                 Offset::from_prism_location(&superclass_node.location()),
                 "Dynamic superclass".to_string(),
             );
@@ -833,6 +837,7 @@ impl<'a> RubyOperationBuilder<'a> {
                     if !has_owner {
                         self.add_diagnostic(
                             Rule::TopLevelMixinSelf,
+                            Severity::Information,
                             Offset::from_prism_location(&arg.location()),
                             "Top level mixin self".to_string(),
                         );
@@ -848,6 +853,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 } else {
                     self.add_diagnostic(
                         Rule::DynamicAncestor,
+                        Severity::Information,
                         Offset::from_prism_location(&arg.location()),
                         "Dynamic mixin argument".to_string(),
                     );
@@ -889,6 +895,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 None => {
                     self.add_diagnostic(
                         Rule::InvalidConstantVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&node.location()),
                         format!("`{call_name}` called at top level"),
                     );
@@ -899,6 +906,7 @@ impl<'a> RubyOperationBuilder<'a> {
             Some(other) => {
                 self.add_diagnostic(
                     Rule::InvalidConstantVisibility,
+                    Severity::Warning,
                     Offset::from_prism_location(&other.location()),
                     format!("Dynamic receiver for `{call_name}`"),
                 );
@@ -914,6 +922,7 @@ impl<'a> RubyOperationBuilder<'a> {
             let Some((name, location)) = Self::extract_literal_name(&argument) else {
                 self.add_diagnostic(
                     Rule::InvalidConstantVisibility,
+                    Severity::Warning,
                     Offset::from_prism_location(&argument.location()),
                     format!("`{call_name}` called with a non-literal argument"),
                 );
@@ -1116,7 +1125,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 } else {
                     format!("`{call_name}` called with a non-literal argument")
                 };
-                self.add_diagnostic(Rule::InvalidMethodVisibility, arg_offset, message);
+                self.add_diagnostic(Rule::InvalidMethodVisibility, Severity::Warning, arg_offset, message);
                 self.visit(&arg);
             }
         }
@@ -1181,6 +1190,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 None => {
                     self.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&node.location()),
                         format!("`{call_name}` called at top level"),
                     );
@@ -1227,6 +1237,7 @@ impl<'a> RubyOperationBuilder<'a> {
                                 if def_node.receiver().is_none() {
                                     self.add_diagnostic(
                                         Rule::InvalidMethodVisibility,
+                                        Severity::Warning,
                                         Offset::from_prism_location(&element.location()),
                                         format!("`{call_name}` requires a singleton method definition"),
                                     );
@@ -1246,6 +1257,7 @@ impl<'a> RubyOperationBuilder<'a> {
                             _ => {
                                 self.add_diagnostic(
                                     Rule::InvalidMethodVisibility,
+                                    Severity::Warning,
                                     Offset::from_prism_location(&element.location()),
                                     format!(
                                         "`{call_name}` array element must be a Symbol, String, or method definition"
@@ -1261,6 +1273,7 @@ impl<'a> RubyOperationBuilder<'a> {
                     if def_node.receiver().is_none() {
                         self.add_diagnostic(
                             Rule::InvalidMethodVisibility,
+                            Severity::Warning,
                             Offset::from_prism_location(&argument.location()),
                             format!("`{call_name}` requires a singleton method definition"),
                         );
@@ -1280,6 +1293,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 arg if Self::is_attr_call(&arg) => {
                     self.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&arg.location()),
                         format!("`{call_name}` does not accept `attr_*` arguments"),
                     );
@@ -1288,6 +1302,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 ruby_prism::Node::ArrayNode { .. } => {
                     self.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&argument.location()),
                         format!("`{call_name}` array argument must be the only argument"),
                     );
@@ -1296,6 +1311,7 @@ impl<'a> RubyOperationBuilder<'a> {
                 _ => {
                     self.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         Offset::from_prism_location(&argument.location()),
                         format!("`{call_name}` called with a non-literal argument"),
                     );
@@ -1450,6 +1466,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
             self.visit(&expression);
             self.add_diagnostic(
                 Rule::DynamicSingletonDefinition,
+                Severity::Information,
                 Offset::from_prism_location(&node.location()),
                 "Dynamic singleton class definition".to_string(),
             );
@@ -1459,6 +1476,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
         let Some(attached_target) = attached_target else {
             self.add_diagnostic(
                 Rule::DynamicSingletonDefinition,
+                Severity::Information,
                 Offset::from_prism_location(&node.location()),
                 "Dynamic singleton class definition".to_string(),
             );
@@ -1554,6 +1572,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                 _ => {
                     self.add_diagnostic(
                         Rule::DynamicSingletonDefinition,
+                        Severity::Information,
                         Offset::from_prism_location(&node.location()),
                         "Dynamic receiver for singleton method definition".to_string(),
                     );
@@ -1904,6 +1923,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                     let offset = Offset::from_prism_location(&node.location());
                     self.add_diagnostic(
                         Rule::InvalidMethodVisibility,
+                        Severity::Warning,
                         offset,
                         format!("`{message}` cannot be called with an explicit receiver"),
                     );
@@ -1918,6 +1938,7 @@ impl Visit<'_> for RubyOperationBuilder<'_> {
                     if visibility == Visibility::ModuleFunction && !self.current_nesting_is_module() {
                         self.add_diagnostic(
                             Rule::InvalidMethodVisibility,
+                            Severity::Warning,
                             offset,
                             "`module_function` can only be used in modules".to_string(),
                         );

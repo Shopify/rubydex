@@ -5,6 +5,7 @@ use crate::{model::ids::UriId, offset::Offset};
 #[derive(Debug)]
 pub struct Diagnostic {
     rule: Rule,
+    // Severity belongs to each diagnostic; every producer must assign it explicitly.
     severity: Severity,
     uri_id: UriId,
     offset: Offset,

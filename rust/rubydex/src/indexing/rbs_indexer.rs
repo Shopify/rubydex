@@ -7,7 +7,7 @@ use ruby_rbs::node::{
     ModuleNode, Node, NodeList, PrependNode, TypeNameNode, Visit,
 };
 
-use crate::diagnostic::Rule;
+use crate::diagnostic::{Rule, Severity};
 use crate::indexing::local_graph::LocalGraph;
 use crate::model::comment::Comment;
 use crate::model::definitions::{
@@ -54,6 +54,7 @@ impl<'a> RBSIndexer<'a> {
         let Ok(signature) = node::parse(self.source) else {
             self.local_graph.add_diagnostic(
                 Rule::ParseError,
+                Severity::Error,
                 Offset::new(0, 0),
                 "Failed to parse RBS document".to_string(),
             );
@@ -650,6 +651,7 @@ impl Visit for RBSIndexer<'_> {
 mod tests {
     use ruby_rbs::node::{self, Node, NodeList};
 
+    use crate::diagnostic::Severity;
     use crate::indexing::rbs_indexer::RBSIndexer;
     use crate::model::definitions::{Definition, DefinitionFlags, Parameter, Signatures};
     use crate::model::visibility::Visibility;
@@ -681,7 +683,11 @@ mod tests {
     fn index_source_with_errors() {
         let context = index_source("module");
 
-        assert_local_diagnostics_eq!(&context, ["parse-error: Failed to parse RBS document (1:1-1:1)"]);
+        assert_local_diagnostics_eq!(
+            &context,
+            ["parse-error: Failed to parse RBS document (1:1-1:1)"],
+            severity: Severity::Error
+        );
 
         assert!(context.graph().definitions().is_empty());
     }
