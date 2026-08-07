@@ -21,4 +21,15 @@ module Rubydex
 
   # Raised by `SkillRegistry.load` when the skill directory doesn't exist.
   class UnknownSkillDirectoryError < SkillError; end
+
+  # Raised when a Cypher query cannot be parsed or cannot run. `Rubydex::Query` raises one of its
+  # subclasses; rescue this class to catch either.
+  class QueryError < Error; end
+
+  # Raised by `Query.parse` when the query is not valid Cypher.
+  class QuerySyntaxError < QueryError; end
+
+  # Raised by `Query#run` when a parsed query fails while it runs against a graph, for example
+  # because it names an unknown property or relationship type.
+  class QueryExecutionError < QueryError; end
 end
